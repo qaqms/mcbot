@@ -23,6 +23,9 @@ import java.util.Map;
  */
 public final class ScanAreaTool implements ServerTool {
 
+    /** 扫描主线程耗时（ms）：模型反馈不展示，但排查"世界信息慢"类投诉必用。 */
+    public static volatile long lastScanMillis = -1;
+
     private static final int MAX_RADIUS = 32;
     private static final int MAX_BLOCK_SAMPLES = 24;
 
@@ -33,6 +36,7 @@ public final class ScanAreaTool implements ServerTool {
 
     @Override
     public Result run(CompanionPlayer companion, JsonObject args) {
+        long t0 = System.nanoTime();
         int r = args.has("r") ? Math.min(MAX_RADIUS, Math.max(1, args.get("r").getAsInt())) : 16;
         var level = companion.level();
 
@@ -92,6 +96,11 @@ public final class ScanAreaTool implements ServerTool {
         if (!near.isEmpty()) {
             fb.append("。近处: ").append(String.join("; ", near.subList(0, Math.min(6, near.size()))));
             fb.append("。@相对(dx,dy,dz) 是世界轴位移，加上我的位置即为目标坐标。");
+        }
+        lastScanMillis = (System.nanoTime() - t0) / 1_000_000;
+        if (lastScanMillis > 50) {
+            // 只在真慢时喊：扫描同步跑在服务器主线程，这条是"谁偷了 tick"的直接证据
+            com.neko.mcbot.McbotMod.LOG.warn("[m3] scan_area r={} 耗时 {}ms（主线程同步）", r, lastScanMillis);
         }
         return new Result(true, fb.toString(), data);
     }

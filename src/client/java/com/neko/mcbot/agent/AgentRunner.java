@@ -33,7 +33,8 @@ public final class AgentRunner implements ToolExecutor {
 
     private static final org.slf4j.Logger LOG = LoggerFactory.getLogger("mcbot/agent");
     private static final long TOOL_TIMEOUT_MS = 90_000;
-    private static final long QUESTION_TIMEOUT_MS = 300_000;
+    // 反问等待从 5min 降到 2min：配合游戏内 `@bot 答 <文本>` 入口，没人理就快醒。
+    private static final long QUESTION_TIMEOUT_MS = 120_000;
     private static final int TRANSCRIPT_CAP = 80;
 
     private ClientConfig cfg;
@@ -195,7 +196,10 @@ public final class AgentRunner implements ToolExecutor {
         sweepQuestionTimeouts();
     }
 
-    private static final class QuestionRecord {
+    /** 同伴正在等主人回答的最新反问（游戏内 `@bot 答 …` 入口用）。 */
+    private volatile Long latestQuestion;
+
+    private final class QuestionRecord {
         final CompletableFuture<ToolOutcome> future;
         final long at;
 
@@ -207,6 +211,10 @@ public final class AgentRunner implements ToolExecutor {
 
     private static final java.util.regex.Pattern CANCEL_WORDS = java.util.regex.Pattern
             .compile("(停|停下|停手|取消|别干了|别做了|cancel|stop)", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    // 游戏内回答同伴反问："答 <文本>" 或 "answer <文本>"
+    private static final java.util.regex.Pattern ANSWER_DIRECTIVE = java.util.regex.Pattern
+            .compile("^(答|answer)[：: ]+(.+)$", java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.DOTALL);
 
     /** 主人指令统一入口（聊天/桥共用）。返回分配的 task_id。 */
     public long submitTask(String text) {
@@ -227,6 +235,16 @@ public final class AgentRunner implements ToolExecutor {
             record("§9我> §r" + text);
             requestCancel();
             return;
+        }
+        var ans = ANSWER_DIRECTIVE.matcher(text.trim());
+        if (ans.matches()) {
+            Long qid = latestQuestion;
+            if (qid != null && answerQuestion("q" + qid, ans.group(2).trim())) {
+                record("§9我> §r" + text);
+                return;
+            }
+            // 没有在等的问题：当普通指令走，但提醒一句免得主人以为回答了空气
+            say("§7[mcbot] 同伴现在没有在等回答的问题，这句当新指令处理了。§r");
         }
         submitTask(text);
     }
@@ -263,6 +281,9 @@ public final class AgentRunner implements ToolExecutor {
             QuestionRecord rec = questionRecords.remove(seq);
             if (rec == null) {
                 return false;
+            }
+            if (latestQuestion != null && latestQuestion == seq) {
+                latestQuestion = null;
             }
             rec.future.complete(new ToolOutcome(true, "主人说：" + text));
             JsonObject d = new JsonObject();
@@ -329,7 +350,8 @@ public final class AgentRunner implements ToolExecutor {
         } catch (RuntimeException e) {
             text = String.valueOf(argsJson);
         }
-        say("§d[同伴想问] §r" + text);
+        say("§d[同伴想问] §r" + text + " §7（回答：@bot 答 <文本>）§r");
+        latestQuestion = seq;
         JsonObject d = new JsonObject();
         d.addProperty("question_id", "q" + seq);
         d.addProperty("text", text);
@@ -342,8 +364,11 @@ public final class AgentRunner implements ToolExecutor {
         long now = System.currentTimeMillis();
         questionRecords.entrySet().removeIf(e -> {
             if (now - e.getValue().at > QUESTION_TIMEOUT_MS) {
+                if (latestQuestion != null && latestQuestion == e.getKey()) {
+                    latestQuestion = null; // 超时作废，别留悬指针
+                }
                 e.getValue().future.complete(new ToolOutcome(false,
-                        "TIMEOUT:主人 5 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。"));
+                        "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。"));
                 return true;
             }
             return false;
