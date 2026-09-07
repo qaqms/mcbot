@@ -18,6 +18,7 @@ public final class TurnBuilder {
     private final Map<Integer, PartialCall> calls = new LinkedHashMap<>();
     private long promptTokens;
     private long completionTokens;
+    private long cachedTokens = -1; // -1 = 后端没报这个字段（区别于报了 0）
     private String finishReason;
 
     private static final class PartialCall {
@@ -46,11 +47,18 @@ public final class TurnBuilder {
     }
 
     public void usage(long prompt, long completion) {
+        usage(prompt, completion, -1);
+    }
+
+    public void usage(long prompt, long completion, long cached) {
         if (prompt > 0) {
             this.promptTokens = prompt;
         }
         if (completion > 0) {
             this.completionTokens = completion;
+        }
+        if (cached >= 0) {
+            this.cachedTokens = cached;
         }
     }
 
@@ -67,6 +75,7 @@ public final class TurnBuilder {
                 list.add(new ToolCall(p.id, p.name, p.args.toString()));
             }
         }
-        return new AssistantTurn(text.toString(), list, promptTokens, completionTokens, finishReason);
+        return new AssistantTurn(text.toString(), list, promptTokens, completionTokens,
+                cachedTokens, finishReason);
     }
 }

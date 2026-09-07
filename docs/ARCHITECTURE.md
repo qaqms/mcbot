@@ -82,8 +82,11 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
   若正停在流式回答上，整轮作废（不执行其工具、不留悬挂 tool_calls）。
 ```
 
-护栏数值：每指令 40 步；同一调用连续 3 次 → Nudge 换思路、5 次 → 停链；
-对话软水位 12000 token（约字符/3），超限先让模型自己压缩再答。
+护栏数值：每指令 40 步；同一调用连续 3 次 → Nudge 换思路、5 次 → 停链——但只有
+**同调用且同结果**才计数（TIMEOUT 后原参重试是合法恢复，不算打转，M4.5 吸取参考项目实战教训）。
+上下文闸门 M4.5 改真数驱动：每步记 API 回报的 prompt_tokens（无则 CJK 感知估算），
+超 6000 在**任务步边界**压缩；切分铁律：保留段只能从 User/Assistant 起切，绝不拆孤儿 Tool；
+同名工具旧回执出站前折叠成占位（存储全量）；摘要端点连败 2 次熔断至下个指令边界。
 `ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`，
 90 秒无回执 → 回 TIMEOUT 教学文本。`ask_owner` 是唯一本地工具（不出客户端，见 §6）。
 
@@ -141,7 +144,7 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
 
 | 位置 | 数值 |
 |---|---|
-| AgentLoop | 40 步/指令；nudge@3；abort@5；软水位 12000 token；压缩保尾 12 |
+| AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
 | 超时 | LLM 180s；工具回执 90s；ask_owner 300s；桥 ask 60s；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | S2C 32KB 截断告警 |

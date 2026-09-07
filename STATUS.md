@@ -3,7 +3,7 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M6 桥接 ✅ 活体联调关账（23:44）· M8 DigAStar ✅ 无头+真机双验收 · 下一步 M7/M5
+## 当前状态：M0–M4 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M4.5 上下文经济学 ✅（单测全绿+服务端回归）· 下一步 M7/M5
 
 | 里程碑 | 状态 |
 |---|---|
@@ -27,6 +27,23 @@
 - **M8 真机**：模型规划上山 → 真实地形两次 `BUDGET_EXCEEDED`（8000 节点帽在 16 格短距复杂地形就撞——观察点，候选调优：可达性预检/启发权重/预算帽）→ 换目标 `NEED_CONFIRM 挖2格` → 模型**没有擅自批准而是 ask_owner 征求** → 授权后真挖登顶 (-512,95,-129) → scan 发现 coal_ore×7 → done 帧诚实汇报。
 - 坑录：①用户中转站只挂 /v1 下，根路径被 CF 人机验证页接管→"一大堆看不懂的东西"=错误体整坨进聊天（已修 LlmClient：HTML 折叠成人话+非200 自动 /v1 换道重试一次，新 jar 待发）；②**git-bash curl 发中文请求体乱码**（服务端 UTF-8 无罪，python urllib 重发即正常）——以后非 ASCII 桥测试一律用 python 发；③游戏内收到"[同伴想问]"后**主人没有回答入口**（只能等 5min 超时或靠桥）——记债务。
 - 待用户重启客户端时顺手：把 E 盘实例 mods/ 里的 mcbot jar 换成 build/libs 新包（含 LlmClient 修复）。
+
+### M4.5 实现备忘（上下文经济学，机制参考公开项目思路、代码全自写）
+
+- **动机**：真机反馈"回复慢"。实测：中转站小请求往返 ≈2s，但历史每步全量重发且旧估算
+  （字符/3）把中文低估 ~3 倍；另有压缩按下标硬切可能切出孤儿 Tool（下一请求直接 400 的真雷）。
+- **落地**：①AssistantTurn/TurnBuilder 透传 usage（含 deepseek `prompt_cache_hit_tokens` 与
+  openai `prompt_tokens_details.cached_tokens` 两方言，未报=-1）；②压缩闸门改真数驱动
+  （max(API 数, CJK 感知估算)>6000 且在任务步边界触发），摘要失败连续 2 次熔断、指令边界恢复；
+  ③新 `Conversation.findCutIndex`：近段按 1500 token 预算从新往回攒，切点只能 User/Assistant，
+  预算内无合法点则退化全量总结；④`outboundHistory()` 出站视图：同名工具被更新过的旧回执折成
+  一行占位（callId/配对不动，存储全量）；⑤打转判定改为"同调用+同结果"才累计（参考项目
+  用真事故换来的教训：TIMEOUT 重试合法）；⑥AgentRunner 每步日志 `[brain] step tokens prompt/completion/cached`，
+  后续调参有数据可依（P2：水位数值等真机 usage 曲线再定）。
+- **验收**（00:30）：ConversationTest 新增 6 例（估算口径/切点铁律/退化/折叠/真数/熔断）全绿；
+  agent-core 19 例 + path 8 例全绿；mod 全编译；旧进程意外重跑的无头 `[m8]` 四场景+
+  速率闸 59/21 账目吻合（服务端代码本轮零改动，此作旁证）。待用户下次开客户端换
+  dist 新 jar 后，观察 `[brain] step tokens` 曲线体感提速。
 
 ### M8 实现备忘（可挖寻路）
 

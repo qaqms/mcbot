@@ -14,7 +14,7 @@ import java.util.concurrent.CompletableFuture;
 public final class ScriptedEngine implements ChatEngine {
 
     private final Deque<AssistantTurn> script = new ArrayDeque<>();
-    private AssistantTurn last = new AssistantTurn("…", List.of(), 0, 0, "stop");
+    private AssistantTurn last = new AssistantTurn("…", List.of(), 0, 0, -1, "stop");
     public int calls;
 
     public ScriptedEngine queue(AssistantTurn... turns) {

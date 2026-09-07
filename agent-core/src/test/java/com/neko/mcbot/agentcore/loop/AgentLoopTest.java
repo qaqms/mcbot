@@ -16,11 +16,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentLoopTest {
 
     private static AssistantTurn toolTurn(String name, String args) {
-        return new AssistantTurn("", List.of(new ToolCall("c-" + name, name, args)), 0, 0, "tool_calls");
+        return new AssistantTurn("", List.of(new ToolCall("c-" + name, name, args)), 0, 0, -1, "tool_calls");
     }
 
     private static AssistantTurn textTurn(String text) {
-        return new AssistantTurn(text, List.of(), 0, 0, "stop");
+        return new AssistantTurn(text, List.of(), 0, 0, -1, "stop");
     }
 
     @Test
@@ -61,7 +61,7 @@ class AgentLoopTest {
                     invocations[0]++;
                     return CompletableFuture.completedFuture(new ToolExecutor.ToolOutcome(false, "挖不动"));
                 },
-                new AgentLoop.Config(40, 3, 5, 12),
+                new AgentLoop.Config(40, 3, 5),
                 new AgentLoop.Listener() {
                     @Override
                     public void onReply(String text) {
@@ -130,16 +130,50 @@ class AgentLoopTest {
                 AgentLoop.Config.defaults(), new AgentLoop.Listener() {
                 },
                 () -> "sys", 10 /* 立刻超水位 */);
+        // 每条 ≈1008 token：近段预算 1500 只装得下末尾一两条，旧段必然被总结
         for (int i = 0; i < 20; i++) {
-            loop.conversation().add(new Msg.User("x".repeat(200) + i));
+            loop.conversation().add(new Msg.User("x".repeat(4000) + i));
         }
         loop.submit("小问题");
 
         var h = loop.conversation().history();
-        // 压缩产物在开头，尾部保留最近若干条，且摘要确实来自一次无工具调用
-        assertTrue(h.get(0) instanceof Msg.User);
+        // 压缩产物在开头，近段原文保留（预算 1500 token ≈ 尾部两条），且摘要来自一次无工具调用
         assertTrue(((Msg.User) h.get(0)).text().startsWith("[对话前情提要] 【要点】历史摘要"),
                 "首条应为前情提要，实际: " + h.get(0));
+        assertTrue(h.stream().anyMatch(m -> m instanceof Msg.User u && u.text().equals("小问题")),
+                "近段必须原文保留最新指令");
+        assertTrue(h.size() <= 5, "旧段应已被摘要替换掉，实际长度 " + h.size());
         assertTrue(engine.calls >= 2, "压缩 + 主对话各至少一次");
+    }
+
+    @Test
+    void sameCallDifferentOutcomeIsNotStuck() {
+        // M4.5：同调用但结果在变（如 TIMEOUT 后原参重试）不得累计打转计数
+        var engine = new ScriptedEngine().queue(toolTurn("move_to", "{}"));
+        var notices = new ArrayList<String>();
+        var replies = new ArrayList<String>();
+        int[] n = {0};
+        var loop = new AgentLoop(engine, List.of(),
+                (name, args) -> CompletableFuture.completedFuture(
+                        new ToolExecutor.ToolOutcome(false, "TIMEOUT:第 " + (++n[0]) + " 次没等到结果")),
+                AgentLoop.Config.defaults(),
+                new AgentLoop.Listener() {
+                    @Override
+                    public void onNotice(String t) {
+                        notices.add(t);
+                    }
+
+                    @Override
+                    public void onReply(String t) {
+                        replies.add(t);
+                    }
+                },
+                () -> "sys", 1_000_000);
+
+        loop.submit("走去箱子");
+        assertTrue(notices.isEmpty(), "结果在变就不是打转，不得 nudge/abort");
+        assertEquals(40, engine.calls, "护栏未触发，一路跑到步数帽才停");
+        assertTrue(replies.stream().anyMatch(r -> r.contains("步数超限")),
+                "终点应是步数帽而非 abort，实际: " + replies);
     }
 }

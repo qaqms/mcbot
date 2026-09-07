@@ -28,13 +28,16 @@ public final class AgentLoop {
 
         default void onNotice(String text) {
         }
+
+        /** 每步模型的 token 真数（cached<0 = 后端没报）。观测用，不影响逻辑。 */
+        default void onUsage(long prompt, long completion, long cached) {
+        }
     }
 
-    public record Config(int maxStepsPerDirective, int repeatNudgeAt, int repeatAbortAt,
-                         int compactionKeepRecent) {
+    public record Config(int maxStepsPerDirective, int repeatNudgeAt, int repeatAbortAt) {
 
         public static Config defaults() {
-            return new Config(40, 3, 5, 12);
+            return new Config(40, 3, 5);
         }
     }
 
@@ -96,6 +99,7 @@ public final class AgentLoop {
             return;
         }
         cancelRequested = false; // 叫停只对当时那条链有效，不追溯新指令
+        convo.onDirectiveBoundary(); // 熔断计数随新指令重置
         steps = 0;
         lastCallKey = null;
         repeatCount = 0;
@@ -132,11 +136,13 @@ public final class AgentLoop {
         }
 
         CompletableFuture<?> ready = convo.needsCompaction()
-                ? convo.compact(engine, cfg.compactionKeepRecent())
+                ? convo.compact(engine)
                 : CompletableFuture.completedFuture(null);
 
-        ready.thenCompose(v -> engine.chat(systemPrompt.get(), convo.history(), tools))
+        ready.thenCompose(v -> engine.chat(systemPrompt.get(), convo.outboundHistory(), tools))
                 .thenAccept(turn -> {
+                    convo.noteUsage(turn);
+                    listener.onUsage(turn.promptTokens(), turn.completionTokens(), turn.cachedTokens());
                     if (consumeCancel()) {
                         return; // 叫停优先于这一轮：整轮丢弃，既不执行工具也不作答
                     }
@@ -163,7 +169,10 @@ public final class AgentLoop {
                     .thenAccept(r -> {
                         convo.add(new Msg.Tool(tc.id(), tc.name(), r.feedback(), r.ok()));
                         listener.onToolInvoked(tc.name(), tc.argsJson(), r.ok(), r.feedback());
-                        String key = tc.name() + '|' + tc.argsJson();
+                        // 打转判定：同调用**且同结果**才累计——TIMEOUT 后原参重试是合法恢复
+                        // （参考项目用真事故换的教训），结果一变说明世界在动，不是空转。
+                        String key = tc.name() + '|' + tc.argsJson() + '|' + r.ok()
+                                + '|' + r.feedback().hashCode();
                         repeatCount = key.equals(lastCallKey) ? repeatCount + 1 : 1;
                         lastCallKey = key;
                         if (repeatCount == cfg.repeatNudgeAt()) {

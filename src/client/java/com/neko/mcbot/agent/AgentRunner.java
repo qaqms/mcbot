@@ -95,11 +95,21 @@ public final class AgentRunner implements ToolExecutor {
                         d.addProperty("text", "（护栏）" + text);
                         emit("progress", d);
                     }
+
+                    @Override
+                    public void onUsage(long prompt, long completion, long cached) {
+                        // M4.5 可观测：每步真实上下文体量。cached<0=后端没报；
+                        // prompt 持续涨而 cached 常年 0/缺失 → 前缀缓存没吃到，该查压缩/剪枝。
+                        LOG.info("[brain] step tokens prompt={} completion={} cached={}",
+                                prompt, completion, cached);
+                    }
                 },
                 () -> PromptBuilder.build(cfg.persona, SkillLoader.load(
                         FabricLoader.getInstance().getGameDir()
                                 .resolve("mcbot").resolve("skills"))),
-                12_000);
+                // 压缩闸门：6000 真 token（API 数优先，本地 CJK 感知估算兜底）。
+                // 参考实测：固定开销≈350，每步只追加；这个数给中转站通道留了延迟余地。
+                6_000);
         LOG.info("大脑已上线：{} / {}", cfg.baseUrl, cfg.model);
     }
 

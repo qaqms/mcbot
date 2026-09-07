@@ -7,6 +7,13 @@
 
 - [x] 按 `docs/BRIDGE.md` §6 清单跑通 7 项（401/状态/task/事件流/补发/MCP/反问闭环）+ cancel
 
+## M4.5：上下文经济学 ✅ 已完成（00:30，证据见 STATUS）
+
+- [x] usage 真数驱动压缩 + 每步 token 日志（deepseek/openai 缓存两方言）
+- [x] 切分铁律（轮边界/User 优先/绝不断 Tool 配对）+ CJK 感知估算 + 失败熔断
+- [x] 过期回执出站折叠（存储全量/出站瘦身两视图）；打转判定改"同调用且同结果"
+- [ ] P2：压缩水位 6000 的数值校准等新 jar 上线后的 `[brain] step tokens` 真数曲线
+
 ## M7：neko 首亮（桥已验证可用，主要是 neko 侧）
 
 - [ ] neko 侧接 MCP（推荐，工具即得）或 REST+SSE；端点+token 从 `bridge.token` 读

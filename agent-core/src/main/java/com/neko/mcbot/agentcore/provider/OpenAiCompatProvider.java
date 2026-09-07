@@ -127,8 +127,19 @@ public final class OpenAiCompatProvider implements ChatProvider {
     public void acceptChunk(JsonObject chunk, TurnBuilder b) {
         if (chunk.has("usage") && chunk.get("usage").isJsonObject()) {
             JsonObject usage = chunk.getAsJsonObject("usage");
-            b.usage(usage.has("prompt_tokens") ? usage.get("prompt_tokens").getAsLong() : 0,
-                    usage.has("completion_tokens") ? usage.get("completion_tokens").getAsLong() : 0);
+            long prompt = usage.has("prompt_tokens") ? usage.get("prompt_tokens").getAsLong() : 0;
+            long completion = usage.has("completion_tokens")
+                    ? usage.get("completion_tokens").getAsLong() : 0;
+            // 缓存命中的两家方言：deepseek 平铺字段 / openai 套 details；没报保持 -1
+            long cached = -1;
+            if (usage.has("prompt_cache_hit_tokens")) {
+                cached = usage.get("prompt_cache_hit_tokens").getAsLong();
+            } else if (usage.has("prompt_tokens_details")
+                    && usage.getAsJsonObject("prompt_tokens_details").has("cached_tokens")) {
+                cached = usage.getAsJsonObject("prompt_tokens_details")
+                        .get("cached_tokens").getAsLong();
+            }
+            b.usage(prompt, completion, cached);
         }
         JsonArray choices = chunk.getAsJsonArray("choices");
         if (choices == null || choices.isEmpty()) {
