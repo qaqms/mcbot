@@ -27,9 +27,17 @@ neko(桌面猫娘) ⇄ 127.0.0.1 桥(HTTP/SSE/MCP) ⇄ mcbot 大脑+工具宿主
 
 ## 文档
 
-- `mcbot-DESIGN.md` — 完整技术方案（拓扑、协议、护栏、寻路、桥接契约、里程碑）。
-- `STATUS.md` — 进度事实源 + 1.21.11 API 实测防漂移笔记。
-- `dist/README-DIST.md` / `dist/README-BRIDGE.md` — 测试包安装 与 neko 侧对接说明。
+| 想干什么 | 看哪里 |
+|---|---|
+| 理解已建成的结构（线程/协议/闸/常数） | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| 搭环境、跑构建与无头验收 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
+| 原子工具清单与回执词汇表 | [`docs/TOOLS.md`](docs/TOOLS.md) |
+| neko/外部大脑怎么接（REST+MCP+SSE 全文契约） | [`docs/BRIDGE.md`](docs/BRIDGE.md)、快速上手 [`dist/README-BRIDGE.md`](dist/README-BRIDGE.md) |
+| 现在排到哪、欠什么债 | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 进度事实源 + 1.21.11 API 防漂移笔记 | [`STATUS.md`](STATUS.md) |
+| 施工前完整蓝图（拓扑/护栏/寻路/里程碑） | [`mcbot-DESIGN.md`](mcbot-DESIGN.md) |
+| 测试包怎么装 | [`dist/README-DIST.md`](dist/README-DIST.md) |
+| AI/新人接手第一页 | [`AGENTS.md`](AGENTS.md) |
 
 ## Clean-room 声明
 

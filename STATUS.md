@@ -1,7 +1,7 @@
 # mcbot 工程进度（STATUS）
 
-> 给后续施工者（人或 AI）：先读 `D:\ai\mcbot-DESIGN.md`（完整技术方案），再读本文件。
-> 本文件是唯一进度事实源，每完成一个里程碑更新。
+> 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
+> 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
 ## 当前状态：M0–M4 ✅ · 联机首测 ✅（14:20）· M6 桥接代码 ✅（14:38），待活体联调 + M5/M7/M8
 
@@ -194,10 +194,14 @@ fabric `KeyBindingHelper.registerKeyBinding(KeyMapping)`。
 ```
 D:\ai\mcbot\
   settings.gradle / gradle.properties / build.gradle   工具链与三模块装配
-  agent-core/          纯 JVM 大脑层（零 MC 依赖）——M2 主战场
-  src/main/            公共+服务端：body/（身体层 M1 已落地）command/ 
-  src/client/          客户端入口（M3 loop 宿主、M6 桥接）
+  agent-core/          纯 JVM 大脑层（零 MC 依赖）+ bridge 内核
+  src/main/            公共+服务端：body/ server(+tools/) task/ command/ common/
+  src/client/          客户端：agent/ bridge/ cfg/ ui/
+  docs/                ARCHITECTURE / DEVELOPMENT / TOOLS / BRIDGE / ROADMAP（as-built 文档组）
+  AGENTS.md            AI 执行者开工第一页（纪律入口）
+  mcbot-DESIGN.md      施工前完整蓝图   README.md 项目首页
   tools/               list-java.ps1（进程清理助手）
+  dist/                测试包 + README-DIST / README-BRIDGE
   run/                 dev 运行目录（gitignore；eula 预置；mcbot/ 为名册与 flag）
 ```
 
