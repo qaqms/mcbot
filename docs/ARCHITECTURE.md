@@ -47,6 +47,7 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
   body/              FakeConnection/CompanionPlayer/CompanionRoster/SummonService/SafeSpawn/SelfTest
+  path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)/PathTask(搜索→确认→执行)
   server/            ToolRegistry/ServerTool/ServerToolDispatcher/RateGuard + tools/(9 个)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
@@ -110,8 +111,13 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
   手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
   `ClientboundBlockDestructionPacket`（-1 清除，onAbort 兜底），完成走
   `Block.getDrops`（错工具真没掉落）→ 背包吸附 → 装不下 `popResource`。
-- 移动：滑步 teleport 占位（≤48 格直线、自动上下坎、实心挡死 `PATH_BLOCKED` 不改世界），
-  M8 换可挖 A*。
+- 移动（M8 起）：move_to = DigAStar 任务。节点=落脚点（脚格+头格可通行、下格有支撑），
+  边统一建模为"清两格(挖)+补支撑(放)+移动"，派生 走/跳/落/下挖/向前挖/垫脚/搭桥。
+  约束全在 LevelDigSampler：神圣集（容器/工作台/床/机关本体与其支撑+任意方块实体）、
+  岩浆邻接否决、起点脚下不挖、单格挖>20s 不值、搜索盒水平 64/垂直 32。
+  要改世界的路先回 NEED_CONFIRM+清单，模型带 may_alter_terrain=true 重发才执行；
+  执行期每 20 节点复核未来 5 节点，变了就地重规划（≤2 次）；同层走路保持 0.45 格/tick
+  滑步节奏（M4 行为视觉回归）。搜索分帧：每 tick 最多展开 300 节点，主线程永不卡崩。
 
 ## 8. 配置文件与运行目录（`<gameDir>/mcbot/`）
 
@@ -141,5 +147,6 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
 | 信封 | S2C 32KB 截断告警 |
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
 | 行动参数 | 臂长 5.5（任务中 6.5 容忍）；滑步 ≤48 格、0.45 格/tick；挖掘进度公式 ÷30 |
+| 寻路(M8) | 8000 节点帽；128 挖帽；放≤背包存量；300 节点/tick；搜索盒 64×32×64；单格挖 ≤20s；重规划 ≤2；复核 20/5 |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 4 |
 | 名册 | v1 每主人 1 同伴；名字 `[a-z0-9_]{2,16}` |

@@ -34,6 +34,14 @@ dependencies {
     // 大脑层：编译期引用 + 运行期以库 mod 形式内嵌进 mcbot jar
     implementation project(':agent-core')
     include project(':agent-core')
+
+    // path/ 子包是零 MC 依赖的纯算法（DigAStar/DigSampler），单测不碰 MC 类就能跑
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
 }
 
 processResources {

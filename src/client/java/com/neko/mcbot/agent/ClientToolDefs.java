@@ -21,8 +21,9 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"r\":{\"type\":\"integer\"}}}"),
             new ToolSpec("place_block", "把背包里的方块放到目标格（item 用注册表路径如 cobblestone）",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"item\":{\"type\":\"string\"}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
-            new ToolSpec("move_to", "走向目标坐标（滑步版≤48格，不会挖路；被挡会如实报告）",
-                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
+            new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。" 
+                    + "若路需要改动世界，先回 NEED_CONFIRM 附方块清单——确认没问题就带 may_alter_terrain=true 重发",
+                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"允许这条路挖/放方块改动世界；首次被 NEED_CONFIRM 后确认再带\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("transfer", "与容器存取物品：dir=out取出/in存入，item可选过滤",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"dir\":{\"type\":\"string\",\"enum\":[\"in\",\"out\"]},\"item\":{\"type\":\"string\"}},\"required\":[\"x\",\"y\",\"z\",\"dir\"]}"),
             new ToolSpec("wait", "原地等待 seconds 秒（1-60），用于等熔炉出货、等作物长熟这类节奏，别用反复查看代替等待",

@@ -3,7 +3,7 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · 联机首测 ✅（14:20）· M6 桥接代码 ✅（14:38），待活体联调 + M5/M7/M8
+## 当前状态：M0–M4 ✅ · M6 桥接代码 ✅（待活体联调）· M8 DigAStar 代码+无头 ✅（22:38，待真机）· 新机环境已迁移
 
 | 里程碑 | 状态 |
 |---|---|
@@ -15,7 +15,31 @@
 | M4 行动工具批 + 跨 tick 任务框架 | ✅ 完成（无头链路 11:28 + 真实实测 11:38：自主寻矿→两次 move_to 机动→发现铜煤矿，差最后 break 时用户退出） |
 | M4 收尾：真取消 / wait / 重进安全落点 / 挖掘 onAbort 清裂纹 | ✅ 14:09 无头 `[m4b]` 全命中 + loop 单测 7/7 |
 | M6 桥接（neko 入口） | ✅ 代码完成（14:38，单测 12/12：桥内核 5 条全绿）——**待活体联调**（主人客户端进世界后用 curl/neko 打） |
-| M5 感知记忆 / M7 neko / M8 DigAStar | ⬜ 见设计文档 §11 |
+| M5 感知记忆 / M7 neko | ⬜ 见设计文档 §11 |
+| M8 DigAStar（纯算法核+执行器+确认流+神圣集） | ✅ **代码+无头验收**（22:38 `[m8]` 四场景全中 + JUnit 8/8）——待真机"地表→矿脉开路" |
+
+### M8 实现备忘（可挖寻路）
+
+- **分层**：`path/DigAStar`（纯算法，零 MC 导入，坐标用自打包 long，根工程新加 JUnit 8 例直测）
+  + `path/DigSampler`（契约：passable/digSeconds/support/placeable/placeCost/maxPlaces/inBounds）
+  + `path/LevelDigSampler`（世界翻译层，**全部安全规则在此**：神圣名册+方块实体检测、岩浆邻接否决、
+  起点脚下不挖、单格>20s 不值挖、搜索盒 64/32）+ `path/PathTask`（SEARCH→确认门→EXECUTE 的 TickTask）。
+  注意：放格与挖格一样吃预算（maxPlaces=背包存量，曾规划出"放2格"而背包只有1块的野路）。
+- **统一动作模型**：每个节点的进入成本 = 清脚格+头格（挖）+补支撑（放），派生
+  WALK/JUMP/FALL/DIG/PILLAR/BRIDGE；斜穿只走现成缝（角落不挖）。终点判据 = 目标柱 3×3×3
+  （"到附近"语义与滑步版一致）。同层 WALK 保持 0.45/tick 插值——视觉回归不破。
+- **NEED_CONFIRM 确认流**：未授权时不执行，回执带挖/放清单（data.blocks ≤32 格）；模型带
+  `may_alter_terrain=true` 重发才执行；执行期重规划出新需改世界的路也会就地回 NEED_CONFIRM（不绕闸）。
+- **执行期复核**：每提交 20 节点验未来 5 节点的支撑/清单格存在性，失败就地重规划（≤2 次），
+  再失败 `NO_PATH:路被改变得太多…重扫再定目的地`。
+- **无头验收 `[m8]`（22:38 基准，接在 m4b 后串行）**：A 石墙拦路→`NEED_CONFIRM 清单≥1`
+  （最优解只挖头格踩脚格翻墙——比人预判还省）；B 授权→真挖到达，掉落进背包；
+  C 箱子嵌墙→**踩箱顶绕过去，箱子分毫未动**；D 基岩笼死→`NO_PATH` 干净失败。
+  同轮 m3 闸账（59×82B+21×77B）/m4 全链/m4b 真取消全绿；m4 的 move_to 已由 A* 接管（纯走路计划挖0放0）。
+- **坑录**：两次"场景异常"实为旧 jar 僵尸服/双服并跑污染——跑验收前必杀干净 KnotServer（killmc 套路）；
+  日志输出带 GBK，管道先 iconv。
+- 已知债：挖子机与 BreakBlockTool 重叠 ~40 行未抽公共；不会自动换工具（手持不动就绕/失败）；
+  不可排流体；TPS 假设 20。
 
 ### M6 实现备忘（桥接）
 
@@ -103,6 +127,7 @@
 | 连接发包 | `Connection.send(Packet<?>) / (Packet<?>, ChannelFutureListener) / (Packet<?>, ChannelFutureListener, boolean)` —— PacketSendListener 已不存在，**三个重载都要覆盖**才能全丢 |
 | 连接断连 | `Connection.disconnect(DisconnectionDetails)` ✓ 可覆盖吞掉 |
 | 命令权限 | `Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)` 做 `requires`；取玩家用 `source.getPlayer()`（可 null；getEntity() 返回 Entity） |
+| 寻路可用 API（M8 javap） | `DimensionType.minY()/height()` 取维度高度范围（Level 无 buildheight 方法）；`Block.byItem(Item)` 可 null；`Level.setBlockAndUpdate(pos,state)`；`Inventory` 实现 `Container.getItem/setItem/getContainerSize(41)`；`ItemStack.isSameItemSameComponents/shrink/grow`；`BlockPos.east()/above(n)` 链式可用 |
 | 世界出生点 | `serverLevel.getRespawnData().pos()`（getSharedSpawnPos 已不存在） |
 | 进场日志 | 假玩家 `steve[embedded] logged in with entity id N`，一切正常 |
 

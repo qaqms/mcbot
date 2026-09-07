@@ -28,7 +28,7 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、真战利品表（错工具真没掉落）、全客户端可见裂纹；掉落先背包后落地 |
 | `collect` | `x,y,z,r?` | 同步 | 吸指定点附近掉落物进背包 |
 | `place_block` | `x,y,z,item` | 同步 | 背包拿方块放（item 用注册路径如 `cobblestone`） |
-| `move_to` | `x,y,z` | 异步(≤3min) | 滑步占位版：≤48 格直线、自动上下坎、实心挡死如实报 `PATH_BLOCKED`，**绝不改世界**（M8 换可挖 A* + may_alter_terrain 确认流） |
+| `move_to` | `x,y,z,may_alter_terrain?` | 异步(≤3min) | **DigAStar（M8）**：节点=落脚点，会绕路/跳/落/挖穿/垫脚/搭桥；改动世界的路先回 `NEED_CONFIRM`+方块清单，点头（`may_alter_terrain=true` 重发）才执行；搜索预算 8000 节点/128 挖/放≤背包存量；执行期每 20 节点复核，世界变了自动重规划 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 原版 `Container` 接口存取，堆叠合并（不开 GUI） |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text` | **本地**（不出客户端） | 方向性决策问主人：question 事件进桥 → `/v1/answer` 回复续跑；300s 不回教它自行定夺 |
@@ -46,7 +46,10 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `OUT_OF_REACH:` | 超出臂长（≈5.5 格） | `move_to` 靠近后重试 |
 | `WRONG_TOOL:` | 当前手持挖不动 | 去做/去找合适工具（回执会指方向） |
 | `UNBREAKABLE:` | 生存手段不可破坏 | 换目标 |
-| `PATH_BLOCKED:` | 滑步走不过去 | 绕路/清障/等升级 |
+| `PATH_BLOCKED:` | 前方堵死/超搜索盒 | 绕路/拆障/分短段重发 |
+| `NEED_CONFIRM:` | 最优路要改动世界（挖/放），未授权 | 把清单说给主人听；同意后带 `may_alter_terrain=true` 重发；主人不愿就换目的地 |
+| `NO_PATH:` | A* 搜索空间内无路（封锁/无支撑） | 换路线方向或先造条件（拿材料/拆明障） |
+| `BUDGET_EXCEEDED:` | 搜索/挖掘超预算（目标太远或太纠缠） | 分短段，或先靠近再重发 |
 | `CANCELLED:` | 主人主动叫停 | **停手**，向主人确认下一步，不许自作主张续上 |
 | `TIMEOUT:` | 服务器/主人超时未回执 | 别重复该操作，向主人说明 |
 | `INTERNAL:` | 服务端异常/参数非 JSON | 报障，别重试 |

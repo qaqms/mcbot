@@ -177,14 +177,15 @@ public final class SelfTest {
                 busyReply != null && !busyReply.ok(), stopped, idleStop);
         f.thenAccept(r -> McbotMod.LOG.info("[m4b] 叫停回执: ok={} {}", r.ok(), r.feedback()));
 
-        // B：wait 正常走完（约 2 秒后才见完成行）
+        // B：wait 正常走完（约 2 秒后才见完成行）——完事接棒 m8 场景
         JsonObject w = new JsonObject();
         w.addProperty("seconds", 2);
         McbotMod.LOG.info("[m4b] wait 2s 提交");
         registry.get("wait").runAsync(cp, w, sched)
-                .thenAccept(r -> McbotMod.LOG.info("[m4b] wait 完成: ok={} {}", r.ok(), r.feedback()));
-        McbotMod.LOG.info("[m4b] 判读：busy拒收=true cancel命中=true 空槽cancel=false，"
-                + "叫停回执 ok=false 且含 CANCELLED，约 2 秒后 wait 完成 ok=true。");
+                .thenAccept(r -> {
+                    McbotMod.LOG.info("[m4b] wait 完成: ok={} {}", r.ok(), r.feedback());
+                    m8Scenarios(cp);
+                });
     }
 
     /** 找一格开阔位：两格空气、脚下实心，先东后南绕圈。找不到就抬头放。 */
@@ -205,6 +206,123 @@ public final class SelfTest {
             }
         }
         return cp.blockPosition().above(2);
+    }
+
+    /**
+     * M8 DigAStar 无头验收（接在 m4b 之后，单槽串行）：
+     * A 石墙拦路→NEED_CONFIRM 带清单；B 点头后真挖穿到达；
+     * C 箱子嵌墙→箱子分毫不动（神圣集）；D 基岩笼→NO_PATH 干净失败。
+     */
+    private static void m8Scenarios(CompanionPlayer cp) {
+        var registry = McbotMod.toolRegistry();
+        var sched = McbotMod.scheduler();
+        var level = cp.level();
+        var base = cp.blockPosition();
+        McbotMod.LOG.info("[m8] 基准点 {}", base.toShortString());
+
+        // 铺一条测试大道：东 2..7 的地板填石，脚格/头格清成空气
+        for (int dx = 2; dx <= 7; dx++) {
+            level.setBlockAndUpdate(base.east(dx).below(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+            level.setBlockAndUpdate(base.east(dx), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(base.east(dx).above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+        }
+        // A 墙：东 4 的脚+头两格石头（placeStock=0 爬不了顶，唯一路线就是挖穿）
+        level.setBlockAndUpdate(base.east(4), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(base.east(4).above(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+
+        // 场景 A：不带 may_alter_terrain → 必须 NEED_CONFIRM 且清单非空
+        JsonObject a = moveArgs(base.east(6));
+        McbotMod.LOG.info("[m8] A 需确认流提交");
+        registry.get("move_to").runAsync(cp, a, sched).thenAccept(ra -> {
+            boolean needConfirm = !ra.ok() && ra.feedback().startsWith("NEED_CONFIRM:");
+            int listed = ra.data() != null && ra.data().has("blocks")
+                    ? ra.data().getAsJsonArray("blocks").size() : 0;
+            McbotMod.LOG.info("[m8] A 需确认={} 清单={} 格：{}", needConfirm, listed, ra.feedback());
+
+            // 场景 B：点头 → 挖穿到达
+            JsonObject b = moveArgs(base.east(6));
+            b.addProperty("may_alter_terrain", true);
+            McbotMod.LOG.info("[m8] B 确认后执行提交（看真挖耗时）");
+            registry.get("move_to").runAsync(cp, b, sched).thenAccept(rb -> {
+                boolean through = rb.ok();
+                boolean wallGone = level.getBlockState(base.east(4)).isAir();
+                McbotMod.LOG.info("[m8] B 到达={} 墙已被挖穿={}：{}", through, wallGone, rb.feedback());
+
+                // 场景 C：把箱子嵌进墙里（脚格=箱子），验证神圣集：只能踩顶绕，绝不挖箱
+                level.setBlockAndUpdate(base.east(4), net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
+                level.setBlockAndUpdate(base.east(4).above(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                level.setBlockAndUpdate(base.east(4).above(2), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+                // 同伴拉回大道西端
+                cp.teleportTo(base.east(2).getX() + 0.5, base.getY(), base.east(2).getZ() + 0.5);
+                JsonObject c = moveArgs(base.east(6));
+                c.addProperty("may_alter_terrain", true);
+                McbotMod.LOG.info("[m8] C 箱子嵌墙提交");
+                registry.get("move_to").runAsync(cp, c, sched).thenAccept(rc -> {
+                    boolean chestIntact = level.getBlockState(base.east(4))
+                            .is(net.minecraft.world.level.block.Blocks.CHEST);
+                    McbotMod.LOG.info("[m8] C 箱子分毫未动={} 结果 ok={}：{}",
+                            chestIntact, rc.ok(), rc.feedback());
+                    // 收尾清箱子，免得残在存档里
+                    level.destroyBlock(base.east(4), false, null);
+                    m8dSealedBox(cp);
+                });
+            });
+        });
+        McbotMod.LOG.info("[m8] 判读基准：A 需确认=true 且清单≥1（踩脚挖头的最优解可以只挖 1 格）；"
+                + "B 到达=true；C 箱子未动；D NO_PATH。全中即 M8 无头验收通过。");
+    }
+
+    /** 场景 D：基岩笼死→必须干净地 NO_PATH，拆笼后同伴归位。 */
+    private static void m8dSealedBox(CompanionPlayer cp) {
+        var registry = McbotMod.toolRegistry();
+        var sched = McbotMod.scheduler();
+        var level = cp.level();
+        var home = cp.blockPosition();
+        McbotMod.LOG.info("[m8] D home={}", home.toShortString());
+        var bedrock = net.minecraft.world.level.block.Blocks.BEDROCK.defaultBlockState();
+        var air = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+        java.util.List<net.minecraft.core.BlockPos> cage = new java.util.ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue; // 同伴占着中心
+                }
+                for (int dy = 0; dy <= 1; dy++) {
+                    var p = home.offset(dx, dy, dz);
+                    level.setBlockAndUpdate(p, bedrock);
+                    cage.add(p);
+                }
+            }
+        }
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                var lid = home.offset(dx, 2, dz);
+                level.setBlockAndUpdate(lid, bedrock);
+                cage.add(lid);
+            }
+        }
+        JsonObject mv = moveArgs(home.east(4)); // 拉近：笼外东 6 可能落在未加载区块，会被工具层区块闸先拦
+        mv.addProperty("may_alter_terrain", true); // 即使全盘授权，基岩也不许碰
+        McbotMod.LOG.info("[m8] D 基岩笼死提交");
+        registry.get("move_to").runAsync(cp, mv, sched).thenAccept(rd -> {
+            boolean cleanFail = !rd.ok() && (rd.feedback().startsWith("NO_PATH:")
+                    || rd.feedback().startsWith("BUDGET_EXCEEDED:"));
+            // 拆笼归位
+            for (var p : cage) {
+                level.setBlockAndUpdate(p, air);
+            }
+            cp.teleportTo(home.getX() + 0.5, home.getY(), home.getZ() + 0.5);
+            McbotMod.LOG.info("[m8] D 干净失败={}：{}", cleanFail, rd.feedback());
+            McbotMod.LOG.info("[m8] 全部场景结束（笼已拆，同伴已归位）");
+        });
+    }
+
+    private static JsonObject moveArgs(net.minecraft.core.BlockPos pos) {
+        JsonObject o = new JsonObject();
+        o.addProperty("x", pos.getX());
+        o.addProperty("y", pos.getY());
+        o.addProperty("z", pos.getZ());
+        return o;
     }
 
     private static Envelope env(String kind, JsonObject body) {
