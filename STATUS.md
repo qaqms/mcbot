@@ -3,7 +3,7 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M6 桥接代码 ✅（待活体联调）· M8 DigAStar 代码+无头 ✅（22:38，待真机）· 新机环境已迁移
+## 当前状态：M0–M4 ✅ · M6 桥接 ✅ 活体联调关账（23:44）· M8 DigAStar ✅ 无头+真机双验收 · 下一步 M7/M5
 
 | 里程碑 | 状态 |
 |---|---|
@@ -14,9 +14,19 @@
 | M3.5 G 面板（配置/召唤/聊天，热重启大脑） | ✅ 实测通过（key 问题为用户侧凭证，已闭环） |
 | M4 行动工具批 + 跨 tick 任务框架 | ✅ 完成（无头链路 11:28 + 真实实测 11:38：自主寻矿→两次 move_to 机动→发现铜煤矿，差最后 break 时用户退出） |
 | M4 收尾：真取消 / wait / 重进安全落点 / 挖掘 onAbort 清裂纹 | ✅ 14:09 无头 `[m4b]` 全命中 + loop 单测 7/7 |
-| M6 桥接（neko 入口） | ✅ 代码完成（14:38，单测 12/12：桥内核 5 条全绿）——**待活体联调**（主人客户端进世界后用 curl/neko 打） |
+| M6 桥接（neko 入口） | ✅ **活体联调关账**（23:29–23:44）：401×2/status/task 管道/SSE id1-30/Last-Event-ID 补发/MCP list+call/cancel/ask-answer 反问闭环——7 项清单全中 |
+| M8 真机（PCL 客户端+真实山丘） | ✅ 登顶链路：BUDGET_EXCEEDED×2 教学→NEED_CONFIRM(挖2格)→**ask_owner q8 主动征求**→授权→真挖上山 (-512,95)→扫出 coal_ore×7→诚实作答 |
 | M5 感知记忆 / M7 neko | ⬜ 见设计文档 §11 |
-| M8 DigAStar（纯算法核+执行器+确认流+神圣集） | ✅ **代码+无头验收**（22:38 `[m8]` 四场景全中 + JUnit 8/8）——待真机"地表→矿脉开路" |
+| M8 DigAStar（纯算法核+执行器+确认流+神圣集） | ✅ 代码+无头（22:38 `[m8]` 四场景全中 + JUnit 8/8）；真机见上行 |
+
+### 活体联调证据（M6+M8 合并验收，2026-09-07 23:08–23:44）
+
+环境：PCL 实例（E:\我的世界\测试，mods=本仓 build/libs jar+fabric-api 0.141.6）进 dev runServer（离线模式），同机桥 127.0.0.1:57121。
+
+- **M6 七项清单全过**：①无/错 token 401；②status 字段实时准确（含 pending_questions）；③POST /v1/task 投令+窗口 fragments；④SSE 帧 id1-30 带 ev/task_id；⑤Last-Event-ID 从 18/23 断点重放准确；⑥MCP tools/list 五工具+tools/call status 成功；⑦ask→answer 闭环（q8 问→答"可以挖"→续跑到登顶）；cancel 接口 ok:true。
+- **M8 真机**：模型规划上山 → 真实地形两次 `BUDGET_EXCEEDED`（8000 节点帽在 16 格短距复杂地形就撞——观察点，候选调优：可达性预检/启发权重/预算帽）→ 换目标 `NEED_CONFIRM 挖2格` → 模型**没有擅自批准而是 ask_owner 征求** → 授权后真挖登顶 (-512,95,-129) → scan 发现 coal_ore×7 → done 帧诚实汇报。
+- 坑录：①用户中转站只挂 /v1 下，根路径被 CF 人机验证页接管→"一大堆看不懂的东西"=错误体整坨进聊天（已修 LlmClient：HTML 折叠成人话+非200 自动 /v1 换道重试一次，新 jar 待发）；②**git-bash curl 发中文请求体乱码**（服务端 UTF-8 无罪，python urllib 重发即正常）——以后非 ASCII 桥测试一律用 python 发；③游戏内收到"[同伴想问]"后**主人没有回答入口**（只能等 5min 超时或靠桥）——记债务。
+- 待用户重启客户端时顺手：把 E 盘实例 mods/ 里的 mcbot jar 换成 build/libs 新包（含 LlmClient 修复）。
 
 ### M8 实现备忘（可挖寻路）
 

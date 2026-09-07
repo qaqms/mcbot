@@ -33,10 +33,20 @@ public final class LlmClient implements ChatEngine {
 
     @Override
     public CompletableFuture<AssistantTurn> chat(String systemPrompt, List<Msg> convo, List<ToolSpec> tools) {
+        return chatOn(provider.endpoint(), true, systemPrompt, convo, tools);
+    }
+
+    /**
+     * 不少中转站只挂在 /v1 下，根路径被首页/CF 人机验证页接管；baseUrl 忘写 /v1 时
+     * 对"返回网页"的错误自动换道重试一次（deepseek 式根路径站点零成本）。
+     */
+    private CompletableFuture<AssistantTurn> chatOn(String endpoint, boolean mayRetryV1,
+                                                    String systemPrompt, List<Msg> convo,
+                                                    List<ToolSpec> tools) {
         TurnBuilder builder = new TurnBuilder();
         JsonObject body = provider.buildBody(systemPrompt, convo, tools);
 
-        HttpRequest request = HttpRequest.newBuilder(URI.create(provider.endpoint()))
+        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
@@ -47,14 +57,42 @@ public final class LlmClient implements ChatEngine {
         return http.sendAsync(request, HttpResponse.BodyHandlers.ofLines())
                 .thenCompose(resp -> {
                     if (resp.statusCode() != 200) {
-                        StringBuilder err = new StringBuilder();
-                        resp.body().limit(50).forEach(l -> err.append(l).append(' '));
+                        String err = summarizeError(resp.body());
+                        if (mayRetryV1 && err.startsWith("web page:") && !endpoint.contains("/v1/")) {
+                            String alt = endpoint.replaceFirst("/chat/completions$", "/v1/chat/completions");
+                            if (!alt.equals(endpoint)) {
+                                return chatOn(alt, false, systemPrompt, convo, tools);
+                            }
+                        }
                         return CompletableFuture.failedFuture(new IOException(
                                 provider.name() + " HTTP " + resp.statusCode() + ": " + err));
                     }
                     resp.body().forEach(line -> onLine(line, builder));
                     return CompletableFuture.completedFuture(builder.build());
                 });
+    }
+
+    /**
+     * 错误体归一：OpenAI 族正常回 JSON（取 error 对象）；站点首页/CF 墙是 HTML——
+     * 整坨塞进聊天和模型上下文毫无意义，折成一句人话。
+     */
+    private static String summarizeError(java.util.stream.Stream<String> lines) {
+        String raw = lines.limit(50).reduce("", (a, b) -> (a + " " + b).trim());
+        if (raw.isEmpty()) {
+            return "(empty body)";
+        }
+        if (raw.startsWith("<")) {
+            return "web page: endpoint returned HTML (wrong path or bot-wall), not a JSON API";
+        }
+        try {
+            var j = JsonParser.parseString(raw);
+            if (j.isJsonObject() && j.getAsJsonObject().has("error")) {
+                raw = j.getAsJsonObject().get("error").toString();
+            }
+        } catch (RuntimeException notJson) {
+            // 保持原文截断
+        }
+        return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
     }
 
     private void onLine(String line, TurnBuilder builder) {
