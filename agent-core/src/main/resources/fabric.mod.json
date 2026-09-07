@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "mcbot-agent-core",
+  "version": "0.1.0",
+  "name": "mcbot agent-core",
+  "description": "Pure-JVM brain layer (LLM transport, conversation, agent loop). No Minecraft dependency; bundled with mcbot.",
+  "authors": ["neko"],
+  "environment": "*",
+  "entrypoints": {}
+}

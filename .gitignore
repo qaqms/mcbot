@@ -1,0 +1,11 @@
+.gradle/
+build/
+run/
+out/
+*.iml
+.idea/
+.vscode/
+local.properties
+
+# 构建产物：源码仓不收 dist 里的 jar（README 保留）
+dist/*.jar

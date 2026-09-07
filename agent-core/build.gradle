@@ -1,0 +1,44 @@
+plugins {
+    id 'java-library'
+    id 'application'
+}
+
+version = rootProject.version
+group = rootProject.maven_group
+
+// 独立命令行 harness：./gradlew :agent-core:run
+application {
+    mainClass = 'com.neko.mcbot.agentcore.harness.Cli'
+}
+
+run {
+    standardInput = System.in
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // JSON 在 mod 运行时由 Minecraft 自带（版本以宿主为准），独立运行时自备
+    compileOnly 'com.google.code.gson:gson:2.11.0'
+    runtimeOnly 'com.google.code.gson:gson:2.11.0'
+
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+    it.options.encoding = 'UTF-8'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}

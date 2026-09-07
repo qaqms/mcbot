@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'mcbot'
+// agent-core：纯 JVM 的大脑层（LLM 传输/对话/loop），零 Minecraft 依赖，可脱离游戏单测。
+include('agent-core')
