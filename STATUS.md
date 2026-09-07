@@ -70,6 +70,25 @@
 - 实测修正：scan_area 回执曾谎称"以面朝方向为前"，数据实为世界轴偏移——已改诚实措辞；
   真·朝向相对坐标随 M5 字符网格一起上。
 
+## 环境迁移记录（2026-09-07，新机 qaqms@F:\ai\mcbot）
+
+机器从原开发机（D:\ai、用户 lulu/mise）迁到本机，以下三项为本机适配（仓库内已改，换机仍需改）：
+
+| 项 | 新值 | 实测依据 |
+|---|---|---|
+| `org.gradle.java.home` | `C:\Users\ms\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2`（Temurin 21.0.10，Gradle 自动置备） | java -version 确认 |
+| wrapper distributionUrl | `file:/F:/ai/gradle-9.5.1-bin.zip`（140MB，curl 断点续传+unzip -t 验完） | 官方源经 github 重定向链路不稳，10s 超时实锤 |
+| 代理 systemProp | 已全部移除，Gradle 走直连 | 直连实测：fabricmc 200 / piston-meta 200 / plugins.gradle 200 / central 200；central 走 10809 代理反回 403 |
+
+网络事实：本机系统代理 127.0.0.1:10809 仅浏览器/curl 用；JVM 不读注册表代理，构建一律直连；Maven Central 直连偶发 000，重试即过（未上镜像，若再频发考虑 aliyun）。
+
+新机无头验收（21:29，`gradlew build` 4m48s 全绿 + autotest.flag SelfTest）：
+- 单测 12/12（bridge 5 + loop 4 + provider 3，XML 核实 0 fail）；产出 mcbot-0.1.0.jar。
+- M1：`steve[embedded] logged in` + `同伴 steve 已召唤 (owner=console)`。
+- M3 五场景全命中：79B 白名单拒 / 97B owner 拒 / status+scan 直调 / 255B 正向(seq=42) / 速率闸 59×82B + 21×77B（与旧基线完全吻合）。新世界出生点 (-512,105,-128)。
+- M4：place → break(7s 真耗时) → move_to → chest → transfer(存 3 圆石)；M4b：`busy拒收=true cancel命中=true 空槽cancel=false`，叫停回执 CANCELLED，2 秒后 wait ok=true。
+- 唯一 ERROR 为新 run 目录首启缺 server.properties（自动生成，良性）；收服后无孤儿 java。
+
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
 
 | 事项 | 真实形状（Mojang 映射） |
