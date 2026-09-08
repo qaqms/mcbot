@@ -152,7 +152,8 @@ public final class BreakBlockTool implements ServerTool {
             return running();
         }
 
-        /** 完成后的收尾：给动画留两拍再交回执（顺带保持"到 done 才回包"的节奏）。 */
+        /** 完成后的收尾：前两拍 running、第 3 拍才回包（给破坏动画留两拍，并维持
+         * "到 done 才回包"的节奏）。计数含当拍，所以条件是 <3 不是 <2。 */
         private Progress finishPhase(net.minecraft.server.level.ServerLevel level, CompanionPlayer c) {
             if (++collectTicks < 3) {
                 return running();

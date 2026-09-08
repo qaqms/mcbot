@@ -107,4 +107,23 @@ class ConversationTest {
         // 失败绝不丢历史
         assertEquals(20, c.history().size());
     }
+
+    @Test
+    void compactedClearsRealTokenGateSoItCannotFireTwiceInARow() {
+        ChatEngine ok = (s, m, t) ->
+                CompletableFuture.completedFuture(new AssistantTurn("- 摘要", List.of(), 0, 0, -1, "stop"));
+        var conv = new Conversation(6000);   // 生产同口径水位
+        for (int i = 0; i < 110; i++) {
+            conv.add(user(200));             // ≈58 token/条：压后近段 ≈1500（<6000）但条数 ≈26（>8），
+                                             // 闸门的熄火与否只剩"旧真数是否作废"一个变量——才有鉴别力
+        }
+        conv.noteUsage(new AssistantTurn("t", List.of(), 9000, 10, 0, "stop"));
+        assertTrue(conv.needsCompaction());
+        conv.compact(ok).join();
+        // R0 回归钉：真数若不随压缩作废，max(旧 9000, 新估算 1500) 会下一步又真 → 白打端点的连发压缩
+        assertFalse(conv.needsCompaction(), "压缩成功后闸门必须立即熄火");
+        // 下一次 API 真数回来照常驱动
+        conv.noteUsage(new AssistantTurn("t", List.of(), 9000, 10, 0, "stop"));
+        assertTrue(conv.needsCompaction());
+    }
 }

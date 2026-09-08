@@ -182,7 +182,7 @@ public final class BridgeService {
         a.add(tool("mcbot_task", "派同伴去办一件事（老板级指令，非原子操作）。返回 task_id 与窗口内的进度片段",
                 "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},"
                         + "\"wait_s\":{\"type\":\"integer\",\"description\":\"0-120，默认8\"}},\"required\":[\"text\"]}"));
-        a.add(tool("mcbot_ask", "和同伴闲聊一句，同步等它的回答（≤60 秒）",
+        a.add(tool("mcbot_ask", "和同伴闲聊一句，同步等它的回答（≤135 秒，含它反问链上的等待）",
                 "{\"type\":\"object\",\"properties\":{\"companion\":{\"type\":\"string\"},"
                         + "\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}"));
         a.add(tool("mcbot_answer", "回答同伴的反问（question 事件里的 question_id）",

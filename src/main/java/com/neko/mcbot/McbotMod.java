@@ -108,6 +108,10 @@ public final class McbotMod implements ModInitializer {
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
             scheduler.tick(server);
             if (++tickCount[0] >= 60) {
+                // 归零重计：旧写法过了 60 拍后**每拍**进 onTick，正常运行（无 flag）时
+                // 就是每秒 20 次 Files.exists——开发工装漏进生产路径。改成每 3 秒探一次，
+                // 兼顾"跑起来后才补 flag"的用法（检测延迟 ≤3s）。
+                tickCount[0] = 0;
                 com.neko.mcbot.body.SelfTest.onTick(server);
             }
         });

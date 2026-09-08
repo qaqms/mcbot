@@ -5,14 +5,23 @@
 > 原序 M7/M5 仍成立但降为二线：侦察把寻路撞帽/轮次爆炸/伪功能三项定位成**已确证的真缺陷**，
 > 且它们直接阻塞 M7 首亮体验；改道理由全文见 STATUS「09-08 三线整改侦察定案」节。
 
-## R0 小清账（穿插偿还，不开新战线；均已到行号自证）
+## R0 小清账（穿插偿还，不开新战线；均已到行号自证）——✅ 09-08 12:40 关账
 
-- [ ] `McbotMod:108-113` tickCount 永不归零 → 正常运行每拍一次 `Files.exists`（开发工装漏入生产）
-- [ ] `BreakBlockTool:155-157` 注释「留两拍」与代码 `<3` 不符（行为对、注释错）
-- [ ] 桥 `/v1/ask` 60s 与反问 120s 不对齐（neko 放弃后大脑空等 60s）
-- [ ] `Conversation.noteCompacted` 不复位 `realPromptTokens` → 压缩可连发
-- [ ] ARCHITECTURE §10 常数表已修一条（ask_owner 300s→120s），余行待扫
-- [ ] 桥 SSE 每连接永久占线程（池仅 4）：2 SSE + 2 长 wait 即饥饿
+- [x] `McbotMod` tickCount 永不归零 → 开发工装漏入生产。**修法：过 60 拍后归零重计**，
+      Files.exists 从 20 次/秒降到 1 次/3 秒；兼顾"跑起来后才补 flag"用法（检测延迟 ≤3s）
+- [x] `BreakBlockTool` 注释澄清："留两拍"其实**是对的**（前两拍 running、第三拍回包），
+      审计代理 off-by-one——只把注释写到不可误读，行为零改动（累计四处代理结论被主会话复核推翻）
+- [x] 桥 `/v1/ask` 60s→**135s**（必须 > 反问 120s，否则 neko 先 504、大脑空等后答案塞进已作废 future）；
+      MCP `mcbot_ask` 描述同步；新回归用例钉住（见下）
+- [x] `Conversation.noteCompacted()` 补 `realPromptTokens=0` + **判别性单测**
+      `compactedClearsRealTokenGateSoItCannotFireTwiceInARow`（水位 6000/40→110 小消息/真数 9000：
+      压后估算 ≈1500 且条数 >8，熄火只剩"旧真数作废"一个变量）；**变异检验：拆修复恰好挂这 1 例**
+- [x] ARCHITECTURE §10 同步（ask 135s、桥池 8；ask_owner 300→120s 早些时候已修）
+- [x] 桥池 4→8 + 注释（SSE 不占线程的彻底解法归 R2-C）
+- 验收（12:39–12:40 无头）：build 绿；ConversationTest 7/7；`[m5a]` 四条全中；`[m4b]`
+  `busy=true cancel=true 空槽=false`；`[m8]` A 需确认=true 清单 1 格/B 到达/C 箱未动/D NO_PATH；
+  MC 侧 0 异常；停服后无孤儿 java（只剩 daemon）。另新增漂移记录：`CompanionScheduler:95` 文案
+  "60 秒"实为 move 帽 3600tick=3min——归 R2-C 一并修（它要动同一段代码）。
 - [ ] `CompanionScheduler:95` 超时文案硬写"60 秒"而 move_to 帽 3600tick=3min（主会话已证；R2-C 一并修）
 
 ## R1 寻路整改（靶子：16 格复杂山地撞 8000 帽；真因分析见 STATUS；**设计卡：`docs/plan/R1-pathfinding.md`**）

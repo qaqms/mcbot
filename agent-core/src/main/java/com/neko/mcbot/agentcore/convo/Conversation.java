@@ -99,9 +99,12 @@ public final class Conversation {
         }
     }
 
-    /** 压缩成功后调用：旧段的估算失效，真数还偏大但会被下一轮 usage 刷新。 */
+    /** 压缩成功后调用：估算与真数都按新历史作废——旧段没了，真数还挂着压缩前的大值
+     *  会让 needsCompaction 下一步又真（可连发压缩白打端点）；归零退回估算兜底，
+     *  下一次真调用会用新口径刷新。 */
     public void noteCompacted() {
         compactFailures = 0;
+        realPromptTokens = 0;
     }
 
     /** CJK 感知估算：中日韩字符≈1 token/字，其余≈4 字符/token，每条消息 +结构开销。 */

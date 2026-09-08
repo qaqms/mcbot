@@ -91,10 +91,14 @@ public final class BridgeHttp implements BridgeEvents.Sink {
 
     private BridgeHttp() throws IOException {
         token = loadOrCreateToken();
-        service = new BridgeService(new RunnerBackend(), ring);
+        // ask 超时 135s：必须 > 反问的 120s——否则 neko 经 /v1/ask 链上触发 ask_owner 时
+        // HTTP 先 504 放弃、大脑还在空等反问，答案回来只塞进已作废的 future。
+        service = new BridgeService(new RunnerBackend(), ring, 135_000);
         server = HttpServer.create(
                 new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT), 4);
-        server.setExecutor(Executors.newFixedThreadPool(4, r -> {
+        // 池 4→8：每个 SSE 长连接永久占一条线程，4 条 = 2 个 SSE + 2 个长 wait 即饥饿。
+        // 彻底解法（SSE 不占线程）归 R2-C 一并设计。
+        server.setExecutor(Executors.newFixedThreadPool(8, r -> {
             Thread t = new Thread(r, "mcbot-bridge");
             t.setDaemon(true);
             return t;
