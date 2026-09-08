@@ -56,20 +56,33 @@ class ConversationTest {
 
     @Test
     void outboundFoldsSupersededToolReceiptsOnly() {
+        // R2-B 后语义：折叠只作用于检查点（步边界推进到 size-FOLD_KEEP_TAIL）之前的
+        // 冻结区——所以场景要拉长到 13 条才有折叠资格，尾巴 12 条永远保留原文。
         var c = new Conversation(1_000_000);
         c.add(user(10));
-        c.add(tool("status", 100));   // 旧 status 回执 → 应折叠
+        c.add(tool("status", 100));   // 旧 status 回执（冻结区内）→ 应折叠
         c.add(tool("scan_area", 100)); // 最新 scan → 保留
-        c.add(tool("status", 5));      // 最新 status → 保留
+        c.add(tool("status", 5));      // 检查点之后的未冻结区 → 保留
+        for (int i = 0; i < 8; i++) {
+            c.add(user(1));            // 拉长历史使旧回执获得折叠资格（保留尾 12 条）
+        }
+        c.add(tool("status", 7));      // 真正的最新 status → 保留
+        assertEquals(13, c.history().size());
+        c.onStepBoundary();            // 步边界：检查点 = 13-12 = 1，只冻 index0
+        // 要折 index1 需要检查点 > 1：再补一条后推进（窗口前移，决定冻结不重算）
+        c.add(user(1));
+        c.onStepBoundary();
         var out = c.outboundHistory();
-        assertEquals(4, out.size(), "只瘦内容不动结构");
+        assertEquals(14, out.size(), "只瘦内容不动结构");
         var old = (Msg.Tool) out.get(1);
         assertTrue(old.content().contains("过期回执已折叠"), "被更新者应折叠");
         assertEquals("c-status", old.callId(), "配对信息（callId）不许丢");
         assertTrue(((Msg.Tool) out.get(2)).content().startsWith("回执内容"),
                 "同名只出现一次的不折（scan 无后来者）");
-        assertFalse(((Msg.Tool) out.get(3)).content().contains("折叠"), "最新一条不折叠");
-        assertEquals(4, c.history().size(), "存储侧永远全量");
+        assertFalse(((Msg.Tool) out.get(3)).content().contains("折叠"),
+                "检查点之后（保留窗口/未冻结区）不得折");
+        assertTrue(((Msg.Tool) out.get(12)).content().startsWith("回执内容"), "保留窗口内不折");
+        assertEquals(14, c.history().size(), "存储侧永远全量");
     }
 
     @Test
