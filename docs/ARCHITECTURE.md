@@ -152,7 +152,7 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
 | 位置 | 数值 |
 |---|---|
 | AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
-| 超时 | LLM 180s；工具回执 90s；ask_owner 300s；桥 ask 60s；task 窗口 ≤120s |
+| 超时 | LLM 180s；工具回执 90s；ask_owner **120s**（M4.6 由 300s 降，本行曾漂移）；桥 ask 60s；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
