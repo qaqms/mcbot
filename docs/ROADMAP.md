@@ -26,6 +26,14 @@
 
 ## R1 寻路整改（靶子：16 格复杂山地撞 8000 帽；真因分析见 STATUS；**设计卡：`docs/plan/R1-pathfinding.md`**）
 
+- [x] **S1 纯算法（09-08 13:44 关账）**：加权 h（W=1.8×H_UNIT=0.467×**距体积** L1 + 入柱价，
+      注释公开"故意不可采纳"）+ 部分提交 API（budgetReached/partialAvailable/partialPath，
+      PARTIAL_MIN_GAIN=4）+ expanded() 等 getter；**对外失败字符串契约零改动**（BUDGET/NO_PATH
+      不动，PARTIAL 话术归 S3）。校准实据：山体用例 w1.0=519 vs w1.8=242 展开（2.1× 聚焦）；
+      150 帽下 partial 真实可用。用例①②③⑥入，DigAStarTest 12/12；现有 8 例**零改动仍绿**；
+      无头 `[m8]` A 确认=true 清单 1/B 到达/C 未动/D NO_PATH、`[m4]/[m4b]/[m5a]/[m3]` 全不回退，0 异常。
+      意外发现：合成山体没复现真机爆炸（旧口径 519≪8000）——真机撞帽必然叠加了**未加载区
+      同步生成/昂贵现查**因素，S2 memo+UNKNOWN 才是主刀，S1 的聚焦是减常数那半。——设计卡 §B 优先级上调
 - [ ] **新发现（09-08 合并复核时 javap 坐实）**：`LevelReader.getChunk(II)` 默认 FULL+create=true，
       而 `LevelDigSampler.passable()`（:53-59）**没查 isLoaded** 就 `getBlockState` → 搜索伸进
       未加载区会在主线程**同步加载/生成区块**（`digSeconds` 有防护、passable 没有）。并入 memo 设计：

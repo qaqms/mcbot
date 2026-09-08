@@ -34,6 +34,19 @@ public final class DigAStar {
     private static final double DIG_OVERHEAD = 0.3; // 每挖一格的固定开销（换工具/瞄准）
     private static final double FALL_PENALTY = 0.15; // 下落罚（每格²），让楼梯优于直落
 
+    /**
+     * 启发权重（docs/plan/R1-pathfinding.md §A，主人拍板 1.8 实测后校）：
+     * **故意不可采纳**——代价上界 ≤ W×最优，拿次优度换展开数。
+     * 旧 h=0.95×L1(到中心) 两头都错：斜步 1.4 消 2 单位（高估），挖价不进入 h（必挖区低估），
+     * f 退化成按 g 的球形扩散→16 格山地撞 8000 帽。真可采纳下界只能假设挖价=0（总能声称绕行），
+     * 对山体零梯度→治不了病根，故走加权而非修下界（设计卡 §A 的否决理由）。
+     */
+    public static final double H_WEIGHT = 1.8;
+    /** 每消 1 个曼哈顿单位的最低真实代价：(1,1,1) 斜跨步覆盖 3 单位只花 1.4 → 1.4/3≈0.467。 */
+    public static final double H_UNIT = 0.467;
+    /** 撞帽时降级为 PARTIAL 的最小推进量（曼哈顿单位）：差不到这个数就坦白 NO_PROGRESS 级。 */
+    public static final int PARTIAL_MIN_GAIN = 4;
+
     private record Node(long key, int x, int y, int z, int digs, int places,
                         double g, double f, long prev) {
     }
@@ -42,6 +55,11 @@ public final class DigAStar {
     private final int maxNodes;
     private final int maxDigs;
     private final int sx, sy, sz, tx, ty, tz;
+    private final double hWeight;
+    /** 入目标柱的最小真实代价（脚+头挖价+放价，搜索开始算一次）；全不可行=0。 */
+    private final double goalEntryCost;
+    /** 起始点到目标体积的 L1（部分提交的推进量基准）。 */
+    private final int startL1;
 
     private final PriorityQueue<Node> open =
             new PriorityQueue<>((a, b) -> Double.compare(a.f, b.f));
@@ -49,11 +67,19 @@ public final class DigAStar {
 
     private int expanded;
     private boolean finished;
+    private boolean budgetReached;
+    /** 已扩展（settled）节点中距目标体积最近者（同 L1 取 g 小）——部分提交候选。 */
+    private Node bestPartial;
     private List<Step> path;
     private String failure;
 
     public DigAStar(DigSampler sampler, int sx, int sy, int sz, int tx, int ty, int tz,
                     int maxNodes, int maxDigs) {
+        this(sampler, sx, sy, sz, tx, ty, tz, maxNodes, maxDigs, H_WEIGHT);
+    }
+
+    public DigAStar(DigSampler sampler, int sx, int sy, int sz, int tx, int ty, int tz,
+                    int maxNodes, int maxDigs, double hWeight) {
         this.s = sampler;
         this.sx = sx;
         this.sy = sy;
@@ -63,6 +89,9 @@ public final class DigAStar {
         this.tz = tz;
         this.maxNodes = maxNodes;
         this.maxDigs = maxDigs;
+        this.hWeight = hWeight;
+        this.startL1 = l1(sx, sy, sz);
+        this.goalEntryCost = computeGoalEntryCost(sampler);
         Node start = new Node(pack(sx, sy, sz), sx, sy, sz, 0, 0, 0, h(sx, sy, sz), 0);
         best.put(start.key, start);
         open.add(start);
@@ -87,7 +116,15 @@ public final class DigAStar {
                 finished = true;
                 return true;
             }
+            // 部分提交候选：只在 settled 节点里选（陈旧堆项已过滤），距体积最近、同距取 g 小
+            if (bestPartial == null || l1(cur.x, cur.y, cur.z) < l1(bestPartial.x, bestPartial.y, bestPartial.z)
+                    || (l1(cur.x, cur.y, cur.z) == l1(bestPartial.x, bestPartial.y, bestPartial.z)
+                        && cur.g < bestPartial.g)) {
+                bestPartial = cur;
+            }
             if (++expanded > maxNodes) {
+                budgetReached = true;   // 对外失败字符串不动（不破坏 [m8]/TOOLS 契约）；
+                                        // PARTIAL/NO_PROGRESS 的定性由 partialAvailable() 给调用方
                 return fail("BUDGET_EXCEEDED:搜索展开超过 " + maxNodes
                         + " 节点。目标太远或地形太纠缠，请分短段移动。");
             }
@@ -108,6 +145,32 @@ public final class DigAStar {
     /** 失败时的结构化原因（NO_PATH… / BUDGET_EXCEEDED…）；成功时为 null。 */
     public String failure() {
         return failure;
+    }
+
+    public int expanded() {
+        return expanded;
+    }
+
+    /** 是否因节点预算帽而结束（区别于 open 空的真 NO_PATH）。 */
+    public boolean budgetReached() {
+        return budgetReached;
+    }
+
+    /**
+     * 撞帽且推进量足够（≥PARTIAL_MIN_GAIN）时，存在可用的"半程路"：调用方可用
+     * {@link #partialPath()} 先走完这段、到点重发（设计卡 §C：撞帽从"失败"变"缩短射程"）。
+     * 非撞帽结束（成功/真封闭/推进不足）返回 false。
+     */
+    public boolean partialAvailable() {
+        if (!budgetReached || bestPartial == null) {
+            return false;
+        }
+        return startL1 - l1(bestPartial.x, bestPartial.y, bestPartial.z) >= PARTIAL_MIN_GAIN;
+    }
+
+    /** 半程路径（不含起点）；仅 {@link #partialAvailable()} 为真时非 null。 */
+    public List<Step> partialPath() {
+        return partialAvailable() ? reconstruct(bestPartial) : null;
     }
 
     public int dugCount() {
@@ -222,8 +285,61 @@ public final class DigAStar {
     }
 
     private double h(int x, int y, int z) {
-        // 曼哈顿×0.95：每步最小真实代价≥1（可采纳），0.95 是轻微聚焦不动点
-        return 0.95 * (Math.abs(x - tx) + Math.abs(z - tz) + Math.abs(y - ty));
+        // 距目标**体积**（3×3×3，与 isGoal 同口径）而非距中心：旧 h 到中心在体积边缘最多多算 3，
+        // 与体积终点判据不自洽也是噪声源。详见 H_WEIGHT 注释：加权是**故意**的，不可采纳。
+        double l = l1(x, y, z);
+        return l == 0 ? 0 : hWeight * H_UNIT * l + goalEntryCost;
+    }
+
+    /** 到目标体积的 L1（体积内=0）。部分提交用它做"推进量"口径，与 h 同一把尺。 */
+    private int l1(int x, int y, int z) {
+        return Math.max(0, Math.abs(x - tx) - 1)
+                + Math.max(0, Math.abs(z - tz) - 1)
+                + Math.max(0, Math.abs(y - ty) - 1);
+    }
+
+    /**
+     * 入柱价：目标柱 27 格里"能站进去"的最小真实代价（脚+头挖价+支撑放价），搜索开始算一次。
+     * 全不可行（如基岩封死）返 0——不拿启发式炸天，让搜索自然穷尽到 NO_PATH；
+     * 这个"只当启发式不当承诺"的口径与快照设计一致（设计卡 §B）。
+     */
+    private double computeGoalEntryCost(DigSampler sampler) {
+        double min = Double.MAX_VALUE;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    double c = cellEntryCost(tx + dx, ty + dy, tz + dz);
+                    if (c >= 0 && c < min) {
+                        min = c;
+                    }
+                }
+            }
+        }
+        return min == Double.MAX_VALUE ? 0 : min;
+    }
+
+    /** 单格入位代价（脚+头+支撑）；不可行返 -1。用 relax 同源公式，不另起一套。 */
+    private double cellEntryCost(int x, int y, int z) {
+        if (!s.inBounds(x, y, z)) {
+            return -1;
+        }
+        double c = MOVE_BASE;
+        for (int cy = y; cy <= y + 1; cy++) {
+            if (!s.passable(x, cy, z)) {
+                double sec = s.digSeconds(x, cy, z);
+                if (sec == DigSampler.INFEASIBLE) {
+                    return -1;
+                }
+                c += sec + DIG_OVERHEAD;
+            }
+        }
+        if (!s.support(x, y - 1, z)) {
+            if (!s.placeable(x, y - 1, z)) {
+                return -1;
+            }
+            c += s.placeCost(x, y - 1, z);
+        }
+        return c;
     }
 
     /** 回溯路径并按"当下世界状态"补齐每步的挖/放清单（搜索期世界不变，重放即一致）。 */

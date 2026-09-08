@@ -77,6 +77,29 @@ class DigAStarTest {
         }
     }
 
+    /** 3D 实心山体（真机靶子的复制品）：x∈[4,16] 的山脊峰在 x=10 高 8，两翼缓升缓降。 */
+    private static void mountain(GridSampler g) {
+        for (int z = -12; z <= 12; z++) {
+            for (int x = 4; x <= 16; x++) {
+                int h = Math.max(0, 8 - Math.abs(x - 10));
+                for (int y = 1; y <= h; y++) {
+                    g.addSolid(x, y, z);
+                }
+            }
+            floor(g, -2, 20, z);
+        }
+    }
+
+    private static DigAStar runW(GridSampler g, int sx, int sy, int sz,
+                                 int tx, int ty, int tz, int maxNodes, double w) {
+        DigAStar a = new DigAStar(g, sx, sy, sz, tx, ty, tz, maxNodes, 128, w);
+        int guard = 0;
+        while (!a.advance(300) && guard++ < 200) {
+            // 分帧推进直至出结果
+        }
+        return a;
+    }
+
     private static DigAStar run(GridSampler g, int sx, int sy, int sz, int tx, int ty, int tz) {
         DigAStar a = new DigAStar(g, sx, sy, sz, tx, ty, tz, 8000, 128);
         int guard = 0;
@@ -214,5 +237,86 @@ class DigAStarTest {
         assertNotNull(a.failure(), "四周皆空无支撑应失败（而不是拆地板）");
         List<com.neko.mcbot.path.DigAStar.Step> p = a.path();
         assertTrue(p == null || p.stream().allMatch(s -> s.y() >= 1), "路径不钻地板以下");
+    }
+
+    // ---- R1-S1：山体聚焦 + 部分提交（docs/plan/R1-pathfinding.md §E 用例①②③⑥）----
+
+    @Test
+    void mountain18FindsPathAndBeatsWeakHeuristic() {
+        // ① 真机靶子：18 格外的实心山。新加权 h 必须在 8000 帽内出路；弱启发（w=1.0）
+        //   展开数必须更多——两者都是确定性断言，不拿"旧代码"玩不可复现的对比
+        GridSampler g = new GridSampler();
+        mountain(g);
+        g.placeStock = 0;
+        DigAStar strong = runW(g, 0, 1, 0, 18, 1, 0, 8000, 1.8);
+        DigAStar weak = runW(g, 0, 1, 0, 18, 1, 0, 8000, 1.0);
+        System.out.println("[mountain] w1.0 expanded=" + weak.expanded() + " " + weak.failure()
+                + " | w1.8 expanded=" + strong.expanded() + " " + strong.failure());
+        assertNull(strong.failure(), "w=1.8 必须在 8000 帽内翻过山");
+        assertTrue(strong.expanded() <= weak.expanded(), "加权必须更聚焦");
+        assertTrue(strong.dugCount() >= 1, "翻山必有挖");
+    }
+
+    @Test
+    void budgetHitYieldsUsableHalfPath() {
+        // ② 撞小帽→PARTIAL。校准实据：本山体 w1.8 全程只需 242 展开（旧球形口径需 519），
+        //   所以预算取 150——比新旧口径都小，才是真"撞帽"现场；半程路非空且推进≥下限
+        GridSampler g = new GridSampler();
+        mountain(g);
+        g.placeStock = 0;
+        DigAStar a = runW(g, 0, 1, 0, 18, 1, 0, 150, 1.8);
+        assertTrue(a.budgetReached(), "150 帽在 242 需求的山体上必撞");
+        assertNotNull(a.failure());
+        System.out.println("[partial] expanded=" + a.expanded() + " partial=" + a.partialAvailable());
+        assertTrue(a.partialAvailable(), "开放漏斗推进型撞帽应给半程，否则教模型原地打转");
+        var pp = a.partialPath();
+        assertNotNull(pp);
+        var end = pp.get(pp.size() - 1);
+        int gain = (18 - 1) - Math.max(0, Math.abs(end.x() - 18) - 1);
+        assertTrue(gain >= DigAStar.PARTIAL_MIN_GAIN,
+                "PARTIAL 宣称的推进量必须真 ≥ 下限，实际 " + gain);
+    }
+
+    @Test
+    void trueSealNeverMasqueradesAsPartial() {
+        // ③ 真封闭：open 耗尽的 NO_PATH 绝不允许附带部分提交（否则模型被教着"再推一段"死循环）
+        GridSampler g = new GridSampler();
+        floor(g, -2, 10, 0);
+        for (int z = -40; z <= 40; z++) {
+            for (int y = 0; y <= 40; y++) {
+                long k = DigAStar.pack(3, y, z);
+                g.solid.add(k);
+                g.unbreak.add(k);
+            }
+        }
+        g.placeStock = 0;
+        DigAStar a = runW(g, 0, 1, 0, 8, 1, 0, 8000, 1.8);
+        assertNotNull(a.failure());
+        assertTrue(a.failure().startsWith("NO_PATH"), "不可破封锁仍须 NO_PATH，实际：" + a.failure());
+        assertTrue(!a.budgetReached() && !a.partialAvailable(), "真封闭不得撞帽、不得给半程");
+    }
+
+    @Test
+    void partialApiIsSelfConsistent() {
+        // ⑥ API 诚实性：partialAvailable 为真时推进量必≥下限；为假时 partialPath 必 null。
+        //   用两个不同预算撞同一个大堆（开放但昂贵）覆盖真/假两侧
+        for (int budget : new int[]{2000, 120}) {
+            GridSampler g = new GridSampler();
+            mountain(g);
+            g.placeStock = 0;
+            DigAStar a = runW(g, 0, 1, 0, 18, 1, 0, budget, 1.8);
+            if (a.partialAvailable()) {
+                assertNotNull(a.partialPath());
+                var end = a.partialPath().get(a.partialPath().size() - 1);
+                int gain = 17 - Math.max(0, Math.abs(end.x() - 18) - 1);
+                assertTrue(gain >= DigAStar.PARTIAL_MIN_GAIN,
+                        "budget=" + budget + " 宣称 PARTIAL 但只推进 " + gain);
+            } else {
+                assertNull(a.partialPath(), "budget=" + budget + " 不可用时不得给路");
+                if (a.budgetReached()) {
+                    System.out.println("[no-progress] budget=" + budget + " 撞帽但推进不足→NO_PROGRESS 候选");
+                }
+            }
+        }
     }
 }
