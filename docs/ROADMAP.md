@@ -77,16 +77,27 @@
 ## R2 延迟整改（靶子：实测 8 轮/任务 = 20–50s；跳数仅 100–150ms 不是主因；
 **设计卡：`docs/plan/R2-latency.md`**，性价比序 D>C>B>A）
 
-- [ ] **真流式**：`LlmClient:57` 换增量行订阅，打 TTFB/TTFT/tok·s⁻¹；最终回复首句即刻播报
-      （工具调用仍需整段参数齐才派发，但不再等整条流收尾）
-- [ ] **前缀稳定打穿缓存**：`outboundHistory` 折叠改「一次性、单调追加、只作用于检查点之前」；
-      system prompt（含 skills）启动读盘一次进内存；压缩摘要插入位置改到不分裂前缀处
-- [ ] **长动作受理即回执**：`move_to`/`break_block` 提交即回「已受理+任务号」，完成事件开新轮，
-      大脑不再挂起（`AgentLoop:166-168` 串行链的挂起点）；配套：单槽 BUSY 拒收→新活顶掉旧活（保留已算路径）
-- [ ] **感知给可行动信息**：`scan_area` 返**绝对坐标** + 可挖目标（含石头）+ 分层摘要；
-      配套：客户端把准星所指坐标随指令注入（所见即所说）——一次改动同时砍轮次与失控感
-- [ ] 打点补齐（清单见 STATUS 第六项）：t_send/TTFB/首行/末行、wire_rtt、本地间隙
+- [ ] **真流式（S3，⚠ 子代理中途被停，分支已存）**：`LlmClient` 弃 ofLines→fromLineSubscriber；
+      TurnSink+括号深度闭合判定；AgentLoop 早派发（idx→future，Msg.Tool 仍按 idx 原序）；
+      SseIncrementalTest。半成品在 `pi-agent-4e7d4c32-8709-478`@f1c9060（**未验编译/未写测试，
+      不可直接 merge**），下回合从该分支续做或重开
+- [x] **前缀稳定打穿缓存（S2，09-08 17:0x merge 0ed915b）**：`foldCheckpoint`+`frozenFolded`
+      （决定一次算定永不重算，折叠只作用检查点前的 Msg.Tool，outboundHistory 纯函数，
+      FOLD_KEEP_TAIL=12）；PromptBuilder 实例缓存（AtomicReference，启动读盘一次，
+      `reloadSkills()` 钩子留给 R3）；压缩挪链尾 finishChain+两处合法 prefix reset 计数/回调。
+      ConversationPrefixTest 7 例字节级断言；主会话独立变异抽检（砍单调保护→精硬红）。偏差 4 条见 STATUS。
+      ⚠ 客户端接线欠账（AgentRunner ~3 行，S2 报告已给）：与 S3 的 useStreaming/打点接线合并做
+- [ ] **长动作受理即回执（S4）**：`move_to`/`break_block` 提交即回「已受理+任务号」，完成事件开新轮，
+      大脑不再挂起；配套：单槽 BUSY 拒收→新活顶掉旧活（保留已算路径）。**排在 S3 后（同文件 AgentLoop）**
+- [x] **感知给可行动信息（S1，09-08 17:3x merge bbd09ea）**：`scan_area` 换 classify 词表
+      （container/ore/rock/workbench/farm/hostile，ROCK_PATHS 常数集不含泥土沙）、绝对坐标
+      `@(x,y,z) d3.2`、首行八向朝向、三层摘要（近 1/中 2/远 3，名额 8/10/12，MAX_SAMPLES=900）；
+      客户端准星注入 `[我此刻盯着]`（≤120B，MISS/ENTITY 不注入，本地拼不过网络）。
+      拆出 5 个零依赖 common 类+26 新单测；无头 `[r2d]` 三项+结构三项全中（证据 STATUS）。
+      偏差 5 条（中环按路径归组/名额轮转/竖直窗口/ore 收窄/StatusTool 不动）已复核接受
+- [ ] 打点补齐（清单见 STATUS 第六项）：t_send/TTFB/首行/末行、wire_rtt、本地间隙（归 S3 一并）
 - 验收：同一任务（挖三块石头进箱）改前后轮次数与总时长对比，用 `[brain] step tokens` + 新打点作数
+      （归 S4 后的合并真机会话；S1/S2 已各自无头口径收口）
 
 ## R3 面板可控性整改（靶子：外部进程能做的，主人反而不能；**设计卡：`docs/plan/R3-panel.md`**）
 

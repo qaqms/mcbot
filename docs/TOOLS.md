@@ -27,7 +27,7 @@ record Result(boolean ok, String feedback, JsonObject data)
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
 | `status` | — | 同步 | 位置/生命/饥饿/背包占用/手持物 |
-| `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 特殊方块（容器/矿石/工作台熔炉/作物）摘要；坐标为世界轴偏移（朝向相对网格在 M5） |
+| `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
 | `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、真战利品表（错工具真没掉落）、全客户端可见裂纹；掉落先背包后落地 |
 | `collect` | `x,y,z,r?` | 同步 | 吸指定点附近掉落物进背包 |
 | `place_block` | `x,y,z,item` | 同步 | 背包拿方块放（item 用注册路径如 `cobblestone`） |

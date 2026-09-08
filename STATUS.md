@@ -3,7 +3,7 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡（docs/plan/）· **R0 ✅ 12:40** · **R1-S1 ✅ 13:44** · **R1-S2 ✅ 14:12** · **R1-S3 ✅ 15:52** · **R1-S4 ✅ 16:05 常数对账** · **R1-S3b ✅ 16:31 同伴持票（[m9] 三断言全中，[m8] 纯产品票 dogfood 不回退）→ R1 无头部分全部收尾** → 下一卡 **R2-S1 感知绝对坐标**（真机山体/面板验证归最终合并会话）
+## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡 · **R1 无头全线收尾 ✅ 16:31**（S1–S4+S3b）· **R2 波1 ✅ 已 merge（S1 感知 17:31 无头全中 / S2 前缀 17:0x 单测+变异抽检过，客户端接线欠账）** · S3（流式）子代理中途被停、半成品分支已存未 merge → 下回合：从分支续做 S3 → 接线+打点合并做 → S4 → R3
 
 | 里程碑 | 状态 |
 |---|---|
@@ -398,6 +398,43 @@ access widener/mixin），`addTicketWithRadius` 在同伴中心挂 5×5 垫子�
 否则"墙"砌在自己人门口（本卡就是这笔债的偿还）。另 S3b 的反向收获：harness 临时票
 全部删除后 `[m8]` 仍全绿，产品票独力成立，临时票机制已死化删除（不是注释掉）。
 
+### R2 波次 1 进展（09-08 17:3x，首次子代理流水线作业）
+
+**模式**：按设计卡文件面交集拆包——S1(D 感知：server+client+common) 与 S2(B 前缀：纯
+agent-core) 零交集，各在 **git worktree** 并行；S3(A 流式) 因碰 AgentLoop 排波 2；S4(C 协议)
+碰面最广排最后。代理交付均要求：白名单外禁改/禁碰文档/禁 commit-main/变异自证。
+主会话按 trust-but-verify 合入。
+
+**S2 已合（merge `0ed915b`）**：Conversation 折叠检查点/冻结决定/PromptBuilder 实例缓存
++reloadSkills 钩子/压缩链尾化；agent-core 27/27；主会话**独立变异抽检**（砍 checkpoint
+单调保护→`checkpointMonotonicAndFoldDecisionsFrozen` 精确红，恢复即绿）确认断言有鉴别力。
+偏差 4 条已复核接受（尾部窗口新语义使旧 4 条折叠场景逻辑上不可存→拉长到 14 条断言逐条保留；
+链尾压缩为"等效非严格后台"；叫停链不压缩）；**客户端接线欠账**（AgentRunner 约 3 行：
+PromptBuilder 实例化+双传、onPrefixReset 接 [brain] 日志）——与 S3 的 useStreaming/打点接线
+合并做，避免接两次半截线。prompt cache 收益（cached/real≥0.6）归最终真机会话终验。
+
+**S1 已合（merge `bbd09ea`）**：5 个零依赖 common 类（ScanCategory/Classify/Format/Plan/Summary）
++26 新单测（根目 48/48）；ScanAreaTool 重写为薄胶水（classify 6 词表/ROCK_PATHS 常数集/
+绝对坐标/首行八向/三层名额 8-10-12/MAX_SAMPLES 900）；客户端准星注入（[我此刻盯着]，
+MISS/ENTITY/未加载一律不注入，只读不写跨线程，异常吃掉=宁缺勿噪）；偏差 5 条全部台理
+已接受（中环按路径归组保"哪种矿"/名额轮转防 stone 刷掉一切/ore 收窄 endsWith/StatusTool 契约
+不动等）。**无头 `[r2d]`（17:31:51）：含 stone/含 @(/体量 561B<32765 三项全 true，结构三项
+（首行我在/面朝八向/[rock]）全中**；回执快照实测格式干净（实读 68/计划 787，近环含 d 距离）；
+`[m5a]/[m8] A-D/[m9] A1A2` 同跑不回退，异常 0，无 WARN 撞 50ms 线。
+
+**⚠ 新观察（存疑入册，非本波 diff 引入）**：`[m9]` A3 "旧家自清" 同代码两次运行结果翻转
+（16:31 true → 17:31 false）。S1 未碰 m9/票代码（diff 空）；aimi 两场均在。首要嫌疑：
+**票过期→真卸载有 purge 周期/卸载队列延迟，wait2=80t 处在边界竞态**（javap 查 purge 频率
+做到一半被收工打断）。产品语义不受影响（票必会过期，只是晚几拍）；下回合把 m9 wait2
+拉到 6s 复跑三场定性，或实测 purge 周期后把"自清延迟 ≤N t"写进注释基准。
+
+**S3 半成品存档**：代理被中途叫停于"写完实现、尚未编译验证/未写 SseIncrementalTest"；
+分支 `pi-agent-4e7d4c32-8709-478`@f1c9060 保留**不入 main**（未验证不 merge 的纪律）。下回合
+从该分支 checkout 续做（编译→测试→铁律变异），或评估重写成本后重开。
+
+**子代理纪律审计**：两单交付零越界（git diff --name-only 均白名单内）；两单均报偏差未自静
+口径；代理报告中的"sk-xxx"命中经定位为 Cli.java 既有 javadoc 占位非本次引入。流水线成立。
+
 **推送与密钥**：主人重发 PAT 用于推送，未落任何盘（remote 无凭据、.git/config 干净、
 一次性 header）；该 token 已在聊天出现多次，**尽快去 GitHub 作废重发**。本次待推：
 S3 关账 commit（代码+探针+harness 修+文档）。
@@ -424,6 +461,8 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 | 假玩家 chunk 票 | **假玩家（FakeConnection）不入 PlayerMap/不发 PLAYER_* 票**（09-08 探针：任何 getBlockState 前同伴脚下 `hasChunkAt=false`）；`getBlockState` 强载的区块**拍尾无票即回收**（同秒内"探针 true/下拍工具 false"即此机制）；harness 用 `ServerChunkCache.addTicketWithRadius(TicketType.PLAYER_LOADING/PLAYER_SIMULATION, ChunkPos, r)` 持票，`removeTicketWithRadius` 释；PLAYER_* 无 FLAG_PERSIST，重启自清 |
 | `Level.isLoaded(BlockPos)` | = `isInValidBounds(pos) && ChunkSource.hasChunk(x>>4, z>>4)`（**存在性**，不是状态≥FULL）；与 `hasChunkAt` 同源，两者对假玩家同时 false |
 | 探针防污染 | 同一 LOG 行内参数左→右求值：`getBlockState` 在前会强载污染后面的 `isLoaded`——纯加载断言必须**单独成行且先于一切方块读** |
+| `BlockHitResult.getType()` | **读私有 miss 标志：一个 BlockHitResult 对象可以本身就是 MISS**——判命中必须比 `getType()!=MISS`，不能只 `instanceof BlockHitResult`（R2-S1 javap 实测） |
+| 客户端方块读 | `Level.getBlockState(BlockPos)` 声明在 `net.minecraft.world.level.Level`，`ClientLevel` **不覆写**→客户端可直接用；`hasChunkAt` 是 `LevelReader` 默认方法；`Direction.fromYRot(double)`/`CropBlock.getMaxAge()`/`BlockStateBase.hasBlockEntity()` public 可用（后者省逐格 BE 查表） |
 | 假玩家进场 | `PlayerList.placeNewPlayer(Connection, ServerPlayer, CommonListenerCookie)`；cookie 用 `CommonListenerCookie.createInitial(GameProfile, false)`（record：profile/latency/ClientInformation/transferred） |
 | 客户端信息类 | `net.minecraft.server.level.ClientInformation`（**不在** network 包），`createDefault()` |
 | ServerPlayer 构造 | `(MinecraftServer, ServerLevel, GameProfile, ClientInformation)` ✓ 公开可子类 |

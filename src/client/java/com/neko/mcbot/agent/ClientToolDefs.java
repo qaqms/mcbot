@@ -13,7 +13,7 @@ public final class ClientToolDefs {
     public static final List<ToolSpec> SPECS = List.of(
             new ToolSpec("status", "查看你自己的状态：位置/生命/饥饿/背包占用/手持物",
                     "{\"type\":\"object\",\"properties\":{}}"),
-            new ToolSpec("scan_area", "环顾四周，返回附近实体与特殊方块（容器/矿石/工作台熔炉/作物）的摘要",
+            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块（容器/矿石/石材 rock/工作台/作物）的分层摘要；坐标均为绝对 @(x,y,z)",
                     "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"}}}"),
             new ToolSpec("break_block", "挖掉一格方块（按真实硬度耗时，需要合适工具，掉落自动进背包）",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
