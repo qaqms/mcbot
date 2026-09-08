@@ -7,6 +7,7 @@ import com.neko.mcbot.agentcore.llm.Msg;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /**
  * 对话窗口：全量存储 + 出站视图 + 摘要前缀。上下文经济学三件套：
@@ -16,8 +17,13 @@ import java.util.concurrent.CompletableFuture;
  * 2) 压缩切分守铁律：新摘要只替换"旧段"；近段按 token 预算原文保留，
  *    切点只允许落在 User（优先）或 Assistant 边界——**绝不从 Tool 消息下刀**，
  *    否则孤儿工具回执会让下一请求直接 400。预算内找不到合法切点就整段总结。
- * 3) 过期回执折叠：同工具更新的回执存在时，旧的压成一行占位——协议配对不动，
- *    只瘦内容。存储永远是全量（展示/未来持久化用），瘦身只发生在出站视图。
+ * 3) 过期回执折叠（R2-B 后：检查点 + 冻结决定）：折叠只发生在 foldCheckpoint 之前
+ *    的"冻结区"，且每条消息折/不折在一次步边界算定后永不重算——同历史多次
+ *    outboundHistory() 字节恒等，增长中的历史旧前缀不被新消息撕裂，prompt cache
+ *    才吃得到。存储永远是全量（展示/未来持久化用），瘦身只发生在出站视图。
+ *
+ * 前缀 reset 仅两处合法事件：压缩（摘要插 index 0，旧字节前缀整体作废）与
+ * 指令边界归零策略；每次 reset 计数并回调（纯库无日志框架，[brain] 日志由宿主接）。
  *
  * 熔断：摘要端点连续失败 2 次后停止自动压缩（每条新指令恢复尝试资格），
  * 免得每步都拖一次注定失败的往返。
@@ -27,6 +33,9 @@ public final class Conversation {
     private static final String SUMMARY_PREFIX = "[对话前情提要] ";
     /** 近段原文保留的 token 预算（估算口径见 estimateTokens）。 */
     public static final int KEEP_BUDGET_TOKENS = 1500;
+    /** 步边界时保留原文的尾部窗口（条）：此内的工具回执永不折叠，
+     *  免得模型看不见刚才的坐标（R2-B 定数）。 */
+    public static final int FOLD_KEEP_TAIL = 12;
     private static final int COMPACT_FAILURES_MAX = 2;
     /** 单条消息的结构开销（角色/定界），粗粒度吸收误差。 */
     private static final int MSG_OVERHEAD = 8;
@@ -35,6 +44,15 @@ public final class Conversation {
     private final int compactAtTokens;
     private int realPromptTokens;
     private int compactFailures;
+
+    /** 折叠检查点：index < cp 的消息进入冻结区；同一条指令内单调不回退，
+     *  只在两类合法 prefix reset 事件（压缩/指令边界归零）时归零。 */
+    private int foldCheckpoint;
+    /** 冻结的折叠决定：frozenFolded.get(i) = 第 i 条冻结时算定的折/不折；
+     *  invariant: frozenFolded.size() == foldCheckpoint。 */
+    private final List<Boolean> frozenFolded = new ArrayList<>();
+    private int prefixResets;
+    private Consumer<String> prefixResetHook;
 
     public Conversation(int compactAtTokens) {
         this.compactAtTokens = compactAtTokens;
@@ -50,14 +68,14 @@ public final class Conversation {
     }
 
     /**
-     * 出站视图：旧的同名工具回执折叠成一行。只瘦 content，不动消息与配对，
-     * 所以 assistant.tool_calls ↔ tool.tool_call_id 的对应关系永远完好。
+     * 出站视图（R2-B：纯函数）：只读 frozenFolded，不再现场扫"后来者"。
+     * 同一历史多次调用字节恒等；assistant.tool_calls ↔ tool.tool_call_id 配对不动。
      */
     public List<Msg> outboundHistory() {
         List<Msg> out = new ArrayList<>(msgs.size());
         for (int i = 0; i < msgs.size(); i++) {
             Msg m = msgs.get(i);
-            if (m instanceof Msg.Tool t && hasNewerToolWithSameName(i, t.name())) {
+            if (m instanceof Msg.Tool t && i < foldCheckpoint && frozenFolded.get(i)) {
                 out.add(new Msg.Tool(t.callId(), t.name(),
                         "(过期回执已折叠：后来又有 " + t.name() + " 更新的结果)", t.ok()));
             } else {
@@ -65,6 +83,62 @@ public final class Conversation {
             }
         }
         return out;
+    }
+
+    /**
+     * 步边界（每次问模型之前调）：检查点推进到 max(旧, size - FOLD_KEEP_TAIL)，
+     * 新入冻结区的消息在此一次性算定折/不折（判据：当时历史里是否有同名更新的
+     * 回执），之后永不重算——这是前缀字节稳定的全部机制。
+     */
+    public void onStepBoundary() {
+        int target = Math.max(foldCheckpoint, Math.min(Math.max(msgs.size() - FOLD_KEEP_TAIL, 0), msgs.size()));
+        while (foldCheckpoint < target) {
+            Msg m = msgs.get(foldCheckpoint);
+            // 只有工具回执有折叠语义；其余类型冻结为"不折"
+            frozenFolded.add(m instanceof Msg.Tool t && hasNewerToolWithSameName(foldCheckpoint, t.name()));
+            foldCheckpoint++;
+        }
+    }
+
+    /**
+     * 指令边界：检查点与冻结决定归零（卡上的"归零策略"，两类合法 prefix reset 之一）。
+     * 归零后下一条指令的首个步边界按新窗口重算——新指令本就开新前缀，代价只裂一次。
+     */
+    public void onNewDirective() {
+        resetFoldState();
+        firePrefixReset("directive-boundary");
+    }
+
+    /** 观测用（测试/宿主日志）：当前检查点。 */
+    public int foldCheckpoint() {
+        return foldCheckpoint;
+    }
+
+    /** 观测用：已冻结决定的条数（不变式下恒等于 foldCheckpoint）。 */
+    public int frozenCount() {
+        return frozenFolded.size();
+    }
+
+    /** 合法 prefix reset 事件累计次数（压缩 + 指令边界归零）。 */
+    public int prefixResets() {
+        return prefixResets;
+    }
+
+    /** 宿主接日志用（纯库不引 slf4j）：每次 prefix reset 回调原因。 */
+    public void setPrefixResetHook(Consumer<String> hook) {
+        this.prefixResetHook = hook;
+    }
+
+    private void resetFoldState() {
+        foldCheckpoint = 0;
+        frozenFolded.clear();
+    }
+
+    private void firePrefixReset(String reason) {
+        prefixResets++;
+        if (prefixResetHook != null) {
+            prefixResetHook.accept(reason);
+        }
     }
 
     private boolean hasNewerToolWithSameName(int index, String name) {
@@ -105,6 +179,10 @@ public final class Conversation {
     public void noteCompacted() {
         compactFailures = 0;
         realPromptTokens = 0;
+        // 折叠坐标同步作废：msgs 被重写（摘要插 index 0），旧 index 的冻结决定已无指代对象；
+        // 这也是两类合法 prefix reset 之一。
+        resetFoldState();
+        firePrefixReset("compaction");
     }
 
     /** CJK 感知估算：中日韩字符≈1 token/字，其余≈4 字符/token，每条消息 +结构开销。 */

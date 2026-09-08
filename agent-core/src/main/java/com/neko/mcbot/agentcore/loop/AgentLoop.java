@@ -6,6 +6,7 @@ import com.neko.mcbot.agentcore.llm.ChatEngine;
 import com.neko.mcbot.agentcore.llm.Msg;
 import com.neko.mcbot.agentcore.llm.ToolCall;
 import com.neko.mcbot.agentcore.llm.ToolSpec;
+import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 
 import java.util.ArrayDeque;
 import java.util.List;
@@ -32,6 +33,11 @@ public final class AgentLoop {
         /** 每步模型的 token 真数（cached<0 = 后端没报）。观测用，不影响逻辑。 */
         default void onUsage(long prompt, long completion, long cached) {
         }
+
+        /** 合法 prefix reset 事件（reason: compaction / directive-boundary）。
+         *  宿主接成 "[brain] prefix reset reason=..." 日志；观测用，不影响逻辑。 */
+        default void onPrefixReset(String reason) {
+        }
     }
 
     public record Config(int maxStepsPerDirective, int repeatNudgeAt, int repeatAbortAt) {
@@ -48,6 +54,9 @@ public final class AgentLoop {
     private final Listener listener;
     private final Supplier<String> systemPrompt;
     private final Conversation convo;
+    /** 可空：接入后每条新指令边界喂它的 onDirectiveBoundary（脏标记只在边界兑现，
+     *  链中不换 system 前缀）；宿主若自己管缓存则不传。 */
+    private final PromptBuilder promptCache;
 
     private final ArrayDeque<String> pending = new ArrayDeque<>();
     private boolean running;
@@ -61,13 +70,22 @@ public final class AgentLoop {
     public AgentLoop(ChatEngine engine, List<ToolSpec> tools, ToolExecutor executor,
                      Config cfg, Listener listener, Supplier<String> systemPrompt,
                      int conversationSoftTokens) {
+        this(engine, tools, executor, cfg, listener, systemPrompt, null, conversationSoftTokens);
+    }
+
+    public AgentLoop(ChatEngine engine, List<ToolSpec> tools, ToolExecutor executor,
+                     Config cfg, Listener listener, Supplier<String> systemPrompt,
+                     PromptBuilder promptCache, int conversationSoftTokens) {
         this.engine = engine;
         this.tools = tools;
         this.executor = executor;
         this.cfg = cfg;
         this.listener = listener;
         this.systemPrompt = systemPrompt;
+        this.promptCache = promptCache;
         this.convo = new Conversation(conversationSoftTokens);
+        // 纯库不引日志框架：reset 事件经 listener 暴露（测试可断言计数/原因）
+        this.convo.setPrefixResetHook(listener::onPrefixReset);
     }
 
     public Conversation conversation() {
@@ -100,6 +118,10 @@ public final class AgentLoop {
         }
         cancelRequested = false; // 叫停只对当时那条链有效，不追溯新指令
         convo.onDirectiveBoundary(); // 熔断计数随新指令重置
+        convo.onNewDirective();     // R2-B：折叠检查点归零（合法 prefix reset 之二）
+        if (promptCache != null) {
+            promptCache.onDirectiveBoundary(); // system 换发也只在指令边界
+        }
         steps = 0;
         lastCallKey = null;
         repeatCount = 0;
@@ -126,20 +148,19 @@ public final class AgentLoop {
         }
         if (stuckAbort) {
             listener.onReply("[内部] 我在同一个操作上反复无进展，先停下了。");
-            pump();
+            finishChain();
             return;
         }
         if (++steps > cfg.maxStepsPerDirective()) {
             listener.onReply("[内部] 这个任务步数超限，我停下了。");
-            pump();
+            finishChain();
             return;
         }
 
-        CompletableFuture<?> ready = convo.needsCompaction()
-                ? convo.compact(engine)
-                : CompletableFuture.completedFuture(null);
-
-        ready.thenCompose(v -> engine.chat(systemPrompt.get(), convo.outboundHistory(), tools))
+        // R2-B：步边界推进折叠检查点（必须在 outboundHistory 之前），
+        // 本次请求的字节前缀自此对本步之前的历史固定。
+        convo.onStepBoundary();
+        engine.chat(systemPrompt.get(), convo.outboundHistory(), tools)
                 .thenAccept(turn -> {
                     convo.noteUsage(turn);
                     listener.onUsage(turn.promptTokens(), turn.completionTokens(), turn.cachedTokens());
@@ -149,7 +170,7 @@ public final class AgentLoop {
                     convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
                     if (!turn.hasToolCalls()) {
                         listener.onReply(turn.text());
-                        pump();
+                        finishChain(); // R2-B：压缩挪链尾，不在 step 关键路径上等摘要
                         return;
                     }
                     runToolCalls(turn.toolCalls()).thenRun(this::step);
@@ -157,9 +178,24 @@ public final class AgentLoop {
                 .exceptionally(t -> {
                     String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
                     listener.onReply("[内部] 模型调用失败：" + msg);
-                    pump();
+                    finishChain();
                     return null;
                 });
+    }
+
+    /**
+     * 链尾（当前指令走完、推进下一条之前）：超水位才压缩。
+     * 关键路径收益：任何一步都不再同步等摘要往返（省 2–5s/次）；摘要请求在
+     * 本链完成后、下一条指令启动前发出——对空转等待队列的宿主而言就是后台。
+     * 压缩成功后 Conversation 内部已调 noteCompacted（真数归零 + prefix reset），
+     * 时机仍在"重写历史"的同一同步块里，R0 回归钉不破。
+     */
+    private void finishChain() {
+        if (convo.needsCompaction()) {
+            convo.compact(engine).whenComplete((v, t) -> pump());
+        } else {
+            pump();
+        }
     }
 
     private CompletableFuture<Void> runToolCalls(List<ToolCall> calls) {
