@@ -13,6 +13,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -43,6 +44,13 @@ public final class PathTask extends TickTask {
     private Phase phase = Phase.SEARCH;
     private DigAStar search;
     private LevelDigSampler sampler;
+    /** 搜索期 memo 装饰（R1-S2）；执行/复核/确认清单永远走裸 sampler live 读——快照只当启发式。 */
+    private MemoDigSampler memo;
+    /** 验尸判图不可信的重开次数；超 2 次本轮直接裸读不再 memo（防"边改边搜"死重启）。 */
+    private int memoRestarts;
+    /** liveify 后的真实挖/放计数（NEED_CONFIRM 清单与到达文案的唯一事实源）。 */
+    private int planDigs;
+    private int planPlaces;
     private List<DigAStar.Step> path;
     private int cursor;            // 下一个要进入的节点（path[0] 是起点）
     private int executed;          // 已提交节点计数（复核节拍用）
@@ -81,25 +89,31 @@ public final class PathTask extends TickTask {
             BlockPos from = c.blockPosition();
             sampler = new LevelDigSampler(level, c, from,
                     LevelDigSampler.countPlaceables(c.getInventory()));
-            search = new DigAStar(sampler,
-                    from.getX(), from.getY(), from.getZ(),
-                    target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS);
+            search = newSearch(from);
         }
         if (!search.advance(EXPAND_PER_TICK)) {
+            // 分帧搜索跨 ~27 tick，中途世界会被别人改：验尸超限则丢旧图，从当前位置重开
+            if (memo != null && memo.worldChanged()) {
+                McbotMod.LOG.info("[path] 验尸超限 stale={}，丢弃旧图重开搜索（第 {} 次）",
+                        memo.staleCount(), memoRestarts + 1);
+                memoRestarts++;
+                search = newSearch(c.blockPosition());
+            }
             return running(); // 还在算（分帧）
         }
         if (search.failure() != null) {
-            McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {}",
-                    c.blockPosition().toShortString(), target.toShortString(), search.failure());
+            McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
+                    target.toShortString(), search.failure(), memoStats());
             return new Progress.Done(new Result(false, search.failure(), null));
         }
-        path = search.path();
+        // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
+        path = liveify(search.path());
         cursor = 0;
-        int digs = search.dugCount();
-        int places = search.placedCount();
-        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={}",
+        int digs = planDigs;
+        int places = planPlaces;
+        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
-                digs, places, replans);
+                digs, places, replans, memoStats());
         if (digs > 0 || places > 0) {
             StringBuilder sb = new StringBuilder();
             for (DigAStar.Step st : path) {
@@ -121,6 +135,57 @@ public final class PathTask extends TickTask {
         }
         phase = Phase.EXECUTE;
         return executeTick(c);
+    }
+
+    /** 搜索构造统一入口：裸 sampler 必在之前建好；memo 套在搜索侧，执行侧永不见缓存。 */
+    private DigAStar newSearch(BlockPos from) {
+        if (memoRestarts < 2) {
+            memo = new MemoDigSampler(sampler);
+        } else {
+            memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
+        }
+        return new DigAStar(memo != null ? memo : sampler,
+                from.getX(), from.getY(), from.getZ(),
+                target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS);
+    }
+
+    /**
+     * 用裸 sampler 按**当前世界**重建每节点的挖/放清单并统计 planDigs/planPlaces。
+     * 为什么必须：NEED_CONFIRM 拿给主人点头、模型拿来决定 may_alter_terrain 的清单，
+     * 如果是 memo 期（搜索跨 27 tick）的旧答案，就是在让主人批准一份"幽灵清单"。
+     * 动作字节不重分类（仅播报语义）；执行期 mineOne/placeOne 本就逐格 live 判定，双层自晦。
+     */
+    private List<DigAStar.Step> liveify(List<DigAStar.Step> plan) {
+        ArrayList<DigAStar.Step> out = new ArrayList<>(plan.size());
+        planDigs = 0;
+        planPlaces = 0;
+        for (DigAStar.Step st : plan) {
+            if (st.action() == DigAStar.ACT_START) {
+                out.add(st);
+                continue;
+            }
+            ArrayList<Long> dig = new ArrayList<>(2);
+            for (int cy = st.y(); cy <= st.y() + 1; cy++) {
+                if (!sampler.passable(st.x(), cy, st.z())) {
+                    dig.add(DigAStar.pack(st.x(), cy, st.z()));
+                }
+            }
+            ArrayList<Long> place = new ArrayList<>(1);
+            if (!sampler.support(st.x(), st.y() - 1, st.z())
+                    && sampler.placeable(st.x(), st.y() - 1, st.z())) {
+                place.add(DigAStar.pack(st.x(), st.y() - 1, st.z()));
+            }
+            planDigs += dig.size();
+            planPlaces += place.size();
+            out.add(new DigAStar.Step(st.x(), st.y(), st.z(), dig, place, st.action()));
+        }
+        return out;
+    }
+
+    private String memoStats() {
+        return memo == null ? "memo=off(验尸超限)" : "[memo] expanded=" + search.expanded()
+                + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()
+                + " 验尸不符=" + memo.staleCount();
     }
 
     private static String unpackShort(long cell) {
@@ -231,20 +296,23 @@ public final class PathTask extends TickTask {
 
     private Progress arrived(CompanionPlayer c) {
         BlockPos at = c.blockPosition();
-        int need = search.dugCount() + search.placedCount();
+        int need = planDigs + planPlaces;
         String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
                 + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
         return new Progress.Done(new Result(true, fb, null));
     }
 
-    /** 从当前位置重新算路。返回 null=成功可继续；Done=失败或新路线需确认（防绕过确认流）。 */
+    /**
+     * 从当前位置重新算路。返回 null=成功可继续；Done=失败或新路线需确认（防绕过确认流）。
+     * 注意：本方法在**单拍内同步算完**（replan 发生在当前 tick，世界不会中途变，
+     * memo 在这层是纯去重不会引入陈旧）——但这个同步循环本身就是单帧冻结点，
+     * 真分帧重规划属 S3（REPLAN_SEARCH 相位），本卡不动它的预算语义。
+     */
     private Progress replan(CompanionPlayer c) {
         BlockPos from = c.blockPosition();
         sampler = new LevelDigSampler(level, c, from,
                 LevelDigSampler.countPlaceables(c.getInventory()));
-        search = new DigAStar(sampler,
-                from.getX(), from.getY(), from.getZ(),
-                target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS);
+        search = newSearch(from);
         replans++;
         cursor = 0;
         // 重规划同步算完（预算有界：8000/300≈27 次循环，必然终止）
@@ -255,13 +323,13 @@ public final class PathTask extends TickTask {
             return new Progress.Done(new Result(false,
                     "NO_PATH:路被改变后重规划失败：" + search.failure(), null));
         }
-        path = search.path();
-        if (!mayAlterTerrain && (search.dugCount() > 0 || search.placedCount() > 0)) {
+        path = liveify(search.path());
+        if (!mayAlterTerrain && (planDigs > 0 || planPlaces > 0)) {
             // 新路线要改世界但未授权：就地停，交回确认流
             return new Progress.Done(new Result(false,
                     "NEED_CONFIRM:路被人改动，新路线需要挖/放才能继续（明细见 data.blocks）。"
                             + "确认就带 may_alter_terrain=true 重发。",
-                    confirmData(search.dugCount(), search.placedCount())));
+                    confirmData(planDigs, planPlaces)));
         }
         return null;
     }

@@ -55,7 +55,15 @@ public final class LevelDigSampler implements DigSampler {
         if (!inBounds(x, y, z)) {
             return false;
         }
-        var st = level.getBlockState(new BlockPos(x, y, z));
+        BlockPos p = new BlockPos(x, y, z);
+        // R1-S2 修洞（javap 实证）：Level.getBlockState → getChunk(II) 默认
+        // ChunkStatus.FULL + create=true —— 对未加载格会**在主线程同步加载/生成区块**。
+        // 分帧搜索每节点问上百格，这是比节点帽更大的尖峰源。未加载一律按不可通行（墙）：
+        // 目标在未加载区会得到 NO_PATH 而非 BUDGET，语义变化已在设计卡 §开放4 备案。
+        if (!level.isLoaded(p)) {
+            return false;
+        }
+        var st = level.getBlockState(p);
         return !st.blocksMotion() && st.getFluidState().isEmpty();
     }
 
@@ -98,8 +106,8 @@ public final class LevelDigSampler implements DigSampler {
 
     @Override
     public boolean support(int x, int y, int z) {
-        if (!inBounds(x, y, z)) {
-            return false;
+        if (!inBounds(x, y, z) || !level.isLoaded(new BlockPos(x, y, z))) {
+            return false; // 同 passable：不拿支撑查询去触发同步区块生成
         }
         var st = level.getBlockState(new BlockPos(x, y, z));
         // 支撑允许是神圣方块——我们只站上去，不挖它
@@ -112,6 +120,9 @@ public final class LevelDigSampler implements DigSampler {
             return false;
         }
         BlockPos p = new BlockPos(x, y, z);
+        if (!level.isLoaded(p)) {
+            return false; // 同上：不在未加载区动放置规划
+        }
         var st = level.getBlockState(p);
         if (!st.isAir() || !st.getFluidState().isEmpty()) {
             return false; // 只往干净空气格里放
@@ -184,11 +195,18 @@ public final class LevelDigSampler implements DigSampler {
         return level.getBlockEntity(p.above()) != null || isSacred(up);
     }
 
+    /** 注册表反查每 Block 只算一次（javap：BuiltInRegistries.BLOCK.getKey 是哈希查表，
+     *  但 memo 命中前的首次+重复邻居仍省掉大量路径字符串分配）。身份键安全：Block 单例。 */
+    private static final java.util.Map<Block, Boolean> SACRED_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
+
     private boolean isSacred(BlockState st) {
-        String path = BuiltInRegistries.BLOCK.getKey(st.getBlock()).getPath();
-        return SACRED_NAMES.contains(path)
-                || path.endsWith("_bed")
-                || path.endsWith("_shulker_box");
+        return SACRED_CACHE.computeIfAbsent(st.getBlock(), b -> {
+            String path = BuiltInRegistries.BLOCK.getKey(b).getPath();
+            return path.endsWith("_bed")
+                    || path.endsWith("_shulker_box")
+                    || SACRED_NAMES.contains(path);
+        });
     }
 
     private boolean lavaAdjacent(BlockPos p) {

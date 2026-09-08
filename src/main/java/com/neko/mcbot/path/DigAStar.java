@@ -46,6 +46,8 @@ public final class DigAStar {
     public static final double H_UNIT = 0.467;
     /** 撞帽时降级为 PARTIAL 的最小推进量（曼哈顿单位）：差不到这个数就坦白 NO_PROGRESS 级。 */
     public static final int PARTIAL_MIN_GAIN = 4;
+    /** memo 总格数硬帽（设计卡 §B）：超帽**停止 memoize 退回直读**（不失败）——内存有界优先。 */
+    public static final int MEMO_MAX_CELLS = 262_144;
 
     private record Node(long key, int x, int y, int z, int digs, int places,
                         double g, double f, long prev) {

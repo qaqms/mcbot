@@ -35,6 +35,10 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
    - `m4`：真挖链路（发镐+圆石+箱子 → place → break(看真实耗时) → move_to → transfer 存箱），
      前置把同伴从坏 `.dat` 落点传回世界出生点；
    - `m4b`：真取消（busy 拒收 / cancel 命中 / 空槽 false / CANCELLED 回执）+ wait 走完。
+   - `m8`：四场景（A 需确认流 / B 授权后真挖到达 / C 箱子神圣集未动 / D 基岩笼 NO_PATH）。
+     ⚠ **判读必须在未挖穿的干净世界**（09-08 实痛：旧世界历史挖穿点在走廊封闭段外围成
+     绕行洞，A 会合法地"挖 0 直达"→ 假退步）。世界脏了就 `rm -rf run/world run/world_nether
+     run/world_the_end` 重建再跑；A/B/C 的真值判读口径见 STATUS「R1-S2 关账证据」。
 2. 判读基准都在日志行前缀里（`[m3]`/`[m4]`/`[m4b]`/`AUTOTEST`），STATUS 各节有逐条"期望值"。
 3. ⚠️ **不要用控制台 stdin 做验收**：经 gradle 管道喂命令连原版 `list` 都报
    "unexpected error" 且吞堆栈——harness 缺陷，与代码无关。一切自动化验收走 SelfTest
