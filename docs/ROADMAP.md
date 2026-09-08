@@ -64,9 +64,11 @@
       PLAYER_LOADING/PLAYER_SIMULATION 票（半径候选与 view-distance 同源），跨 chunk 移动换票，
       dismiss 释票。**不修后果：野外单独行动的同伴永远寸步难行（搜索全读 UNKNOWN）**；
       代价：常驻加载面积（TPS/内存）。harness 已用同机制跑通 `[m8]`。
-- [ ] **S4 常数对账**：H_WEIGHT/H_UNIT/PARTIAL_MIN_GAIN/STALE_*/MEMO_MAX_CELLS/DIG_QUANT/
-      SEARCH_SLICE_NS/SEARCH_TOTAL_NS/BIAS_REUSE 同步进 STATUS §10 与 ARCHITECTURE §10；
-      TOOLS 词汇补 NO_PROGRESS / PARTIAL 回执 / 悬空起点 NEED_CONFIRM 新语义
+- [x] **S4 常数对账（09-08 16:05）**：全部 R1 常数已进 ARCHITECTURE §10「寻路(R1 后)」行
+      （双帽 8000/400ms、切片 6ms、h=1.8×0.467+入柱价公开不可采纳、PARTIAL gain≥4、memo 帽
+      262144、验尸 256/8/24、DIG_QUANT 0.25s、降权 0.7）；TOOLS §3 词汇表换血：
+      BUDGET_EXCEEDED 不再对外（降为内部串），新增 PARTIAL/NO_PROGRESS 两行及期望行为；
+      债务表销"16 格山地撞帽"旧账（转真机终验）+ 立"假玩家无票→R1-S3b"新账。
 - 验收：同一山体用例修复前后对比（展开数、降级是否命中）；`[m8]` 四场景不回退（新世界口径）
       ——S1–S3 均已按此口径验收；真机山体 PARTIAL/无单帧冻结归最终合并真机会话
 
@@ -142,8 +144,10 @@
 - [x] 纯算法核入 DigAStar（零 MC 依赖）+ 根工程 JUnit 8 例；无头 [m8] A确认/B挖穿到达/C箱子神圣/D基岩NO_PATH 全中
 - [x] 真机验收（23:41–23:44）：真实山丘 NEED_CONFIRM→ask_owner→授权挖 2 格登顶；复杂地形两次 BUDGET_EXCEEDED 教学回执生效；扫出 coal_ore×7
 - 已知边界/债：挖子机与 BreakBlockTool 重叠 ~40 行未抽公共；无自动换工具；斜穿不挖角落；流体不可排；TPS 假设 20；
-  **8000 节点帽在 16 格复杂山地就撞（真机实锤）**——候选调参：启发权重/可达预检/帽上调，随 M5 一并评
-- 已知边界/债：挖子机与 BreakBlockTool 重叠 ~40 行未抽公共类；无自动换工具（手持挖不动则绕/失败）；斜穿不挖角落；流体不可排；TPS 假设 20
+  ~~8000 帽在 16 格山地就撞（真机实锤）~~ → **R1 已整改**（加权 h 2.1× 聚焦 + memo 4:1 去重 +
+  UNKNOWN 墙 + 双帽 PARTIAL 降级），无头全绿；**真机山体 PARTIAL/无单帧冻结待合并真机会话终验**
+- 已知边界/债：斜穿不挖角落；流体不可排；TPS 假设 20；**假玩家无 chunk 票（09-08 探针实锤）
+  → R1-S3b 待做**：不修则野外孤伴寻路全读 UNKNOWN；harness 已用 PLAYER_* 票绕过
 
 ## 债务清单（穿插偿还，勿开新战线时盯着这里）
 
