@@ -3,7 +3,7 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡（docs/plan/）· **R0 ✅ 12:40** · **R1-S1 ✅ 13:44** · **R1-S2 ✅ 14:12（新世界口径）** · **R1-S3 代码完成（14:5x）但未关账**：单测 22/22 绿，无头 `[m8]` 在第二个新世界全红（expanded=1 NO_PATH），根因未定性、`[m8dbg]` 探针已埋未跑 → 下回合第一件事：跑探针定性
+## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡（docs/plan/）· **R0 ✅ 12:40** · **R1-S1 ✅ 13:44** · **R1-S2 ✅ 14:12** · **R1-S3 ✅ 15:52 关账（新世界全红定性=假玩家无票+harness 地形污染，非回归；产品修复另立 R1-S3b 待拍板）** → 下一卡 **R1-S4 常数对账**，之后转 R2
 
 | 里程碑 | 状态 |
 |---|---|
@@ -324,9 +324,9 @@ x=7..12，历史挖穿点在封闭段外围成绕行洞；删 run/world 重建�
 数据，纯测试垫块）。下张卡：**R1-S3（REPLAN_SEARCH 真分帧 + 旧路复用偏置 ×0.7 +
 双帽时间预算 + PARTIAL 话术）**。
 
-### R1-S3 中间记录（09-08 14:5x，**未关账**，主人叫停于文档同步）
+### R1-S3 关账证据（09-08 15:52 无头，含一次重大定性）
 
-**代码已落地**（编译绿，单测 22/22：DigAStar 14 + Memo 3 + WireSize 5）：
+**代码四项**（编译绿，单测 22/22：DigAStar 14 + Memo 3 + WireSize 5）：
 ① `REPLAN_SEARCH` 真分帧相位：`beginReplan` 只装盘（新 sampler/降权集/相位），旧版单拍
 同步 while 冻结点已杀；重搜与首搜共用同一分帧出口，失败/确认/计数不复制逻辑。
 ② 旧路降权 ×0.7（`BIAS_REUSE`）：只取 cursor-1 往后的未来路（回头路降权会诱导读回振荡），
@@ -340,22 +340,31 @@ x=7..12，历史挖穿点在封闭段外围成绕行洞；删 run/world 重建�
 "PARTIAL:…已走到最近点…请从该点重发 move_to（可分多段）"；推进不足 → NO_PROGRESS
 （不再冒充 BUDGET）；open 空的真 NO_PATH 永不降级。
 
-**⚠ 未关账，卡在无头回归**：删旧世界重建后（seed 随机，出生点变到 -672,79,-608），
-`[m8]` A/B/C/D 四场景 + `[m4]` move **全变 `NO_PATH expanded=1 命中=12 实查=82`**（14:54:36–38）。
-但**同一相邻格 place_block/break 成功**（-671,78 放圆石又挖掉）→ 区块在、方块真。
-已 javap 坐实 `Level.isLoaded = isInValidBounds && ChunkSource.hasChunk(存在性)`，排掉
-"isLoaded 语义误杀"一半；剩两嫌疑未定性：
-  a) 该出生点地形本身 26 邻居全不可行（流体？基岩团？——passable 拒流体、
-     digSeconds 拒流体/硬石，若坐实则**场景对出生地形敏感，不是 S3 回归**，但 harness
-     需补"出生点可用性地基"前置）；
-  b) S3 某改动真引入回归（嫌疑弱：14:12 同一 memo 下搜索正常，S3 只动预算/相位/降权）。
-已埋 `[m8dbg]` 探针（基准点周围 18 格 + 走廊中段：方块名/loaded/motion/fluid/hard/手持），
-**未跑即停**。下回合第一动作：rebuild → 新世界或现世界跑一把 → 按探针定性 → 补账/修复，
-关账前不得进 S4/R2。真机山体验证同批顺延。
+**⚠ 本卡真正的收获是被新世界全红逼出来的两个产品级事实（探针定性，非猜测）**：
+  事实 A（产品缺陷，立卡 R1-S3b）：**假玩家不持任何 chunk 票**——`[m8dbg-pre]` 在任何
+  getBlockState 触碰前实测同伴自己脚下格 `hasChunkAt=false`；之前所有世界能跑绿纯属
+  踩在出生点区块常驻区/主人在线加载区上。`getBlockState` 的同步强载**撑不过一拍**
+  （拍尾无票即回收，B 场景 TARGET_LOST vs 探针 loaded=true 的"同秒矛盾"即此机制）。
+  影面：真实产品里同伴单独在远处行动时根本无路可寻——**不修此洞，R1 所有搜索改进
+  对野外孤伴无效**。harness 已用 `ServerChunkCache.addTicketWithRadius(PLAYER_LOADING/
+  PLAYER_SIMULATION, pos, 8)` 持票（无 PERSIST 标，重启自清），产品侧需在 summon/
+  移动跟踪/dismiss 挂同机制→R1-S3b，待主人拍板。
+  事实 B（harness 缺陷，已修）：`[m8]` 场景被 m4 残留（箱子正好塞在走廊唯一入口）与
+  悬空出生点（脚撑=false 且 placeStock=0 → 26 邻居合法拒绝 → expanded=1 是**正确算法
+  行为**）污染。修：SelfTest 新增 `findClearStrip`（14 格水平净带扫描，脚/头可通行、
+  下为实心非容器）+ m4/m8 各自迁带 + `[m8env]` 常驻断言（票失效立刻 warn，不再靠猜）。
+  新世界（-672,79,-608 雪地尖柱，最难啃的地形）实测：m4 的 `move_to 完成: false
+  NEED_CONFIRM 放2格` 是悬空点搭柱需授权的**正确新语义**，非退步。
 
-**推送与密钥**：本次（09-08 下午）主人重发 PAT 用于推送，未落任何盘（remote 无凭据、
-.git/config 干净、一次性 header）；该 token 已在聊天出现过一次，事后仍建议作废重发。
-待推清单：S3 中间 commit（本次）+ 之前的 7a365b1。
+**关账验收（15:51:54–15:52:37，票+净带后的最终代码，异常 0，停服无孤儿）**：
+`[m5a]` 四 true；`[m4b]` busy/cancel/空槽全中；`[m8]` A 需确认=true 清单 1（挖头格最优解，
+净带坐标 -661）/ B 到达=true 真挖 6s（站定 -662,80,-607）/ C 箱未动=true / D NO_PATH ✓；
+`[m8env]` 零告警；memo 去重 3970/962 ≈ 4:1；`partial=false` 字段已入 `[path]` 日志。
+真机山体 PARTIAL/无单帧冻结验证：并入最终一次性真机会话清单（不单独约）。
+
+**推送与密钥**：主人重发 PAT 用于推送，未落任何盘（remote 无凭据、.git/config 干净、
+一次性 header）；该 token 已在聊天出现多次，**尽快去 GitHub 作废重发**。本次待推：
+S3 关账 commit（代码+探针+harness 修+文档）。
 
 ### R0 关账证据（09-08 12:39–12:40，本机无头）
 
@@ -373,6 +382,9 @@ x=7..12，历史挖穿点在封闭段外围成绕行洞；删 run/world 重建�
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 假玩家 chunk 票 | **假玩家（FakeConnection）不入 PlayerMap/不发 PLAYER_* 票**（09-08 探针：任何 getBlockState 前同伴脚下 `hasChunkAt=false`）；`getBlockState` 强载的区块**拍尾无票即回收**（同秒内"探针 true/下拍工具 false"即此机制）；harness 用 `ServerChunkCache.addTicketWithRadius(TicketType.PLAYER_LOADING/PLAYER_SIMULATION, ChunkPos, r)` 持票，`removeTicketWithRadius` 释；PLAYER_* 无 FLAG_PERSIST，重启自清 |
+| `Level.isLoaded(BlockPos)` | = `isInValidBounds(pos) && ChunkSource.hasChunk(x>>4, z>>4)`（**存在性**，不是状态≥FULL）；与 `hasChunkAt` 同源，两者对假玩家同时 false |
+| 探针防污染 | 同一 LOG 行内参数左→右求值：`getBlockState` 在前会强载污染后面的 `isLoaded`——纯加载断言必须**单独成行且先于一切方块读** |
 | 假玩家进场 | `PlayerList.placeNewPlayer(Connection, ServerPlayer, CommonListenerCookie)`；cookie 用 `CommonListenerCookie.createInitial(GameProfile, false)`（record：profile/latency/ClientInformation/transferred） |
 | 客户端信息类 | `net.minecraft.server.level.ClientInformation`（**不在** network 包），`createDefault()` |
 | ServerPlayer 构造 | `(MinecraftServer, ServerLevel, GameProfile, ClientInformation)` ✓ 公开可子类 |

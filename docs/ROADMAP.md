@@ -53,10 +53,22 @@
 - [x] ~~部分提交~~（S1 已做算法侧：budgetReached/partialAvailable/partialPath；对模型的
       PARTIAL 话术归 S3）
 - [x] ~~回归用例~~（①②③⑥随 S1、④⑤⑥随 S2 入册；山体聚焦实据 w1.0=519 vs w1.8=242）
-- [ ] **重规划真分帧 + 双帽 + PARTIAL 话术（S3）**：`PathTask.replan` 同步 while 循环是单帧
-      冻结点→新相位 REPLAN_SEARCH 复用 searchTick 切片；旧路径格降权 ×0.7 抑抖动；
-      节点帽+时间帽双帽（先到先停）；PARTIAL 反馈给模型的措辞模板；`[m8]` 断言扩展
+- [x] **重规划真分帧 + 双帽 + PARTIAL 话术（S3，09-08 15:52 关账）**：`PathTask.replan` 同步
+      while 冻结点已杀（新相位 REPLAN_SEARCH 与首搜共用分帧出口）；旧路格降权 ×0.7 抑抖
+      （只往未来取、失效格周围不入集；单测⑨原路复现 cost 恰 ×0.7、expanded 143→29）；
+      双帽：节点 8000 + 累计 CPU 400ms，单拍另 6ms 切片（单测⑧）；PARTIAL/NO_PROGRESS
+      话术入 PathTask，真 NO_PATH 永不降级。新世界全红定性：假玩家无 chunk 票 + m4 残留
+      污染场景（expanded=1 是正确算法行为），**非 S3 回归**；harness 持票+净带修复，
+      证据见 STATUS「R1-S3 关账证据」。
+- [ ] **R1-S3b（本卡发现立卡，待主人拍板范围）：同伴正式持票**——summon 挂
+      PLAYER_LOADING/PLAYER_SIMULATION 票（半径候选与 view-distance 同源），跨 chunk 移动换票，
+      dismiss 释票。**不修后果：野外单独行动的同伴永远寸步难行（搜索全读 UNKNOWN）**；
+      代价：常驻加载面积（TPS/内存）。harness 已用同机制跑通 `[m8]`。
+- [ ] **S4 常数对账**：H_WEIGHT/H_UNIT/PARTIAL_MIN_GAIN/STALE_*/MEMO_MAX_CELLS/DIG_QUANT/
+      SEARCH_SLICE_NS/SEARCH_TOTAL_NS/BIAS_REUSE 同步进 STATUS §10 与 ARCHITECTURE §10；
+      TOOLS 词汇补 NO_PROGRESS / PARTIAL 回执 / 悬空起点 NEED_CONFIRM 新语义
 - 验收：同一山体用例修复前后对比（展开数、降级是否命中）；`[m8]` 四场景不回退（新世界口径）
+      ——S1–S3 均已按此口径验收；真机山体 PARTIAL/无单帧冻结归最终合并真机会话
 
 ## R2 延迟整改（靶子：实测 8 轮/任务 = 20–50s；跳数仅 100–150ms 不是主因；
 **设计卡：`docs/plan/R2-latency.md`**，性价比序 D>C>B>A）

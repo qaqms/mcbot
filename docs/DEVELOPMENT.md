@@ -36,9 +36,13 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
      前置把同伴从坏 `.dat` 落点传回世界出生点；
    - `m4b`：真取消（busy 拒收 / cancel 命中 / 空槽 false / CANCELLED 回执）+ wait 走完。
    - `m8`：四场景（A 需确认流 / B 授权后真挖到达 / C 箱子神圣集未动 / D 基岩笼 NO_PATH）。
-     ⚠ **判读必须在未挖穿的干净世界**（09-08 实痛：旧世界历史挖穿点在走廊封闭段外围成
-     绕行洞，A 会合法地"挖 0 直达"→ 假退步）。世界脏了就 `rm -rf run/world run/world_nether
-     run/world_the_end` 重建再跑；A/B/C 的真值判读口径见 STATUS「R1-S2 关账证据」。
+     ⚠ 两个已坐实的坑（09-08 探针定性，代码已内置修复，判读时知道即可）：
+     **假玩家不持 chunk 票**（SelfTest 现在用 addTicketWithRadius(PLAYER_*) 自动持票，
+     跨拍搜索/TARGET_LOST 才有稳定世界）；**场景吃地形运气**（悬空出生点/m4 残留箱体会
+     让 expanded=1 成为“正确的 NO_PATH”——现在 m4/m8 各自先扫 14 格净带迁址，`[m8env]`
+     warn 出现=票失效；另旧世界被历史挖穿会造绕行洞，脏了就删 run/world 重建）。
+     m4 的 `move_to 完成: false NEED_CONFIRM 放N格` 在悬空/凹凸地形下是正常语义
+     （搭路=改世界需授权），不是退步。
 2. 判读基准都在日志行前缀里（`[m3]`/`[m4]`/`[m4b]`/`AUTOTEST`），STATUS 各节有逐条"期望值"。
 3. ⚠️ **不要用控制台 stdin 做验收**：经 gradle 管道喂命令连原版 `list` 都报
    "unexpected error" 且吞堆栈——harness 缺陷，与代码无关。一切自动化验收走 SelfTest

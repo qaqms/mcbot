@@ -168,6 +168,17 @@ public final class SelfTest {
         // 先把同伴挪回地表（soak 硬杀可能把 .dat 停在洞底）
         var rd = cp.level().getRespawnData();
         cp.teleportTo(rd.pos().getX() + 0.5, rd.pos().getY() + 1, rd.pos().getZ() + 0.5);
+        // 【09-08 定性】出生点本身可能就是悬空格/雪原尖柱（实测脚撑=false 且无料可垫），
+        // 而假玩家不带 chunk 票——harness 先持票再找 14 格净带落脚，m4/m4b/m8 共用。
+        holdChunks(cp.level(), cp.blockPosition(), 8);
+        var strip = findClearStrip(cp.level(), cp.blockPosition());
+        if (strip != null) {
+            cp.teleportTo(strip.getX() + 0.5, strip.getY(), strip.getZ() + 0.5);
+            holdChunks(cp.level(), strip, 8);
+            McbotMod.LOG.info("[m4] 迁至 14 格净带 {}", strip.toShortString());
+        } else {
+            McbotMod.LOG.warn("[m4] 出生点周围 40 格内无净带，原地照跑");
+        }
         var registry = McbotMod.toolRegistry();
         var sched = McbotMod.scheduler();
         var inv = cp.getInventory();
@@ -281,30 +292,28 @@ public final class SelfTest {
         var registry = McbotMod.toolRegistry();
         var sched = McbotMod.scheduler();
         var level = cp.level();
+        // 【09-08 定性】假玩家不带 chunk 票（探针前 hasChunkAt=false 实测）：scenario 铺台
+        // 靠 getBlockState 同步强载，拍尾回收→搜索/下一拍工具全看到 UNKNOWN。
+        // harness 自己挂临时票（PLAYER_* 无 PERSIST 标，重启自清）；产品侧归 R1-S3b。
+        holdChunks(level, cp.blockPosition(), 8);
+        var strip = findClearStrip(level, cp.blockPosition());
+        if (strip != null) {
+            cp.teleportTo(strip.getX() + 0.5, strip.getY(), strip.getZ() + 0.5);
+            holdChunks(level, strip, 8);
+            McbotMod.LOG.info("[m8] 迁至 14 格净带（逃离 m4 残留胸箱/悬空出生点的地形运气）");
+        } else {
+            McbotMod.LOG.warn("[m8] 没找到净带，原地形照跑（失败时先查 m4 残留）");
+        }
         var base = cp.blockPosition();
         McbotMod.LOG.info("[m8] 基准点 {}", base.toShortString());
-        // [m8dbg] 新世界 spawn 在 -672,79,-608 时 A* 邻居全拒而 place/break 正常——把邻域真值
-        // （方块名/加载/可通行/可挖秒）直接打出来定性，不靠猜（R1-S3 调查 09-08）。
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                for (int dy = 0; dy <= 1; dy++) {
-                    net.minecraft.core.BlockPos p = base.offset(dx, dy, dz);
-                    var st = level.getBlockState(p);
-                    McbotMod.LOG.info("[m8dbg] ({}) blk='{}' loaded={} motion={} fluid={} hard={} held='{}'",
-                            p.toShortString(), st.getBlock().getName(), level.isLoaded(p),
-                            st.blocksMotion(), st.getFluidState().isEmpty() ? "no" : st.getFluidState().getType(),
-                            st.getBlock().defaultDestroyTime(),
-                            cp.getMainHandItem().isEmpty() ? "空手"
-                                    : cp.getMainHandItem().getItem());
-                }
-            }
-        }
-        { // 走廊中段与目标柱的加载态（passable 的 UNKNOWN=墙之后，这类断言必须显式看见加载）
+        // 环境断言（轻量常驻）：harness 票失效时这里立刻暴翼，不等搜索谜之 expanded=1。
+        {
             for (int d = 2; d <= 6; d += 2) {
                 net.minecraft.core.BlockPos p = base.east(d);
-                McbotMod.LOG.info("[m8dbg] 走廊({}) blk='{}' loaded={}",
-                        p.toShortString(), level.getBlockState(p).getBlock().getName(),
-                        level.isLoaded(p));
+                if (!level.hasChunkAt(p)) {
+                    McbotMod.LOG.warn("[m8env] 走廊({}) 未加载！harness 票失效，先查 holdChunks",
+                            p.toShortString());
+                }
             }
         }
 
@@ -372,6 +381,73 @@ public final class SelfTest {
                 + "B 到达=true；C 箱子未动；D NO_PATH。全中即 M8 无头验收通过。");
     }
 
+    /**
+     * harness 临时持票（非产品机制！）：假玩家不持有 PLAYER_* 票（09-08 探针实测），
+     * 验收场景铺完台后区块会在拍尾被回收，搜索下一拍就读成 UNKNOWN 墙。
+     * PLAYER_LOADING/SIMULATION 无 PERSIST 标，重启自清；产品侧正式修复另立 R1-S3b。
+     */
+    private static final java.util.List<net.minecraft.world.level.ChunkPos> HELD =
+            new java.util.ArrayList<>();
+
+    private static void holdChunks(net.minecraft.server.level.ServerLevel level,
+                                   net.minecraft.core.BlockPos around, int radius) {
+        var pos = new net.minecraft.world.level.ChunkPos(around);
+        if (HELD.contains(pos)) {
+            return;
+        }
+        level.getChunkSource().addTicketWithRadius(
+                net.minecraft.server.level.TicketType.PLAYER_LOADING, pos, radius);
+        level.getChunkSource().addTicketWithRadius(
+                net.minecraft.server.level.TicketType.PLAYER_SIMULATION, pos, radius);
+        HELD.add(pos);
+        McbotMod.LOG.info("[m8dbg] harness 持票 r={} @ {}", radius, pos);
+    }
+
+    private static void releaseChunks(net.minecraft.server.level.ServerLevel level) {
+        for (var pos : HELD) {
+            level.getChunkSource().removeTicketWithRadius(
+                    net.minecraft.server.level.TicketType.PLAYER_LOADING, pos, 8);
+            level.getChunkSource().removeTicketWithRadius(
+                    net.minecraft.server.level.TicketType.PLAYER_SIMULATION, pos, 8);
+        }
+        HELD.clear();
+    }
+
+    /** 找 14 格水平净带（脚/头可通行、下为实心且非容器）：m8 场景不再吃 m4 残留的地形运气。 */
+    private static net.minecraft.core.BlockPos findClearStrip(
+            net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos origin) {
+        for (int off = 0; off <= 40; off++) {
+            int[] dirs = (off == 0) ? new int[]{1} : new int[]{1, -1};
+            for (int dir : dirs) {
+                for (int dy : new int[]{0, 1, -1}) {
+                    var cand = origin.offset(dir * off, dy, 0);
+                    if (stripOk(level, cand)) {
+                        return cand;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean stripOk(net.minecraft.server.level.ServerLevel level,
+                                   net.minecraft.core.BlockPos start) {
+        for (int i = 0; i < 14; i++) {
+            var p = start.east(i);
+            var foot = level.getBlockState(p);
+            var head = level.getBlockState(p.above());
+            var down = level.getBlockState(p.below());
+            boolean open = !foot.blocksMotion() && foot.getFluidState().isEmpty()
+                    && !head.blocksMotion() && head.getFluidState().isEmpty();
+            boolean ground = down.blocksMotion() && down.getFluidState().isEmpty()
+                    && !down.hasBlockEntity();
+            if (!open || !ground) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** 场景 D：基岩笼死→必须干净地 NO_PATH，拆笼后同伴归位。 */
     private static void m8dSealedBox(CompanionPlayer cp) {
         var registry = McbotMod.toolRegistry();
@@ -413,7 +489,8 @@ public final class SelfTest {
             }
             cp.teleportTo(home.getX() + 0.5, home.getY(), home.getZ() + 0.5);
             McbotMod.LOG.info("[m8] D 干净失败={}：{}", cleanFail, rd.feedback());
-            McbotMod.LOG.info("[m8] 全部场景结束（笼已拆，同伴已归位）");
+            McbotMod.LOG.info("[m8] 全部场景结束（笼已拆，同伴已归位，harness 票已释）");
+            releaseChunks(level);
         });
     }
 
