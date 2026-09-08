@@ -264,6 +264,21 @@
 **交叉点（一次改动双收益，优先做）**：感知给**绝对坐标+可挖目标** 与 **准星目标注入**
 同时砍轮次和失控感；"受理即回执"既是最大延迟项的解，也是面板/HUD"当前任务"显示的前提。
 
+### 整改总案与合并裁决（09-08，设计卡已入 `docs/plan/R1-pathfinding.md` / `R2-latency.md` / `R3-panel.md`）
+
+三张 Plan 卡（寻路/延迟/面板）均 javap 实证；主会话合并时**推/改了三处代理结论**：
+1. R1 卡"未加载读成 VOID_AIR 洞"归因错——实测 VOID_AIR 仅垂直越界；真病灶是
+   `passable()` 不查 isLoaded → `getBlockState` → `getChunk(II)` 默认 FULL+create=true →
+   **主线程同步生成区块**（新发现，入 R1-B）；单价重查：最低 0.467/曼哈顿单（非 0.7），
+   现 h 高估 2 倍坐实。
+2. R3 卡"passable 有 isLoaded 防护"——实测只有 `digSeconds` 有（:65），passable 没有（:53-59）。
+3. R2 卡与 R3 卡的 skills 读盘冲突——裁决：**R2 出 AtomicReference 缓存+`reloadSkills()` 失效钩子，
+   R3 调钩子**；persona 零重建（diff 驱动 `applyConfig`）。总线命名：**沿用 BridgeEvents**，
+   javadoc 正名（改名是文档债）。一发契约（一 seq 恰一终局）：**不留双发兼容窗**（自家客户端自控）。
+   `ROCK_PATHS` 不含泥土/沙（目标≠材料）。多 call 并行：**不做**（撞单槽，串行+PARK 已够）。
+   PARTIAL 后服务端自动接力：**不做**，回执教模型重发（R2-C 落地后再评）。
+   待主人拍板：PARK 中新指令自动顶替还是需明示；护栏值持久化；W=1.5/1.8/面板可调；真机验收批次。
+
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
 
 | 事项 | 真实形状（Mojang 映射） |

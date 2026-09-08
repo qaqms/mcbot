@@ -13,11 +13,16 @@
 - [ ] `Conversation.noteCompacted` 不复位 `realPromptTokens` → 压缩可连发
 - [ ] ARCHITECTURE §10 常数表已修一条（ask_owner 300s→120s），余行待扫
 - [ ] 桥 SSE 每连接永久占线程（池仅 4）：2 SSE + 2 长 wait 即饥饿
+- [ ] `CompanionScheduler:95` 超时文案硬写"60 秒"而 move_to 帽 3600tick=3min（主会话已证；R2-C 一并修）
 
-## R1 寻路整改（靶子：16 格复杂山地撞 8000 帽；真因分析见 STATUS）
+## R1 寻路整改（靶子：16 格复杂山地撞 8000 帽；真因分析见 STATUS；**设计卡：`docs/plan/R1-pathfinding.md`**）
 
-- [ ] **h 修正**：删「可采纳」假断言；要么按最小真实单价（斜步 0.7/曼哈顿单）重推下界，
-      要么改**显式加权 A\***（w=1.5–2，注释写清「故意不可采纳，牺牲最优性换展开数」）
+- [ ] **新发现（09-08 合并复核时 javap 坐实）**：`LevelReader.getChunk(II)` 默认 FULL+create=true，
+      而 `LevelDigSampler.passable()`（:53-59）**没查 isLoaded** 就 `getBlockState` → 搜索伸进
+      未加载区会在主线程**同步加载/生成区块**（`digSeconds` 有防护、passable 没有）。并入 memo 设计：
+      UNKNOWN（未加载）一律不可通行
+- [ ] **h 修正**：删「可采纳」假断言；采**显式加权 A\***（h=1.8×0.467×L1+目标入柱最小价；
+      可采纳下界被否：必挖区零梯度治不了病根），注释公开取舍
 - [ ] **世界快照 + memo**：搜索开始时预采集搜索盒内 passable/硬度/神圣/岩浆判定（或 memo），
       目标：每节点 Level 读从 100–300 次降到 O(1) 数组查
 - [ ] **部分提交**：撞帽/无解时提交「距目标最近的已扩展节点」并走完——把 BUDGET_EXCEEDED
@@ -28,7 +33,8 @@
       需先给 DigAStar 加展开数 getter
 - 验收：同一山体用例修复前后对比（展开数、降级是否命中）；`[m8]` 四场景不回退
 
-## R2 延迟整改（靶子：实测 8 轮/任务 = 20–50s；跳数仅 100–150ms 不是主因）
+## R2 延迟整改（靶子：实测 8 轮/任务 = 20–50s；跳数仅 100–150ms 不是主因；
+**设计卡：`docs/plan/R2-latency.md`**，性价比序 D>C>B>A）
 
 - [ ] **真流式**：`LlmClient:57` 换增量行订阅，打 TTFB/TTFT/tok·s⁻¹；最终回复首句即刻播报
       （工具调用仍需整段参数齐才派发，但不再等整条流收尾）
@@ -41,7 +47,7 @@
 - [ ] 打点补齐（清单见 STATUS 第六项）：t_send/TTFB/首行/末行、wire_rtt、本地间隙
 - 验收：同一任务（挖三块石头进箱）改前后轮次数与总时长对比，用 `[brain] step tokens` + 新打点作数
 
-## R3 面板可控性整改（靶子：外部进程能做的，主人反而不能）
+## R3 面板可控性整改（靶子：外部进程能做的，主人反而不能；**设计卡：`docs/plan/R3-panel.md`**）
 
 - [ ] 反问闭环进面板：醒目横幅 + 作答输入框 + 120s 倒计时（`latestQuestion` 暴露给 UI）
 - [ ] 工具回执/护栏/当前步数进 transcript（`onToolInvoked`/`onNotice` 补 record()，约 10 行）
