@@ -3,6 +3,8 @@ package com.neko.mcbot.body;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.common.Envelope;
+import com.neko.mcbot.common.McbotPayloads;
+import com.neko.mcbot.common.WireSize;
 import com.neko.mcbot.server.ServerTool;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
@@ -47,7 +49,69 @@ public final class SelfTest {
             }
         }
 
+        m5aSizeGate();
         m3Scenarios(server);
+    }
+
+    /**
+     * 闸①（信封尺寸）无头验收。不依赖同伴，所以跑在主链路之前；且走**真的**
+     * {@code C2s.CODEC} 编解码往返——那才是收包时真正经过的路径，手写字符串判长度不算验收。
+     *
+     * <p>三个点必测：①超限包被换成哨兵而不是抛异常（抛了就是踢主人线）；
+     * ②中文包按**字节**而非字符判定（旧闸量错单位的地方）；③正常小包往返无损。
+     */
+    private static void m5aSizeGate() {
+        io.netty.buffer.ByteBuf okBuf = io.netty.buffer.Unpooled.buffer();
+        McbotPayloads.C2s.CODEC.encode(okBuf, new McbotPayloads.C2s(
+                "{\"kind\":\"tool_call\",\"seq\":7,\"tool\":\"scan_area\",\"args\":{\"r\":16}}"));
+        McbotPayloads.C2s okBack = McbotPayloads.C2s.CODEC.decode(okBuf);
+        boolean 小包往返无损 = !okBack.oversize() && okBack.json.contains("tool_call")
+                && okBack.json.contains("scan_area");
+
+        // 中文堆到超限：按字符数看“没超 32768”，按字节数必须把它拦住
+        String fat = "{\"kind\":\"tool_call\",\"args\":{\"note\":\"" + "矿".repeat(12000) + "\"}}";
+        io.netty.buffer.ByteBuf fatBuf = io.netty.buffer.Unpooled.buffer();
+        McbotPayloads.C2s.CODEC.encode(fatBuf, new McbotPayloads.C2s(fat));
+        int fatWire = fatBuf.readableBytes();
+        McbotPayloads.C2s fatBack;
+        String threw = "none";
+        try {
+            fatBack = McbotPayloads.C2s.CODEC.decode(fatBuf);
+        } catch (Throwable t) {
+            fatBack = McbotPayloads.C2s.OVERSIZED;      // 只是为了不让下面的日志抩掉
+            threw = t.getClass().getSimpleName();
+        }
+        boolean 超限被拒且不抛 = fatBack.oversize() && "none".equals(threw);
+
+        // 刚好在线内：验证闸没关得过紧（否则正常回执会被误杀）
+        int budget = WireSize.MAX_BODY_BYTES - "{\"kind\":\"x\",\"v\":\"\"}".length();
+        String edge = "{\"kind\":\"x\",\"v\":\"" + "a".repeat(budget) + "\"}";        io.netty.buffer.ByteBuf edgeBuf = io.netty.buffer.Unpooled.buffer();
+        McbotPayloads.C2s.CODEC.encode(edgeBuf, new McbotPayloads.C2s(edge));
+        McbotPayloads.C2s edgeBack = McbotPayloads.C2s.CODEC.decode(edgeBuf);
+        boolean 限内放行 = !edgeBack.oversize() && edge.equals(edgeBack.json);
+
+        // 畸形声明（长度前缀吹大）同样不能抛：这是“不踢线”的另一半保证
+        io.netty.buffer.ByteBuf badBuf = io.netty.buffer.Unpooled.buffer();
+        net.minecraft.network.VarInt.write(badBuf, 900000);   // 声明 900000 字节，实际只写几十字节
+        badBuf.writeBytes("只有几个字节".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        McbotPayloads.C2s badBack;
+        String badThrew = "none";
+        try {
+            badBack = McbotPayloads.C2s.CODEC.decode(badBuf);
+        } catch (Throwable t) {
+            badBack = McbotPayloads.C2s.OVERSIZED;
+            badThrew = t.getClass().getSimpleName();
+        }
+        boolean 畸形不抛 = badBack.oversize() && "none".equals(badThrew);
+
+        McbotMod.LOG.info("[m5a] 小包往返={} 超限被拒且不抛={} 限内放行={} 畸形不抛={}"
+                        + " (fat={}字符/{}B 线上={}B 上限={}B)",
+                小包往返无损, 超限被拒且不抛, 限内放行, 畸形不抛,
+                fat.length(), WireSize.utf8Bytes(fat), fatWire, WireSize.MAX_BODY_BYTES);
+        fatBuf.release();
+        edgeBuf.release();
+        okBuf.release();
+        badBuf.release();
     }
 
     private static void m3Scenarios(MinecraftServer server) {
@@ -220,13 +284,25 @@ public final class SelfTest {
         var base = cp.blockPosition();
         McbotMod.LOG.info("[m8] 基准点 {}", base.toShortString());
 
-        // 铺一条测试大道：东 2..7 的地板填石，脚格/头格清成空气
+        // 铺一条测试大道：东 2..7 的地板填石，脚格/头格清成空气；**两侧也封石**。
+        // 为什么必须封两侧：不封的话“唯一路线就是挖穿”这句前提只取决于基准点旁边的
+        // 自然地形——地形恰好能走时，A* 会找到一条真的不用挖的绕行（于是 A 不报
+        // NEED_CONFIRM、B 也“没挖穿”），而算法本身并没有错。上一台机器恰好封得住，
+        // 本机（base=5,63,0）就能从 z=1 绕过去——验收场景不能靠运气，这里把它变确定。
         for (int dx = 2; dx <= 7; dx++) {
             level.setBlockAndUpdate(base.east(dx).below(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
             level.setBlockAndUpdate(base.east(dx), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
             level.setBlockAndUpdate(base.east(dx).above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+            for (int dz : new int[]{-1, 1}) {
+                // 侧墙只砌两层（脚+头）：2 格高在 placeStock=0 时已经跳不上去，
+                // 再往上砌会白白改地形，也会把“最优解只挖 1 格”这个观测点遮掉。
+                level.setBlockAndUpdate(base.east(dx).offset(0, 0, dz),
+                        net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+                level.setBlockAndUpdate(base.east(dx).above().offset(0, 0, dz),
+                        net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+            }
         }
-        // A 墙：东 4 的脚+头两格石头（placeStock=0 爬不了顶，唯一路线就是挖穿）
+        // A 墙：东 4 的脚+头两格石头（placeStock=0 爬不了顶，封住两侧后唯一路线就是挖穿）
         level.setBlockAndUpdate(base.east(4), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
         level.setBlockAndUpdate(base.east(4).above(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
 

@@ -7,6 +7,7 @@ import com.neko.mcbot.body.CompanionRoster;
 import com.neko.mcbot.body.SummonService;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
+import com.neko.mcbot.common.WireSize;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
@@ -28,7 +29,10 @@ public final class ServerToolDispatcher {
         this.registry = registry;
     }
 
-    /** 闸①尺寸校验在 StreamCodec readUtf 已兜底；这里闸②③+执行。 */
+    /**
+     * 三道闸的②③＋执行在这里；闸①（尺寸）在 {@code McbotPayloads.C2s.CODEC} 里已完成，
+     * 超限包根本进不到这个方法。
+     */
     public void handle(ServerPlayer sender, Envelope env) {
         var profile = sender.getGameProfile();
 
@@ -132,12 +136,41 @@ public final class ServerToolDispatcher {
 
     private void send(ServerPlayer owner, String kind, JsonObject body) {
         String json = new Envelope(kind, body).encode();
-        if (json.length() > Envelope.MAX_BYTES) {
-            McbotMod.LOG.warn("S2C 信封超限({}B)，截断 kind={}", json.length(), kind);
-            json = json.substring(0, Envelope.MAX_BYTES);
+        // 闸①（出站）：按 UTF-8 字节量，不是字符数。旧写法用 json.length() 比较 32*1024，
+        // 而本项目的回执几乎全是中文（一字三字节）：那等于把上限抬到了 ~96KB，
+        // 正好越过原版入站 32767 字符/98301 字节的红线。
+        int bytes = WireSize.utf8Bytes(json);
+        if (bytes > WireSize.MAX_BODY_BYTES) {
+            McbotMod.LOG.warn("S2C 信封超限({}B > {}B)，改发瘦身回执 kind={}",
+                    bytes, WireSize.MAX_BODY_BYTES, kind);
+            json = shrink(kind, body, bytes);
         }
-        McbotMod.LOG.info("[m3] S2C -> {} {} ({}B)", owner.getGameProfile().name(), kind, json.length());
+        McbotMod.LOG.info("[m3] S2C -> {} {} ({}B)", owner.getGameProfile().name(), kind,
+                WireSize.utf8Bytes(json));
         net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(owner,
                 new McbotPayloads.S2c(json));
+    }
+
+    /**
+     * 超限回执的堆：不是“截断到 32KB”，而是换一条合法的小信封。
+     *
+     * <p>为什么不截断：JSON 中途铲断只会让对端 {@code Envelope.decode} 解不动而静默丢弃，
+     * 于是那个 {@code seq} 永远等不到回执，大脑要白等 90 秒才吐一条 TIMEOUT 教学——
+     * 尺寸闸反而造成了一次难查的“卡住”。换成合法信封，并且**保留 seq**，
+     * 才能立刻把“回执太大、换个小范请求”这件事教给模型。
+     */
+    private static String shrink(String kind, JsonObject body, int originalBytes) {
+        JsonObject small = new JsonObject();
+        if (body != null && body.has("seq")) {
+            small.addProperty("seq", body.get("seq").getAsInt());
+        }
+        if (body != null && body.has("task_id")) {
+            small.addProperty("task_id", body.get("task_id").getAsInt());
+        }
+        small.addProperty("ok", false);
+        small.addProperty("feedback", "INTERNAL:回执过大（" + originalBytes
+                + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），详细数据已丢弃。"
+                + "请把这次请求范围改小（如缩小扫描半径、分批取数）后重试。");
+        return new Envelope(kind, small).encode();
     }
 }

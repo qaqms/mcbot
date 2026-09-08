@@ -10,7 +10,11 @@ import com.google.gson.JsonObject;
  */
 public record Envelope(String kind, JsonObject body) {
 
-    public static final int MAX_BYTES = 32 * 1024;
+    /**
+     * 尺寸上限的**真源在 {@link WireSize}**（那个类零依赖、可进单测）；这里只是旧调用点的别名。
+     * 两边各自写数字的话，改一处就会漏一处——闸①入站读 WireSize、这里也指向它。
+     */
+    public static final int MAX_BYTES = WireSize.MAX_ENVELOPE_BYTES;
 
     public String str(String field) {
         return body != null && body.has(field) ? body.get(field).getAsString() : "";

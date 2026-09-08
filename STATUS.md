@@ -3,10 +3,11 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M4.5 上下文经济学 ✅（单测全绿+服务端回归）· 下一步 M7/M5
+## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · **M5.1 闸① 字节尺寸闸 ✅ 无头关账**（新机器）
 
 | 里程碑 | 状态 |
 |---|---|
+| M5.1 闸①：C2S/S2C 显式 **UTF-8 字节**尺寸闸（原靠 STRING_UTF8 隐式上限） | ✅ 无头关账（11:03 发现缺陷 + 11:11 `[m5a]` 四条全中；JUnit 5 例） |
 | M0 脚手架 | ✅ |
 | M1 假玩家身体（soak 30分36秒 0 踢线） | ✅ |
 | M2 agent-core（真实端点通过） | ✅ |
@@ -16,7 +17,7 @@
 | M4 收尾：真取消 / wait / 重进安全落点 / 挖掘 onAbort 清裂纹 | ✅ 14:09 无头 `[m4b]` 全命中 + loop 单测 7/7 |
 | M6 桥接（neko 入口） | ✅ **活体联调关账**（23:29–23:44）：401×2/status/task 管道/SSE id1-30/Last-Event-ID 补发/MCP list+call/cancel/ask-answer 反问闭环——7 项清单全中 |
 | M8 真机（PCL 客户端+真实山丘） | ✅ 登顶链路：BUDGET_EXCEEDED×2 教学→NEED_CONFIRM(挖2格)→**ask_owner q8 主动征求**→授权→真挖上山 (-512,95)→扫出 coal_ore×7→诚实作答 |
-| M5 感知记忆 / M7 neko | ⬜ 见设计文档 §11 |
+| M5 感知记忆 / M7 neko | ⬜ 见设计文档 §11；M5 五项中**闸① 已关账**（09-08 11:11），余：字符网格 / craft·smelt·inspect / JSONL 持久化 / event 生产者 |
 | M8 DigAStar（纯算法核+执行器+确认流+神圣集） | ✅ 代码+无头（22:38 `[m8]` 四场景全中 + JUnit 8/8）；真机见上行 |
 
 ### 活体联调证据（M6+M8 合并验收，2026-09-07 23:08–23:44）
@@ -34,6 +35,43 @@
 ①`@bot 答 <文本>` 就地喂给最新挂起问题（反问气泡附回答指引；无挂起时降为普通指令并提示）；
 ②反问超时 300s→120s；③scan_area 主线程耗时计入工具层，>50ms 进警告日志（"谁偷了 tick"的直接证据；
 实测扫描本身 <1s 不是本次瓶颈，真凶是空等）。单测/编译全绿。
+
+### M5.1 实现备忘（闸① 加固，2026-09-08）
+
+- **先说修掉的是什么真缺陷**：旧闸用 `json.length()`（**字符数**）去比 `32*1024`。本项目
+  回执几乎全中文（一字三字节），等于上限被抬到 ~96KB；而原版 `STRING_UTF8` 自己的
+  字节红线是 98301——两边套起来就是“中文大回执能一路到 ~96KB 还不被拦，一旦越过
+  98301B 就抛 `DecoderException` → **对端连接直接断**”（详见防漂移表）。
+- **入站（`C2s.CODEC`）**：自己预扮 VarInt 长度前缀（`getByte`，不动 readerIndex）、自己卡
+  `WireSize.MAX_BODY_BYTES=32765`；超限/畸形一律返回 `C2s.OVERSIZED` 哨兵而非报错，
+  接收处（`McbotMod`）记一条 `闸①：C2S 信封超过 32768B，丢弃` 日志后丢弃。
+  入站不抛 = 不踢线；且 32765B < 32767 字符红线，所以**过了本闸的信封原版解码器不可能再拒**。
+- **出站（`ServerToolDispatcher#send`）**：按字节量。超限时**不再截断**（截断只会造出非法
+  JSON → 对端 `Envelope.decode` 静默丢弃 → 那个 `seq` 白等 90s TIMEOUT，“尺寸闸反而造成
+  一次难查的卡住”），而是换一条 **`shrink()` 生成的合法瘦身回执**（保留 `seq`/`task_id`，
+  `ok=false` + “缩小范围或分批”教学）。
+- **客户端发送前自检（`AgentRunner#execute`）**：超上限直接就地回 `DENIED:参数过大`，
+  不进 `pending`、不占任务槽——模型能立刻学到“是我参数太肥”，而不是 90s 后一条无关的 TIMEOUT。
+- **分层理由**：尺寸算术全部抽进 `common/WireSize`（零 MC、零 Gson），所以能进根工程
+  JUnit（与 `path/DigAStar` 同一手法）；真 codec 往返只能在服务器运行期测，留在 SelfTest `[m5a]`。
+- **顺带清的两笔**：① `Envelope.MAX_BYTES` 改为指向 `WireSize`（两处 32KB 各写一份数字必定漂移）；
+  ② **`FakeConnection` 的 javadoc 里有事实错误**，已按 javap 重写：keep-alive 对假玩家**根本不跑**
+  （`ServerConnectionListener.tick()` 只遍历自己受理的连接，假连接从不在其中），
+  而不是旧稿说的“每 15s 踢一次、靠 disconnect 闸门捣住”；丢包与 disconnect 覆写都不是长驻的原因。
+- **验收**（11:11 实跑，新机器首次无头）：`[m5a] 小包往返=true 超限被拒且不抛=true 限内放行=true
+  畸形不抛=true (fat=12039字符/36039B 线上=36042B 上限=32765B)` —— 那包只有 12039 **字符**，
+  旧字闸判“没超”，实际 36039 **字节**（且仍在原版 98301B 红线之内，旧世界它会一路放行）。
+  全链路回归：`[m3]` 5 场景 + S2C 84 行、`[m4]` 真挖 7s/移动/存箱、`[m4b]` `busy=true cancel=true
+  空槽=false` + wait 走完、JUnit 13 例（WireSize 5 + DigAStar 8）全绿，MC 侧 0 异常。
+- **顺手修了验收器本身的脆弱性**：`[m8]` A/B 在本机首次实跑**不达标**（A 需确认=false，
+  日志“站定在 10,63,**1**”）——原因是场景只铺了 z=0 那条道，两侧不封，而本机自然地形
+  z=±1 恰好可走，A* 找到一条**真的不用挖**的绕行（算法无错，是场景假设依赖运气；
+  上一台机器恰好封得住）。已给大道补砌两层侧墙，使“唯一路线就是挖穿”与地形无关：
+  重跑后 `A 需确认=true 清单=1 格`（最优解只挖头格、踩脚格翻墙，与 22:38 基准吻合）、
+  `B 到达=true`、`C 箱子分毫未动=true ok=true`（封侧后 C 才真的在考神圣集，
+  之前是从 z=1 绕过去的——断言过了但没测到东西）、`D NO_PATH=true`。
+- **已知边界（不隐藏）**：闸① 卡在 32765B 意味着未来 `scan_area` 换成字符网格（M5）后
+  32 半径的回执可能真的撞上限——届时走“分批取数”，而不是把闸改松。
 
 ### M4.5 实现备忘（上下文经济学，机制参考公开项目思路、代码全自写）
 
@@ -162,6 +200,13 @@
 | 连接断连 | `Connection.disconnect(DisconnectionDetails)` ✓ 可覆盖吞掉 |
 | 命令权限 | `Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)` 做 `requires`；取玩家用 `source.getPlayer()`（可 null；getEntity() 返回 Entity） |
 | 寻路可用 API（M8 javap） | `DimensionType.minY()/height()` 取维度高度范围（Level 无 buildheight 方法）；`Block.byItem(Item)` 可 null；`Level.setBlockAndUpdate(pos,state)`；`Inventory` 实现 `Container.getItem/setItem/getContainerSize(41)`；`ItemStack.isSameItemSameComponents/shrink/grow`；`BlockPos.east()/above(n)` 链式可用 |
+| **STRING_UTF8 的真实上限** | `ByteBufCodecs.STRING_UTF8 = stringUtf8(32767)`（clinit 里 `sipush 32767`），限的是**字符数**；`Utf8String.read` 用 `ByteBufUtil.utf8MaxBytes(32767)` = **98301 字节**卡 VarInt 声明长度，再解出来校 `s.length() ≤ 32767`。三处 `throw DecoderException`（声明>utf8MaxBytes / <0 / >readableBytes）——所以“32767 看着像 32KB”其实能放到 ~96KB 中文包。**闸① 因此自己读前缀、自己卡字节，不靠它** |
+| **解码报错 = 断线** | `Connection.exceptionCaught` **只宽容** `SkipPacketException`（debug 一行就 return）；其余一律置 `handlingFault` 并走关 channel 的路。结论：自定义 codec 里报错不是“丢包”，是“踢线” |
+| **监听器根本没有 tick()** | 1.21.11 的 `ServerCommonPacketListenerImpl` **无** `tick()` 方法；`keepConnectionAlive()` 在 `ServerGamePacketListenerImpl.tick()` 里被调（且先过 `isSingleplayerOwner()` 与 `now-keepAliveTime>=15000` 两道门，`keepAlivePending=true` 的**置位在 else 分支内、先过 `checkIfClosed`**，不是“无条件先置位再 send”） |
+| **keep-alive 驱动链（假玩家不在环上）** | `ServerConnectionListener.tick()` 只遍历**自己受理的** `connections` 列表 → `Connection.tick()` → 监听器是 `TickablePacketListener` 才调 `tick()` → `keepConnectionAlive()`。`FakeConnection` 是手工造 + `placeNewPlayer` 直接进场，**从不进那个列表**，所以第一环就进不去——**这才是同伴能长驻的真正原因**（不是丢包、也不是 disconnect 闸门） |
+| `Connection.handleDisconnection()` | 开头是 `if (channel != null && channel.isOpen()) return;`（字节码 `16: ifeq 20` 是“没开才继续”）——channel 还开着时它**直接空转**；`setReadOnly()` 则是 `channel!=null` 就 `setAutoRead(false)`，内存 channel 不 null → **会真执行** |
+| `StreamCodec` 手写形状 | `StreamCodec.ofMember(StreamMemberEncoder, StreamDecoder)`；**`StreamMemberEncoder.encode(T value, O buf)` 参数是“值在前”**（与 `StreamEncoder.encode(B,V)` 相反）；`VarInt` 只有 `read/write/hasContinuationBit/getByteSize`（无 peek，所以预扮得用 `getByte`）。**闸① codec 用** |
+| `Connection.pendingActions` | `Queue<Consumer<Connection>>`，由 `runOnceConnected` 在 channel 就绪时冲刷——这就是不覆写 `send` 时的慢性泄漏源 |
 | 世界出生点 | `serverLevel.getRespawnData().pos()`（getSharedSpawnPos 已不存在） |
 | 进场日志 | 假玩家 `steve[embedded] logged in with entity id N`，一切正常 |
 

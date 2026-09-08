@@ -62,12 +62,19 @@ src/client/          客户端
 ## 4. 网络协议与三道闸
 
 - 通道就两条：`mcbot:c2s`、`mcbot:s2c`，各携带一个 JSON 信封 `{kind, ...}`；
-  语义演进只加 kind 不加密道（尺寸闸 = STRING_UTF8 默认上限 + 解析失败即丢，S2C 超 32KB 截断告警）。
+  语义演进只加 kind 不加密道。闸① 是**显式的字节尺寸闸**（不再是“靠 codec 默认上限”）：
+  `C2s.CODEC` 自己读 VarInt 长度前缀并卡 `WireSize.MAX_BODY_BYTES`，超限**不读不抛**，
+  交回 `C2s.OVERSIZED` 哨兵由接收处丢弃并记日志。为什么不靠原版 `STRING_UTF8`：
+  它限的是**字符数**（32767，折算字节上限 98301 ≈ 96KB），且超限**抛** `DecoderException`，
+  而 `Connection.exceptionCaught` 对非 `SkipPacketException` 一律关 channel——
+  等价于“模型吐了一坨超大参数 → 主人被踢线”。出站 S2C 也按字节量，超限时**不是截断**
+  （截断只造出非法 JSON → 对端静默丢弃 → 那个 seq 白等 90s TIMEOUT），
+  而是换一条**保留 seq 的合法瘦身回执**，把“范围改小”教给模型；客户端另有发送前自检。
 - **C2S kind**：`summon` / `dismiss` / `tool_call{seq,tool,args}` / `cancel` / `answer`。
 - **S2C kind**：`tool_result{seq,ok,feedback,data?}` / `summon_result` / `dismiss_result` /
   `cancel_ack` / `event`（服务器主动播报，当前无生产者——留给任务进度事件）。
 - **三道闸**（`ServerToolDispatcher.handle`，按序）：
-  ① 尺寸/格式（codec 层 + `Envelope.decode` 判空丢弃）；
+  ① 尺寸/格式（`C2s.CODEC` 显式字节闸 + `Envelope.decode` 判空丢弃）；
   ② 速率：按玩家 token bucket，容量 60、补充 20/秒，超频回 `DENIED:消息过于频繁`；
   ③ 白名单 + `args` 必须是 JSON 对象 + **owner 强校验**：`tool_call` 只能作用于
   发送者名下的同伴（名册 `ownerUuid == 发送者 UUID`），无从伪造"替别人下令"。
@@ -147,7 +154,7 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
 | AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
 | 超时 | LLM 180s；工具回执 90s；ask_owner 300s；桥 ask 60s；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
-| 信封 | S2C 32KB 截断告警 |
+| 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
 | 行动参数 | 臂长 5.5（任务中 6.5 容忍）；滑步 ≤48 格、0.45 格/tick；挖掘进度公式 ÷30 |
 | 寻路(M8) | 8000 节点帽；128 挖帽；放≤背包存量；300 节点/tick；搜索盒 64×32×64；单格挖 ≤20s；重规划 ≤2；复核 20/5 |

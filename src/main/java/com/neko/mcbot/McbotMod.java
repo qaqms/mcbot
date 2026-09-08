@@ -6,6 +6,7 @@ import com.neko.mcbot.body.SummonService;
 import com.neko.mcbot.command.McbotCommands;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
+import com.neko.mcbot.common.WireSize;
 import com.neko.mcbot.server.ServerToolDispatcher;
 import com.neko.mcbot.server.ToolRegistry;
 import com.neko.mcbot.server.tools.ScanAreaTool;
@@ -76,6 +77,13 @@ public final class McbotMod implements ModInitializer {
             McbotMod.dispatcher = dispatcher;
             ServerPlayNetworking.registerGlobalReceiver(McbotPayloads.C2s.TYPE,
                     (payload, context) -> {
+                        // 闸①：超尺寸包在 codec 里已被换成哨兵（不抛异常，所以连接不会被踢）。
+                        if (payload.oversize()) {
+                            LOG.warn("闸①：C2S 信封超过 {}B，丢弃（来自 {}）",
+                                    WireSize.MAX_ENVELOPE_BYTES,
+                                    context.player().getGameProfile().name());
+                            return;
+                        }
                         Envelope env = Envelope.decode(payload.json);
                         if (env == null) {
                             LOG.warn("信封解析失败，丢弃 (from {})",

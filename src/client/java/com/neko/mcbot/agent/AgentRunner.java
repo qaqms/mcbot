@@ -10,6 +10,7 @@ import com.neko.mcbot.bridge.BridgeEvents;
 import com.neko.mcbot.cfg.ClientConfig;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
+import com.neko.mcbot.common.WireSize;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
@@ -180,7 +181,6 @@ public final class AgentRunner implements ToolExecutor {
         body.addProperty("name", name);
         ClientPlayNetworking.send(new McbotPayloads.C2s(new Envelope(kind, body).encode()));
     }
-
     /** 主线程周期调用：工具/问题超时兜底。 */
     public void tick() {
         long now = System.currentTimeMillis();
@@ -331,8 +331,18 @@ public final class AgentRunner implements ToolExecutor {
                     new ToolOutcome(false, "INTERNAL:模型给出的参数不是合法 JSON。"));
         }
         CompletableFuture<ToolOutcome> f = new CompletableFuture<>();
+        String json = new Envelope("tool_call", body).encode();
+        // 发送前自检：服务端闸①对超尺寸包是“丢弃 + 日志”，不会回话。若不在这里拦下，
+        // 这个 seq 会挂在 pending 里直到 90 秒后变一条与真因无关的 TIMEOUT 教学，
+        // 模型也就学不会“是我参数太肥”。就地回 DENIED，既不占任务槽也不制造掉线错觉。
+        if (!WireSize.fits(json)) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:这次工具调用的参数过大（" + WireSize.utf8Bytes(json)
+                            + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），服务器不会收。"
+                            + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
+        }
         pending.put(seq, new Pending(f, System.currentTimeMillis(), TOOL_TIMEOUT_MS));
-        ClientPlayNetworking.send(new McbotPayloads.C2s(new Envelope("tool_call", body).encode()));
+        ClientPlayNetworking.send(new McbotPayloads.C2s(json));
         return f;
     }
 
