@@ -2,6 +2,9 @@
 build/
 run/
 out/
+# Python 审计脚本（tools/compare_*.py）跑出的字节码缓存
+__pycache__/
+*.py[cod]
 *.iml
 .idea/
 .vscode/

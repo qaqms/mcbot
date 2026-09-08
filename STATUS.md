@@ -263,8 +263,22 @@ fabric `KeyBindingHelper.registerKeyBinding(KeyMapping)`。
 | Fabric API | 0.141.6+1.21.11 | Modrinth |
 | 映射 | `loom.officialMojangMappings()` | 官方示例默认 |
 | Gradle | 9.5.1，wrapper 走 `file:/D:/ai/gradle-9.5.1-bin.zip`（本地缓存） | 删 zip 可换回官方 URL |
-| 构建 JDK | Temurin 21.0.12（mise，路径在 gradle.properties） | 换机器要改 |
-| 代理 | 127.0.0.1:7897（gradle.properties systemProp 已配） | 不需要时删该段 |
+| 构建 JDK | Temurin **21.0.10**，Gradle 自动置备，`C:\Users\lulu\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2`（写在 gradle.properties） | 换机器必改；本机 PATH 上的 java 是 17，不能拿来编 MC 1.21.11 |
+| 代理 | 127.0.0.1:7897（gradle.properties systemProp 已配） | 本机实测代理 0.47s / 直连 0.77s 皆通；不需要时删 Proxy 两行 |
+| AI 执行者 shell | pi 的 `bash` 需 `~/.pi/agent/settings.json` 配 `shellPath: "D:/git/Git/bin/bash.exe"` | Git 装在 D:\git\Git（非标准路径），pi 只默认扫 C:\Program Files\Git；改完**必须重启 pi** 才生效 |
+| 仓库路径 | 本机 `D:\ai\mcbot`（origin `https://github.com/qaqms/mcbot.git`，私有） | 拉取用一次性 `http.extraHeader`，token 不落 `.git/config`/URL |
+
+### 机器迁移记录（2026-09-08 10:20，hostname mio）
+
+从远端拉到 `0c7f244`（本地原在 `7dc6f9f`，快进 5 个提交：`a9a4877`/`a9f4373`/`1459fa8`/`c3cca77`/`0c7f244`）。
+`a9a4877` 把构建配置改到了另一台机器（用户 `ms`、`C:\Users\ms\.gradle\jdks`、wrapper 指 `F:/ai/`），
+而**本机无 `C:\Users\ms`、无 F 盘**，两项均不可用，故改回本机（JDK → `C:\Users\lulu\.gradle\jdks\...`，
+wrapper → `D:/ai/gradle-9.5.1-bin.zip`（zip 实测存在，140MB），代理 → 7897），与本文件上表口径重新对齐。
+
+证据：`./gradlew build` → **BUILD SUCCESSFUL in 30s**（18 任务，16 执行/2 最新）；仅“过时 API”提示，无编码告警。
+单测 XML 核对：agent-core **19 例**（BridgeService 5 / Conversation 6 / AgentLoop 5 / OpenAiCompat 3）
++ path DigAStarTest **8 例** = 27/27，**0 failures 0 errors 0 skipped**。本轮零代码改动（纯构建配置），
+故未跑无头 SelfTest；下次动服务端代码按惯例补 `[m4*]`/`[m8]` 级验收。
 | 运行约束 | TaskStop 杀不掉 javaexec 子进程 → 用 tools/list-java.ps1 找 PID 再 taskkill | 见上节 |
 
 ## 目录结构（现状）
