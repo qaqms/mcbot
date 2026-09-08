@@ -24,7 +24,7 @@
   "60 秒"实为 move 帽 3600tick=3min——归 R2-C 一并修（它要动同一段代码）。
 - [ ] `CompanionScheduler:95` 超时文案硬写"60 秒"而 move_to 帽 3600tick=3min（主会话已证；R2-C 一并修）
 
-## R1 寻路整改（靶子：16 格复杂山地撞 8000 帽；真因分析见 STATUS；**设计卡：`docs/plan/R1-pathfinding.md`**）
+## R1 寻路整改 ✅ 无头全线收尾 09-08 16:31（S1–S4+S3b；真机山体待合并会话；靶子：16 格山地撞 8000 帽已拆；设计卡：`docs/plan/R1-pathfinding.md`）
 
 - [x] **S1 纯算法（09-08 13:44 关账）**：加权 h（W=1.8×H_UNIT=0.467×**距体积** L1 + 入柱价，
       注释公开"故意不可采纳"）+ 部分提交 API（budgetReached/partialAvailable/partialPath，
@@ -60,10 +60,12 @@
       话术入 PathTask，真 NO_PATH 永不降级。新世界全红定性：假玩家无 chunk 票 + m4 残留
       污染场景（expanded=1 是正确算法行为），**非 S3 回归**；harness 持票+净带修复，
       证据见 STATUS「R1-S3 关账证据」。
-- [ ] **R1-S3b（本卡发现立卡，待主人拍板范围）：同伴正式持票**——summon 挂
-      PLAYER_LOADING/PLAYER_SIMULATION 票（半径候选与 view-distance 同源），跨 chunk 移动换票，
-      dismiss 释票。**不修后果：野外单独行动的同伴永远寸步难行（搜索全读 UNKNOWN）**；
-      代价：常驻加载面积（TPS/内存）。harness 已用同机制跑通 `[m8]`。
+- [x] **R1-S3b（09-08 16:31 关账）：同伴正式持票**——`CompanionChunkPads`：自定义超时票
+      （40t，LOADING|SIMULATION，无 PERSIST）5×5 垫子，END_SERVER_TICK 每拍续（排在
+      scheduler 前，防自锁死），只续不撤=零释放代码/零抽干互踩；**不设 owner 在线闸**
+      （同伴独立跑长活是卖点，代价≤25chunk/同伴）。`[m9]` 三断言全中 + `[m8]` 纯产品票
+      dogfood 不回退；机制思路经只读调研取得（clean-room，javap 坐实参考写法在 1.21.11
+      本不可移植），三组新 API 事实入 STATUS 漂移表。
 - [x] **S4 常数对账（09-08 16:05）**：全部 R1 常数已进 ARCHITECTURE §10「寻路(R1 后)」行
       （双帽 8000/400ms、切片 6ms、h=1.8×0.467+入柱价公开不可采纳、PARTIAL gain≥4、memo 帽
       262144、验尸 256/8/24、DIG_QUANT 0.25s、降权 0.7）；TOOLS §3 词汇表换血：

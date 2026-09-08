@@ -3,7 +3,7 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡（docs/plan/）· **R0 ✅ 12:40** · **R1-S1 ✅ 13:44** · **R1-S2 ✅ 14:12** · **R1-S3 ✅ 15:52 关账（新世界全红定性=假玩家无票+harness 地形污染，非回归）** · **R1-S4 ✅ 16:05 常数对账（纯文档）** → 当前：**R1-S3b 同伴持票（参考项目机制调研中，clean-room）**，完成后转 R2
+## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡（docs/plan/）· **R0 ✅ 12:40** · **R1-S1 ✅ 13:44** · **R1-S2 ✅ 14:12** · **R1-S3 ✅ 15:52** · **R1-S4 ✅ 16:05 常数对账** · **R1-S3b ✅ 16:31 同伴持票（[m9] 三断言全中，[m8] 纯产品票 dogfood 不回退）→ R1 无头部分全部收尾** → 下一卡 **R2-S1 感知绝对坐标**（真机山体/面板验证归最终合并会话）
 
 | 里程碑 | 状态 |
 |---|---|
@@ -369,7 +369,34 @@ h=1.8×0.467×L1距体积+入柱价（公开故意不可采纳）、PARTIAL gain
 验尸 256/8/24、DIG_QUANT 0.25s、降权 0.7）；TOOLS §3：BUDGET_EXCEEDED 退出对外词汇
 （grep 坐实仅剩 DigAStar 内部与 SelfTest 容忍位），新增 PARTIAL/NO_PROGRESS 两行；
 ROADMAP 债务表：销"16 格山地撞帽"（转真机终验）、立"假玩家无 chunk 票→R1-S3b"。
-至此 R1 主线（S1–S4）无头口径全部关账；剩 S3b（持票，调研中）+ 真机终验。
+至此 R1 主线（S1–S4）无头口径关账；尾随一笔 S3b（持票）同日下午落地，见下节。
+
+### R1-S3b 关账证据（09-08 16:31，无头；经主人同意先做机制调研）
+
+调研方式：Explore 子代理**只读**参考项目拿机制思路（结论已验：零代码行/零注释文本/
+零专有名称；且 1.21.11 连 TicketType.create 都已移除，参考的写法在目标版根本不可移植，
+事实侧封死抄袭），落地 `CompanionChunkPads` 全自写。javap 实测三件事已入漂移表（见本节末）。
+
+落地 `body/CompanionChunkPads`（新类 + McbotMod 挂点，共 ~60 行）：自定义
+`TicketType(40t 超时, LOADING|SIMULATION)`（1.21.11 该类是**公开 record 构造器**，无需
+access widener/mixin），`addTicketWithRadius` 在同伴中心挂 5×5 垫子；END_SERVER_TICK 每拍
+续票（**排在 scheduler.tick 之前**：传送后下一拍 PathTask 先见票再搜索）；只续不撤
+（字节码坐实同 type+同 level 重加走 `resetTicksLeft`，天然去重）；dismiss/死亡/崩溃=停续
+→40t 自然过期，无释放代码；无 PERSIST→重启零残留；多同伴共 chunk 同键互不抽干。
+**与参考实现的刻意分歧：不设"owner 在线"闸**——mcbot 卖点是同伴独立跑长活，代价每同伴
+≤25 chunk（上限=名册数）；驱动绝不挂 entity tick（票过期→chunk 退 entity-ticking→tick 断→
+永远刷不回的自锁死，注释已钉）。
+**[m9] 新验收（16:31:10–18）**：A1 跳 96 格外新家垫子跟到=true；A2 远环（+10 chunk）
+不加载=false（排除"碰巧全域加载"）；A3 再跳后旧家票断续→区块真的卸载=true。
+**dogfood**：harness 临时票（holdChunks/releaseChunks PLAYER_*）全部删除，`[m8]` 仅靠产品票
+跑：A 需确认清单 1/B 真挖 6s 到达/C 箱未动/D NO_PATH，`[m8env]` 零告警；本轮 m4 move
+还是 挖0放0 直走 expanded=5（世界残留少了一格坦路，正确行为）。
+异常 0，停服无孤儿。**R1 无头部分至此全部收尾**；真机山体 PARTIAL/面板清单① 归最终
+合并真机会话。
+
+⚠ harness 教训入册：S2 的 UNKNOWN=墙方向对但不完整——配套必须同时给同伴发票，
+否则"墙"砌在自己人门口（本卡就是这笔债的偿还）。另 S3b 的反向收获：harness 临时票
+全部删除后 `[m8]` 仍全绿，产品票独力成立，临时票机制已死化删除（不是注释掉）。
 
 **推送与密钥**：主人重发 PAT 用于推送，未落任何盘（remote 无凭据、.git/config 干净、
 一次性 header）；该 token 已在聊天出现多次，**尽快去 GitHub 作废重发**。本次待推：
@@ -391,6 +418,9 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| TicketType（1.21.11） | **无公开 `create(name, comparator, timeout)`**（那是更老版本/他映射的写法）；但 record 构造公开：`new TicketType(long timeoutTicks, int flags)`，flags=FLAG_LOADING/FLAG_SIMULATION/FLAG_PERSIST 等；自定义票类型无需 mixin/AW |
+| `addTicketWithRadius(type, pos, r)` | 实为**单条票** `new Ticket(type, ChunkLevel.byStatus(FULL) - r)` 落在中心 chunk（半径靠 level 逐级衰减扩散，非逐 chunk 加票）；`addTicket(long,Ticket)` 对**同 type 同 level** 的已有票只 `resetTicksLeft()` 不新增——"每拍续票不撤"安全且幂等，多同伴共 chunk 互不抽干；超时递减在 `TicketStorage.purgeStaleTickets`（canTicketExpire 门），关闭时 `deactivateTicketsOnClosing`，无 PERSIST 不落盘 |
+| `ChunkPos` 取块坐标 | 方法叫 `getBlockAt(int,int,int)` / `getMiddleBlockPosition(int)` / `getWorldPosition()`；**无 `getBlockPosition`**（凭记忆写会编译炸） |
 | 假玩家 chunk 票 | **假玩家（FakeConnection）不入 PlayerMap/不发 PLAYER_* 票**（09-08 探针：任何 getBlockState 前同伴脚下 `hasChunkAt=false`）；`getBlockState` 强载的区块**拍尾无票即回收**（同秒内"探针 true/下拍工具 false"即此机制）；harness 用 `ServerChunkCache.addTicketWithRadius(TicketType.PLAYER_LOADING/PLAYER_SIMULATION, ChunkPos, r)` 持票，`removeTicketWithRadius` 释；PLAYER_* 无 FLAG_PERSIST，重启自清 |
 | `Level.isLoaded(BlockPos)` | = `isInValidBounds(pos) && ChunkSource.hasChunk(x>>4, z>>4)`（**存在性**，不是状态≥FULL）；与 `hasChunkAt` 同源，两者对假玩家同时 false |
 | 探针防污染 | 同一 LOG 行内参数左→右求值：`getBlockState` 在前会强载污染后面的 `isLoaded`——纯加载断言必须**单独成行且先于一切方块读** |

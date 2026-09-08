@@ -106,6 +106,9 @@ public final class McbotMod implements ModInitializer {
 
         var tickCount = new int[1];
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
+            // 票在 scheduler 之前：传送后的下一拍，PathTask 先见到加载好的世界再搜索
+            // （自锁死陷阱见 CompanionChunkPads 注释③，不可改到别处）。
+            com.neko.mcbot.body.CompanionChunkPads.tick(server);
             scheduler.tick(server);
             if (++tickCount[0] >= 60) {
                 // 归零重计：旧写法过了 60 拍后**每拍**进 onTick，正常运行（无 flag）时

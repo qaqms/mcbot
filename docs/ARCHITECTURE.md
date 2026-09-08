@@ -46,7 +46,7 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
   prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md)
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
-  body/              FakeConnection/CompanionPlayer/CompanionRoster/SummonService/SafeSpawn/SelfTest
+  body/              FakeConnection/CompanionPlayer/CompanionRoster/CompanionChunkPads/SummonService/SafeSpawn/SelfTest
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)/PathTask(搜索→确认→执行)
   server/            ToolRegistry/ServerTool/ServerToolDispatcher/RateGuard + tools/(9 个)
   task/              TickTask/CompanionScheduler
@@ -158,5 +158,6 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
 | 行动参数 | 臂长 5.5（任务中 6.5 容忍）；滑步 ≤48 格、0.45 格/tick；挖掘进度公式 ÷30 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
+| 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
 | 名册 | v1 每主人 1 同伴；名字 `[a-z0-9_]{2,16}` |

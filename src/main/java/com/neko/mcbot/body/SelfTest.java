@@ -168,13 +168,11 @@ public final class SelfTest {
         // 先把同伴挪回地表（soak 硬杀可能把 .dat 停在洞底）
         var rd = cp.level().getRespawnData();
         cp.teleportTo(rd.pos().getX() + 0.5, rd.pos().getY() + 1, rd.pos().getZ() + 0.5);
-        // 【09-08 定性】出生点本身可能就是悬空格/雪原尖柱（实测脚撑=false 且无料可垫），
-        // 而假玩家不带 chunk 票——harness 先持票再找 14 格净带落脚，m4/m4b/m8 共用。
-        holdChunks(cp.level(), cp.blockPosition(), 8);
+        // 【09-08 定性】出生点本身可能就是悬空格/雪原尖柱（实测脚撑=false 且无料可垫）。
+        // 票的事已由产品层 CompanionChunkPads 接管（R1-S3b，[m9] 验收）；这里只管净带落脚。
         var strip = findClearStrip(cp.level(), cp.blockPosition());
         if (strip != null) {
             cp.teleportTo(strip.getX() + 0.5, strip.getY(), strip.getZ() + 0.5);
-            holdChunks(cp.level(), strip, 8);
             McbotMod.LOG.info("[m4] 迁至 14 格净带 {}", strip.toShortString());
         } else {
             McbotMod.LOG.warn("[m4] 出生点周围 40 格内无净带，原地照跑");
@@ -292,26 +290,22 @@ public final class SelfTest {
         var registry = McbotMod.toolRegistry();
         var sched = McbotMod.scheduler();
         var level = cp.level();
-        // 【09-08 定性】假玩家不带 chunk 票（探针前 hasChunkAt=false 实测）：scenario 铺台
-        // 靠 getBlockState 同步强载，拍尾回收→搜索/下一拍工具全看到 UNKNOWN。
-        // harness 自己挂临时票（PLAYER_* 无 PERSIST 标，重启自清）；产品侧归 R1-S3b。
-        holdChunks(level, cp.blockPosition(), 8);
+        // 【09-08】票归产品层 CompanionChunkPads（每拍续，[m9] 验收）；这里只找净带落脚。
         var strip = findClearStrip(level, cp.blockPosition());
         if (strip != null) {
             cp.teleportTo(strip.getX() + 0.5, strip.getY(), strip.getZ() + 0.5);
-            holdChunks(level, strip, 8);
             McbotMod.LOG.info("[m8] 迁至 14 格净带（逃离 m4 残留胸箱/悬空出生点的地形运气）");
         } else {
             McbotMod.LOG.warn("[m8] 没找到净带，原地形照跑（失败时先查 m4 残留）");
         }
         var base = cp.blockPosition();
         McbotMod.LOG.info("[m8] 基准点 {}", base.toShortString());
-        // 环境断言（轻量常驻）：harness 票失效时这里立刻暴翼，不等搜索谜之 expanded=1。
+        // 环境断言（轻量常驻）：产品票失效时这里立刻暴䁓，不等搜索谜之 expanded=1。
         {
             for (int d = 2; d <= 6; d += 2) {
                 net.minecraft.core.BlockPos p = base.east(d);
                 if (!level.hasChunkAt(p)) {
-                    McbotMod.LOG.warn("[m8env] 走廊({}) 未加载！harness 票失效，先查 holdChunks",
+                    McbotMod.LOG.warn("[m8env] 走廊({}) 未加载！产品票断供，先查 CompanionChunkPads",
                             p.toShortString());
                 }
             }
@@ -379,38 +373,6 @@ public final class SelfTest {
         });
         McbotMod.LOG.info("[m8] 判读基准：A 需确认=true 且清单≥1（踩脚挖头的最优解可以只挖 1 格）；"
                 + "B 到达=true；C 箱子未动；D NO_PATH。全中即 M8 无头验收通过。");
-    }
-
-    /**
-     * harness 临时持票（非产品机制！）：假玩家不持有 PLAYER_* 票（09-08 探针实测），
-     * 验收场景铺完台后区块会在拍尾被回收，搜索下一拍就读成 UNKNOWN 墙。
-     * PLAYER_LOADING/SIMULATION 无 PERSIST 标，重启自清；产品侧正式修复另立 R1-S3b。
-     */
-    private static final java.util.List<net.minecraft.world.level.ChunkPos> HELD =
-            new java.util.ArrayList<>();
-
-    private static void holdChunks(net.minecraft.server.level.ServerLevel level,
-                                   net.minecraft.core.BlockPos around, int radius) {
-        var pos = new net.minecraft.world.level.ChunkPos(around);
-        if (HELD.contains(pos)) {
-            return;
-        }
-        level.getChunkSource().addTicketWithRadius(
-                net.minecraft.server.level.TicketType.PLAYER_LOADING, pos, radius);
-        level.getChunkSource().addTicketWithRadius(
-                net.minecraft.server.level.TicketType.PLAYER_SIMULATION, pos, radius);
-        HELD.add(pos);
-        McbotMod.LOG.info("[m8dbg] harness 持票 r={} @ {}", radius, pos);
-    }
-
-    private static void releaseChunks(net.minecraft.server.level.ServerLevel level) {
-        for (var pos : HELD) {
-            level.getChunkSource().removeTicketWithRadius(
-                    net.minecraft.server.level.TicketType.PLAYER_LOADING, pos, 8);
-            level.getChunkSource().removeTicketWithRadius(
-                    net.minecraft.server.level.TicketType.PLAYER_SIMULATION, pos, 8);
-        }
-        HELD.clear();
     }
 
     /** 找 14 格水平净带（脚/头可通行、下为实心且非容器）：m8 场景不再吃 m4 残留的地形运气。 */
@@ -489,8 +451,47 @@ public final class SelfTest {
             }
             cp.teleportTo(home.getX() + 0.5, home.getY(), home.getZ() + 0.5);
             McbotMod.LOG.info("[m8] D 干净失败={}：{}", cleanFail, rd.feedback());
-            McbotMod.LOG.info("[m8] 全部场景结束（笼已拆，同伴已归位，harness 票已释）");
-            releaseChunks(level);
+            McbotMod.LOG.info("[m8] 全部场景结束（笼已拆，同伴已归位）");
+            m9PadScenario(cp);
+        });
+    }
+
+    /**
+     * R1-S3b 无头验收（产品票 dogfood）：同伴 5×5 垫子要能——A1 跟人到新家；
+     * A2 只刷自己周围（远环不得为真，排除“碰巧全域加载”）；A3 再跳一次后旧家
+     * 垫子停止续期→自然过期自清（无任何显式释放代码）。
+     */
+    private static void m9PadScenario(CompanionPlayer cp) {
+        var level = cp.level();
+        var sched = McbotMod.scheduler();
+        var registry = McbotMod.toolRegistry();
+        var home = cp.blockPosition();
+        // 新家：东 96 格（6 chunk，超出旧垫 5×5 与出生常驻区）；地面安全点用 SafeSpawn
+        var dest = SafeSpawn.findNear(level, home.east(96));
+        cp.teleportTo(dest.getX() + 0.5, dest.getY(), dest.getZ() + 0.5);
+        McbotMod.LOG.info("[m9] 跳新家 {}（旧家 {}）", dest.toShortString(), home.toShortString());
+        JsonObject w = new JsonObject();
+        w.addProperty("seconds", 4); // 80 拍 > 票寿命 40：续票中→常在；断续→必过期
+        registry.get("wait").runAsync(cp, w, sched).thenAccept(r -> {
+            var dChunk = new net.minecraft.world.level.ChunkPos(dest);
+            boolean padHere = level.hasChunkAt(dChunk.getMiddleBlockPosition(dest.getY()));
+            boolean farRing = level.hasChunkAt(
+                    new net.minecraft.core.BlockPos((dChunk.x + 10) * 16, dest.getY(), (dChunk.z + 10) * 16));
+            McbotMod.LOG.info("[m9] A1 新家票={} A2 远环也加载(必须false)={}", padHere, farRing);
+            // 二次跳：往东再 96 格；旧家 padHere 的票从此断续，等它自焚
+            var dest2 = SafeSpawn.findNear(level, dest.east(96));
+            cp.teleportTo(dest2.getX() + 0.5, dest2.getY(), dest2.getZ() + 0.5);
+            JsonObject w2 = new JsonObject();
+            w2.addProperty("seconds", 4);
+            registry.get("wait").runAsync(cp, w2, sched).thenAccept(r2 -> {
+                boolean oldGone = !level.hasChunkAt(dChunk.getMiddleBlockPosition(dest.getY()));
+                boolean newHere = level.hasChunkAt(new net.minecraft.world.level.ChunkPos(dest2)
+                        .getMiddleBlockPosition(dest2.getY()));
+                McbotMod.LOG.info("[m9] A3 旧家断续后自清={} 新家继续跟={}", oldGone, newHere);
+                McbotMod.LOG.info("[m9] 判读：A1=true 且 A2=false 且 A3 两 true 即产品票成立；"
+                        + "全中则 R1 寻路线无头部分全部收尾。归位。");
+                cp.teleportTo(home.getX() + 0.5, home.getY(), home.getZ() + 0.5);
+            });
         });
     }
 
