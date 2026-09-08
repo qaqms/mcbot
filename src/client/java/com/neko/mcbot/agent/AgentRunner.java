@@ -11,10 +11,17 @@ import com.neko.mcbot.cfg.ClientConfig;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
 import com.neko.mcbot.common.WireSize;
+import com.neko.mcbot.common.ScanFormat;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
@@ -220,14 +227,58 @@ public final class AgentRunner implements ToolExecutor {
     public long submitTask(String text) {
         long id = taskSeq.incrementAndGet();
         currentTask = id;
-        record("§9我> §r" + text);
+        record("§9我> §r" + text);   // 面板回看只记主人原话：注入是给模型的上下文，不是主人说过的话
         if (loop == null) {
             say("§c[mcbot] 大脑未配置：打开面板（默认 G）填 base_url/model/api_key 后保存。§r");
             emitState("大脑未配置，指令未执行");
             return id;
         }
-        loop.submit(text);
+        // R2-D 准星注入：把“主人刚说这句话时正盯着什么”拼到 user 文本尾。
+        // 读不到（未进世界/准星空/跨线程异常）就吐个空串，“没得看”不能变成“看不看得到都要”的噪声。
+        String hint = crosshairHint();
+        loop.submit(hint.isEmpty() ? text : text + "\n" + hint);
         return id;
+    }
+
+    /**
+     * 本地拼一条准星提示（不过网络、不进服务器，只补上“发话瞬间”这个模型本来拿不到的信息）。
+     *
+     * <p><b>“发话瞬间”语义：</b>取的是 {@code Minecraft.hitResult}（客户端每拍刷一次的上一次
+     * 射线拾取结果），不是“主人开口那一帧”的精确重放：一拍 50ms 内准星不会瞬移，
+     * 拿它当“刚说话时盯的格”对模型足够；反过来，等到工具跑完再看就错了一整个往返。
+     *
+     * <p>口径：MISS / ENTITY / 未加载区块 / 空方块一律不注入；方块名用注册表路径
+     * （与 scan_area 同一套词），坐标用绝对。准星够不着时 {@code hitResult} 本身就是 MISS：
+     * 拿不到确定位置时“猜一个”比“不说”坑得多。
+     *
+     * <p>线程：{@code /v1/task} 是在 HTTP 线程上直接调 {@code submitTask} 的，而 hitResult/客户端
+     * level 由渲染线程维护。这里只读不写，且 {@code HitResult}/{@code BlockPos}/{@code BlockState}
+     * 字段都是不可变的；一旦真碰上正在拆除的 level（退世界瞬间等），统一吃掉异常当成“没得看”。
+     */
+    private static String crosshairHint() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level == null || mc.player == null) {
+                return "";
+            }
+            HitResult hit = mc.hitResult;
+            if (hit == null || hit.getType() != HitResult.Type.BLOCK) {
+                return "";
+            }
+            BlockPos p = ((BlockHitResult) hit).getBlockPos();
+            if (!mc.level.hasChunkAt(p)) {
+                return "";
+            }
+            BlockState st = mc.level.getBlockState(p);
+            if (st.isAir()) {
+                return "";
+            }
+            String path = BuiltInRegistries.BLOCK.getKey(st.getBlock()).getPath();
+            double d = mc.player.position().distanceTo(Vec3.atCenterOf(p));
+            return ScanFormat.crosshair(path, p.getX(), p.getY(), p.getZ(), d);
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     public void onOwnerDirective(String text) {
