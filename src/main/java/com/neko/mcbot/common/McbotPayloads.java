@@ -55,7 +55,8 @@ public final class McbotPayloads {
          * + 推 readerIndex）保证解出来的字符串与原版逐字节一致。
          *
          * <p>一条恒等式值得记着：本闸卡在 32765 <b>字节</b>，而 UTF-8 字节数 ≥ 字符数，
-         * 所以字符数必 <b>32767</b>——原版那个“字符数超 32767 也报错”的分支永远触发不了。
+         * 所以字符数必 ≤ 32765，恒小于原版的 32767 字符红线——原版那个“字符数超限也报错”
+         * 的分支永远触发不了。
          * 换句说：过了这道闸的信封，原版解码器不可能拒。这才是“不抛异常”能成立的原因。
          */
         public static final StreamCodec<ByteBuf, C2s> CODEC = StreamCodec.ofMember(
