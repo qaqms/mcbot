@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
+import com.neko.mcbot.common.ScanFormat;
 import com.neko.mcbot.common.WireSize;
 import com.neko.mcbot.server.ServerTool;
 import net.fabricmc.loader.api.FabricLoader;
@@ -491,8 +492,68 @@ public final class SelfTest {
                 McbotMod.LOG.info("[m9] 判读：A1=true 且 A2=false 且 A3 两 true 即产品票成立；"
                         + "全中则 R1 寻路线无头部分全部收尾。归位。");
                 cp.teleportTo(home.getX() + 0.5, home.getY(), home.getZ() + 0.5);
+                r2dScanScenario(cp);
             });
         });
+    }
+
+    /**
+     * R2-S1（设计卡 §D）无头验收：把 3 块 STONE 嵌进同伴身边（近环），扫一次，
+     * 验证“可行动化”的三件事真的成立：分类词表、绝对坐标、体量在线路闸内。
+     *
+     * <p>为什么嵌在紧贴身旁的 1～2 格：近环只保留每种路径最近的几格，嵌远了
+     * 会被自然石材挤掉名额——那时“含 stone”仍能由周围地形满足，断言就白给了。
+     */
+    private static void r2dScanScenario(CompanionPlayer cp) {
+        var level = cp.level();
+        var registry = McbotMod.toolRegistry();
+        var base = cp.blockPosition();
+        // 嵌三块：脚旁、头顶、东侧 2 格（都在近环 y=-1..1 以内）
+        var embeds = new java.util.ArrayList<net.minecraft.core.BlockPos>(3);
+        embeds.add(base.east(1));
+        embeds.add(base.east(1).above());
+        embeds.add(base.east(2));
+        var prior = new java.util.ArrayList<net.minecraft.world.level.block.state.BlockState>();
+        for (var p : embeds) {
+            prior.add(level.getBlockState(p));
+            level.setBlockAndUpdate(p, net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+        }
+
+        ServerTool.Result res = registry.get("scan_area").run(cp, new JsonObject());
+        String fb = res.feedback();
+        int bytes = WireSize.utf8Bytes(fb);
+
+        boolean 含stone = fb.contains("stone");
+        boolean 含绝对坐标 = fb.contains("@(");
+        boolean 体量在线闸内 = bytes < WireSize.MAX_BODY_BYTES;
+        String firstLine = fb.substring(0, Math.max(0, fb.indexOf('\n') < 0 ? fb.length() : fb.indexOf('\n')));
+        boolean 首行朝向 = firstLine.startsWith("我在 (") && firstLine.contains(" 面朝 ");
+        boolean 词表分类 = fb.contains("[rock]");
+        int faceAt = firstLine.indexOf(" 面朝 ");
+        boolean 朝向合法 = faceAt >= 0
+                && ScanFormat.EIGHT.contains(firstLine.substring(faceAt + 4).trim());
+        // 参考项（不进通过基准）：近环每种路径只留最近 4 格，脚下本来就是石材时
+        // 把我们嵌的三块挤出名额是**正确行为**，所以这里只报数不断言。
+        boolean 嵌块可见 = false;
+        for (var p : embeds) {
+            if (fb.contains("@(" + p.getX() + "," + p.getY() + "," + p.getZ() + ")")) {
+                嵌块可见 = true;
+                break;
+            }
+        }
+
+        // 收尾：把嵌进去的石头恢复成原状，不给存档留验收残留
+        for (int i = 0; i < embeds.size(); i++) {
+            level.setBlockAndUpdate(embeds.get(i), prior.get(i));
+        }
+
+        McbotMod.LOG.info("[r2d] 含stone={} 含绝对坐标={} 体量{}B<{}B={} 首行朝向={} 朝向合法={} 词表[rock]={} 嵌块可见(参考)={}",
+                含stone, 含绝对坐标, bytes, WireSize.MAX_BODY_BYTES, 体量在线闸内, 首行朝向, 朝向合法, 词表分类, 嵌块可见);
+        McbotMod.LOG.info("[r2d] 回执快照（前 {} 字）：{}", Math.min(fb.length(), 400),
+                fb.replace('\n', '¶'));
+        McbotMod.LOG.info("[r2d] 判读基准（卡 §F-S1）：含stone / 含@( / 字节<{} 三项全 true 即无头验收通过；"
+                + "另钉结构三项：首行'我在 (' / 面朝∈八向 / 含[rock] 词表。嵌块已按原状恢复。",
+                WireSize.MAX_BODY_BYTES);
     }
 
     private static JsonObject moveArgs(net.minecraft.core.BlockPos pos) {
