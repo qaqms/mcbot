@@ -48,6 +48,9 @@ public final class DigAStar {
     public static final int PARTIAL_MIN_GAIN = 4;
     /** memo 总格数硬帽（设计卡 §B）：超帽**停止 memoize 退回直读**（不失败）——内存有界优先。 */
     public static final int MEMO_MAX_CELLS = 262_144;
+    /** 重规划抑抖（R1-S3 §D）：旧路线格（脚/挖/放）代价×此系数——旧路比任何新候选严格便宜，
+     * 同地形重搜必原路复现；不复用 open/best（旧 g/f 建在旧地形上，复用会带进失效代价）。 */
+    public static final double BIAS_REUSE = 0.7;
 
     private record Node(long key, int x, int y, int z, int digs, int places,
                         double g, double f, long prev) {
@@ -68,11 +71,18 @@ public final class DigAStar {
     private final Map<Long, Node> best = new HashMap<>();
 
     private int expanded;
+    /** 累计搜索 CPU 时长（验尸/双帽口径用）；totalBudgetNanos 到点即撞帽，与节点帽同位。 */
+    private long usedNanos;
+    private long totalBudgetNanos = Long.MAX_VALUE / 8;
+    /** 旧路线格集（R1-S3 抑抖）；null=首搜。 */
+    private java.util.Set<Long> reuse;
     private boolean finished;
     private boolean budgetReached;
     /** 已扩展（settled）节点中距目标体积最近者（同 L1 取 g 小）——部分提交候选。 */
     private Node bestPartial;
     private List<Step> path;
+    /** 命中目标时的 settled 节点（pathCost 供抑抖断言/观测）。 */
+    private Node goalNode;
     private String failure;
 
     public DigAStar(DigSampler sampler, int sx, int sy, int sz, int tx, int ty, int tz,
@@ -99,11 +109,22 @@ public final class DigAStar {
         open.add(start);
     }
 
-    /** 分帧推进：最多展开 budget 个节点。返回 true=已出结果（path() 或 failure()）。 */
+    /** 分帧推进（不限时，单测/兼容用）。 */
     public boolean advance(int budget) {
+        return advance(budget, Long.MAX_VALUE / 8);
+    }
+
+    /**
+     * 分帧推进：节点数 ≤budget **且** 本拍耗时 ≤sliceNanos，先到先停（R1-S3 双帽之一）；
+     * 另受构造后累计 CPU 帽 totalBudget() 约束（另一帽）。返回 true=已出结果
+     * （path()/partialPath()/failure() ZL 三态由 budgetReached()+partialAvailable() 定性）。
+     */
+    public boolean advance(int budget, long sliceNanos) {
         if (finished) {
             return true;
         }
+        long t0 = System.nanoTime();
+        long sliceEnd = t0 + sliceNanos;
         for (int i = 0; i < budget; i++) {
             Node cur = open.poll();
             if (cur == null) {
@@ -114,6 +135,7 @@ public final class DigAStar {
                 continue; // 陈旧堆项
             }
             if (isGoal(cur.x, cur.y, cur.z)) {
+                goalNode = cur;
                 path = reconstruct(cur);
                 finished = true;
                 return true;
@@ -131,8 +153,38 @@ public final class DigAStar {
                         + " 节点。目标太远或地形太纠缠，请分短段移动。");
             }
             expand(cur);
+            // 每 16 拓才探一次钟：nanoTime 本身不免费，粗粒度换开销（帽语义不差这 16 节点）
+            if ((expanded & 15) == 0) {
+                long now = System.nanoTime();
+                if (now >= sliceEnd) {
+                    usedNanos += now - t0;
+                    return false; // 本拍切片用尽，下拍续（未出结果）
+                }
+                if (usedNanos + (now - t0) >= totalBudgetNanos) {
+                    usedNanos = totalBudgetNanos;
+                    budgetReached = true;
+                    return fail("BUDGET_EXCEEDED:搜索耗尽了 " + (totalBudgetNanos / 1_000_000)
+                            + "ms 时间预算（展开 " + expanded + " 节点）。目标太远或地形太纠缠，请分短段移动。");
+                }
+            }
         }
+        usedNanos += System.nanoTime() - t0;
         return false;
+    }
+
+    /** 累计搜索 CPU 预算（纳秒）；PathTask 传 SEARCH_TOTAL_NS。越界后与节点帽同位撞帽。 */
+    public void totalBudget(long nanos) {
+        this.totalBudgetNanos = nanos;
+    }
+
+    /** 旧路线格降权集（R1-S3 §D）；在建好 start 之后、首次 advance 之前调一次。 */
+    public void reuseBias(java.util.Set<Long> cells) {
+        this.reuse = cells;
+    }
+
+    /** 搜索已花的累计 CPU 毫秒（日志观测）。 */
+    public long elapsedMillis() {
+        return usedNanos / 1_000_000;
     }
 
     public boolean done() {
@@ -173,6 +225,16 @@ public final class DigAStar {
     /** 半程路径（不含起点）；仅 {@link #partialAvailable()} 为真时非 null。 */
     public List<Step> partialPath() {
         return partialAvailable() ? reconstruct(bestPartial) : null;
+    }
+
+    /** 降级终点距目标体积的 L1（PARTIAL 文案里的"还差 d 格"）；无候选时 -1。 */
+    public int remainingL1() {
+        return bestPartial == null ? -1 : l1(bestPartial.x, bestPartial.y, bestPartial.z);
+    }
+
+    /** 成功路径的总代价 g（抑抖断言/观测用）；未成功为 -1。 */
+    public double pathCost() {
+        return goalNode == null ? -1 : goalNode.g;
     }
 
     public int dugCount() {
@@ -237,8 +299,11 @@ public final class DigAStar {
         }
 
         // 1) 脚格+头格：不通就要挖（本步 ≤2 挖），挖不动/不许挖则边无效
+        long destKey = pack(bx, by, bz);
         List<Long> dig = new ArrayList<>(2);
-        double cost = MOVE_BASE + (dx != 0 && dz != 0 ? MOVE_DIAG : 0);
+        // 抑抖（R1-S3）：旧路线上的落脚格本步基础价先打折，后面逐项再打
+        double cost = (MOVE_BASE + (dx != 0 && dz != 0 ? MOVE_DIAG : 0))
+                * (reuse != null && reuse.contains(destKey) ? BIAS_REUSE : 1.0);
         int newDigs = 0;
         int places;
         for (int cy = by; cy <= by + 1; cy++) {
@@ -253,8 +318,9 @@ public final class DigAStar {
             if (cur.digs + newDigs > maxDigs) {
                 return;
             }
-            cost += sec + DIG_OVERHEAD;
-            dig.add(pack(bx, cy, bz));
+            long dc = pack(bx, cy, bz);
+            cost += (sec + DIG_OVERHEAD) * (reuse != null && reuse.contains(dc) ? BIAS_REUSE : 1.0);
+            dig.add(dc);
         }
         // 2) 支撑：没有现成实心就放一块（PILLAR=直上、BRIDGE=横移补脚 都由此派生），
         //    放格同挖格一样累计预算（=背包存量），不够就无效——防"规划靠 0 库存的路"
@@ -263,9 +329,11 @@ public final class DigAStar {
             if (!s.placeable(bx, by - 1, bz) || cur.places + 1 > s.maxPlaces()) {
                 return;
             }
-            cost += s.placeCost(bx, by - 1, bz);
+            long pc = pack(bx, by - 1, bz);
+            cost += s.placeCost(bx, by - 1, bz)
+                    * (reuse != null && reuse.contains(pc) ? BIAS_REUSE : 1.0);
             places = cur.places + 1;
-            place.add(pack(bx, by - 1, bz));
+            place.add(pc);
         } else {
             places = cur.places;
         }
@@ -274,7 +342,7 @@ public final class DigAStar {
             cost += FALL_PENALTY * dy * dy;
         }
 
-        long key = pack(bx, by, bz);
+        long key = destKey;
         double g = cur.g + cost;
         Node old = best.get(key);
         if (old != null && old.g <= g) {

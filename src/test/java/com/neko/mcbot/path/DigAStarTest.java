@@ -319,4 +319,79 @@ class DigAStarTest {
             }
         }
     }
+
+    @Test
+    void wallClockCapCountsAsBudgetAndStaysHonest() {
+        // ⑧ R1-S3 双帽之时间帽：1ns 预算下首次 advance 就在 16 节点采样点撞帽——
+        // budgetReached 定性、失败串仍走 BUDGET_EXCEEDED 前缀（对外契约不破）；
+        // 推进不足下限时必须不给半程路（PARTIAL 不得拿起点冒充"走了一段"）
+        GridSampler g = new GridSampler();
+        for (int x = -4; x <= 48; x++) {
+            for (int z = -4; z <= 4; z++) {
+                g.addSolid(x, 0, z);
+            }
+        }
+        g.placeStock = 0;
+        DigAStar a = new DigAStar(g, 0, 1, 0, 40, 1, 0, 8000, 128);
+        a.totalBudget(1L);
+        assertTrue(a.advance(1000), "1ns 预算必须在首个 16 节点采样点就收尾");
+        assertTrue(a.budgetReached());
+        assertTrue(a.failure().startsWith("BUDGET_EXCEEDED"), a.failure());
+        // 帽到前已 settles ~16 节点：平廊里推进会≥下限，半程自一致性口径（同⑥）——
+        // 宣称可用必给路且真变近；宣称不可用必不给路，两者不得矛盾
+        if (a.partialAvailable()) {
+            assertNotNull(a.partialPath());
+            DigAStar.Step end = a.partialPath().get(a.partialPath().size() - 1);
+            int gain = 39 - Math.max(0, Math.abs(end.x() - 40) - 1);
+            assertTrue(gain >= DigAStar.PARTIAL_MIN_GAIN, "gain=" + gain);
+        } else {
+            assertNull(a.partialPath());
+        }
+        System.out.println("[timecap⑧] expanded=" + a.expanded() + " partial=" + a.partialAvailable()
+                + " remainL1=" + a.remainingL1() + " 耗时=" + a.elapsedMillis() + "ms");
+    }
+
+    @Test
+    void reuseBiasReproducesOldRouteAtExactlyDiscountedCost() {
+        // ⑨ R1-S3 抑抖机制：同地形重搜携旧路降权集 → 必原路复现，总代价恰 ×BIAS_REUSE
+        // （平地无挖放，逐项都落在旧脚格里；FALL_PENALTY 不参与折扣故本场景须无坠）。
+        // 这是"复核失效后不抽风换路"的机器可证版本。
+        GridSampler g = new GridSampler();
+        for (int x = -4; x <= 40; x++) {
+            for (int z = -4; z <= 4; z++) {
+                g.addSolid(x, 0, z);
+            }
+        }
+        g.placeStock = 0;
+        DigAStar first = new DigAStar(g, 0, 1, 0, 30, 1, 0, 8000, 128);
+        while (!first.advance(300)) {
+            // 跑到出结果
+        }
+        assertNull(first.failure());
+        Set<Long> oldCells = new HashSet<>();
+        StringBuilder plain = new StringBuilder();
+        for (DigAStar.Step st : first.path()) {
+            oldCells.add(DigAStar.pack(st.x(), st.y(), st.z()));
+            st.dig().forEach(oldCells::add);
+            st.place().forEach(oldCells::add);
+            plain.append(st.x()).append(',').append(st.y()).append(',').append(st.z()).append(';');
+        }
+        DigAStar again = new DigAStar(g, 0, 1, 0, 30, 1, 0, 8000, 128);
+        again.reuseBias(oldCells);
+        while (!again.advance(300)) {
+            // 同上
+        }
+        assertNull(again.failure());
+        StringBuilder biased = new StringBuilder();
+        for (DigAStar.Step st : again.path()) {
+            biased.append(st.x()).append(',').append(st.y()).append(',').append(st.z()).append(';');
+        }
+        assertEquals(plain.toString(), biased.toString(), "旧路降权后必须原路复现（抑抖的本体）");
+        assertEquals(first.pathCost() * DigAStar.BIAS_REUSE, again.pathCost(), 1e-9,
+                "无挖放无坠的平路上总代价应恰为 ×0.7");
+        assertTrue(again.expanded() <= first.expanded() + 1,
+                "降权只会更早撞目标 expanded=" + again.expanded() + " vs " + first.expanded());
+        System.out.println("[reuse⑨] 原路复现 cost " + first.pathCost() + "→" + again.pathCost()
+                + " expanded " + first.expanded() + "→" + again.expanded());
+    }
 }

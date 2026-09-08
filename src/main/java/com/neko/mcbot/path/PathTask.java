@@ -21,8 +21,10 @@ import java.util.List;
  * → EXECUTE（逐节点：挖（真计时）→ 放（消耗背包）→ 落位）→ 到达。
  *
  * 执行期复核（DESIGN §8）：每提交 20 个节点，重验接下来 5 个节点的状态
- * （该清的还清着、支撑还在、放过的没被拆）；变了就地从当前位置重新规划，
- * 重规划上限 2 次，再变就 NO_PATH 交还给模型决策。
+ * （该清的还清着、支撑还在、放过的没被拆）；变了就切 REPLAN_SEARCH 相位从当前
+ * 位置**分帧**重搜（R1-S3：旧版单拍同步 while 的单帧冻结点已杀），旧路格 ×0.7 降权
+ * 抑抖动，重规划上限 2 次，再变就 NO_PATH 交还给模型决策。搜索双帽：节点 8000 +
+ * 累计 CPU 400ms，先到先停；撞帽且推进≥4 格提交 PARTIAL 半程段，不足则 NO_PROGRESS。
  *
  * 取消/超时：onAbort 清掉进行中的裂纹动画；future 由调度器统一完成。
  */
@@ -34,8 +36,12 @@ public final class PathTask extends TickTask {
     private static final int RECHECK_EVERY = 20;
     private static final int RECHECK_AHEAD = 5;
     private static final int MAX_REPLAN = 2;
+    /** 单帧搜索时间切片（R1-S3 双帽之一）：节点帽 300 防无界，时间帽 6ms 防重节点撑爆单帧。 */
+    private static final long SEARCH_SLICE_NS = 6_000_000L;
+    /** 单次搜索累计 CPU 预算（另一帽）：越界即撞帽走 PARTIAL/NO_PROGRESS 定性，TPS 无关。 */
+    private static final long SEARCH_TOTAL_NS = 400_000_000L;
 
-    private enum Phase { SEARCH, EXECUTE }
+    private enum Phase { SEARCH, REPLAN_SEARCH, EXECUTE }
 
     private final BlockPos target;
     private final boolean mayAlterTerrain;
@@ -51,6 +57,16 @@ public final class PathTask extends TickTask {
     /** liveify 后的真实挖/放计数（NEED_CONFIRM 清单与到达文案的唯一事实源）。 */
     private int planDigs;
     private int planPlaces;
+    /** 本轮搜索是重规划（失败文案加"路被改变后"前缀；旧路降权集只在重搜时装）。 */
+    private boolean wasReplan;
+    /** PARTIAL 半程段：走完后的到达文案换成"缩短射程"话术（设计卡 §C）。 */
+    private boolean partialTail;
+    private int partialRemain = -1;
+    /** 复核认定"变了"的格（§D：这点周围不入旧路降权集，防把坏格当旧路便宜复用）。 */
+    private long replanBadKey;
+    private boolean replanBadSet;
+    /** 本趟搜索要携带的旧路降权集（验尸重开也自动续上；首搜=null）。 */
+    private java.util.Set<Long> reusePending;
     private List<DigAStar.Step> path;
     private int cursor;            // 下一个要进入的节点（path[0] 是起点）
     private int executed;          // 已提交节点计数（复核节拍用）
@@ -79,7 +95,7 @@ public final class PathTask extends TickTask {
         if (++tickWarmup < 2) {
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
-        return phase == Phase.SEARCH ? searchTick(c) : executeTick(c);
+        return phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
     }
 
     // ---- SEARCH ----
@@ -91,8 +107,8 @@ public final class PathTask extends TickTask {
                     LevelDigSampler.countPlaceables(c.getInventory()));
             search = newSearch(from);
         }
-        if (!search.advance(EXPAND_PER_TICK)) {
-            // 分帧搜索跨 ~27 tick，中途世界会被别人改：验尸超限则丢旧图，从当前位置重开
+        if (!search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS)) {
+            // 分帧搜索跨多拍，中途世界会被别人改：验尸超限则丢旧图，从当前位置重开
             if (memo != null && memo.worldChanged()) {
                 McbotMod.LOG.info("[path] 验尸超限 stale={}，丢弃旧图重开搜索（第 {} 次）",
                         memo.staleCount(), memoRestarts + 1);
@@ -101,19 +117,38 @@ public final class PathTask extends TickTask {
             }
             return running(); // 还在算（分帧）
         }
+        String lead = wasReplan ? "路被改变后重规划失败：" : "";
         if (search.failure() != null) {
-            McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
-                    target.toShortString(), search.failure(), memoStats());
-            return new Progress.Done(new Result(false, search.failure(), null));
+            if (search.budgetReached() && search.partialAvailable()) {
+                // 撞帽≠失败：提交"距目标最近的已扩展节点"半程段，走完由 arrived 出 PARTIAL 话术
+                partialTail = true;
+                partialRemain = search.remainingL1();
+                path = liveify(search.partialPath());
+                cursor = 0;
+                McbotMod.LOG.info("[path] 撞帽→半程段：还差约 {} 格 L1，本段 {} 节点（挖 {} 放 {}）{}",
+                        partialRemain, path.size(), planDigs, planPlaces, memoStats());
+            } else {
+                McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
+                        target.toShortString(), search.failure(), memoStats());
+                // 撞帽但推进不足下限：不再冒充 BUDGET，换成对模型有行动意义的 NO_PROGRESS（§C）；
+                // open 空的真 NO_PATH 永不降级（D 基岩笼场景钉死）
+                String why = search.budgetReached()
+                        ? "NO_PROGRESS:" + lead + "搜索预算用尽（展开 " + search.expanded()
+                                + " 节点/" + search.elapsedMillis() + "ms）而没能向目标实质推进。"
+                                + "换条路绕开或分更短的段，别硬撞同一方向。"
+                        : "NO_PATH:" + lead + search.failure();
+                return new Progress.Done(new Result(false, why, null));
+            }
+        } else {
+            // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
+            path = liveify(search.path());
+            cursor = 0;
         }
-        // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
-        path = liveify(search.path());
-        cursor = 0;
         int digs = planDigs;
         int places = planPlaces;
-        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} {}",
+        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
-                digs, places, replans, memoStats());
+                digs, places, replans, partialTail, memoStats());
         if (digs > 0 || places > 0) {
             StringBuilder sb = new StringBuilder();
             for (DigAStar.Step st : path) {
@@ -128,7 +163,8 @@ public final class PathTask extends TickTask {
         }
         if ((digs > 0 || places > 0) && !mayAlterTerrain) {
             return new Progress.Done(new Result(false,
-                    "NEED_CONFIRM:到 " + target.toShortString() + " 需要改动世界——挖 "
+                    "NEED_CONFIRM:" + (partialTail ? "本段（半程推进）" : "到 ") + target.toShortString()
+                            + " 需要改动世界——挖 "
                             + digs + " 格、放 " + places + " 格（明细见 data.blocks）。"
                             + "确认就重发 move_to 并带 may_alter_terrain=true；不想改就换目的地。",
                     confirmData(digs, places)));
@@ -144,9 +180,14 @@ public final class PathTask extends TickTask {
         } else {
             memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
         }
-        return new DigAStar(memo != null ? memo : sampler,
+        DigAStar d = new DigAStar(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(),
                 target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS);
+        d.totalBudget(SEARCH_TOTAL_NS);
+        if (reusePending != null) {
+            d.reuseBias(reusePending);
+        }
+        return d;
     }
 
     /**
@@ -185,7 +226,7 @@ public final class PathTask extends TickTask {
     private String memoStats() {
         return memo == null ? "memo=off(验尸超限)" : "[memo] expanded=" + search.expanded()
                 + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()
-                + " 验尸不符=" + memo.staleCount();
+                + " 验尸不符=" + memo.staleCount() + " 耗时=" + search.elapsedMillis() + "ms";
     }
 
     private static String unpackShort(long cell) {
@@ -245,11 +286,9 @@ public final class PathTask extends TickTask {
                                 + "到了 (" + c.blockPosition().toShortString()
                                 + ")，重新扫一下再定目的地吧。", null));
             }
-            Progress early = replan(c);
-            if (early != null) {
-                return early; // 重规划失败，或新路线需确认
-            }
+            beginReplan(c);
             executed = 0;
+            return running();
         }
 
         DigAStar.Step next = path.get(cursor);
@@ -297,58 +336,87 @@ public final class PathTask extends TickTask {
     private Progress arrived(CompanionPlayer c) {
         BlockPos at = c.blockPosition();
         int need = planDigs + planPlaces;
+        if (partialTail) {
+            // §C 回执模板：撞帽从"失败"变"缩短射程"，行动指令写给模型（从本段落点重发）
+            return new Progress.Done(new Result(false,
+                    "PARTIAL:未能到 " + target.toShortString() + "。已走到能到的最近点 "
+                            + at.toShortString() + "，离目标还差约 " + partialRemain + " 格。"
+                            + "这一段已走完，请从该点重发 move_to（可分多段）"
+                            + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。"), null));
+        }
         String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
                 + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
         return new Progress.Done(new Result(true, fb, null));
     }
 
     /**
-     * 从当前位置重新算路。返回 null=成功可继续；Done=失败或新路线需确认（防绕过确认流）。
-     * 注意：本方法在**单拍内同步算完**（replan 发生在当前 tick，世界不会中途变，
-     * memo 在这层是纯去重不会引入陈旧）——但这个同步循环本身就是单帧冻结点，
-     * 真分帧重规划属 S3（REPLAN_SEARCH 相位），本卡不动它的预算语义。
+     * 复核发现路断了 → 切 REPLAN_SEARCH 相位，和首搜共用同一分帧出口（S3：杀掉旧版
+     * 单拍同步 while 的单帧冻结点）。旧路格（脚+挖+放）装进降权集 ×0.7 抑抖；
+     * 复核认定变了的格周围不入集（§D）——那恰好是不能再信的部分。
      */
-    private Progress replan(CompanionPlayer c) {
+    private void beginReplan(CompanionPlayer c) {
         BlockPos from = c.blockPosition();
         sampler = new LevelDigSampler(level, c, from,
                 LevelDigSampler.countPlaceables(c.getInventory()));
-        search = newSearch(from);
         replans++;
+        wasReplan = true;
+        partialTail = false;
+        reusePending = reuseCells();
+        path = null;
         cursor = 0;
-        // 重规划同步算完（预算有界：8000/300≈27 次循环，必然终止）
-        while (!search.advance(EXPAND_PER_TICK)) {
-            // 分帧接口在同步循环下等价于一次算完
-        }
-        if (search.failure() != null) {
-            return new Progress.Done(new Result(false,
-                    "NO_PATH:路被改变后重规划失败：" + search.failure(), null));
-        }
-        path = liveify(search.path());
-        if (!mayAlterTerrain && (planDigs > 0 || planPlaces > 0)) {
-            // 新路线要改世界但未授权：就地停，交回确认流
-            return new Progress.Done(new Result(false,
-                    "NEED_CONFIRM:路被人改动，新路线需要挖/放才能继续（明细见 data.blocks）。"
-                            + "确认就带 may_alter_terrain=true 重发。",
-                    confirmData(planDigs, planPlaces)));
-        }
-        return null;
+        search = newSearch(from);
+        phase = Phase.REPLAN_SEARCH;
+        McbotMod.LOG.info("[path] 复核失效→分帧重规划（第 {} 次，旧路降权格 {}）", replans, reusePending.size());
     }
 
-    /** 复核未来节点的格子状态：该清的还清着？支撑还在？ */
+    /** 旧路格集：从 cursor-1 往后（含待挖/待放格）；只往未来取——回头路降权会诱导读回振荡。 */
+    private java.util.Set<Long> reuseCells() {
+        java.util.HashSet<Long> set = new java.util.HashSet<>();
+        if (path == null) {
+            return set;
+        }
+        int from = Math.max(0, cursor - 1);
+        for (int i = from; i < path.size(); i++) {
+            DigAStar.Step st = path.get(i);
+            set.add(DigAStar.pack(st.x(), st.y(), st.z()));
+            for (long cell : st.dig()) {
+                set.add(cell);
+            }
+            for (long cell : st.place()) {
+                set.add(cell);
+            }
+        }
+        if (replanBadSet) {
+            int bx = DigAStar.unpackX(replanBadKey), by = DigAStar.unpackY(replanBadKey),
+                    bz = DigAStar.unpackZ(replanBadKey);
+            set.removeIf(cell -> {
+                int x = DigAStar.unpackX(cell), y = DigAStar.unpackY(cell), z = DigAStar.unpackZ(cell);
+                return Math.max(Math.abs(x - bx), Math.max(Math.abs(y - by), Math.abs(z - bz))) <= 1;
+            });
+        }
+        return set;
+    }
+
+    /** 复核未来节点的格子状态：该清的还清着？支撑还在？失效格记入 replanBadKey。 */
     private boolean validateAhead(CompanionPlayer c) {
+        replanBadSet = false;
         int end = Math.min(path.size(), cursor + RECHECK_AHEAD);
         for (int i = cursor; i < end; i++) {
             DigAStar.Step st = path.get(i);
             for (long cell : st.dig()) {
                 int x = DigAStar.unpackX(cell), y = DigAStar.unpackY(cell), z = DigAStar.unpackZ(cell);
                 if (!level.hasChunkAt(new BlockPos(x, y, z))) {
-                    return false; // 区块卸载，假设失效
+                    replanBadKey = cell; // 区块卸载，假设失效
+                    replanBadSet = true;
+                    return false;
                 }
                 // 挖过的应该还是空的（被人补上=变了）；没挖的仍待挖，不算坏
             }
             if (!sampler.support(st.x(), st.y() - 1, st.z()) && st.place().isEmpty()
                     && i > cursor) {
-                return false; // 原支撑被拆了
+                replanBadKey = DigAStar.pack(st.x(), st.y() - 1, st.z()); // 原支撑被拆了
+                replanBadSet = true;
+                return false;
             }
         }
         return true;

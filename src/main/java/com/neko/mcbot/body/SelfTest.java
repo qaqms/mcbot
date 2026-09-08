@@ -283,6 +283,30 @@ public final class SelfTest {
         var level = cp.level();
         var base = cp.blockPosition();
         McbotMod.LOG.info("[m8] 基准点 {}", base.toShortString());
+        // [m8dbg] 新世界 spawn 在 -672,79,-608 时 A* 邻居全拒而 place/break 正常——把邻域真值
+        // （方块名/加载/可通行/可挖秒）直接打出来定性，不靠猜（R1-S3 调查 09-08）。
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = 0; dy <= 1; dy++) {
+                    net.minecraft.core.BlockPos p = base.offset(dx, dy, dz);
+                    var st = level.getBlockState(p);
+                    McbotMod.LOG.info("[m8dbg] ({}) blk='{}' loaded={} motion={} fluid={} hard={} held='{}'",
+                            p.toShortString(), st.getBlock().getName(), level.isLoaded(p),
+                            st.blocksMotion(), st.getFluidState().isEmpty() ? "no" : st.getFluidState().getType(),
+                            st.getBlock().defaultDestroyTime(),
+                            cp.getMainHandItem().isEmpty() ? "空手"
+                                    : cp.getMainHandItem().getItem());
+                }
+            }
+        }
+        { // 走廊中段与目标柱的加载态（passable 的 UNKNOWN=墙之后，这类断言必须显式看见加载）
+            for (int d = 2; d <= 6; d += 2) {
+                net.minecraft.core.BlockPos p = base.east(d);
+                McbotMod.LOG.info("[m8dbg] 走廊({}) blk='{}' loaded={}",
+                        p.toShortString(), level.getBlockState(p).getBlock().getName(),
+                        level.isLoaded(p));
+            }
+        }
 
         // 铺一条测试大道：东 2..7 的地板填石，脚格/头格清成空气；**两侧也封石**。
         // 为什么必须封两侧：不封的话“唯一路线就是挖穿”这句前提只取决于基准点旁边的
