@@ -74,15 +74,61 @@ public final class AgentLoop {
      * @param accumulated  是否仍拼了整轮（false = 走了"只要过程"的路径）
      */
     public record StreamStats(long ttfb, long ttft, long firstTool, long afterChunk, long afterTool,
-                              int chunks, int deltas, int toolsReady, boolean accumulated) {
+                              int chunks, int deltas, int toolsReady, boolean accumulated,
+                              long cacheWaste) {
 
         /** 一行可 grep 的观测格式；宿主直接 LOG.info。 */
         public String format() {
             return "ttfb=" + ttfb + "ms ttft=" + ttft + "ms first_tool=" + firstTool
                     + "ms after_chunk=" + afterChunk + "ms after_tool=" + afterTool
                     + "ms chunks=" + chunks + " deltas=" + deltas
-                    + " early=" + toolsReady + " accumulated=" + accumulated;
+                    + " early=" + toolsReady + " accumulated=" + accumulated
+                    + " cache_waste=" + cacheWaste;
         }
+    }
+
+    /**
+     * 一条指令里最多允许几个工具调用"提前派发"。
+     *
+     * <p><b>为什么是 1 而不是全部</b>：早派发在流式过程中就把 payload 发出去，
+     * 这些调用**不走 {@link #awaitAndRecord} 的串行链**。而 mod 侧的执行器背后只有
+     * 一具身体 + 单槽调度器（忙即回 BUSY），所以同轮若多个"占身体"的调用一起早派发，
+     * 只有第一个能进槽，其余立刻被拒——**一条 BUSY 教学换一次白跑的往返**。
+     * 只早派发首个就同时拿到两件事：单调用场景零损失（仍然提前起跑），
+     * 多调用场景退回 R2-A 之前的串行语义（第二个起，等轮落地后按 index 依次发）。
+     *
+     * <p>纯只读工具（status/scan_area）其实可以并行，但 agent-core 不认识"哪些工具占身体"，
+     * 那是宿主的知识；在核里设 1 是不依赖宿主、且不会错的安全默认。
+     */
+    private static final int MAX_EARLY_DISPATCH = 1;
+
+    // ---- 缓存浪费诊断（评估 §5.2）：让"前缀缓存静默退化"变成可观测 ----
+
+    /** 上一轮 API 回报的 prompt token（0 = 没报过）。 */
+    private long prevPromptTokens;
+    /** 最近一次算出的缓存浪费（token），随 StreamStats 出到日志。 */
+    private long lastCacheWaste = -1;
+    /** 分包粒度噪声底：缓存按段命中，段边界处必然差一点；扣掉它免得长期误报。 */
+    private static final long CACHE_WASTE_NOISE_FLOOR = 1024;
+
+    /**
+     * 本轮"本该命中却重新处理"的 token 数。
+     *
+     * <pre>期望缓存读取 ≈ min(上一轮 prompt, 本轮 prompt)</pre>
+     *
+     * 扣掉真实命中数再减噪声底，负数归零。**它是诊断不是统计**：正常长期贴近 0，
+     * **一旦持续抬头**就说明前缀被谁动了——系统提示里混进会变的字段、工具表增删、
+     * 历史被从中间剪了、或两轮间隔太久缓存过期。比看 {@code cached/prompt} 比值灵敏，
+     * 因为它盯的是**增量**（比值本来就会随历史增长而变化）。
+     *
+     * <p>首轮不计（那时缓存本就该是空的）；后端没报 cached（<0）时返回 -1。纯读数，不影响逻辑。
+     */
+    static long cacheWasteOf(long prevPrompt, long prompt, long cached) {
+        if (prevPrompt <= 0 || prompt <= 0 || cached < 0) {
+            return -1;
+        }
+        long expected = Math.min(prevPrompt, prompt);
+        return Math.max(0, expected - cached - CACHE_WASTE_NOISE_FLOOR);
     }
 
     private final ChatEngine engine;
@@ -213,6 +259,11 @@ public final class AgentLoop {
                 .thenAccept(turn -> {
                     convo.noteUsage(turn);
                     listener.onUsage(turn.promptTokens(), turn.completionTokens(), turn.cachedTokens());
+                    // 缓存浪费诊断（评估 §5.2）：读上一轮的 prompt 与本轮的 cached 做增量对比。
+                    // 只在这里记账，不参与任何判断——它存在的意义是"前缀退化时有人立刻看得见"。
+                    lastCacheWaste = cacheWasteOf(prevPromptTokens, turn.promptTokens(),
+                            turn.cachedTokens());
+                    prevPromptTokens = turn.promptTokens() > 0 ? turn.promptTokens() : prevPromptTokens;
                     listener.onStreamStats(reactor.stats());
                     reactor.seal(); // 此后到达的工具就绪信号不再派发（它们已过时）
                     Map<Integer, CompletableFuture<ToolOutcome>> started = reactor.takeStarted();
@@ -264,6 +315,9 @@ public final class AgentLoop {
         private final Map<Integer, CompletableFuture<ToolOutcome>> started = new ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.AtomicBoolean sealed =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        /** 本步已经占掉早派发额度的数量（上限 {@link #MAX_EARLY_DISPATCH}）。 */
+        private final java.util.concurrent.atomic.AtomicInteger earlySlots =
+                new java.util.concurrent.atomic.AtomicInteger();
 
         void seal() {
             sealed.set(true);
@@ -278,12 +332,18 @@ public final class AgentLoop {
         StreamStats stats() {
             return new StreamStats(timings.ttfbMs(), timings.ttftMs(), timings.firstToolMs(),
                     timings.afterChunkMs(), timings.afterToolMs(), timings.chunks(),
-                    timings.deltas(), timings.toolsReady(), true);
+                    timings.deltas(), timings.toolsReady(), true, lastCacheWaste);
         }
 
         @Override
         public void onToolCallReady(int index, ToolCall call) {
             if (sealed.get() || !earlyDispatched.add(index)) {
+                return;
+            }
+            // 额度纪律：只让最先就绪的那个（们）提前起跑。理由见 MAX_EARLY_DISPATCH——
+            // 同轮多个"占身体"的调用一起发出去，服务端单槽只会收下第一个，其余白拿 BUSY。
+            // 超额的调用不在这里发，改由 awaitAndRecord 按 index 依次串行执行。
+            if (earlySlots.incrementAndGet() > MAX_EARLY_DISPATCH) {
                 return;
             }
             // 与整轮落地后的路径同构：executor.execute 只投递、不阻塞（mod 侧就是发一个 payload），

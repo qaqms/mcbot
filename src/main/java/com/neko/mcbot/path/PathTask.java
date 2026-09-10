@@ -197,6 +197,7 @@ public final class PathTask extends TickTask {
      * 动作字节不重分类（仅播报语义）；执行期 mineOne/placeOne 本就逐格 live 判定，双层自晦。
      */
     private List<DigAStar.Step> liveify(List<DigAStar.Step> plan) {
+        long t0 = System.nanoTime();
         ArrayList<DigAStar.Step> out = new ArrayList<>(plan.size());
         planDigs = 0;
         planPlaces = 0;
@@ -220,6 +221,11 @@ public final class PathTask extends TickTask {
             planPlaces += place.size();
             out.add(new DigAStar.Step(st.x(), st.y(), st.z(), dig, place, st.action()));
         }
+        // 效率评估 §3.1：这一步是**单拍、无分帧、无预算**的全路径活体重扫，
+        // 且紧跟在"搜索刚花掉最多 400ms CPU"之后（尖峰叠加）。给它单独计时，
+        // 才能判定要不要把它也改成按拍切片——量级此前只能靠猜。
+        McbotMod.LOG.info("[brain] liveify nodes={} {}ms", plan.size(),
+                (System.nanoTime() - t0) / 1_000_000L);
         return out;
     }
 

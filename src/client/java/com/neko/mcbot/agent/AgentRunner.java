@@ -40,10 +40,36 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class AgentRunner implements ToolExecutor {
 
     private static final org.slf4j.Logger LOG = LoggerFactory.getLogger("mcbot/agent");
+    /** 默认工具回执超时。 */
     private static final long TOOL_TIMEOUT_MS = 90_000;
     // 反问等待从 5min 降到 2min：配合游戏内 `@bot 答 <文本>` 入口，没人理就快醒。
     private static final long QUESTION_TIMEOUT_MS = 120_000;
     private static final int TRANSCRIPT_CAP = 80;
+
+    /**
+     * 按工具名给回执超时（效率评估发现的真缺陷：客户端 90s &lt; 服务端 move 帽 180s）。
+     *
+     * <p><b>原来的后果</b>：`move_to` 服务端允许跑 3600 tick = **180s**，而客户端一律 90s 就
+     * 判 TIMEOUT。于是任何 90–180s 的移动，模型都会收到"这次操作 90 秒没有结果，先别重复这个操作"
+     * ——**一句错误的教它别重试**，而同伴其实还在走；随后那条第 90s 之后才到的真回执，
+     * 因为 seq 已从 `pending` 移除而被**静默丢弃**（`handleS2c` 里 `p == null` 直接返回）。
+     * 模型拿着错的世界模型继续动作，再撞一次 BUSY。
+     *
+     * <p><b>口径</b>：客户端超时必须**严格大于**服务端该工具的 cap（帽 + 余量），
+     * 否则 TIMEOUT 就不是"真超时"而是"客户端先跑了"。帽值来源：
+     * {@code MoveToTool} 3600 tick、{@code BreakBlockTool} 1200 tick、
+     * {@code WaitTool} seconds*20+100 tick（按最长的 60s 算）。
+     */
+    private static long toolTimeoutMs(String tool, String argsJson) {
+        return switch (tool) {
+            // 服务端 3600 tick = 180s，留 30s 余量
+            case "move_to" -> 210_000;
+            // 服务端 seconds*20+100 tick；seconds 上限 60 ⇒ 1300 tick = 65s，留余量
+            case "wait" -> 80_000;
+            // 服务端 1200 tick = 60s，90s 已够
+            default -> TOOL_TIMEOUT_MS;
+        };
+    }
 
     private ClientConfig cfg;
     private final AtomicLong seqGen = new AtomicLong();
@@ -54,6 +80,8 @@ public final class AgentRunner implements ToolExecutor {
     private final ArrayDeque<String> transcript = new ArrayDeque<>();
     private volatile long currentTask;
     private volatile String companionName = "";
+    /** 迟到回执计数（效率评估 §6 的直接证据）：>0 说明超时帽配错、真结果被扔。 */
+    private final AtomicLong lateResults = new AtomicLong();
     private AgentLoop loop;
     /** R2-B 前缀缓存：启动读盘一次，链中不再逐步读 skills；换发只在指令边界。 */
     private PromptBuilder promptCache;
@@ -180,6 +208,13 @@ public final class AgentRunner implements ToolExecutor {
                 Pending p = pending.remove(seq);
                 if (p != null) {
                     p.future().complete(new ToolOutcome(env.bool("ok"), env.str("feedback")));
+                } else {
+                    // 迟到的回执（本 seq 已被超时/叫停收走）：语义上只能丢弃，但**必须留痕**——
+                    // 这正是"客户端超时 < 服务端帽"那类缺陷唯一的直接证据。
+                    // 该计数持续 >0 就说明超时帽配错了，工具的活其实干完了、回执却被扔了。
+                    lateResults.incrementAndGet();
+                    LOG.warn("[brain] 迟到回执 seq={} ok={}（已被超时收走，丢弃）feedback={}",
+                            seq, env.bool("ok"), env.str("feedback"));
                 }
             }
             case "event" -> {
@@ -376,6 +411,8 @@ public final class AgentRunner implements ToolExecutor {
         o.addProperty("current_task", currentTask);
         o.addProperty("pending_tools", pending.size());
         o.addProperty("pending_questions", questionRecords.size());
+        // 效率诊断：迟到回执数（>0 即超时帽配错，真结果被丢弃）；桥的 /v1/status 直接可见
+        o.addProperty("late_results", lateResults.get());
         return o.toString();
     }
 
@@ -410,7 +447,7 @@ public final class AgentRunner implements ToolExecutor {
                             + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），服务器不会收。"
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
-        pending.put(seq, new Pending(f, System.currentTimeMillis(), TOOL_TIMEOUT_MS));
+        pending.put(seq, new Pending(f, System.currentTimeMillis(), toolTimeoutMs(name, argsJson)));
         ClientPlayNetworking.send(new McbotPayloads.C2s(json));
         return f;
     }

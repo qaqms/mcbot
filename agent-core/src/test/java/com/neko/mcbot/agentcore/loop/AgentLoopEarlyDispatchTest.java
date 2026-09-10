@@ -218,6 +218,71 @@ class AgentLoopEarlyDispatchTest {
         loop.submit("随便说句");
         assertEquals(1, stats.size(), "每步应报一次打点");
         assertTrue(stats.get(0).format().contains("ttfb="), "打点格式要可 grep");
+        assertTrue(stats.get(0).format().contains("cache_waste="), "缓存浪费指标要在打点里");
         assertTrue(stats.get(0).accumulated(), "默认路径要拼整轮");
+    }
+
+    /**
+     * 同轮多个工具时，**只有第一个**能提前派发。
+     *
+     * <p>钉的是 R2-S3 引入、又在效率评估里被修掉的一个真缺陷：早派发在流式过程中就把 payload
+     * 发出去，绕过了 {@code awaitAndRecord} 的串行链；而 mod 侧只有一具身体 + 单槽调度器，
+     * 于是"同轮 3 个占身体的调用一起早派发"会让后两个白拿 BUSY（各换一次白跑的往返）。
+     * 现在的纪律：只有最先就绪的那个提前起跑，其余等整轮落地后按 index 串行。
+     *
+     * <p>断言必须落在"整轮还没落地"的时刻，才分得出"早发"与"轮落地后才发"。
+     */
+    @Test
+    void onlyFirstToolIsDispatchedEarlyWhenSeveralAreReady() {
+        var engine = new ScriptedEngine().queue(toolTurn("a", "b", "c"), textTurn("都好了"));
+        engine.streamingDelayMs = 200;
+        engine.readyReportLimit = -1; // 三个都在整轮落地前报就绪 → 三个都想抢额度
+        var starts = new ConcurrentHashMap<String, Long>();
+        var replies = new CopyOnWriteArrayList<String>();
+        var allDispatched = new CountDownLatch(3);
+        long t0 = System.nanoTime();
+
+        var loop = new AgentLoop(engine, List.of(),
+                (name, args) -> {
+                    starts.putIfAbsent(name, (System.nanoTime() - t0) / 1_000_000L);
+                    allDispatched.countDown();
+                    return CompletableFuture.completedFuture(
+                            new ToolExecutor.ToolOutcome(true, name + " ok"));
+                },
+                AgentLoop.Config.defaults(),
+                new AgentLoop.Listener() {
+                    @Override
+                    public void onReply(String text) {
+                        replies.add(text);
+                    }
+                },
+                () -> "sys", 1_000_000);
+
+        loop.submit("三件事");
+        assertTrue(await(allDispatched), "三个工具最终都要被执行");
+        awaitTrue("跑完", () -> replies.contains("都好了"));
+
+        Long aAt = starts.get("a");
+        Long bAt = starts.get("b");
+        Long cAt = starts.get("c");
+        assertTrue(aAt != null && aAt < 160, "第一个工具应早派发（实际 " + aAt + "ms）");
+        assertTrue(bAt != null && bAt >= 160,
+                "第二个工具不得抢早派发额度（实际 " + bAt + "ms）——否则服务端单槽会回 BUSY");
+        assertTrue(cAt != null && cAt >= 160, "第三个工具同上（实际 " + cAt + "ms）");
+    }
+
+    /** 缓存浪费：正常延续应贴近 0；前缀被换掉才抬头。首轮/后端没报 cached 时不判定。 */
+    @Test
+    void cacheWasteMetricDetectsPrefixBreak() {
+        // 正常：上轮 3000、本轮 3200、命中 3000 ⇒ 3000-3000-1024 < 0 ⇒ 0
+        assertEquals(0, AgentLoop.cacheWasteOf(3000, 3200, 3000));
+        // 前缀被换：命中只剩 500 ⇒ 3000-500-1024 = 1476
+        assertEquals(1476, AgentLoop.cacheWasteOf(3000, 3200, 500));
+        // 首轮没有"上一轮" ⇒ 不判定
+        assertEquals(-1, AgentLoop.cacheWasteOf(0, 3200, 0));
+        // 后端没报 cached ⇒ 不判定
+        assertEquals(-1, AgentLoop.cacheWasteOf(3000, 3200, -1));
+        // 噪声底之内不报
+        assertEquals(0, AgentLoop.cacheWasteOf(3000, 3000, 2500));
     }
 }

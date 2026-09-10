@@ -94,15 +94,46 @@ public final class ServerToolDispatcher {
         }
 
         ServerTool.Result r;
+        long t0 = System.nanoTime();
         try {
             tool.runAsync(companion, args, McbotMod.scheduler())
-                    .thenAccept(res -> replyTool(sender, seq, res.ok(), res.feedback(), res.data()));
+                    .whenComplete((res, err) -> {
+                        if (err != null) {
+                            // 工具层以异常完成：按原语义交回一条 INTERNAL，别让 owner 白等 90s。
+                            // （此前这条路径只在 runAsync **同步抛**时才走到，异步异常会静默丢失，
+                            //   客户端挂到 TIMEOUT；顺手补上，属于同一处语义缺口。）
+                            McbotMod.LOG.error("工具 {} 异步失败", toolName, err);
+                            replyTool(sender, seq, false, "INTERNAL:工具执行失败: "
+                                    + err.getClass().getSimpleName(), null);
+                            logToolTiming(toolName, t0, -1);
+                            return;
+                        }
+                        logToolTiming(toolName, t0, res == null ? -1 : res.feedback().length());
+                        replyTool(sender, seq, res.ok(), res.feedback(), res.data());
+                    });
             return;
         } catch (Throwable t) {
             McbotMod.LOG.error("工具 {} 派发异常", toolName, t);
             r = new ServerTool.Result(false, "INTERNAL:工具内部错误: " + t.getClass().getSimpleName(), null);
         }
+        logToolTiming(toolName, t0, -1);
         replyTool(sender, seq, r.ok(), r.feedback(), r.data());
+    }
+
+    /**
+     * 每工具耗时归因（效率评估 §5.5）。
+     *
+     * <p>在这条日志之前，"模型慢"和"工具慢"是混在同一个总时长里的——`[m4]` 验收虽然打印过
+     * "break_block 完成"，但那是自由文本、事后无法统计。有了这一行，
+     * 真机曲线就能把每一秒归到具体工具上（例：`move_to` 慢到底慢在搜索还是走路，
+     * 再看 `[path]` 的 expanded/elapsed 细分）。
+     *
+     * @param chars 回执字符数（-1 = 未拿到回执）；回执越长，模型那侧 prefill 越贵，
+     *              所以它和时间一起记，才能解释"工具很快但这轮还是很慢"
+     */
+    private static void logToolTiming(String toolName, long t0, int chars) {
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+        McbotMod.LOG.info("[brain] tool {} {}ms chars={}", toolName, ms, chars);
     }
 
     private CompanionPlayer companionOfSender(ServerPlayer sender) {
