@@ -54,9 +54,15 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `NO_PATH:` | A* 搜索空间内无路（真封闭，**永不降级**）/无支撑 | 换路线方向或先造条件（拿材料/拆明障） |
 | `PARTIAL:` | 撞搜索帽但已实质推进：半程段已走完，停在"能到的最近点" | 从回执里的当前点**重发 move_to**（可分多段抵达），别当失败 |
 | `NO_PROGRESS:` | 撞帽且连短程都没推进（目标方向被纠缠堵死） | 换方向/换目的地，硬撞同一方向无益 |
+| `ACCEPTED:` | **受理回执**（R2-S4）：这件事被受理了，**还没有结果** | 别重发（会被 BUSY 挡）、别干等；做完系统会主动报同一编号；这期间可以回主人一句话 |
 | `CANCELLED:` | 主人主动叫停 | **停手**，向主人确认下一步，不许自作主张续上 |
+| `SUPERSEDED:` | 被新指令顶掉（R2-S4，**本地合成**，不是服务端发的） | 别自作主张续上；要做就重新发一次 |
 | `TIMEOUT:` | 服务器/主人超时未回执 | 别重复该操作，向主人说明 |
 | `INTERNAL:` | 服务端异常/参数非 JSON | 报障，别重试 |
+
+> `CANCELLED:`/`SUPERSEDED:`/`TIMEOUT:` 三种都会作为 `job_event` 的 `phase`
+> （依次 `cancelled`/`superseded`/`failed`）出现，**相位与文本前缀分开**是有意的：
+> 相位给客户端/面板做状态，前缀给模型做教学。
 
 ## 4. 加一个工具（配方）
 
@@ -67,3 +73,25 @@ record Result(boolean ok, String feedback, JsonObject data)
 4. 参数校验失败要回 `DENIED:` 教学文本；成功回执里写清数量与位置。
 5. 自测：SelfTest 直调（无头）→ 真机 `@bot` 驱动一遍；两处证据进 STATUS。
 6. 桥接层**不用改**——它是任务级的，原子工具对 neko 不可见（by design）。
+
+### 4.1 要不要走「受理即回执」（ACCEPT）？
+
+默认 **不**（`acceptanceMode()` 返回 `SYNC`）。只有**跨 tick 且真的会花几秒以上**的活才覆写
+`ACCEPT`——目前就 `move_to`（3600tick≈180s）与 `break_block`（1200tick≈60s，挖一格实测 6–7s）。
+
+短活走 ACCEPT 是**净亏**：先回受理再回结果 = 白多一跳，而且模型还得再问一次"好了没"。
+另外注意服务端只有**一具身体 + 单槽**：走 ACCEPT 不会让两个"占身体"的活并行
+（第二个仍会被 BUSY 挡），它省的是"大脑被一条长活占住"。
+
+覆写时要**同时**给三样，缺一个就会出问题：
+
+| 成员 | 为什么 |
+|---|---|
+| `acceptanceMode() → ACCEPT` | 决定走不走 job 通道 |
+| `capTicks(args)` | **两个消费者共用一个来源**：`scheduler.submit` 拿它做服务端超时，派发层拿它算给客户端的受理回执（客户端等待上限 = cap×50ms+15s）。两边各写一份，就是"服务端允许跑 180s、客户端 90s 就判 TIMEOUT、真回执被当迟到丢掉"那条真缺陷 |
+| `acceptSubject(args)` | 受理文案里"我在干什么"那一小段（如 `走到 12,63,-4`）。**只给主语**——"别猜、别等着、做完我主动报 j1"这套模板由派发层统一拼，每个工具一字不差，模型才学一遍就够 |
+
+`runAsync` 里 `sched.submit(..., capTicks(args))` 要传**同一个** `capTicks(args)`，别写死数字。
+快路径（`DENIED`/`BUSY`/`TARGET_LOST`…）照常直接 `return CompletableFuture.completedFuture(...)`：
+派发层发现 future 已完成就回普通 `tool_result`，不会走 ack。**这也是要遵守的**——
+先 ack 再立刻报失败等于白多一跳。

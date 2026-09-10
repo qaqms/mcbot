@@ -45,13 +45,16 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
                      TurnBuilder(聚合器)/TurnSinkTarget(写入契约)
                      StreamingTurnReader(聚合+闭合判定)/ToolArgsScanner(配平+required 齐=可派发)
   convo/             Conversation：软水位压缩（"[对话前情提要]"前缀，保尾部）
-  loop/              AgentLoop 状态机 + ToolExecutor 契约
+  loop/              AgentLoop 状态机（含 Ledger 保序落账 + PARK）/ToolExecutor 契约
+                     PendingJobs(两段式等待: seq→终局 / 受理后 jobId→事件 + 超时口径)
   prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
   body/              FakeConnection/CompanionPlayer/CompanionRoster/CompanionChunkPads/SummonService/SafeSpawn/SelfTest
-  path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)/PathTask(搜索→确认→执行)
-  server/            ToolRegistry/ServerTool/ServerToolDispatcher/RateGuard + tools/(9 个)
+  path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
+                     PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
+  server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(9 个)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
@@ -92,6 +95,35 @@ submit(指令) → pump → step → [压缩?] → LLM(流式) → turn
   若正停在流式回答上，整轮作废（不执行其工具、不留悬挂 tool_calls）。
 ```
 
+### 5.1 受理即回执与 PARK（R2-S4 阶段 2）
+
+```
+turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话）
+                     ↓
+   Ledger.flush()：按 index 升序写出**已到达**的最长前缀
+                     ↓
+   全部落账 → step()（照旧）
+   还有"已受理未到达" → parked=true，**不 step**（PARK）
+                     ↓
+   job_event(done/failed/cancelled/superseded) → Ledger.resolve → flush → step()
+```
+
+要点（细节契约在 `docs/BRIDGE.md` §5.1，工具侧授权在 `docs/TOOLS.md` §4.1）：
+
+- **受理不等于结果**：服务端的 `job_ack` 只表示"开始了"，回执里带 `accepted=true` 字段。
+  Ledger 记下 `jobId` 但**槽位保持空**——把它当结果写进对话，就等于告诉模型事情做完了。
+- **落账必须保序**：一步里"第 0 条在跑、第 1 条当场有结果"是常态，而 `tool` 消息必须与
+  `assistant.tool_calls` 严格同序，所以第 1 条也不能先写。Ledger 只写"已到达的**前缀**"。
+- **PARK 不计步**：`steps` 只在 `step()` 里涨，所以等一条 3 分钟的移动不会吃掉 40 步帽。
+- **PARK 的铁律**：解锁（叫停/新指令）之前，必须给**每一条** in-flight 的 `tool_call`
+  补一条合成回执（`CANCELLED:`/`SUPERSEDED:`）。少一条，下一次请求里那个 tool_call 就有
+  id 找不到配对的消息 → OpenAI 400，整段历史作废。唯一实现是 `AgentLoop.supersedeAll`。
+- 客户端侧两段式等待收在 `PendingJobs<T>`：`seq → 终局` / 受理后转 `jobId → job_event`，
+  凭据（那个 future）跟着转段搬；**超时口径只有一处**：受理后的上限 = 服务端报的
+  `cap_ticks`×50ms + 15s 余量（`JOB_GRACE_MS`）。
+- 止血开关：`client.json` 的 `accept_mode`（默认 true）。关掉 = 客户端不在 `tool_call` 里点
+  `accept`，服务端对 ACCEPT 工具仍走同步回执、大脑也不 PARK，整条链退回旧语义（不用换服务端）。
+
 **真流式与早派发（R2-A）**：`LlmClient` 不用 `ofLines()`（行是收完才交出来的），自己实现
 `BodySubscriber` 按字节增量解码、按行切分，每行到货即回调。于是"某个工具调用的参数写完了"
 可以在**整轮落地之前**就知道，工具当场起跑（省下的是挂起时间）。
@@ -107,8 +139,9 @@ submit(指令) → pump → step → [压缩?] → LLM(流式) → turn
 上下文闸门 M4.5 改真数驱动：每步记 API 回报的 prompt_tokens（无则 CJK 感知估算），
 超 6000 在**任务步边界**压缩；切分铁律：保留段只能从 User/Assistant 起切，绝不拆孤儿 Tool；
 同名工具旧回执出站前折叠成占位（存储全量）；摘要端点连败 2 次熔断至下个指令边界。
-`ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`，
-90 秒无回执 → 回 TIMEOUT 教学文本。`ask_owner` 是唯一本地工具（不出客户端，见 §6）。
+`ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`
+（或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
+长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。`ask_owner` 是唯一本地工具（不出客户端，见 §6）。
 
 ## 6. 桥接（neko 入口）
 
@@ -165,7 +198,7 @@ submit(指令) → pump → step → [压缩?] → LLM(流式) → turn
 | 位置 | 数值 |
 |---|---|
 | AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
-| 超时 | LLM 180s；工具回执 90s；ask_owner **120s**（M4.6 由 300s 降，本行曾漂移）；桥 ask **135s**（R0 对齐：必须 > 反问 120s）；task 窗口 ≤120s |
+| 超时 | LLM 180s；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**（M4.6 由 300s 降，本行曾漂移）；桥 ask **135s**（R0 对齐：必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
@@ -175,6 +208,7 @@ submit(指令) → pump → step → [压缩?] → LLM(流式) → turn
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |
 | 前缀(R2-S2) | FOLD_KEEP_TAIL=12；折叠只在 index<foldCheckpoint 冻结区；prefix reset 全库仅两事件（compaction / directive-boundary）；system 换发仅指令边界；压缩链尾 finishChain（叫停链不压） |
 | 流式(R2-A) | SSE 逐行回调（自实现 BodySubscriber，增量 UTF-8 解码+跨 chunk 攒半行/半字符/CRLF）；闭合判定=顶层括号配平 **且** schema required 齐；就绪信号每 index 一生一次；工具就绪即在回调线程派发（execute 只投递不阻塞）；记账按 index 顺序折叠；同一 index 的 arguments 只许累积一次 |
+| 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具仅 move_to(3600tick)/break_block(1200tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
 | 名册 | v1 每主人 1 同伴；名字 `[a-z0-9_]{2,16}` |
 

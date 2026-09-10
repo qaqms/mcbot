@@ -101,7 +101,7 @@ Loom 配置：yarn `1.21.11+build.6`、loader `0.19.5`、Java 21、国内镜像�
 |---|---|---|
 | `summon` | name, persona_id? | 校验 owner 同伴数 < 上限 |
 | `dismiss` | companion_id | |
-| `tool_call` | task_id?, seq, tool, args_json | seq 由客户端自增 |
+| `tool_call` | task_id?, seq, tool, args_json, accept? | seq 由客户端自增；`accept`（R2-S4 追加，缺省=老语义）点名要不要走"受理即回执" |
 | `cancel` | task_id | |
 | `answer` | question_id, text | 回复同伴的反问 |
 
@@ -111,6 +111,8 @@ Loom 配置：yarn `1.21.11+build.6`、loader `0.19.5`、Java 21、国内镜像�
 |---|---|---|
 | `roster` | companions[] | 登录/变更时全量推 |
 | `tool_result` | seq, ok, feedback_text, data_json | |
+| `job_ack` | seq, job_id, tool, cap_ticks, text | **R2-S4 追加**：长活受理回执（文本以 `ACCEPTED:` 开头）。一个 seq 只会收到 result **或** ack |
+| `job_event` | seq, job_id, tool, phase(progress/done/failed/cancelled/superseded), text, data_json | **R2-S4 追加**：受理后的后续。契约见 `docs/BRIDGE.md` §5.1 |
 | `event` | companion_id, type(started/progress/done/fail/question/state), body | 经 loop 转 SSE 给 neko |
 
 **服务器侧三道闸**（安全生命线，逐 payload 执行）：

@@ -104,10 +104,19 @@ S3=A（新 JUnit `SseIncrementalTest`：自起 HttpServer 5 帧隔 200ms，断�
 S4=C（`[r2c]`：move 提交 100ms 内拿 ACCEPTED、done 事件续跑放槽；抢占+`reused_remaining=n`；
     桥侧 **python urllib**（禁 git-bash curl，中文乱码是记过的坑）断言 fragments 含 progress；
     `[m4b]` 基准同步改写）
-    **进度（09-10）**：阶段 1 = **lastPlan 复用**已关账（`PlanCache` + `[m8]` A/B 实测 B 零重搜，
-    见 STATUS）。与卡上 §C 的差别：本阶段走的是"**确认重发**复用"（同一目标+同一起点+TTL，
-    授权态不入键、清单用当前世界重算），不是"**抢占续跑**"（那需 `remaining()`+代际号+抢占）。
-    阶段 2 起才动 `job_ack`/PARK/`ACCEPTED:` 与 `[m4b]` 基准改写。
+    **进度（09-10）**：
+    - **阶段 1 = lastPlan 复用** ✅ 关账（`PlanCache` + `[m8]` A/B 实测 B 零重搜，见 STATUS）。
+      与卡上 §C 的差别：走的是"**确认重发**复用"（判据＝同伴+目标+**起点**+TTL，授权态不入键、
+      清单用当前世界重算），不是"**抢占续跑**"。
+    - **阶段 2 = 受理即回执 + PARK** ✅ 关账（`job_ack`/`job_event` 信封、`acceptanceMode`/
+      `capTicks`/`acceptSubject`、`Ledger` 保序落账 + PARK、`PendingJobs` 两段式等待、
+      PARK 铁律合成回执、`accept_mode` 止血开关、教学进提示词；`[r2c]` 六项全中，单测 145/145）。
+      与卡上 §C 的差别：**抢占未做**（无 `preempt`/`superseded` 服务端相位/`generation`/
+      `remaining()`），**progress 帧未发**（客户端已能收，服务端无调用点），故 `[m4b]` 的
+      "BUSY 拒收"基准**照旧**、`reused_remaining=n` 读数不适用。
+      另：卡上 §E 的"−12–35s"**别照抄**——对严格串行的活 ACCEPT 不缩短总时长，真收益是
+      "大脑不被长活占住"与"同轮后续调用不被阻塞"（后者今天受限于服务端单槽，吃到的是只读工具）。
+    - **阶段 3（未完）**：抢占 + `remaining()` 续节点 + `generation` + progress 入桥限速。
 
 **新常数（进 §10）**：FOLD_KEEP_TAIL=12｜`ACCEPTED:` 前缀常量｜job 超时=capTicks+15s｜
 progress 限速 1/s/job、4/s 全局｜lastPlan TTL=30s｜ROCK_PATHS、环带步长 1/2/3、MAX_SAMPLES=900、

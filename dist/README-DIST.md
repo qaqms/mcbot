@@ -8,7 +8,7 @@
 
 1. **起服务器**（已含 mcbot）：
    ```
-   cd D:/ai/mcbot && ./gradlew runServer
+   cd <仓库根> && ./gradlew runServer
    ```
 2. **起客户端**（你自己的启动器）：Prism / HMCL / MultiMC 建 **Fabric 1.21.11** 实例，
    把上面两个 jar 放进该实例的 `mods/` 文件夹，正常登录启动。

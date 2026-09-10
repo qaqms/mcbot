@@ -10,11 +10,32 @@
 | Loom | `net.fabricmc.fabric-loom-remap` 1.17.20 | 普通 loom 在此版本不可用 |
 | Loader / Fabric API | 0.19.5 / 0.141.6+1.21.11 | |
 | 映射 | `loom.officialMojangMappings()` | 注意：`Identifier` 不叫 ResourceLocation 等命名坑见 STATUS 防漂移表 |
-| JDK | Temurin 21 | 路径写死在 `gradle.properties`（换机器必改 `org.gradle.java.home`） |
-| Gradle | 9.5.1 | wrapper 指向本地 zip（换机器要改回官方 URL） |
-| 代理 | `gradle.properties` 内 systemProp 127.0.0.1:7897 | 不在墙内可删该段 |
+| JDK | Temurin 21 | **仓内不写路径**；本机路径放用户级 `gradle.properties`（见 §1.1） |
+| Gradle | 9.5.1 | wrapper 走**官方源**；到不了 services.gradle.org 的机器按 wrapper 注释临时改 `file:`（别提交） |
+| 代理 | `gradle.properties` 内 systemProp 127.0.0.1:7897 | **本机网络相关**；换环境删该段即回退直连 |
 
 `run/` 是开发运行目录（gitignore）：`eula.txt` 预置 true；`run/mcbot/` 放名册/配置/flag。
+
+### 1.1 多设备：哪些东西**不许**进仓（09-10 定死）
+
+这份仓要在多台设备上接着干，所以**任何机器相关的绝对路径都不许写进受版本控制的文件**。
+历史上踩过两次：一次是另一位用户名下的 `.gradle/jdks`、一次是别的盘上的 Gradle zip，
+每次都让另一台机器直接构建不起来（记录见 `STATUS.md` 环境迁移节）。
+
+**换机器只需三步**：
+
+1. **JDK**：在**用户级** `<GRADLE_USER_HOME>/gradle.properties`（默认 `~/.gradle/gradle.properties`，
+   仓外）里写 `org.gradle.java.home=<你的 JDK 21 路径>`。**什么都不写也行**——只要
+   `java -version` 是 21（MC 1.21.11 编不了 17）。
+2. **Gradle 发行包**：不用管，wrapper 会自己去官方源下（缓存在 `~/.gradle/wrapper/dists`）。
+   只有网络到不了 `services.gradle.org` 时，才手动下 zip 并**临时**把
+   `gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指过去——**改完别提交**。
+   （Gradle 用 URL 的 MD5 当缓存目录名：换了 URL 就等于换了缓存，所以要重新下。）
+3. **代理**：仓内 `gradle.properties` 的 `systemProp.*Proxy*` 段按你的网络删改。
+
+文档里引用本仓一律用**相对路径**（`docs/...`、仓根写成 `<仓库根>`）；引用参考项目/桌面 AI
+一律写成"主人本机的只读副本（路径不入仓）"。写文档时顺手检查：`git ls-files` 里不该出现
+盘符路径（`gradle/wrapper` 的注释除外，那是反例说明）。
 
 ## 2. 常用命令
 
@@ -54,7 +75,7 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
      `A3 旧家断续后自清=false` 在 09-10 16:53 那次复跑（**早于**当日任何 R2-S4 改动）就已出现，
      A1/A2 照旧通过，说明"垫子跟人 + 非全域"两条没坏、**只有"过期自清"这一条读数不对**。
      已排除一个假设：把 `run/server.properties` 的 `view-distance` 从默认 10 调到 4
-     （64 < A3 的 96 格跳距）后 A3 **仍是 false**，所以不是"被自身视野掩盖"。
+     （64 < A3 的 96 格跳距）后 A3 **仍是 false**，所以不是"被自身视野掩盖"（实验完已改回默认 10）。
      待查方向（留给专项卡）：假玩家是否在出生点持有不自清的票（`ChunkTicketType` 的
      玩家票与 `POST_TELEPORT` 语义要 javap 实测）、或 4 秒观察窗不够卸块。
      **在查清之前，别把 `[m9] A3` 当作回归信号，也别据此宣布 R1-S3b 仍然成立。**

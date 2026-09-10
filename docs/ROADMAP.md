@@ -95,8 +95,27 @@
       计数/回调。ConversationPrefixTest 7 例字节级断言；主会话独立变异抽检（砍单调保护→精硬红）。
       偏差 4 条见 STATUS。**客户端接线欠账已在 R2-S3 一并还清**（AgentRunner 真接上
       PromptBuilder 实例 + `onStreamStats`/`onPrefixReset` 打点）
-- [ ] **长动作受理即回执（S4）**：`move_to`/`break_block` 提交即回「已受理+任务号」，完成事件开新轮，
-      大脑不再挂起；配套：单槽 BUSY 拒收→新活顶掉旧活（保留已算路径）。**排在 S3 后（同文件 AgentLoop）**
+ - [x] **长动作受理即回执（S4）阶段 1（09-10 关账）：lastPlan 复用**——`path/PlanCache`
+       （按同伴分槽，判据＝同伴+目标+**起点**+TTL 30s，授权态刻意不入键，复用时清单按当前世界
+       `liveify` 重算）；`PathTask` 的"计划就绪"出口抽成 `afterPlanReady`，让"搜出来的"与"复用的"
+       走同一条判定与话术路径；未命中打 `未复用 lastPlan（原因）` 便于长期观测命中率。
+       无头 `[m8]` B 那趟实测 `memo=reuse(未搜索)`（真的没重搜）且清单逐格一致。偏差 4 条见 STATUS。
+ - [x] **S4 阶段 2（09-10 关账）：受理即回执 + PARK**——信封 `job_ack`/`job_event`
+       （`progress|done|failed|cancelled|superseded`，单终局契约）；`ServerTool.acceptanceMode()`+
+       `capTicks(args)`+`acceptSubject(args)`（cap 只有一个来源，根治"服务端 180s/客户端 90s"）；
+       `move_to`/`break_block` 走 ACCEPT，其余六条 SYNC；大脑新增 `Ledger`（按 index 升序只写
+       "已到达"的最长前缀，**受理不算已到达**）与 PARK（挂起不再问模型、不计步）；
+       客户端 `PendingJobs<T>` 两段式等待（受理后上限＝cap×50ms+15s）；PARK 铁律
+       （解锁前必须给每条 in-flight 补合成回执，否则下一请求 400）；`accept_mode` 止血开关。
+       协议契约进 `docs/BRIDGE.md` §5.1，教学进 `PromptBuilder`/`ClientToolDefs`。
+       单测 145/145（新增 PARK 7 + PendingJobs 7 + JobEnvelope 6）；无头 `[r2c]` 策略/文案/契约六项全中；
+       `[m4b]`/`[m8]`/`[r2d]` 无回归。偏差见 STATUS（本卡**未做**抢占与 progress 帧）
+ - [ ] **S4 阶段 3（未完）**：抢占——`sched.submit(...,preempt)` 顶掉旧活并向旧 seq 发
+       `phase=superseded`；`PathTask.remaining()` + lastPlan 存"剩余节点"（阶段 1 的缓存判据可原样复用）
+       → 新任务 target 逐格相同就续节点；`generation` 代际号（丢旧事件）；`phase=progress` 真正
+       接进 `BridgeEvents` 并限速（1 帧/s/job、全局 4 帧/s，Ring 200）。**落地后**才把 `[m4b]`
+       判读基准从"BUSY 拒收"改写成"顶替"
+ - [ ] S4 附带：`[brain] llm stream` 补 `t_send`/末行/`wire_rtt`/本地间隙四项打点（阶段 1/2 未动它）
 - [x] **感知给可行动信息（S1，09-08 17:3x merge bbd09ea）**：`scan_area` 换 classify 词表
       （container/ore/rock/workbench/farm/hostile，ROCK_PATHS 常数集不含泥土沙）、绝对坐标
       `@(x,y,z) d3.2`、首行八向朝向、三层摘要（近 1/中 2/远 3，名额 8/10/12，MAX_SAMPLES=900）；

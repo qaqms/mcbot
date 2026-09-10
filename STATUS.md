@@ -333,7 +333,7 @@ onComplete/onCounters）与 `TurnTimings`（时延打点）；新增 `StreamingT
 
 ### 活体联调证据（M6+M8 合并验收，2026-09-07 23:08–23:44）
 
-环境：PCL 实例（E:\我的世界\测试，mods=本仓 build/libs jar+fabric-api 0.141.6）进 dev runServer（离线模式），同机桥 127.0.0.1:57121。
+环境：PCL 实例（实例目录在主人本机，路径不入仓；mods=本仓 build/libs jar+fabric-api 0.141.6）进 dev runServer（离线模式），同机桥 127.0.0.1:57121。
 
 - **M6 七项清单全过**：①无/错 token 401；②status 字段实时准确（含 pending_questions）；③POST /v1/task 投令+窗口 fragments；④SSE 帧 id1-30 带 ev/task_id；⑤Last-Event-ID 从 18/23 断点重放准确；⑥MCP tools/list 五工具+tools/call status 成功；⑦ask→answer 闭环（q8 问→答"可以挖"→续跑到登顶）；cancel 接口 ok:true。
 - **M8 真机**：模型规划上山 → 真实地形两次 `BUDGET_EXCEEDED`（8000 节点帽在 16 格短距复杂地形就撞——观察点，候选调优：可达性预检/启发权重/预算帽）→ 换目标 `NEED_CONFIRM 挖2格` → 模型**没有擅自批准而是 ask_owner 征求** → 授权后真挖登顶 (-512,95,-129) → scan 发现 coal_ore×7 → done 帧诚实汇报。
@@ -481,17 +481,24 @@ onComplete/onCounters）与 `TurnTimings`（时延打点）；新增 `StreamingT
 - 实测修正：scan_area 回执曾谎称"以面朝方向为前"，数据实为世界轴偏移——已改诚实措辞；
   真·朝向相对坐标随 M5 字符网格一起上。
 
-## 环境迁移记录（2026-09-07，新机 qaqms@F:\ai\mcbot）
+## 环境迁移记录（2026-09-07；09-10 补：已改成多设备可移植）
 
-机器从原开发机（D:\ai、用户 lulu/mise）迁到本机，以下三项为本机适配（仓库内已改，换机仍需改）：
+> **09-10 口径变更（多设备开发）**：主人明确要在多台设备上接着干，所以**机器相关的绝对路径
+> 一律不进仓**。仓内 `gradle.properties` 现在只留工具链版本 + 代理，`org.gradle.java.home`
+> 挪到**用户级** `<GRADLE_USER_HOME>/gradle.properties`（仓外）；wrapper 的 `distributionUrl`
+> 改回**官方源**。下面这张历史表的路径保留作记录，但**不要照着填**——换机只需做
+> `docs/DEVELOPMENT.md` §2 的那三步。
 
-| 项 | 新值 | 实测依据 |
+机器从原开发机迁到新机时，以下三项属"本机适配"（**历史上曾写进仓内，现已移出**）：
+
+| 项 | 当时的写法（历史记录） | 现在的口径 |
 |---|---|---|
-| `org.gradle.java.home` | `C:\Users\ms\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2`（Temurin 21.0.10，Gradle 自动置备） | java -version 确认 |
-| wrapper distributionUrl | `file:/F:/ai/gradle-9.5.1-bin.zip`（140MB，curl 断点续传+unzip -t 验完） | 官方源经 github 重定向链路不稳，10s 超时实锤 |
-| 代理 systemProp | 已全部移除，Gradle 走直连 | 直连实测：fabricmc 200 / piston-meta 200 / plugins.gradle 200 / central 200；central 走 10809 代理反回 403 |
+| 构建 JDK | `org.gradle.java.home=<用户目录>\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2`（Temurin 21.0.10，Gradle 自动置备） | **移出仓**：写进用户级 `gradle.properties`；不设也行，只要 PATH 上的 `java` 是 21 |
+| wrapper distributionUrl | `file:/<盘>:/ai/gradle-9.5.1-bin.zip`（140MB，curl 断点续传+unzip -t 验完） | **回官方源**（多设备必须）；到不了 services.gradle.org 的机器按 `gradle-wrapper.properties` 注释临时改 `file:`（只改本机、别提交） |
+| 代理 systemProp | 曾全部移除走直连 | 仓内保留 `127.0.0.1:7897` 并标注"本机网络相关，换环境按需删改" |
 
-网络事实：本机系统代理 127.0.0.1:10809 仅浏览器/curl 用；JVM 不读注册表代理，构建一律直连；Maven Central 直连偶发 000，重试即过（未上镜像，若再频发考虑 aliyun）。
+网络事实：JVM 不读注册表代理，构建是否走代理只由 `systemProp.*` 决定；某台机器上
+Maven Central 直连偶发 000、重试即过（未上镜像，若再频发考虑 aliyun）。
 
 新机无头验收（21:29，`gradlew build` 4m48s 全绿 + autotest.flag SelfTest）：
 - 单测 12/12（bridge 5 + loop 4 + provider 3，XML 核实 0 fail）；产出 mcbot-0.1.0.jar。
@@ -893,18 +900,19 @@ fabric `KeyBindingHelper.registerKeyBinding(KeyMapping)`。
 | Fabric Loader | 0.19.5 | meta.fabricmc.net |
 | Fabric API | 0.141.6+1.21.11 | Modrinth |
 | 映射 | `loom.officialMojangMappings()` | 官方示例默认 |
-| Gradle | 9.5.1，wrapper 走 `file:/D:/ai/gradle-9.5.1-bin.zip`（本地缓存） | 删 zip 可换回官方 URL |
-| 构建 JDK | Temurin **21.0.10**，Gradle 自动置备，`C:\Users\lulu\.gradle\jdks\eclipse_adoptium-21-amd64-windows.2`（写在 gradle.properties） | 换机器必改；本机 PATH 上的 java 是 17，不能拿来编 MC 1.21.11 |
-| 代理 | 127.0.0.1:7897（gradle.properties systemProp 已配） | 本机实测代理 0.47s / 直连 0.77s 皆通；不需要时删 Proxy 两行 |
-| AI 执行者 shell | pi 的 `bash` 需 `~/.pi/agent/settings.json` 配 `shellPath: "D:/git/Git/bin/bash.exe"` | Git 装在 D:\git\Git（非标准路径），pi 只默认扫 C:\Program Files\Git；改完**必须重启 pi** 才生效 |
-| 仓库路径 | 本机 `D:\ai\mcbot`（origin `https://github.com/qaqms/mcbot.git`，私有） | 拉取用一次性 `http.extraHeader`，token 不落 `.git/config`/URL |
+| Gradle | 9.5.1，wrapper 走**官方源** `services.gradle.org/distributions/` | 09-10 起不再指向本机盘上的 zip（那会让别的设备构建不起来） |
+| 构建 JDK | Temurin **21.0.10**，路径写在**用户级** `<GRADLE_USER_HOME>/gradle.properties` 的 `org.gradle.java.home`（仓内不写） | 换机器只需改仓外那一个文件；本机 PATH 上的 java 是 17，不能拿来编 MC 1.21.11 |
+| 代理 | 127.0.0.1:7897（仓内 `gradle.properties` 的 systemProp 已配，并标注"本机网络相关"） | 换环境删 Proxy 两行即回退直连 |
+| AI 执行者 shell | pi 的 `bash` 需在 `~/.pi/agent/settings.json` 配 `shellPath` 指向你的 git-bash | Git 若装在非标准路径，pi 默认扫不到；改完**必须重启 pi** 才生效 |
+| 仓库路径 | 仓根可放任意位置（origin `https://github.com/qaqms/mcbot.git`，私有） | 文档一律用相对路径引用本仓；推送用一次性 token URL，token 不落 `.git/config` |
 
 ### 机器迁移记录（2026-09-08 10:20，hostname mio）
 
 从远端拉到 `0c7f244`（本地原在 `7dc6f9f`，快进 5 个提交：`a9a4877`/`a9f4373`/`1459fa8`/`c3cca77`/`0c7f244`）。
-`a9a4877` 把构建配置改到了另一台机器（用户 `ms`、`C:\Users\ms\.gradle\jdks`、wrapper 指 `F:/ai/`），
-而**本机无 `C:\Users\ms`、无 F 盘**，两项均不可用，故改回本机（JDK → `C:\Users\lulu\.gradle\jdks\...`，
-wrapper → `D:/ai/gradle-9.5.1-bin.zip`（zip 实测存在，140MB），代理 → 7897），与本文件上表口径重新对齐。
+当时 `a9a4877` 把构建配置改到了另一台机器（另一个用户名下的 `.gradle/jdks`、wrapper 指另一个盘），
+而本机既没有那个用户目录也没有那个盘，两项都不可用，于是改回了本机路径——**这正是"机器相关路径
+不该进仓"的教训来源**。09-10 已按这个教训收口：仓内不再出现任何本机绝对路径（见上方环境迁移记录与
+`docs/DEVELOPMENT.md` §2 的换机三步）。
 
 证据：`./gradlew build` → **BUILD SUCCESSFUL in 30s**（18 任务，16 执行/2 最新）；仅“过时 API”提示，无编码告警。
 单测 XML 核对：agent-core **19 例**（BridgeService 5 / Conversation 6 / AgentLoop 5 / OpenAiCompat 3）
@@ -915,7 +923,7 @@ wrapper → `D:/ai/gradle-9.5.1-bin.zip`（zip 实测存在，140MB），代理 
 ## 目录结构（现状）
 
 ```
-D:\ai\mcbot\
+<仓库根>/
   settings.gradle / gradle.properties / build.gradle   工具链与三模块装配
   agent-core/          纯 JVM 大脑层（零 MC 依赖）+ bridge 内核
   src/main/            公共+服务端：body/ server(+tools/) task/ command/ common/
@@ -952,7 +960,7 @@ neko 的"最后一公里"：客户端侧起 127.0.0.1 HTTP/SSE（JDK HttpServer�
 
 ## 施工纪律（所有 AI 执行者必读）
 
-- **Clean-room**：允许从 `D:\1mcckao\minecraft-numen-1.21.1` 读**机制与设计动机**；
+- **Clean-room**：允许从**参考项目（主人本地的只读副本，路径不入仓）**读**机制与设计动机**；
   禁止复制/翻译其任何代码、注释文本、README 句子、资源；禁止使用 "Numen/言出法随" 名称与美术。
   机制一手参考：Carpet 同版本分支（假玩家）、Baritone 公开文章（寻路思想）、
   arXiv 2410.08500（空间字符网格）、OpenAI 协议文档（function calling/SSE）。

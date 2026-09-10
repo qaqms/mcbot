@@ -18,6 +18,11 @@
   无头验收只走 SelfTest（autotest.flag），**禁用控制台 stdin**（该 harness 连原版命令都吞错）。
 - **API 签名**：1.21.11 映射漂移极多，别信任何记忆（包括本文）——javap 实测，
   新事实补进 STATUS 防漂移表。
+- **多设备可移植**：这份仓要在多台设备上接着干，所以**受版本控制的文件里不许出现机器相关的
+  绝对路径**（盘符路径、某个用户名下的目录、某台机器的代理端口）。本机专属设置写进
+  **用户级** `<GRADLE_USER_HOME>/gradle.properties`（仓外）；文档引用本仓用相对路径、
+  引用参考项目写成"主人本机的只读副本（路径不入仓）"。提交前自查一遍（见
+  `docs/DEVELOPMENT.md` §1.1 的三步换机法）。
 - 构建输出/日志在 Windows 上是 GBK，管道先 `iconv -f GBK -t UTF-8` 再判读。
 - TaskStop/杀进程后检查孤儿 java（`tools/list-java.ps1`），否则 `session.lock` 卡死下次启动。
 
