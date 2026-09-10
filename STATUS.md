@@ -3,7 +3,81 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡 · **R1 无头全线收尾 ✅ 16:31**（S1–S4+S3b）· **R2 波1 ✅ 已 merge（S1 感知 / S2 前缀）** · **R2-S3 真流式+早派发 ✅ 无头关账（单测 111/111 全绿 + 三次变异自证；R2-S2 客户端接线欠账一并还清）** · **R2-S4 阶段1 lastPlan 复用 ✅ 无头关账（单测 125/125 全绿；`[m8]` A/B/C/D 全中且 B 实测零重搜）** → 下一卡 R2-S4 阶段2：受理即回执 + PARK 语义
+## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡 · **R1 无头全线收尾 ✅ 16:31**（S1–S4+S3b；⚠ 09-10 复查发现 `[m9] A3` 转红，原因未定，见 DEVELOPMENT §3）· **R2 波1 ✅ 已 merge（S1 感知 / S2 前缀）** · **R2-S3 真流式+早派发 ✅ 无头关账** · **R2-S4 阶段1 lastPlan 复用 ✅ 无头关账** · **R2-S4 阶段2 受理即回执 + PARK ✅ 无头关账（单测 145/145 全绿；`[r2c]` 六项全 true）** → 下一卡 R2-S4 阶段3（抢占 superseded + `remaining()` 续跑 + progress 事件入桥限速）
+
+### R2-S4 阶段 2 关账证据（受理即回执 + PARK，2026-09-10）
+
+**问题**：`move_to`/`break_block` 这类要跑几秒到几分钟的活走"一问一答"，模型在那边干等一整跳——
+既不能改主意也不能催，白烧一次 prefill+decode；而且客户端把长活的等待帽和服务端能力帽
+（move 3600tick=180s vs 客户端 90s）对不上，超时后真回执还被当"迟到"丢弃。
+
+**做了什么**（跨 agent-core / 服务端 / 客户端三层，协议契约写进 `docs/BRIDGE.md` §5.1）：
+
+1. **信封**：C2S 的 `tool_call` 多一个**可选**字段 `accept`；S2C 新增 `job_ack`（受理）
+   与 `job_event`（`progress|done|failed|cancelled|superseded`）。
+   **缺省 = 老语义同步回执**——老客户端不认识 `job_ack`，服务端擅自换形态会让它白等 90 秒；
+   新形态永远由发送方点名。快路径（DENIED/BUSY/TARGET_LOST…）即使工具是 ACCEPT 也直接回
+   `tool_result`：**单终局契约**（一个 seq 要么 ack 要么 result，不会两条都来）。
+2. **策略表只有一个来源**：`ServerTool.acceptanceMode()`（默认 SYNC）+
+   `capTicks(args)`（工具自己 `submit` 用它、派发层报给客户端也用它——**同一个数**，
+   这是"服务端 180s / 客户端 90s"那条真缺陷的根治）+ `acceptSubject(args)`（只提供主语，
+   教学模板统一由派发层拼，模型学一遍就够）。
+3. **大脑 PARK**（agent-core）：新增 `Ledger` 按 index 升序只写"已到达"的最长前缀——
+   受理**不算已到达**（写进对话就等于告诉模型事情做完了，正是这一卡要消灭的谎）。
+   受理 ⇒ 不再问模型、链挂起（**PARK 期间不计步**，长活不吃 40 步帽）；`job_event` 到了
+   才补 `tool` 消息并开新轮。
+4. **PARK 铁律**（卡点、也是本卡最容易写错的地方）：解锁（叫停/新指令）之前必须给
+   **每一条** in-flight 的 `tool_call` 补一条合成回执（`CANCELLED:`/`SUPERSEDED:`），
+   否则下一次请求里 `assistant.tool_calls` 有 id 找不到配对的 tool 消息 → **OpenAI 直接 400**。
+   唯一实现是 `AgentLoop.supersedeAll`；未知 `jobId` 的事件是幂等空操作。
+5. **客户端两段式记账**：新 `PendingJobs<T>`（agent-core，可单测）把 `seq → jobId` 的转段
+   与**超时口径**收在一处——受理后的等待上限 = 服务端报的 `cap` × 50ms + 15s 余量。
+   `AgentRunner` 的 `statusJson` 新增 `pending_jobs` / `parked` / `parked_jobs` / `accept_mode`。
+6. **教学进提示词与工具描述**：`PromptBuilder.BASE` 与 `move_to`/`break_block` 描述都写明
+   "`ACCEPTED:` 开头≠结果，别重发（会被 BUSY 挡）、别干等，做完系统会主动报"。
+7. **回滚开关**：`client.json` 的 `accept_mode`（默认 true）。关掉即整条链退回今日语义，
+   **不需要换服务端**——发布后唯一能一键止血的地方。面板"保存并应用"会原样带过该值，
+   免得不小心把手关的开关拧回去。
+
+**无头验收（`runServer` + `autotest.flag`，新世界）**：
+- `[r2c] ACCEPT=2 条 SYNC=6 条 策略全对=true`
+  （ACCEPT：`move_to` cap=3600tick / `break_block` cap=1200tick；其余六条 SYNC）
+- `[r2c] 受理文案快照：ACCEPTED:我已开始「走到 2, 64, -16」编号 j1，最多约 180 秒。这条还没有结果——别猜、别等着，可以先回我一句话或做别的，做完我会主动报 j1。`
+- `[r2c] 前缀对=true 教学齐=true 秒数按帽(180s)=true 客户端等195000ms>帽180000ms=true 相位映射=true`
+- **无回归**：`[m4b] busy拒收=true cancel命中=true 空槽cancel=false`｜`[m8]` A 需确认=true 清单=2 格
+  → B 到达=true 墙位被打通=true（且 B 那趟仍是 `memo=reuse(未搜索)`，阶段 1 未回退）
+  → C 箱子分毫未动=true → D 干净失败=true｜`[r2d]` 六项全 true
+- 单测 **145/145 全绿**（agent-core 79 + 根工程 66）：新增 `AgentLoopParkTest` 7 例、
+  `PendingJobsTest` 7 例、`JobEnvelopeTest` 6 例。
+
+**`[r2c]` 验不到什么（先读，别误读成"整卡验过了"）**：无头 harness **没有连着的客户端**，
+`job_ack`/`job_event` 发出去是空操作（`ServerPlayNetworking.send` 对未连接玩家直接返回 false），
+所以它只能验**策略表 / 文案 / 跨模块契约**这三件纯逻辑。真正的 job 往返
+（受理 → 客户端 PARK → 事件回来 → 原序补账 → 续跑）由 `AgentLoopParkTest`（含
+"第 0 条在跑、第 1 条当场有结果时**一条都不许先写**"与"缺口没补齐就不许开新轮"两条）
++ `PendingJobsTest` 覆盖；**两端对接要等主人联机看 `[brain] job 受理/结束` 与 `[brain] park=`**。
+
+**偏差与诚实口径（不隐藏）**：
+1. **本卡不是设计卡 §C 的全部**：已做「受理即回执 + PARK + 客户端两段式等待 + 铁律 +
+   回滚开关 + 教学 + `[r2c]`」；**未做** 抢占（`sched.submit(...,preempt)` 向旧 seq 发
+   `superseded`、`PathTask.remaining()` 续跑、`generation` 代际号）与 **progress 事件入桥
+   + 限速（1/s/job、4/s 全局）**。`phase=progress` 的通路已通（客户端会播报到桥的 progress 帧），
+   但**服务端目前不发 progress 帧**（没有调用点）。故 `[m4b]` 的"BUSY 拒收"基准**仍照旧有效**，
+   要等抢占落地才改写成"顶替"。
+2. **"最大单项收益"这个说法要打折**：对**严格串行**的活（走一段、再挖一格），
+   总时长 = ack + 干活 + 一轮推理，和同步版一样——ACCEPT 不缩短它。真收益在两处：
+   ①**大脑不再被一条长活占住**（HTTP 请求不长时间挂着，中转站/网关超时风险一起消失，
+   主人也能中途插话）；②**同一轮里的后续调用不再被长活阻塞**（长活 0.2s 就让位）。
+   但 ② 今天受限于"服务端一具身体 + 单槽"：第二个占身体的调用仍会拿 BUSY，
+   所以真正吃到 ② 的是只读工具——那正是"工具复数化 / 只读工具可并行"那张卡的欠账。
+   **下一步要量的就是它**，不是照着设计卡的 −12–35s 记账。
+3. **`accept` 缺省 false 是刻意的不对称**：服务端只在发送方点名时才走新形态。
+   代价是新客户端必须显式带上（已带），好处是老客户端/老服务端混跑不会互相坑。
+4. **`[m9] A3` 转红与本卡无关，但必须记**：`A3 旧家断续后自清=false` 在 09-10 16:53 那次
+   复跑（**早于**当日任何 R2-S4 改动）就已出现，A1/A2 照旧通过。已排除
+   "被自身 view-distance 掩盖"这个假设（把 `view-distance` 从默认 10 调到 4 后仍 false）。
+   原因未定，待查方向与排查纪律写进 `docs/DEVELOPMENT.md` §3。**别把它当本卡回归，
+   也别据此宣布 R1-S3b 仍然成立。**
 
 ### R2-S4 阶段 1 关账证据（lastPlan 复用，2026-09-10）
 

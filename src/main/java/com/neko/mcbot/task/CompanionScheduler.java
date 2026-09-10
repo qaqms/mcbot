@@ -16,7 +16,8 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class CompanionScheduler {
 
-    private static final int DEFAULT_CAP_TICKS = 1200; // 60s
+    /** 工具没覆写 {@link ServerTool#capTicks} 时的兜底帽：1200 tick = 60s。 */
+    public static final int DEFAULT_CAP_TICKS = 1200;
 
     private final Map<UUID, Slot> active = new HashMap<>();
 
@@ -91,8 +92,12 @@ public final class CompanionScheduler {
                     slot.task().onAbort();
                 } catch (RuntimeException ignored) {
                 }
+                // 文案必须**按实际帽算**：这里原来硬写"60 秒"，而 move_to 的帽是 3600tick=180s，
+                // 于是模型看到的是"60 秒没做完"、实际等了 3 分钟——一句自相矛盾的读数会把
+                // "到底该不该重试"的判断带偏。（效率评估 §5.6 点名的那处。）
                 slot.future().complete(new ServerTool.Result(false,
-                        "TIMEOUT:这件事 60 秒没做完，我停手了。要不要换个做法？", null));
+                        "TIMEOUT:这件事 " + Math.max(1, slot.capTicks() / 20) + " 秒没做完，我停手了。"
+                                + "要不要换个做法？", null));
             }
         }
     }

@@ -51,6 +51,22 @@ public final class AgentLoop {
         /** 每步的流式打点（R2-A）。观测用，不影响逻辑。 */
         default void onStreamStats(AgentLoop.StreamStats stats) {
         }
+
+        /**
+         * 服务端**受理**了一次跨 tick 长活（R2-S4 受理即回执）。
+         *
+         * <p>与 {@link #onToolInvoked} 的区别：那条是"结果到了"，这条只是"我开始了、还没有结果"。
+         * 宿主用它播报进度（桥的 progress 帧 / 面板一行），**不要**把它当成工具结果去记账。
+         */
+        default void onToolAccepted(String name, String argsJson, String feedback, String jobId) {
+        }
+
+        /**
+         * PARK 状态变化（R2-S4）：true = 这条指令挂起在等长活的结果，链上暂时没有下一步。
+         * 观测用；宿主可据此在面板上显示"在等 j7"。
+         */
+        default void onParked(boolean parked, int outstandingJobs) {
+        }
     }
 
     public record Config(int maxStepsPerDirective, int repeatNudgeAt, int repeatAbortAt) {
@@ -152,6 +168,17 @@ public final class AgentLoop {
     private boolean stuckAbort;
     /** 本步的早派发反应器（R2-A）；一步一个，步首新建、收尾置空。 */
     private StepReactor reactor;
+    /** 本步工具调用的落账账本；非 null = "这一步的工具还没全部写进对话"。 */
+    private Ledger ledger;
+    /**
+     * PARK 标记（R2-S4）：这条指令的工具里有"已受理、还没结果"的长活，链挂起等事件。
+     *
+     * <p>与非 PARK 的区别只有一个但很关键：PARK 期间**没有下一个步边界**来消费
+     * {@link #cancelRequested} 或推进指令队列，所以叫停/换发必须在本地就地解锁并补齐回执
+     * （见 {@link #cancelDirective()} / {@link #submit(String)}）。
+     */
+    private volatile boolean parked;
+
     /** 已被早派发的 index：跨 future 回调串行化，保证一个 index 只派发一次。 */
     private final Set<Integer> earlyDispatched = ConcurrentHashMap.newKeySet();
 
@@ -181,6 +208,16 @@ public final class AgentLoop {
     }
 
     public synchronized void submit(String directive) {
+        if (parked) {
+            // 新指令 = PARK 解锁。**铁律**：解锁前必须给每个 in-flight job 补一条合成回执，
+            // 否则那条 tool_call 永远没有配对的 tool 消息——OpenAI 对"assistant.tool_calls
+            // 有 id 却找不到对应 tool 消息"是直接 400，整段历史就废了。
+            // 顺带把挂起的那条链作废（它的续跑已经没有意义了）。
+            supersedeAll("SUPERSEDED:我收到了新指令，这件事被顶掉了，不会再给你它的结果。"
+                    + "要做就重新发一次。");
+            ledger = null;
+            running = false;
+        }
         pending.add(directive);
         if (!running) {
             running = true;
@@ -191,10 +228,60 @@ public final class AgentLoop {
     /**
      * 主人叫停：排队中的指令直接丢弃；正在跑的这条在下一个边界停下
      * （若它正等某个工具回执，服务端会把该任务的 future 以 CANCELLED 完成，链即续跑到步首）。
+     *
+     * <p>PARK 期间没有"下一个边界"可等（链是挂起的），所以这里就地解锁：先补齐 CANCELLED 合成回执，
+     * 再推一步让 {@link #consumeCancel()} 收尾并回一句"先停手"。
      */
     public synchronized void cancelDirective() {
         pending.clear();
         cancelRequested = true;
+        if (parked) {
+            supersedeAll("CANCELLED:主人主动叫停了这件事。别自作主张续上，等主人的下一步指示。");
+            step();
+        }
+    }
+
+    /**
+     * 服务端的 job 事件（受理回执的后续）——PARK 的解锁键。
+     *
+     * <p>线程：宿主保证同一实例上串行调用（mod 侧走客户端主线程 tick / payload 处理）。
+     * 幂等：未知 jobId 直接忽略——因为叫停/换发时本地已经补过合成回执，服务端那条迟到的
+     * 真结果到了就该被丢掉，而不是把已经写好的对话再改一遍。
+     */
+    public synchronized void onJobEvent(String jobId, ToolOutcome outcome) {
+        if (jobId == null || ledger == null) {
+            return;
+        }
+        int idx = ledger.indexOfJob(jobId);
+        if (idx < 0) {
+            return;
+        }
+        ledger.resolve(idx, outcome);
+        if (ledger.flush()) {
+            ledger = null;
+            parked = false;
+            listener.onParked(false, 0);
+            step();
+        }
+    }
+
+    /**
+     * PARK 解锁的铁律：给账本里每个 in-flight job 写一条**合成回执**，然后立刻按序落账。
+     *
+     * <p>为什么必须合成而不是"留着以后再说"：协议要求每条 tool_call 都有配对的 tool 消息，
+     * 而这条指令的历史**马上**就会被下一条指令的请求带出去。没有合成回执 = 下次请求 400。
+     */
+    private void supersedeAll(String syntheticText) {
+        if (ledger == null) {
+            parked = false;
+            return;
+        }
+        for (int idx : ledger.outstanding()) {
+            ledger.resolve(idx, ToolOutcome.synthetic(syntheticText));
+        }
+        ledger.flush();
+        parked = false;
+        listener.onParked(false, 0);
     }
 
     private void pump() {
@@ -214,6 +301,9 @@ public final class AgentLoop {
         lastCallKey = null;
         repeatCount = 0;
         stuckAbort = false;
+        // 新指令不继承上一条的账本/PARK（换发路径已在 submit 里补齐合成回执）
+        ledger = null;
+        parked = false;
         convo.add(new Msg.User(d));
         step();
     }
@@ -284,7 +374,7 @@ public final class AgentLoop {
                     }
                     // 同一指令里必须继续问模型（回执已进对话）；finishChain 是"这条指令完了"的出口，
                     // 在这里调会把工具回执直接丢掉、链断在工具调用上（R2-A 分支重写时踩过）。
-                    awaitAndRecord(started, turn).thenRun(this::step);
+                    runTools(started, turn).thenRun(this::afterTools);
                 })
                 .exceptionally(t -> {
                     listener.onReply("[内部] 模型调用失败：" + msg(t));
@@ -358,7 +448,102 @@ public final class AgentLoop {
     }
 
     /**
-     * 等齐本步的工具结果并按 index 原序写回对话。
+     * 一步里每条 tool_call 的落账状态。
+     *
+     * <p><b>为什么需要账本而不是"来了就写"</b>：受理即回执引入了**乱序到达**——第 0 条被受理
+     * （结果要等几十秒），第 1 条（同步工具/BUSY）当场就有结果。而 OpenAI 协议要求
+     * {@code tool} 消息与 {@code assistant.tool_calls} **严格同序配对**，所以第 1 条不能先写。
+     * 账本只做一件事：**按 index 升序写出"已到达"的最长前缀**，其余留在槽里等。
+     *
+     * <p>"已受理"**不算已到达**：受理是"还没有结果"，写进对话就等于告诉模型事情做完了——
+     * 那正是这一卡要消灭的谎。所以 {@code accepted} 只登记 jobId，槽位仍然空着。
+     */
+    private final class Ledger {
+        private final List<ToolCall> calls;
+        private final ToolOutcome[] outcomes;
+        private final String[] jobIds;
+        /** 已按序写入 convo 的前缀长度（不变式：它之前的槽位全部非空）。 */
+        private int flushed;
+
+        Ledger(List<ToolCall> calls) {
+            this.calls = calls;
+            this.outcomes = new ToolOutcome[calls.size()];
+            this.jobIds = new String[calls.size()];
+        }
+
+        /** 一次真结果（同步回执、job 事件、或本地合成回执）。 */
+        void resolve(int idx, ToolOutcome r) {
+            if (outcomes[idx] == null) {
+                outcomes[idx] = r;
+            }
+        }
+
+        /** 受理：只登记 jobId，槽位保持"未到达"。 */
+        void accepted(int idx, ToolOutcome r) {
+            jobIds[idx] = r.jobId();
+            ToolCall tc = calls.get(idx);
+            listener.onToolAccepted(tc.name(), tc.argsJson(), r.feedback(), r.jobId());
+        }
+
+        /** 还在跑（已受理、无结果）的槽位。 */
+        List<Integer> outstanding() {
+            List<Integer> out = new ArrayList<>();
+            for (int i = 0; i < outcomes.length; i++) {
+                if (outcomes[i] == null && jobIds[i] != null) {
+                    out.add(i);
+                }
+            }
+            return out;
+        }
+
+        int indexOfJob(String jobId) {
+            for (int i = 0; i < jobIds.length; i++) {
+                if (outcomes[i] == null && jobId.equals(jobIds[i])) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        /** 按 index 升序写出已到达的最长前缀；返回 true = 这一步全部落账完毕。 */
+        boolean flush() {
+            while (flushed < outcomes.length && outcomes[flushed] != null) {
+                ToolCall tc = calls.get(flushed);
+                ToolOutcome r = outcomes[flushed];
+                convo.add(new Msg.Tool(tc.id(), tc.name(), r.feedback(), r.ok()));
+                listener.onToolInvoked(tc.name(), tc.argsJson(), r.ok(), r.feedback());
+                noteResult(tc.name(), tc.argsJson(), r);
+                flushed++;
+            }
+            return flushed == outcomes.length;
+        }
+    }
+
+    /**
+     * 工具链跑完之后：要么进下一步，要么 PARK。
+     *
+     * <p>PARK 的判据是"账本里还有已受理未到达的槽位"。注意**不进 {@code step()}**——
+     * 这正是"受理即回执"的收益所在：模型不用干等那几十秒，这条指令就此挂起，
+     * 等到 {@code job_event} 再来续。PARK 期间不计步（{@code steps} 只在 {@code step()} 里涨），
+     * 所以长活不会把 40 步帽吃掉。
+     */
+    private void afterTools() {
+        if (ledger == null) {
+            step();
+            return;
+        }
+        if (ledger.flush()) {
+            ledger = null;
+            step();
+            return;
+        }
+        parked = true;
+        int n = ledger.outstanding().size();
+        listener.onParked(true, n);
+    }
+
+    /**
+     * 等齐本步的工具结果并把它们**按 index 原序**交给账本。
      *
      * <p><b>为什么不是 allOf</b>：allOf 只保证"都完成"，不保证"按序记账"——
      * {@code thenApply} 是挂在各自的 future 上的，谁先完成谁先写。真实 mod 路径上
@@ -369,19 +554,27 @@ public final class AgentLoop {
      *
      * <p>早派发的 future 是**同一个**对象：提前起跑省的是时间，不改变记账顺序，
      * 也不会重复执行（map 命中即不再调 executor）。
+     *
+     * <p>R2-S4 起这条链**只负责"把结果填进账本"**，写对话与 park 判定都归
+     * {@link Ledger#flush()} / {@link #afterTools()}。
      */
-    private CompletableFuture<Void> awaitAndRecord(
+    private CompletableFuture<Void> runTools(
             Map<Integer, CompletableFuture<ToolOutcome>> early, AssistantTurn turn) {
+        Ledger led = new Ledger(turn.toolCalls());
+        ledger = led;
         CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
         for (int i = 0; i < turn.toolCalls().size(); i++) {
+            final int idx = i;
             ToolCall tc = turn.toolCalls().get(i);
             CompletableFuture<ToolOutcome> started = early.get(i);
             CompletableFuture<ToolOutcome> result =
                     started != null ? started : executor.execute(tc.name(), tc.argsJson());
             chain = chain.thenCompose(ignored -> result).thenAccept(r -> {
-                convo.add(new Msg.Tool(tc.id(), tc.name(), r.feedback(), r.ok()));
-                listener.onToolInvoked(tc.name(), tc.argsJson(), r.ok(), r.feedback());
-                noteResult(tc.name(), tc.argsJson(), r);
+                if (r.accepted()) {
+                    led.accepted(idx, r);
+                } else {
+                    led.resolve(idx, r);
+                }
             });
         }
         return chain;
@@ -425,16 +618,11 @@ public final class AgentLoop {
         }
     }
 
-    private CompletableFuture<Void> runToolCalls(List<ToolCall> calls) {
-        CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
-        for (ToolCall tc : calls) {
-            chain = chain.thenCompose(v -> executor.execute(tc.name(), tc.argsJson())
-                    .thenAccept(r -> {
-                        convo.add(new Msg.Tool(tc.id(), tc.name(), r.feedback(), r.ok()));
-                        listener.onToolInvoked(tc.name(), tc.argsJson(), r.ok(), r.feedback());
-                        noteResult(tc.name(), tc.argsJson(), r);
-                    }));
-        }
-        return chain;
-    }
+    /**
+     * 压缩等处置见 {@link #finishChain()}。
+     *
+     * <p>（原 {@code runToolCalls} 是 M3 期的第二条工具执行路径，早在 R2-A 就被
+     * {@code runTools} 取代、没人调用了。R2-S4 起**删掉**而不是留着：它不认识账本与 PARK，
+     * 留着就是一条"能用但会绕过受理语义"的暗路，将来谁接上去就是一个难查的错。）
+     */
 }

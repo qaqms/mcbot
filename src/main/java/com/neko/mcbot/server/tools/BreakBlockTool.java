@@ -28,9 +28,29 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class BreakBlockTool implements ServerTool {
 
+    /** 挖一格的能力帽：1200 tick = 60s（够硬方块慢慢磨，又不能让它挂死一整分钟）。 */
+    public static final int CAP_TICKS = 1200;
+
     @Override
     public String name() {
         return "break_block";
+    }
+
+    @Override
+    public int capTicks(JsonObject args) {
+        return CAP_TICKS;
+    }
+
+    /** 受理即回执：挖一格实测 6–7s（硬方块更久），没道理让模型为它干等一整跳。 */
+    @Override
+    public Acceptance acceptanceMode() {
+        return Acceptance.ACCEPT;
+    }
+
+    @Override
+    public String acceptSubject(JsonObject args) {
+        BlockPos pos = readPos(args);
+        return pos == null ? "挖方块" : "挖 " + pos.toShortString() + " 的方块";
     }
 
     @Override
@@ -65,7 +85,7 @@ public final class BreakBlockTool implements ServerTool {
                     "OUT_OF_REACH:那格超过我的臂长（约 5.5 格）。先 move_to 靠近。", null));
         }
         ItemStack tool = c.getInventory().getSelectedItem().copy();
-        if (!sched.submit(c, new Task(pos, before, tool), f, 1200)) {
+        if (!sched.submit(c, new Task(pos, before, tool), f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }

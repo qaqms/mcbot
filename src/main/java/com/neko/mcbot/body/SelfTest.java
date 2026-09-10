@@ -575,6 +575,78 @@ public final class SelfTest {
         McbotMod.LOG.info("[r2d] 判读基准（卡 §F-S1）：含stone / 含@( / 字节<{} 三项全 true 即无头验收通过；"
                 + "另钉结构三项：首行'我在 (' / 面朝∈八向 / 含[rock] 词表。嵌块已按原状恢复。",
                 WireSize.MAX_BODY_BYTES);
+
+        r2cAcceptScenario(cp);
+    }
+
+    /**
+     * R2-S4 阶段 2（受理即回执 + PARK）无头验收。
+     *
+     * <p><b>这个场景验得到什么、验不到什么（先读，别误读成"整卡验过了"）</b>：
+     * 无头 harness **没有连着的客户端**，`job_ack`/`job_event` 发出去是空操作
+     * （`ServerPlayNetworking.send` 对未连接玩家直接返回 false），所以这里只能验
+     * **策略表 / 文案 / 跨模块契约**这三件纯逻辑；真正那条"受理 → 客户端 PARK →
+     * 事件回来 → 续跑"的往返，由 agent-core 的 `AgentLoopParkTest`（7 例）+
+     * `PendingJobsTest`（7 例）+ 根工程 `JobEnvelopeTest`（6 例）覆盖；
+     * 两端对接要等主人联机时看 `[brain] job …` 日志。
+     */
+    private static void r2cAcceptScenario(CompanionPlayer cp) {
+        var registry = McbotMod.toolRegistry();
+        var args = new JsonObject();
+        var here = cp.blockPosition().east(8);
+        args.addProperty("x", here.getX());
+        args.addProperty("y", here.getY());
+        args.addProperty("z", here.getZ());
+
+        // ① 策略表：只有跨 tick 长活走 ACCEPT。这条表就是性能取舍的载体——
+        //    短活走 ACCEPT 是净亏（先受理再结果 = 白多一跳 + 模型多问一次）。
+        int accept = 0;
+        int sync = 0;
+        boolean policyOk = true;
+        var names = new java.util.TreeSet<>(registry.names());
+        for (String n : names) {
+            var t = registry.get(n);
+            boolean isAccept = t.acceptanceMode() == com.neko.mcbot.server.ServerTool.Acceptance.ACCEPT;
+            boolean shouldAccept = "move_to".equals(n) || "break_block".equals(n);
+            policyOk &= isAccept == shouldAccept;
+            if (isAccept) {
+                accept++;
+            } else {
+                sync++;
+            }
+            McbotMod.LOG.info("[r2c] 策略 {} mode={} cap={}tick 主语={}",
+                    n, isAccept ? "ACCEPT" : "SYNC", t.capTicks(args), t.acceptSubject(args));
+        }
+
+        // ② 文案与契约：受理回执必须以 ACCEPTED: 开头，且三句教学齐（还没有结果/别等/我主动报编号）
+        var moveTool = registry.get("move_to");
+        int cap = moveTool.capTicks(args);
+        String text = com.neko.mcbot.server.ServerToolDispatcher.acceptText(
+                moveTool, args, "j1", cap);
+        String prefix = com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome.ACCEPTED_PREFIX;
+        boolean 前缀对 = text.startsWith(prefix);
+        boolean 教学齐 = text.contains("还没有结果") && text.contains("别猜")
+                && text.contains("别等") && text.contains("j1");
+        boolean 秒数按帽 = text.contains(String.valueOf(cap / 20));
+
+        // ③ 超时口径：客户端等待上限必须**严格大于**服务端帽，否则 TIMEOUT 是"客户端先跑了"
+        long clientWait = com.neko.mcbot.agentcore.loop.PendingJobs.jobTimeoutMs(cap);
+        boolean 客户端等更久 = clientWait > cap * 50L;
+        // 相位映射：叫停/顶替与普通失败必须分得开（客户端补账话术不同）
+        boolean 相位对 = "cancelled".equals(com.neko.mcbot.server.ServerToolDispatcher
+                .phaseOf(false, "CANCELLED:主人叫停了。"))
+                && "superseded".equals(com.neko.mcbot.server.ServerToolDispatcher
+                .phaseOf(false, "SUPERSEDED:被顶了。"))
+                && "done".equals(com.neko.mcbot.server.ServerToolDispatcher.phaseOf(true, "到了。"))
+                && "failed".equals(com.neko.mcbot.server.ServerToolDispatcher.phaseOf(false, "NO_PATH:x"));
+
+        McbotMod.LOG.info("[r2c] ACCEPT={} 条 SYNC={} 条 策略全对={}", accept, sync, policyOk);
+        McbotMod.LOG.info("[r2c] 受理文案快照：{}", text);
+        McbotMod.LOG.info("[r2c] 前缀对={} 教学齐={} 秒数按帽({}s)={} 客户端等{}ms>帽{}ms={} 相位映射={}",
+                前缀对, 教学齐, cap / 20, 秒数按帽, clientWait, cap * 50L, 客户端等更久, 相位对);
+        McbotMod.LOG.info("[r2c] 判读基准：策略全对=true 且 前缀对/教学齐/秒数按帽/客户端等更久/相位映射 五 true。"
+                + "**本场景只验策略与契约**——job 往返（受理→PARK→事件→续跑）在 agent-core 单测里；"
+                + "真机对接看 [brain] job 受理/结束 与 [brain] park= 日志。");
     }
 
     private static JsonObject moveArgs(net.minecraft.core.BlockPos pos) {

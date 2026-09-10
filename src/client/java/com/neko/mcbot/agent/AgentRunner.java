@@ -3,6 +3,7 @@ package com.neko.mcbot.agent;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.agentcore.llm.LlmClient;
 import com.neko.mcbot.agentcore.loop.AgentLoop;
+import com.neko.mcbot.agentcore.loop.PendingJobs;
 import com.neko.mcbot.agentcore.loop.ToolExecutor;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.agentcore.prompt.SkillLoader;
@@ -74,7 +75,11 @@ public final class AgentRunner implements ToolExecutor {
     private ClientConfig cfg;
     private final AtomicLong seqGen = new AtomicLong();
     private final AtomicLong taskSeq = new AtomicLong();
-    private final Map<Long, Pending> pending = new ConcurrentHashMap<>();
+    /**
+     * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
+     * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
+     */
+    private final PendingJobs<CompletableFuture<ToolOutcome>> pending = new PendingJobs<>();
     /** mcbot_ask 排队等作答的桥（onReply 按序喂给最早的问题）。 */
     private final ArrayDeque<CompletableFuture<String>> askWaiters = new ArrayDeque<>();
     private final ArrayDeque<String> transcript = new ArrayDeque<>();
@@ -82,12 +87,12 @@ public final class AgentRunner implements ToolExecutor {
     private volatile String companionName = "";
     /** 迟到回执计数（效率评估 §6 的直接证据）：>0 说明超时帽配错、真结果被扔。 */
     private final AtomicLong lateResults = new AtomicLong();
+    /** PARK 观测：受理之后链挂起、等 job 事件的数量（面板/桥可见）。 */
+    private volatile boolean parked;
+    private volatile int parkedJobs;
     private AgentLoop loop;
     /** R2-B 前缀缓存：启动读盘一次，链中不再逐步读 skills；换发只在指令边界。 */
     private PromptBuilder promptCache;
-
-    private record Pending(CompletableFuture<ToolOutcome> future, long sentAtMs, long timeoutMs) {
-    }
 
     public AgentRunner(ClientConfig cfg) {
         this.cfg = cfg;
@@ -159,6 +164,30 @@ public final class AgentRunner implements ToolExecutor {
                         // 缓存命中率下降到底是这两件事还是别处动了前缀。
                         LOG.info("[brain] prefix reset reason={}", reason);
                     }
+
+                    @Override
+                    public void onToolAccepted(String name, String argsJson, String feedback, String jobId) {
+                        // 受理 ≠ 结果：这里只播报，不进 transcript 的"已做完"叙事。
+                        LOG.info("[brain] tool {} 受理 job={}", name, jobId);
+                        JsonObject d = new JsonObject();
+                        d.addProperty("text", feedback);
+                        d.addProperty("tool", name);
+                        d.addProperty("job_id", jobId);
+                        emit("progress", d);
+                    }
+
+                    @Override
+                    public void onParked(boolean nowParked, int outstanding) {
+                        // PARK 是本卡的核心状态：它必须在面板/桥/日志三处都看得见，
+                        // 否则"卡住了"和"在等一条长活"从外面完全分不出来。
+                        parked = nowParked;
+                        parkedJobs = outstanding;
+                        LOG.info("[brain] park={} 在等 {} 条长活", nowParked, outstanding);
+                        JsonObject d = new JsonObject();
+                        d.addProperty("parked", nowParked);
+                        d.addProperty("outstanding", outstanding);
+                        emit("state", d);
+                    }
                 },
                 () -> promptCache.get(),
                 // 压缩闸门：6000 真 token（API 数优先，本地 CJK 感知估算兜底）。
@@ -205,9 +234,9 @@ public final class AgentRunner implements ToolExecutor {
         switch (env.kind()) {
             case "tool_result" -> {
                 long seq = env.num("seq", -1);
-                Pending p = pending.remove(seq);
+                var p = pending.takeTool(seq);
                 if (p != null) {
-                    p.future().complete(new ToolOutcome(env.bool("ok"), env.str("feedback")));
+                    p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback")));
                 } else {
                     // 迟到的回执（本 seq 已被超时/叫停收走）：语义上只能丢弃，但**必须留痕**——
                     // 这正是"客户端超时 < 服务端帽"那类缺陷唯一的直接证据。
@@ -217,6 +246,8 @@ public final class AgentRunner implements ToolExecutor {
                             seq, env.bool("ok"), env.str("feedback"));
                 }
             }
+            case "job_ack" -> onJobAck(env);
+            case "job_event" -> onJobEvent(env);
             case "event" -> {
                 say("§7[同伴] " + env.str("text") + "§r");
                 emitState(env.str("text"));
@@ -235,24 +266,81 @@ public final class AgentRunner implements ToolExecutor {
         }
     }
 
+    /**
+     * 受理回执：那个 seq 这一跳就定性了（**不会再等 tool_result**），改等 job 事件。
+     *
+     * <p>兑现 future 用的是"受理"这个 outcome（{@code accepted=true}）——大脑据此
+     * **不把这条写进对话**，转而 PARK。这里绝不能拿它当结果：把它写进对话就等于告诉模型
+     * "事情做完了"，那正是这一卡要消灭的谎。
+     */
+    private void onJobAck(Envelope env) {
+        long seq = env.num("seq", -1);
+        String jobId = env.str("job_id");
+        int capTicks = env.num("cap_ticks", PendingJobs.FALLBACK_CAP_TICKS);
+        var j = pending.acceptAsJob(seq, jobId, capTicks, System.currentTimeMillis());
+        if (j == null) {
+            lateResults.incrementAndGet();
+            LOG.warn("[brain] 迟到受理 seq={} job={}（该 seq 已被收走，丢弃）", seq, jobId);
+            return;
+        }
+        LOG.info("[brain] job {} 受理 {}（帽 {}tick ⇒ 本地等 {}s）",
+                jobId, j.tool(), capTicks, j.timeoutMs() / 1000);
+        j.ticket().complete(ToolOutcome.accepted(jobId, env.str("text")));
+    }
+
+    /** 长活的后续：progress 只播报；done/failed/cancelled/superseded 才解锁 PARK。 */
+    private void onJobEvent(Envelope env) {
+        String jobId = env.str("job_id");
+        String phase = env.str("phase");
+        String text = env.str("text");
+        if ("progress".equals(phase)) {
+            // 进度帧不进对话（模型不需要、也看不懂"第 3/7 格"），只喂给桥与面板
+            JsonObject d = new JsonObject();
+            d.addProperty("text", text);
+            d.addProperty("job_id", jobId);
+            d.addProperty("tool", env.str("tool"));
+            emit("progress", d);
+            return;
+        }
+        var j = pending.takeJob(jobId);
+        if (j == null) {
+            // 正常：叫停/换发时大脑已经本地补过合成回执，这条真结果就该被丢掉。
+            LOG.info("[brain] job {} 事件 phase={} 无人认领（已被叫停/顶替收走）", jobId, phase);
+            return;
+        }
+        LOG.info("[brain] job {} {} phase={} {}ms", jobId, j.tool(), phase,
+                System.currentTimeMillis() - j.acceptedAtMs());
+        boolean ok = "done".equals(phase);
+        if (loop != null) {
+            loop.onJobEvent(jobId, new ToolOutcome(ok, text));
+        }
+    }
+
     /** 面板召唤/遣散按钮：与 /mcbot 命令同权限（服务器按发送者校验 owner）。 */
     public void sendLifecycle(String kind, String name) {
         JsonObject body = new JsonObject();
         body.addProperty("name", name);
         ClientPlayNetworking.send(new McbotPayloads.C2s(new Envelope(kind, body).encode()));
     }
-    /** 主线程周期调用：工具/问题超时兜底。 */
+    /** 主线程周期调用：工具/长活/问题超时兜底。 */
     public void tick() {
         long now = System.currentTimeMillis();
-        pending.entrySet().removeIf(e -> {
-            if (now - e.getValue().sentAtMs() > e.getValue().timeoutMs()) {
-                e.getValue().future().complete(new ToolOutcome(false,
-                        "TIMEOUT:这次操作 " + (e.getValue().timeoutMs() / 1000)
-                                + " 秒没有结果，先别重复这个操作，向主人说明情况。"));
-                return true;
+        for (var t : pending.sweepTools(now)) {
+            t.ticket().complete(new ToolOutcome(false,
+                    "TIMEOUT:这次操作 " + (t.timeoutMs() / 1000)
+                            + " 秒没有结果，先别重复这个操作，向主人说明情况。"));
+        }
+        for (var j : pending.sweepJobs(now)) {
+            // 长活超时必须**同样交给大脑**：不交的话 PARK 就永远解不开，整条链静默卡死
+            // （比收到一条 TIMEOUT 教学坏得多——模型连"我卡住了"都看不到）。
+            LOG.warn("[brain] job {} 本地等满 {}s 仍未收到事件，按超时解锁 PARK",
+                    j.jobId(), j.timeoutMs() / 1000);
+            if (loop != null) {
+                loop.onJobEvent(j.jobId(), new ToolOutcome(false,
+                        "TIMEOUT:这件事等了 " + (j.timeoutMs() / 1000)
+                                + " 秒还没有结果（服务端可能已掉线）。别重复这个操作，先向主人说明情况。"));
             }
-            return false;
-        });
+        }
         sweepQuestionTimeouts();
     }
 
@@ -409,7 +497,13 @@ public final class AgentRunner implements ToolExecutor {
         o.addProperty("model", cfg == null ? "" : cfg.model);
         o.addProperty("companion", companionName);
         o.addProperty("current_task", currentTask);
-        o.addProperty("pending_tools", pending.size());
+        o.addProperty("pending_tools", pending.pendingTools());
+        // R2-S4：长活是"第二段等待"，它和普通工具待办必须分开看——
+        // 合在一起数的话，"卡在工具上"和"正常在等一条 3 分钟的移动"分不出来。
+        o.addProperty("pending_jobs", pending.pendingJobs());
+        o.addProperty("parked", parked);
+        o.addProperty("parked_jobs", parkedJobs);
+        o.addProperty("accept_mode", cfg == null || cfg.acceptMode);
         o.addProperty("pending_questions", questionRecords.size());
         // 效率诊断：迟到回执数（>0 即超时帽配错，真结果被丢弃）；桥的 /v1/status 直接可见
         o.addProperty("late_results", lateResults.get());
@@ -429,6 +523,11 @@ public final class AgentRunner implements ToolExecutor {
         JsonObject body = new JsonObject();
         body.addProperty("seq", (int) seq);
         body.addProperty("tool", name);
+        // R2-S4：**显式点名**要不要受理即回执。服务端对没有这个字段的请求一律按老语义
+        // （同步回执）处理——老客户端不认识 job_ack，擅自换形态会让它白等到超时。
+        // 这个字段同时也是发布后的止血开关（client.json 的 accept_mode）。
+        boolean accept = cfg == null || cfg.acceptMode;
+        body.addProperty("accept", accept);
         try {
             body.add("args", com.google.gson.JsonParser.parseString(
                     argsJson == null || argsJson.isBlank() ? "{}" : argsJson));
@@ -447,7 +546,7 @@ public final class AgentRunner implements ToolExecutor {
                             + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），服务器不会收。"
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
-        pending.put(seq, new Pending(f, System.currentTimeMillis(), toolTimeoutMs(name, argsJson)));
+        pending.registerTool(seq, name, System.currentTimeMillis(), toolTimeoutMs(name, argsJson), f);
         ClientPlayNetworking.send(new McbotPayloads.C2s(json));
         return f;
     }

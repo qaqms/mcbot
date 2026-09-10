@@ -86,6 +86,52 @@ neko → 问用户 → POST /v1/answer {"question_id":"q8","text":"绕开他家�
 大脑 → 收到"主人说：绕开…"续跑 → 最终 done
 ```
 
+## 5.1 受理即回执（R2-S4 阶段 2）：长活不走一问一答
+
+`move_to`/`break_block` 这类要跑几秒到几分钟的活，**一问一答**是错的：模型在那边干等
+一整跳，既不能改主意也不能催。所以这两条工具改成两段式——先"受理"、后"结果"。
+
+C2S 的 `tool_call` 多一个**可选**字段 `accept`：
+
+```json
+{"kind":"tool_call","seq":7,"tool":"move_to","accept":true,"args":{"x":12,"y":63,"z":-4}}
+```
+
+- **缺省（没有这个字段）= 老语义同步回执**。这是刻意的向后兼容：老客户端不认识
+  `job_ack`，服务端擅自换形态会让它白等到 90 秒超时。要新形态就**由发送方点名**。
+- 客户端有 `client.json` 的 `accept_mode`（默认 true）作止血阀门；关掉即整条链退回今日语义。
+
+S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）：
+
+```json
+{"kind":"job_ack","seq":7,"job_id":"j3","tool":"move_to","cap_ticks":3600,
+ "text":"ACCEPTED:我已开始「走到 12,63,-4」编号 j3，最多约 180 秒。这条还没有结果——别猜、别等着，可以先回我一句话或做别的，做完我会主动报 j3。"}
+{"kind":"job_event","seq":7,"job_id":"j3","tool":"move_to","phase":"done","text":"到了 (12,63,-4) 附近…"}
+```
+
+**契约（四条，改之前先读）**：
+
+1. **单终局**：一个 `seq` 要么收到 `tool_result`，要么收到 `job_ack`——**不会两条都来**。
+   已经出结果的快路径（`DENIED`/`BUSY`/`TARGET_LOST`…）即使工具是 ACCEPT 模式也直接回
+   `tool_result`：先 ack 再立刻报失败等于白多一跳，还会让模型以为"被打回了"和"跑完了"是两件事。
+2. **`job_ack` 自带教学**：文案必须以 `ACCEPTED:` 开头，且三句齐（还没结果 / 别干等 / 做完主动报编号）。
+   前缀是给**模型**看的契约；"要不要 park"是控制流，走 `ToolOutcome.accepted` **字段**，不认字符串。
+3. **`phase ∈ progress|done|failed|cancelled|superseded`**。`progress` 只播报不进对话
+   （限速 1 帧/s/job、全局 4 帧/s）；其余四者解锁 PARK。`cancelled`（主人叫停）与
+   `superseded`（被新指令顶掉）必须与 `failed` 分开，因为客户端补账的话术不同。
+4. **`cap_ticks` 是客户端等待上限的来源**，客户端的超时必须**严格大于** `cap*50ms`
+   （agent-core 的 `PendingJobs.JOB_GRACE_MS` 给 15s 余量）。两边各拍一个常数，就是
+   "服务端跑 180s、客户端 90s 判 TIMEOUT"那条真缺陷的成因。
+
+客户端侧的对应状态机：`tool_call` → 等 `tool_result`；收到 `job_ack` → **同一 seq 转段**
+（`seq → jobId`）改等 `job_event`；大脑收到受理**不把这条写进对话**，转 **PARK**——
+这条指令挂起、不再问模型（PARK 期间不计步），事件到了才按 index 原序补 `tool` 消息并开新轮。
+
+⚠️ **PARK 的铁律**：解锁（主人叫停 / 新指令 / 本地超时）之前，**每一条 in-flight 的
+`tool_call` 都必须有一条回执**，哪怕是本地合成的 `CANCELLED:`/`SUPERSEDED:`。少一条，
+下一次请求里那个 `assistant.tool_calls` 就有 id 找不到配对的 `tool` 消息——OpenAI 直接 400，
+一整段历史当场作废。`AgentLoop.supersedeAll` 是这条规则的唯一实现，别在别处补回执。
+
 ## 6. 活体验收清单（手动过一遍即 M6 关账）
 
 前置：装 `dist/mcbot-0.1.0.jar`（14:38 起含桥）+ fabric-api；开发服开着；进世界（面板顶出现桥行）。

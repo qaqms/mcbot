@@ -115,12 +115,16 @@ public final class McbotPanelScreen extends Screen {
     }
 
     private void applyConfig() {
-        if (runner() == null) {
+        AgentRunner r = runner();
+        if (r == null) {
             return;
         }
-        runner().reconfigure(new ClientConfig(
+        // accept_mode 面板上没有开关（它是发布后的止血阀门，只手改 client.json）；
+        // 这里**原样带过去**，免得"保存并应用"把主人手关掉的开关又拧回开。
+        r.reconfigure(new ClientConfig(
                 baseUrl.getValue().trim(), model.getValue().trim(),
-                apiKey.getValue().trim(), persona.getValue().trim()));
+                apiKey.getValue().trim(), persona.getValue().trim(),
+                r.config().acceptMode));
     }
 
     private void lifecycle(String kind) {

@@ -17,9 +17,32 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class MoveToTool implements ServerTool {
 
+    /** 一次寻路+走完的能力帽：3600 tick = 180s（远路要挖要垫，短帽会把它砍在半路）。 */
+    public static final int CAP_TICKS = 3600;
+
     @Override
     public String name() {
         return "move_to";
+    }
+
+    @Override
+    public int capTicks(JsonObject args) {
+        return CAP_TICKS;
+    }
+
+    /**
+     * 受理即回执：移动是最典型的"几十秒才有结果"的长活，让模型干等毫无意义
+     * （它既不能改目的地、也不能先干别的）。先回 ACCEPTED，走完再以 job_event 报结果。
+     */
+    @Override
+    public Acceptance acceptanceMode() {
+        return Acceptance.ACCEPT;
+    }
+
+    @Override
+    public String acceptSubject(JsonObject args) {
+        BlockPos to = BreakBlockTool.readPos(args);
+        return to == null ? "移动" : "走到 " + to.toShortString();
     }
 
     @Override
@@ -43,7 +66,7 @@ public final class MoveToTool implements ServerTool {
                     "TARGET_LOST:(" + to.toShortString() + ") 不在已加载区域，先往那个方向走一段。",
                     null));
         }
-        if (!sched.submit(c, new PathTask(level, to, alter), f, 3600)) {
+        if (!sched.submit(c, new PathTask(level, to, alter), f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
