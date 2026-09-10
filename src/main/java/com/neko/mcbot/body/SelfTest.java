@@ -6,6 +6,7 @@ import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
 import com.neko.mcbot.common.ScanFormat;
 import com.neko.mcbot.common.WireSize;
+import com.neko.mcbot.path.PathTask;
 import com.neko.mcbot.server.ServerTool;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
@@ -291,14 +292,9 @@ public final class SelfTest {
         var registry = McbotMod.toolRegistry();
         var sched = McbotMod.scheduler();
         var level = cp.level();
-        // 【09-08】票归产品层 CompanionChunkPads（每拍续，[m9] 验收）；这里只找净带落脚。
-        var strip = findClearStrip(level, cp.blockPosition());
-        if (strip != null) {
-            cp.teleportTo(strip.getX() + 0.5, strip.getY(), strip.getZ() + 0.5);
-            McbotMod.LOG.info("[m8] 迁至 14 格净带（逃离 m4 残留胸箱/悬空出生点的地形运气）");
-        } else {
-            McbotMod.LOG.warn("[m8] 没找到净带，原地形照跑（失败时先查 m4 残留）");
-        }
+        // [m4] 用的也是 `基准点.east(6)`，中间只隔几秒——不清 lastPlan 缓存的话，场景 A 会
+        // 命中 m4 那条路，于是"A 是搜出来的、B 是复用的"这条判读不成立（09-10 实测踩到）。
+        PathTask.clearPlanCache();
         var base = cp.blockPosition();
         McbotMod.LOG.info("[m8] 基准点 {}", base.toShortString());
         // 环境断言（轻量常驻）：产品票失效时这里立刻暴䁓，不等搜索谜之 expanded=1。
@@ -312,27 +308,36 @@ public final class SelfTest {
             }
         }
 
-        // 铺一条测试大道：东 2..7 的地板填石，脚格/头格清成空气；**两侧也封石**。
-        // 为什么必须封两侧：不封的话“唯一路线就是挖穿”这句前提只取决于基准点旁边的
-        // 自然地形——地形恰好能走时，A* 会找到一条真的不用挖的绕行（于是 A 不报
-        // NEED_CONFIRM、B 也“没挖穿”），而算法本身并没有错。上一台机器恰好封得住，
-        // 本机（base=5,63,0）就能从 z=1 绕过去——验收场景不能靠运气，这里把它变确定。
+        // 铺一条**完全密闭**的石砌短隧道：x=base+2..base+7，1 格宽 2 格高，四壁/顶/底/东端全石，
+        // 只留西端（base+1 那侧）一个门洞。
+        //
+        // 为什么是"密闭盒子"而不是"露天的两排侧墙"（09-10 改）：旧版只砌了脚+头两层的侧墙，
+        // 剩下全靠天然地形，结果本机实测 A* 直接从**东端外侧**绕进走廊并落在目标旁边
+        // （`7,63,0→13,63,0` 路径 10 节点、挖 0 放 0，A 报"不用挖就能到"）。
+        // 算法没错，是验收场景在吃地形运气——而"[m8] A 必须 NEED_CONFIRM"一旦靠运气，
+        // 它就不是验收而是抽奖。密闭盒子把地形自由度清零：唯一进得去的路是西端门洞，
+        // 进去走三格就在 base+4 撞上必须挖穿的墙（脚+头两格）。
+        var stone = net.minecraft.world.level.block.Blocks.STONE.defaultBlockState();
+        var air = net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
         for (int dx = 2; dx <= 7; dx++) {
-            level.setBlockAndUpdate(base.east(dx).below(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
-            level.setBlockAndUpdate(base.east(dx), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-            level.setBlockAndUpdate(base.east(dx).above(), net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
-            for (int dz : new int[]{-1, 1}) {
-                // 侧墙只砌两层（脚+头）：2 格高在 placeStock=0 时已经跳不上去，
-                // 再往上砌会白白改地形，也会把“最优解只挖 1 格”这个观测点遮掉。
-                level.setBlockAndUpdate(base.east(dx).offset(0, 0, dz),
-                        net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
-                level.setBlockAndUpdate(base.east(dx).above().offset(0, 0, dz),
-                        net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = -1; dy <= 3; dy++) {
+                    // dx<=6 才是隧道本体；dx==7 是**东端塞子**——曾经写成"整段都挖空"，
+                    // 结果东口敞着，A* 从东侧绕进来又变成 0 挖（本机 base=25,67,0 实测复现）。
+                    boolean tunnel = dz == 0 && (dy == 0 || dy == 1) && dx <= 6;
+                    level.setBlockAndUpdate(base.east(dx).offset(0, dy, dz), tunnel ? air : stone);
+                }
             }
         }
-        // A 墙：东 4 的脚+头两格石头（placeStock=0 爬不了顶，封住两侧后唯一路线就是挖穿）
-        level.setBlockAndUpdate(base.east(4), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
-        level.setBlockAndUpdate(base.east(4).above(), net.minecraft.world.level.block.Blocks.STONE.defaultBlockState());
+        // 西端引道：同伴脚下垫石、脚/头清空——起点判据不再受原地形（水/树叶/台阶）影响
+        for (int dx = 0; dx <= 1; dx++) {
+            level.setBlockAndUpdate(base.east(dx).below(), stone);
+            level.setBlockAndUpdate(base.east(dx), air);
+            level.setBlockAndUpdate(base.east(dx).above(), air);
+        }
+        // A 墙：东 4 的脚+头两格石头（隧道内唯一可挖的通路；两侧/顶/东端全已封死）
+        level.setBlockAndUpdate(base.east(4), stone);
+        level.setBlockAndUpdate(base.east(4).above(), stone);
 
         // 场景 A：不带 may_alter_terrain → 必须 NEED_CONFIRM 且清单非空
         JsonObject a = moveArgs(base.east(6));
@@ -357,8 +362,14 @@ public final class SelfTest {
             McbotMod.LOG.info("[m8] B 确认后执行提交（看真挖耗时）");
             registry.get("move_to").runAsync(cp, b, sched).thenAccept(rb -> {
                 boolean through = rb.ok();
-                boolean wallGone = level.getBlockState(base.east(4)).isAir();
-                McbotMod.LOG.info("[m8] B 到达={} 墙已被挖穿={}：{}", through, wallGone, rb.feedback());
+                // "打通"而不是"墙那一格变空气"：同伴只有 2 格高，穿墙只要清掉脚+头**两格**中的
+                // 任意一对（实测它会跳上墙顶再挖顶棚，走的是 (x,94+1..94+2) 那对）——
+                // 只盯 base.east(4) 那一格会得出"没挖穿"的假读数（09-10 实测踩到）。
+                boolean breached = false;
+                for (int dy = 0; dy <= 2; dy++) {
+                    breached |= level.getBlockState(base.east(4).above(dy)).isAir();
+                }
+                McbotMod.LOG.info("[m8] B 到达={} 墙位被打通={}：{}", through, breached, rb.feedback());
 
                 // 场景 C：把箱子嵌进墙里（脚格=箱子），验证神圣集：只能踩顶绕，绝不挖箱
                 level.setBlockAndUpdate(base.east(4), net.minecraft.world.level.block.Blocks.CHEST.defaultBlockState());
@@ -380,11 +391,11 @@ public final class SelfTest {
                 });
             });
         });
-        McbotMod.LOG.info("[m8] 判读基准：A 需确认=true 且清单≥1（踩脚挖头的最优解可以只挖 1 格）；"
-                + "B 到达=true；C 箱子未动；D NO_PATH。全中即 M8 无头验收通过。");
+        McbotMod.LOG.info("[m8] 判读基准：A 需确认=true 且清单≥1（密闭隧道：不挖开就没有第二条路进得去）；"
+                + "B 到达=true 且墙位被打通=true；C 箱子未动；D NO_PATH。全中即 M8 无头验收通过。");
     }
 
-    /** 找 14 格水平净带（脚/头可通行、下为实心且非容器）：m8 场景不再吃 m4 残留的地形运气。 */
+    /** 找 14 格水平净带（脚/头可通行、下为实心且非容器）：m4 场景不吃出生点的地形运气。 */
     private static net.minecraft.core.BlockPos findClearStrip(
             net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos origin) {
         for (int off = 0; off <= 40; off++) {
@@ -419,7 +430,9 @@ public final class SelfTest {
         return true;
     }
 
-    /** 场景 D：基岩笼死→必须干净地 NO_PATH，拆笼后同伴归位。 */
+    /**
+     * 场景 D：基岩笼死→必须干净地 NO_PATH，拆笼后同伴归位。
+     */
     private static void m8dSealedBox(CompanionPlayer cp) {
         var registry = McbotMod.toolRegistry();
         var sched = McbotMod.scheduler();

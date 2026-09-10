@@ -104,6 +104,10 @@ S3=A（新 JUnit `SseIncrementalTest`：自起 HttpServer 5 帧隔 200ms，断�
 S4=C（`[r2c]`：move 提交 100ms 内拿 ACCEPTED、done 事件续跑放槽；抢占+`reused_remaining=n`；
     桥侧 **python urllib**（禁 git-bash curl，中文乱码是记过的坑）断言 fragments 含 progress；
     `[m4b]` 基准同步改写）
+    **进度（09-10）**：阶段 1 = **lastPlan 复用**已关账（`PlanCache` + `[m8]` A/B 实测 B 零重搜，
+    见 STATUS）。与卡上 §C 的差别：本阶段走的是"**确认重发**复用"（同一目标+同一起点+TTL，
+    授权态不入键、清单用当前世界重算），不是"**抢占续跑**"（那需 `remaining()`+代际号+抢占）。
+    阶段 2 起才动 `job_ack`/PARK/`ACCEPTED:` 与 `[m4b]` 基准改写。
 
 **新常数（进 §10）**：FOLD_KEEP_TAIL=12｜`ACCEPTED:` 前缀常量｜job 超时=capTicks+15s｜
 progress 限速 1/s/job、4/s 全局｜lastPlan TTL=30s｜ROCK_PATHS、环带步长 1/2/3、MAX_SAMPLES=900、

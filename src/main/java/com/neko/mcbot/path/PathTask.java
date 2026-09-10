@@ -47,11 +47,31 @@ public final class PathTask extends TickTask {
      */
     private static final int CONFIRM_INLINE_BUDGET = 1_200;
 
+    /**
+     * NEED_CONFIRM 后重发时的搜索结果复用缓存（R2-S4 "lastPlan"）。
+     *
+     * <p><b>为什么需要</b>：确认流是"两次 move_to"——第一次算出路、回 NEED_CONFIRM；
+     * 模型带 {@code may_alter_terrain=true} 重发时，旧的 {@link PathTask} 实例已经随
+     * {@code Progress.Done} 被丢弃（{@code MoveToTool} 每次都 {@code new PathTask}），于是**同一条路
+     * 要完整重搜一遍**（含 memo 重建、{@code liveify} 活体清单重算）。
+     *
+     * <p><b>省多少取决于路的难度</b>：短直路本来就只展开几百节点（实测 6 节点直路
+     * {@code expanded=302 / 12ms}），省下来可以忽略；难路（R1 那次 16 格复杂山地）才是
+     * 设计卡记的"0.4–1.4s CPU + 分帧约 27 拍"量级。所以这条优化的判据不是"省了多少毫秒"，
+     * 而是"**复用确实发生且不重搜**"——日志里以 {@code memo=reuse(未搜索)} 为读数特征。
+     *
+     * <p>判据、TTL、槽位规则都收在 {@link PlanCache} 里（纯逻辑、可单测）；
+     * 本类只负责在"计划就绪"与"任务作废"两个时刻喂它。
+     */
+    private static final PlanCache PLANS = new PlanCache();
+
     private enum Phase { SEARCH, REPLAN_SEARCH, EXECUTE }
 
     private final BlockPos target;
     private final boolean mayAlterTerrain;
     private final ServerLevel level;
+    /** 计划缓存的槽位键；tick 里从同伴取（构造时拿不到），作废时用它清槽。 */
+    private java.util.UUID cacheKey;
 
     private Phase phase = Phase.SEARCH;
     private DigAStar search;
@@ -107,6 +127,16 @@ public final class PathTask extends TickTask {
     // ---- SEARCH ----
 
     private Progress searchTick(CompanionPlayer c) {
+        // 先看有没有"确认前刚算好的那条路"可用（R2-S4 lastPlan）：省掉一整次重搜。
+        // 只在首搜阶段尝试；重规划（REPLAN_SEARCH）是"世界变了"的产物，必须重新搜。
+        if (search == null && phase == Phase.SEARCH && !wasReplan) {
+            if (tryReusePlan(c)) {
+                return afterPlanReady(c, path); // tryReusePlan 已把 path/planDigs/planPlaces 装好
+            }
+            // 未命中要留痕：这条优化一旦因起点微移而永远不命中，"省了一次搜索"就只是日志里的一句谎，
+            // 必须能从这行读数看出它到底有没有生效、以及为什么没生效。
+            McbotMod.LOG.info("[path] 未复用 lastPlan（{}），照常重搜", PLANS.lastMiss());
+        }
         if (search == null) {
             BlockPos from = c.blockPosition();
             sampler = new LevelDigSampler(level, c, from,
@@ -123,35 +153,45 @@ public final class PathTask extends TickTask {
             }
             return running(); // 还在算（分帧）
         }
-        String lead = wasReplan ? "路被改变后重规划失败：" : "";
         if (search.failure() != null) {
             if (search.budgetReached() && search.partialAvailable()) {
                 // 撞帽≠失败：提交"距目标最近的已扩展节点"半程段，走完由 arrived 出 PARTIAL 话术
                 partialTail = true;
                 partialRemain = search.remainingL1();
-                path = liveify(search.partialPath());
-                cursor = 0;
+                List<DigAStar.Step> plan = liveify(search.partialPath());
                 McbotMod.LOG.info("[path] 撞帽→半程段：还差约 {} 格 L1，本段 {} 节点（挖 {} 放 {}）{}",
-                        partialRemain, path.size(), planDigs, planPlaces, memoStats());
-            } else {
-                McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
-                        target.toShortString(), search.failure(), memoStats());
-                // 撞帽但推进不足下限：不再冒充 BUDGET，换成对模型有行动意义的 NO_PROGRESS（§C）；
-                // open 空的真 NO_PATH 永不降级（D 基岩笼场景钉死）
-                String why = search.budgetReached()
-                        ? "NO_PROGRESS:" + lead + "搜索预算用尽（展开 " + search.expanded()
-                                + " 节点/" + search.elapsedMillis() + "ms）而没能向目标实质推进。"
-                                + "换条路绕开或分更短的段，别硬撞同一方向。"
-                        : "NO_PATH:" + lead + search.failure();
-                return new Progress.Done(new Result(false, why, null));
+                        partialRemain, plan.size(), planDigs, planPlaces, memoStats());
+                return afterPlanReady(c, plan);
             }
-        } else {
-            // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
-            path = liveify(search.path());
-            cursor = 0;
+            McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
+                    target.toShortString(), search.failure(), memoStats());
+            // 撞帽但推进不足下限：不再冒充 BUDGET，换成对模型有行动意义的 NO_PROGRESS（§C）；
+            // open 空的真 NO_PATH 永不降级（D 基岩笼场景钉死）
+            String lead = wasReplan ? "路被改变后重规划失败：" : "";
+            String why = search.budgetReached()
+                    ? "NO_PROGRESS:" + lead + "搜索预算用尽（展开 " + search.expanded()
+                            + " 节点/" + search.elapsedMillis() + "ms）而没能向目标实质推进。"
+                            + "换条路绕开或分更短的段，别硬撞同一方向。"
+                    : "NO_PATH:" + lead + search.failure();
+            return new Progress.Done(new Result(false, why, null));
         }
+        // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
+        return afterPlanReady(c, liveify(search.path()));
+    }
+
+    /**
+     * 计划就绪后的公共出口：登记清单、把结果写进 lastPlan 缓存（供确认后重发复用）、
+     * 然后出 NEED_CONFIRM 或进执行。
+     *
+     * <p>把这条出口抽出来是为了让"刚搜出来的"和"从缓存复用的"走**同一条**判定与话术路径——
+     * 两条路各写一份的话，迟早会在确认话术或计数上漂移。
+     */
+    private Progress afterPlanReady(CompanionPlayer c, List<DigAStar.Step> plan) {
+        path = plan;
+        cursor = 0;
         int digs = planDigs;
         int places = planPlaces;
+        rememberPlan(c, plan);
         McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
                 digs, places, replans, partialTail, memoStats());
@@ -177,6 +217,63 @@ public final class PathTask extends TickTask {
         }
         phase = Phase.EXECUTE;
         return executeTick(c);
+    }
+
+    // ---- lastPlan 缓存（R2-S4）----
+
+    /** 记下刚算好的路（连同**起点**，见 {@link PlanCache} 里"起点必须相同"的理由）。只在主线程调用。 */
+    private void rememberPlan(CompanionPlayer c, List<DigAStar.Step> plan) {
+        if (c == null) {
+            return;
+        }
+        cacheKey = c.getUUID();
+        PLANS.put(cacheKey, c.blockPosition(), target, plan, System.currentTimeMillis());
+    }
+
+    /**
+     * 尝试续用确认前算好的那条路（判据见 {@link PlanCache#take}）。
+     *
+     * <p><b>复用的只是节点序列，清单当场重算</b>：{@code liveify} 拿缓存里的节点按**当前**世界
+     * 重建挖/放格并刷新 {@code planDigs/planPlaces}。所以
+     * ① "要改动世界吗"这个判断用的是新鲜读数，授权态不入缓存键也不会绕过点头；
+     * ② 路上新冒出来的方块会被记成待挖格（原来可走、现在不可通行）而不是被无视。
+     *
+     * @return true = 已装载 path/planDigs/planPlaces，调用方可直接走 afterPlanReady 的后续
+     */
+    private boolean tryReusePlan(CompanionPlayer c) {
+        if (c == null) {
+            return false;
+        }
+        PlanCache.Entry p = PLANS.take(c.getUUID(), c.blockPosition(), target, System.currentTimeMillis());
+        if (p == null) {
+            return false;
+        }
+        // 采样器仍要建（执行期 mineOne/placeOne/复核都用它 live 读世界），但**不必重搜**
+        sampler = new LevelDigSampler(level, c, c.blockPosition(),
+                LevelDigSampler.countPlaceables(c.getInventory()));
+        path = liveify(p.path);
+        cursor = 0;
+        executed = 0;
+        // 故意**不建** search 对象：这趟根本没搜，凭空造一个没 advance 过的 DigAStar 只为喂日志，
+        // 既白付一次构造（含目标旁的 live 读），又会让日志出现"expanded=0"这种自相矛盾的读数。
+        // memoStats() 已按 search==null 单独出一句"未搜索"。
+        McbotMod.LOG.info("[path] 复用确认前的搜索结果（lastPlan）：目标 {} 共 {} 节点，"
+                        + "按当前世界重算清单（挖 {} 放 {}），省掉一次重搜",
+                target.toShortString(), path.size(), planDigs, planPlaces);
+        return true;
+    }
+
+    /** 任务作废时清掉自己的缓存槽（避免留下一条早已作废的路）。 */
+    private void dropPlan() {
+        PLANS.drop(cacheKey);
+    }
+
+    /**
+     * 清空 lastPlan 缓存（**只给无头验收用**，见 {@link PlanCache#clear}）。
+     * 生产路径不需要它：槽位按同伴分、被新计划顶替、并受 TTL 约束。
+     */
+    public static void clearPlanCache() {
+        PLANS.clear();
     }
 
     /**
@@ -287,6 +384,11 @@ public final class PathTask extends TickTask {
     }
 
     private String memoStats() {
+        // 复用 lastPlan 时本轮**没有**搜索对象：如实说"这趟没搜"，别伪造成
+        // memo=off(验尸超限)（那是另一回事）或 expanded=0（会被读成"搜了但没展开"）。
+        if (search == null) {
+            return "memo=reuse(未搜索)";
+        }
         return memo == null ? "memo=off(验尸超限)" : "[memo] expanded=" + search.expanded()
                 + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()
                 + " 验尸不符=" + memo.staleCount() + " 耗时=" + search.elapsedMillis() + "ms";
@@ -598,6 +700,7 @@ public final class PathTask extends TickTask {
     @Override
     public void onAbort() {
         clearCrack();
+        dropPlan(); // 任务作废了，别把一条已废的路留在缓存里给下一趟复用
     }
 
     /** 供 MoveToTool 在提交前做的距离帽判断。 */

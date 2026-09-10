@@ -12,3 +12,6 @@ local.properties
 
 # 构建产物：源码仓不收 dist 里的 jar（README 保留）
 dist/*.jar
+
+# 测试/桥接跑出来的空日志目录（每次 :test 都会重建）
+logs/
