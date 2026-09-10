@@ -40,6 +40,12 @@ public final class PathTask extends TickTask {
     private static final long SEARCH_SLICE_NS = 6_000_000L;
     /** 单次搜索累计 CPU 预算（另一帽）：越界即撞帽走 PARTIAL/NO_PROGRESS 定性，TPS 无关。 */
     private static final long SEARCH_TOTAL_NS = 400_000_000L;
+    /**
+     * NEED_CONFIRM 清单内联进回执文本的字节预算（效率评估 §5.4）。
+     * 取 1200B：足够列十余种方块（同类合并后通常全列得下），同时把这段
+     * 长期留在对话历史里的文字压在可控范围内（信封上限是 32765B，不是约束方）。
+     */
+    private static final int CONFIRM_INLINE_BUDGET = 1_200;
 
     private enum Phase { SEARCH, REPLAN_SEARCH, EXECUTE }
 
@@ -164,13 +170,64 @@ public final class PathTask extends TickTask {
         if ((digs > 0 || places > 0) && !mayAlterTerrain) {
             return new Progress.Done(new Result(false,
                     "NEED_CONFIRM:" + (partialTail ? "本段（半程推进）" : "到 ") + target.toShortString()
-                            + " 需要改动世界——挖 "
-                            + digs + " 格、放 " + places + " 格（明细见 data.blocks）。"
+                            + " 需要改动世界——挖 " + digs + " 格、放 " + places + " 格。"
+                            + inlineList()
                             + "确认就重发 move_to 并带 may_alter_terrain=true；不想改就换目的地。",
                     confirmData(digs, places)));
         }
         phase = Phase.EXECUTE;
         return executeTick(c);
+    }
+
+    /**
+     * 把"会动哪些方块"直接写进**给模型看的回执文本**（效率评估 §5.4 的真缺陷修复）。
+     *
+     * <p><b>原来错在哪</b>：文案写的是"明细见 {@code data.blocks}"，但 {@code data} 这条线
+     * 从头到尾到不了模型——{@code ServerToolDispatcher} 把它塞进信封，而客户端
+     * {@code AgentRunner} 只取 {@code env.str("feedback")}，{@code ToolOutcome} 也只有
+     * {@code (ok, feedback)} 两个字段。于是模型**被要求去批准一份自己看不见的清单**，
+     * 最可能的补偿动作是再发一次 {@code scan_area}（多一整轮 2–6s）或者盲点头。
+     *
+     * <p><b>为什么带字节预算而不是全列</b>：这段文字会**留在对话历史里**，而回执越小越省
+     * prefill。所以先按**方块种类**合并同类项（比逐格列更省也更好读），再按
+     * {@link #CONFIRM_INLINE_BUDGET} 截断，截断时明确写出"还有 N 格未列"——
+     * 不能让模型以为清单已经完整（那会变成另一种"看不见却以为看见"）。
+     */
+    private String inlineList() {
+        java.util.LinkedHashMap<String, Integer> byName = new java.util.LinkedHashMap<>();
+        for (DigAStar.Step st : path) {
+            for (long cell : st.dig()) {
+                byName.merge(sampler.blockName(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
+                        DigAStar.unpackZ(cell)), 1, Integer::sum);
+            }
+            for (long cell : st.place()) {
+                byName.merge("(放)" + sampler.blockName(DigAStar.unpackX(cell),
+                        DigAStar.unpackY(cell), DigAStar.unpackZ(cell)), 1, Integer::sum);
+            }
+        }
+        if (byName.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("要动的方块：");
+        int total = 0;
+        for (int c : byName.values()) {
+            total += c;
+        }
+        int listedKinds = 0;
+        int listedCount = 0;
+        for (var e : byName.entrySet()) {
+            String part = (listedKinds == 0 ? "" : "、") + e.getKey() + "×" + e.getValue();
+            if (com.neko.mcbot.common.WireSize.utf8Bytes(sb + part) > CONFIRM_INLINE_BUDGET) {
+                break;
+            }
+            sb.append(part);
+            listedKinds++;
+            listedCount += e.getValue();
+        }
+        if (listedCount < total) {
+            sb.append("……还有 ").append(total - listedCount).append(" 格未列");
+        }
+        return sb.append('。').toString();
     }
 
     /** 搜索构造统一入口：裸 sampler 必在之前建好；memo 套在搜索侧，执行侧永不见缓存。 */

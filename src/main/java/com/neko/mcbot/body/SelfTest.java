@@ -341,7 +341,15 @@ public final class SelfTest {
             boolean needConfirm = !ra.ok() && ra.feedback().startsWith("NEED_CONFIRM:");
             int listed = ra.data() != null && ra.data().has("blocks")
                     ? ra.data().getAsJsonArray("blocks").size() : 0;
-            McbotMod.LOG.info("[m8] A 需确认={} 清单={} 格：{}", needConfirm, listed, ra.feedback());
+            // 效率评估 §5.4：清单必须**内联在给模型看的文字里**。以前文案让模型"见 data.blocks"，
+            // 而 data 到不了模型（AgentRunner 只取 feedback）——所以这条断言钉的是
+            // "回执文本本身必须含清单"，而不是"信封里有没有 data"。
+            boolean inlined = ra.feedback().contains("要动的方块：")
+                    && ra.feedback().contains("×");
+            int fbBytes = WireSize.utf8Bytes(ra.feedback());
+            boolean withinBudget = fbBytes < 4096; // 内联预算 1200B + 固定文案，留足余量
+            McbotMod.LOG.info("[m8] A 需确认={} 清单={} 格 内联={} 回执={}B：{}",
+                    needConfirm, listed, inlined, fbBytes, ra.feedback());
 
             // 场景 B：点头 → 挖穿到达
             JsonObject b = moveArgs(base.east(6));
