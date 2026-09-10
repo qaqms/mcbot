@@ -39,6 +39,12 @@ public final class OpenAiCompatProvider implements ChatProvider {
         return baseUrl + "/chat/completions";
     }
 
+    /** 换道重试用：只改 baseUrl，其余（key/model/名）照旧。 */
+    @Override
+    public ChatProvider withBaseUrl(String newBaseUrl) {
+        return new OpenAiCompatProvider(name, newBaseUrl, apiKey, model);
+    }
+
     @Override
     public Map<String, String> authHeaders() {
         return Map.of("Authorization", "Bearer " + apiKey);
@@ -124,7 +130,7 @@ public final class OpenAiCompatProvider implements ChatProvider {
     }
 
     @Override
-    public void acceptChunk(JsonObject chunk, TurnBuilder b) {
+    public void acceptChunk(JsonObject chunk, TurnSinkTarget b) {
         if (chunk.has("usage") && chunk.get("usage").isJsonObject()) {
             JsonObject usage = chunk.getAsJsonObject("usage");
             long prompt = usage.has("prompt_tokens") ? usage.get("prompt_tokens").getAsLong() : 0;
@@ -174,7 +180,7 @@ public final class OpenAiCompatProvider implements ChatProvider {
                         args = fn.get("arguments").getAsString();
                     }
                 }
-                b.toolCallDelta(index, id, name, args);
+                b.toolCallDeltaChecked(index, id, name, args);
             }
         }
     }

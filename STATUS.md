@@ -3,7 +3,64 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡 · **R1 无头全线收尾 ✅ 16:31**（S1–S4+S3b）· **R2 波1 ✅ 已 merge（S1 感知 17:31 无头全中 / S2 前缀 17:0x 单测+变异抽检过，客户端接线欠账）** · S3（流式）子代理中途被停、半成品分支已存未 merge → 下回合：从分支续做 S3 → 接线+打点合并做 → S4 → R3
+## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡 · **R1 无头全线收尾 ✅ 16:31**（S1–S4+S3b）· **R2 波1 ✅ 已 merge（S1 感知 / S2 前缀）** · **R2-S3 真流式+早派发 ✅ 无头关账（单测 111/111 全绿 + 三次变异自证；R2-S2 客户端接线欠账一并还清）** → 下一卡 R2-S4 受理即回执
+
+### R2-S3 关账证据（真流式 + tool_call 早派发，2026-09-10）
+
+**做了什么**：`LlmClient` 弃 `BodyHandlers.ofLines()`（它把"响应完成"与"能看见行"绑死，早派发
+物理上不可能），自实现 `BodySubscriber` 按字节增量解码、按行切分（跨 chunk 攒半行、UTF-8 残缺
+序列攒在 carry、CRLF 归一），每行到货即回调；新增 `TurnSink`（onTextDelta/onToolCallReady/
+onComplete/onCounters）与 `TurnTimings`（时延打点）；新增 `StreamingTurnReader` +
+`ToolArgsScanner`（闭合判定）；`AgentLoop` 早派发（工具就绪即在回调线程 `executor.execute`，
+记账仍按 index 原序折叠）；`ScriptedEngine` 覆盖带 sink 的重载，使纯单测能真走早派发路径；
+`AgentRunner` 接 `onStreamStats`（`[brain] llm stream ...`）与 `onPrefixReset`
+（`[brain] prefix reset reason=...`），并**把 R2-S2 欠的 PromptBuilder 缓存真接上**
+（此前 AgentRunner 仍每步读盘，S2 的缓存等于没生效——本轮补上）。
+
+**验收（`./gradlew build` 全绿）**：
+- **111 例全绿**（agent-core 63 + 根工程 48）：新增 `ToolArgsScannerTest` 21 例、
+  `SseIncrementalTest` 11 例（自起 HttpServer、200ms 帧距真流式）、
+  `AgentLoopEarlyDispatchTest` 4 例；既有 agent-core 27 例与根工程 48 例**零改动仍绿**。
+- `SseIncrementalTest` 关键断言：`toolCallIsReadyBeforeTurnCompletes` —— 工具就绪时刻
+  **严格早于**整轮完成（断言 `readyAtMs < completeAtMs`）；`deltasArriveWhileStreamIsStillOpen`
+  —— 三片文本逐段到达且首段在流还开着时就到；`multibyteCharSplitAcrossChunks` —— 把一条帧
+  切在汉字三字节序列**内部**，解出来仍是"你好世界"；`retryDoesNotPoisonLaterRequests`
+  —— 换道 `/v1` 重试后第二次请求仍从原 baseUrl 出发（两次各打一次根路径）。
+- **三次变异自证（主会话亲自抽检，非子代理报告）**：
+  ① 早派发失效（`onToolCallReady` 直接 return）→ `toolStartsBeforeTurnLands` **精硬红**；
+  ② 记账改回 `allOf`（只等齐、不排序）→ `toolResultsAreRecordedInIndexOrder` **精硬红**；
+  ③ required 门失效（`if (false && ...)`）→ 4 例红（`balancedButMissingRequiredIsNotReady` /
+  `nullRequiredValueIsNotReady` / `secondTopLevelObjectReplacesTheFirst` /
+  `partialToolArgsDoNotReportReady`）。三次均改回后复跑全绿。
+- 修复过程中被单测抓出的真 bug 三处（记下来免得重犯）：① `ToolArgsScanner` 的键位状态机把
+  值字符串 `"}"` 当成键名收集，导致后续真键漏采（改为"最近顶层有效字符"判键位）；
+  ② `AgentLoop` 早派发分支把工具续跑错接成 `finishChain()`（那是"这条指令完了"的出口，
+  会把工具回执直接丢掉、链断在工具调用上），应接 `step()`；
+  ③ tool_call 碎片被**累积两次**（外层自己解析一遍 + provider 又走一遍），raw 变成
+  `{"x":1{"x":1,"y":2,"z":3}}` 永远解析失败——改为 provider 走 `toolCallDeltaChecked`
+  把"写进去 + 判定结果"合成唯一一次写入。
+
+**偏差与已知边界（不隐藏）**：
+1. **本轮未跑无头 SelfTest**：改动全在客户端大脑层（`agent-core` + `src/client`），
+   `src/main`（服务端/三道闸/寻路/票）**一行未动**，而无头 harness 恰好验不了真流式
+   （SelfTest 直跑 dispatcher，不经过 `LlmClient`）。故按"证据匹配被改面"用
+   `SseIncrementalTest`（真 HTTP 流式）+ `AgentLoopEarlyDispatchTest` 顶替。
+   **这不是豁免**：下次动服务端代码时必须补 `[m4*]/[m8]` 级回归。
+2. **早派发的真实收益待真机量化**：`[brain] llm stream` 打点已就位，"省了多少秒"要等主人下次
+   真机会话的 `first_tool` vs 整轮耗时才作数。中转站若把整轮攒成一坨再吐，`after_chunk`
+   会把它暴露出来，此时早派发收益归零（可观测，不是猜的）。
+3. **`toolResultsAreRecordedInIndexOrder` 是契约钉、不是事故复盘**：真实 mod 路径工具是串行
+   执行的（一次一个 payload、等回执才发下一个），"逆序完成"在现网不会自然发生；本用例用测试
+   掌控的 future 刻意造出逆序，目的是钉死"`ToolExecutor` 允许并行时也不破配对顺序"。
+4. **`ToolArgsScanner` 的"两个独立对象"规则**：顶层对象已闭合、又来一个以 `{` 开头的片段 ⇒
+   丢弃旧的以新的为准。真协议不这么发，这是为"中转站什么都干得出来"兜底；代价是端点若真把
+   两段**续写**拆成两个对象，我们只认最后一个（取舍写在类注释里）。
+5. **`ChatEngine` 新增带 sink 重载**：只实现旧三参的引擎由接口默认实现兜底（拿整轮后补发
+   `onComplete`），故存量替身零改动；但这类引擎**不会**有早派发（`ScriptedEngine` 已覆盖，
+   属测试替身行为，不影响 mod 路径）。
+6. **`AgentLoop` 的 `reactor` 字段可空**：`thenAccept` 回调里读 `reactor.stats()` 依赖
+   "回调与 step 同链、不会跨步"，与既有 `convo/steps` 等字段同一假设；若将来引入并发多步，
+   这里要一并加锁（已在该字段注释点明）。
 
 | 里程碑 | 状态 |
 |---|---|

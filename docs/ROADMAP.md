@@ -77,16 +77,24 @@
 ## R2 延迟整改（靶子：实测 8 轮/任务 = 20–50s；跳数仅 100–150ms 不是主因；
 **设计卡：`docs/plan/R2-latency.md`**，性价比序 D>C>B>A）
 
-- [ ] **真流式（S3，⚠ 子代理中途被停，分支已存）**：`LlmClient` 弃 ofLines→fromLineSubscriber；
-      TurnSink+括号深度闭合判定；AgentLoop 早派发（idx→future，Msg.Tool 仍按 idx 原序）；
-      SseIncrementalTest。半成品在 `pi-agent-4e7d4c32-8709-478`@f1c9060（**未验编译/未写测试，
-      不可直接 merge**），下回合从该分支续做或重开
-- [x] **前缀稳定打穿缓存（S2，09-08 17:0x merge 0ed915b）**：`foldCheckpoint`+`frozenFolded`
-      （决定一次算定永不重算，折叠只作用检查点前的 Msg.Tool，outboundHistory 纯函数，
-      FOLD_KEEP_TAIL=12）；PromptBuilder 实例缓存（AtomicReference，启动读盘一次，
-      `reloadSkills()` 钩子留给 R3）；压缩挪链尾 finishChain+两处合法 prefix reset 计数/回调。
-      ConversationPrefixTest 7 例字节级断言；主会话独立变异抽检（砍单调保护→精硬红）。偏差 4 条见 STATUS。
-      ⚠ 客户端接线欠账（AgentRunner ~3 行，S2 报告已给）：与 S3 的 useStreaming/打点接线合并做
+- [x] **真流式 + 早派发（S3，09-10 关账）**：`LlmClient` 弃 `ofLines()`，自实现 `BodySubscriber`
+      按字节增量解码+按行切分（跨 chunk 半行/UTF-8 残缺序列/CRLF 都自己管）；`TurnSink` +
+      `TurnTimings`；`StreamingTurnReader` + `ToolArgsScanner`（**两道人门**：顶层括号配平
+      **且** schema required 齐——只看配平会把 `{"x":1}` 半截参数当成品派发）；`AgentLoop`
+      早派发（就绪即在回调线程 execute；记账按 index 原序**顺序折叠**，不是 `allOf`）。
+      `SseIncrementalTest` 11 例（真 HTTP 200ms 帧距）+ `ToolArgsScannerTest` 21 例 +
+      `AgentLoopEarlyDispatchTest` 4 例；全量 **111/111 绿**；**三次变异自证**（早派发失效/
+      记账改 allOf/required 门失效 → 各自精硬红）。⚠ 偏差：本轮未跑无头 SelfTest
+      （只动客户端大脑层、`src/main` 零改动，且 harness 验不了真流式）→ 下次动服务端必补。
+      注：设计卡写的是 `fromLineSubscriber`，实施时因"订阅者/结果容器两层泛型冲突"
+      改为自实现约 40 行 BodySubscriber（语义更明确且可单测，理由见 ARCHITECTURE §5）
+- [x] **前缀稳定打穿缓存（S2，09-08 17:0x merge 0ed915b；客户端接线 09-10 还清）**：
+      `foldCheckpoint`+`frozenFolded`（决定一次算定永不重算，折叠只作用检查点前的 Msg.Tool，
+      outboundHistory 纯函数，FOLD_KEEP_TAIL=12）；PromptBuilder 实例缓存（AtomicReference，
+      启动读盘一次，`reloadSkills()` 钩子留给 R3）；压缩挪链尾 finishChain+两处合法 prefix reset
+      计数/回调。ConversationPrefixTest 7 例字节级断言；主会话独立变异抽检（砍单调保护→精硬红）。
+      偏差 4 条见 STATUS。**客户端接线欠账已在 R2-S3 一并还清**（AgentRunner 真接上
+      PromptBuilder 实例 + `onStreamStats`/`onPrefixReset` 打点）
 - [ ] **长动作受理即回执（S4）**：`move_to`/`break_block` 提交即回「已受理+任务号」，完成事件开新轮，
       大脑不再挂起；配套：单槽 BUSY 拒收→新活顶掉旧活（保留已算路径）。**排在 S3 后（同文件 AgentLoop）**
 - [x] **感知给可行动信息（S1，09-08 17:3x merge bbd09ea）**：`scan_area` 换 classify 词表
@@ -95,9 +103,10 @@
       客户端准星注入 `[我此刻盯着]`（≤120B，MISS/ENTITY 不注入，本地拼不过网络）。
       拆出 5 个零依赖 common 类+26 新单测；无头 `[r2d]` 三项+结构三项全中（证据 STATUS）。
       偏差 5 条（中环按路径归组/名额轮转/竖直窗口/ore 收窄/StatusTool 不动）已复核接受
-- [ ] 打点补齐（清单见 STATUS 第六项）：t_send/TTFB/首行/末行、wire_rtt、本地间隙（归 S3 一并）
+- [x] 打点补齐（S3 已落一半）：`ttfb`/`ttft`/`first_tool`/`after_chunk`/`after_tool`/`chunks`/
+      `deltas`/`early` 已进 `[brain] llm stream`；**t_send/末行/wire_rtt/本地间隙仍缺**，归 S4 一并
 - 验收：同一任务（挖三块石头进箱）改前后轮次数与总时长对比，用 `[brain] step tokens` + 新打点作数
-      （归 S4 后的合并真机会话；S1/S2 已各自无头口径收口）
+      （归 S4 后的合并真机会话；S1/S2/S3 已各自无头口径收口）
 
 ## R3 面板可控性整改（靶子：外部进程能做的，主人反而不能；**设计卡：`docs/plan/R3-panel.md`**）
 

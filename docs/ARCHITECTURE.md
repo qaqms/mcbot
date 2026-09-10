@@ -39,11 +39,14 @@
 
 ```
 agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
-  llm/               Msg(sealed)/ToolCall/ToolSpec/AssistantTurn/ChatEngine/LlmClient(SSE)
+  llm/               Msg(sealed)/ToolCall/ToolSpec/AssistantTurn/ChatEngine/LlmClient(SSE 流式)
+                     TurnSink(过程回调契约)/TurnTimings(时延打点)
   provider/          OpenAI 兼容线格式：请求体组装、tool_call 按 index 增量拼装
+                     TurnBuilder(聚合器)/TurnSinkTarget(写入契约)
+                     StreamingTurnReader(聚合+闭合判定)/ToolArgsScanner(配平+required 齐=可派发)
   convo/             Conversation：软水位压缩（"[对话前情提要]"前缀，保尾部）
   loop/              AgentLoop 状态机 + ToolExecutor 契约
-  prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md)
+  prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
   body/              FakeConnection/CompanionPlayer/CompanionRoster/CompanionChunkPads/SummonService/SafeSpawn/SelfTest
@@ -82,12 +85,22 @@ src/client/          客户端
 ## 5. 大脑回路（AgentLoop）
 
 ```
-submit(指令) → pump → step → [压缩?] → LLM → turn
+submit(指令) → pump → step → [压缩?] → LLM(流式) → turn
   turn 无 tool_calls → onReply(作答) → pump 下一条
   turn 有 tool_calls → 串行执行（ToolExecutor）→ 每条回执进对话 → step
 叫停（cancelDirective）：清队列 + 标记；在下一个步边界生效；
   若正停在流式回答上，整轮作废（不执行其工具、不留悬挂 tool_calls）。
 ```
+
+**真流式与早派发（R2-A）**：`LlmClient` 不用 `ofLines()`（行是收完才交出来的），自己实现
+`BodySubscriber` 按字节增量解码、按行切分，每行到货即回调。于是"某个工具调用的参数写完了"
+可以在**整轮落地之前**就知道，工具当场起跑（省下的是挂起时间）。
+闭合判定两道人门：①顶层括号配平（自己维护"在不在字符串/是否被转义"）；②schema 的 required
+字段在顶层全出现——只看配平会把 `{"x":1}` 这种半截参数当成品派发。
+写回纪律不变：`Msg.Tool` 一律按 index 原序记账（协议要求与 `assistant.tool_calls` 严格同序），
+所以等待是**顺序折叠**而不是 `allOf`（后者只保证都到、不保证按序）。
+打点 `ttfb/ttft/first_tool/after_chunk/after_tool/chunks/deltas/early` 经 `onStreamStats` 出到 `[brain] llm stream`。
+回滚开关：把 `AgentLoop` 的 `engine.chat(..., reactor, true)` 换回三参 `chat(...)` 即走旧路径（代码保留同语义）。
 
 护栏数值：每指令 40 步；同一调用连续 3 次 → Nudge 换思路、5 次 → 停链——但只有
 **同调用且同结果**才计数（TIMEOUT 后原参重试是合法恢复，不算打转，M4.5 吸取参考项目实战教训）。
@@ -161,5 +174,7 @@ submit(指令) → pump → step → [压缩?] → LLM → turn
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |
 | 前缀(R2-S2) | FOLD_KEEP_TAIL=12；折叠只在 index<foldCheckpoint 冻结区；prefix reset 全库仅两事件（compaction / directive-boundary）；system 换发仅指令边界；压缩链尾 finishChain（叫停链不压） |
+| 流式(R2-A) | SSE 逐行回调（自实现 BodySubscriber，增量 UTF-8 解码+跨 chunk 攒半行/半字符/CRLF）；闭合判定=顶层括号配平 **且** schema required 齐；就绪信号每 index 一生一次；工具就绪即在回调线程派发（execute 只投递不阻塞）；记账按 index 顺序折叠；同一 index 的 arguments 只许累积一次 |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
 | 名册 | v1 每主人 1 同伴；名字 `[a-z0-9_]{2,16}` |
+

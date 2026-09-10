@@ -55,6 +55,8 @@ public final class AgentRunner implements ToolExecutor {
     private volatile long currentTask;
     private volatile String companionName = "";
     private AgentLoop loop;
+    /** R2-B 前缀缓存：启动读盘一次，链中不再逐步读 skills；换发只在指令边界。 */
+    private PromptBuilder promptCache;
 
     private record Pending(CompletableFuture<ToolOutcome> future, long sentAtMs, long timeoutMs) {
     }
@@ -72,6 +74,9 @@ public final class AgentRunner implements ToolExecutor {
                 new com.neko.mcbot.agentcore.provider.OpenAiCompatProvider(
                         "mcbot", cfg.baseUrl, cfg.apiKey, cfg.model),
                 java.time.Duration.ofSeconds(180));
+        // R2-B：prefix 缓存也接上了——启动读一次盘，指令边界才允许换发（链中不换=不裂前缀）。
+        promptCache = new PromptBuilder(() -> PromptBuilder.build(cfg.persona, SkillLoader.load(
+                FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"))));
         loop = new AgentLoop(engine, ClientToolDefs.SPECS, this, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
@@ -112,12 +117,25 @@ public final class AgentRunner implements ToolExecutor {
                         LOG.info("[brain] step tokens prompt={} completion={} cached={}",
                                 prompt, completion, cached);
                     }
+
+                    @Override
+                    public void onStreamStats(AgentLoop.StreamStats stats) {
+                        // R2-A 打点：回答"这一轮卡在哪"。
+                        // ttft 大而 ttfb 小 → 中转站在攒批；first_tool 远早于整轮结束 → 早派发真省了时间。
+                        LOG.info("[brain] llm stream {}", stats.format());
+                    }
+
+                    @Override
+                    public void onPrefixReset(String reason) {
+                        // R2-B：合法前缀重置（compaction / directive-boundary）唯一两处，打点以便对账
+                        // 缓存命中率下降到底是这两件事还是别处动了前缀。
+                        LOG.info("[brain] prefix reset reason={}", reason);
+                    }
                 },
-                () -> PromptBuilder.build(cfg.persona, SkillLoader.load(
-                        FabricLoader.getInstance().getGameDir()
-                                .resolve("mcbot").resolve("skills"))),
+                () -> promptCache.get(),
                 // 压缩闸门：6000 真 token（API 数优先，本地 CJK 感知估算兜底）。
                 // 参考实测：固定开销≈350，每步只追加；这个数给中转站通道留了延迟余地。
+                promptCache,
                 6_000);
         LOG.info("大脑已上线：{} / {}", cfg.baseUrl, cfg.model);
     }
