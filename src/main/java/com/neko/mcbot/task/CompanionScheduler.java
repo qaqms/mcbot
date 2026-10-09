@@ -39,6 +39,10 @@ public final class CompanionScheduler {
         return active.containsKey(companionId);
     }
 
+    public void cancelAll(String reason) {
+        for (UUID uuid : new HashMap<>(active).keySet()) cancel(uuid, reason);
+    }
+
     /**
      * 主人叫停：中止该同伴的活跃任务（先走 onAbort 收尾），
      * future 以 CANCELLED 教学回执完成——顺带把 tool_result 送回客户端。

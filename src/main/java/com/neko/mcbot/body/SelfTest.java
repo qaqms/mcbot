@@ -43,6 +43,13 @@ public final class SelfTest {
 
         var dispatcherCmd = server.getCommands().getDispatcher();
         var src = server.createCommandSourceStack();
+        McbotMod.LOG.info("[f0-world] 名册位于当前存档={} dispatcher属于当前服务器={} 全局C2S已注册={}",
+                McbotMod.summonService().roster().store().normalize().equals(
+                        server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                                .resolve("mcbot/companions.json").normalize()),
+                McbotMod.dispatcher().belongsTo(server),
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.getGlobalReceivers()
+                        .contains(McbotPayloads.C2s.TYPE.id()));
         for (String cmd : new String[]{"mcbot ping", "mcbot summon steve", "mcbot list"}) {
             try {
                 McbotMod.LOG.info("AUTOTEST [{}] rc={}", cmd, dispatcherCmd.execute(cmd, src));
@@ -647,6 +654,46 @@ public final class SelfTest {
         McbotMod.LOG.info("[r2c] 判读基准：策略全对=true 且 前缀对/教学齐/秒数按帽/客户端等更久/相位映射 五 true。"
                 + "**本场景只验策略与契约**——job 往返（受理→PARK→事件→续跑）在 agent-core 单测里；"
                 + "真机对接看 [brain] job 受理/结束 与 [brain] park= 日志。");
+        f0LifecycleScenario(cp);
+    }
+
+    private static void f0LifecycleScenario(CompanionPlayer cp) {
+        var summon = McbotMod.summonService();
+        var scheduler = McbotMod.scheduler();
+        var waitArgs = new JsonObject();
+        waitArgs.addProperty("seconds", 30);
+        var waiting = McbotMod.toolRegistry().get("wait").runAsync(cp, waitArgs, scheduler);
+        String name = cp.getGameProfile().name();
+        summon.dismiss(null, name);
+        ServerTool.Result stopped = waiting.getNow(null);
+        boolean dismissed = summon.roster().byName(name) == null
+                && !scheduler.busy(cp.getUUID())
+                && stopped != null && stopped.feedback().startsWith("CANCELLED:");
+        summon.summon(null, name);
+        var entry = summon.roster().byName(name);
+        ServerPlayer restored = entry == null ? null : cp.level().getServer()
+                .getPlayerList().getPlayer(entry.uuid());
+        boolean summoned = restored instanceof CompanionPlayer;
+        boolean shutdownCleared = false;
+        if (restored instanceof CompanionPlayer replacement) {
+            var next = McbotMod.toolRegistry().get("wait").runAsync(replacement, waitArgs, scheduler);
+            scheduler.cancelAll("验收停服清理。");
+            var cancelled = next.getNow(null);
+            shutdownCleared = !scheduler.busy(replacement.getUUID())
+                    && cancelled != null && cancelled.feedback().startsWith("CANCELLED:");
+        }
+        McbotMod.LOG.info("[f0-world] 遣散取消任务={} 再召唤成功={} 停服槽清空={}",
+                dismissed, summoned, shutdownCleared);
+        Path stopFlag = FabricLoader.getInstance().getGameDir().resolve("mcbot/autotest-stop.flag");
+        if (Files.exists(stopFlag)) {
+            try {
+                Files.delete(stopFlag);
+                McbotMod.LOG.info("AUTOTEST 完成，按开发标记正常停服。");
+                cp.level().getServer().halt(false);
+            } catch (java.io.IOException failure) {
+                McbotMod.LOG.error("AUTOTEST 停服标记处理失败", failure);
+            }
+        }
     }
 
     private static JsonObject moveArgs(net.minecraft.core.BlockPos pos) {

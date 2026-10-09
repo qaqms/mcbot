@@ -1,0 +1,51 @@
+{
+  "task": {"text": "Inspect your status and surroundings, then report.", "wait_s": 0},
+  "ask": {"text": "Report your current status."},
+  "answer": {"question_id": "q8", "text": "Do not change terrain."},
+  "cancel": {"task_id": 1},
+  "status": {
+    "contract_version": "1.0",
+    "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f",
+    "in_game": true,
+    "brain_enabled": true,
+    "model": "example-model",
+    "companion": "steve",
+    "current_task": 1,
+    "queued_tasks": 0,
+    "pending_asks": 0,
+    "pending_tools": 0,
+    "pending_jobs": 1,
+    "pending_questions": 0,
+    "parked": true,
+    "parked_jobs": 1,
+    "accept_mode": true,
+    "late_results": 0
+  },
+  "events": [
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "state", "task_id": 1, "status": "queued"},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "state", "task_id": 1, "status": "running"},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "progress", "task_id": 1, "text": "status receipt", "tool": "status", "ok": true},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "progress", "task_id": 1, "text": "ACCEPTED: movement started; no result yet.", "tool": "move_to", "job_id": "j3"},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "state", "task_id": 1, "parked": true, "outstanding": 1},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "state", "task_id": 1, "parked": false, "outstanding": 0},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "progress", "task_id": 1, "text": "movement receipt", "tool": "move_to", "ok": true},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "question", "task_id": 1, "question_id": "q8", "text": "May I change terrain?"},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "state", "task_id": 1, "text": "answer accepted"},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "progress", "task_id": 1, "text": "owner answer receipt", "tool": "ask_owner", "ok": true},
+    {"contract_version": "1.0", "session_id": "d10ace27-136d-4f91-8ad9-a4a50e40538f", "ev": "done", "task_id": 1, "status": "completed", "text": "Task report."}
+  ],
+  "taskResult": {
+    "task_id": 1,
+    "done": true,
+    "status": "completed",
+    "fragments": [
+      "status receipt",
+      "ACCEPTED: movement started; no result yet.",
+      "movement receipt",
+      "May I change terrain?",
+      "answer accepted",
+      "owner answer receipt",
+      "Task report."
+    ]
+  }
+}

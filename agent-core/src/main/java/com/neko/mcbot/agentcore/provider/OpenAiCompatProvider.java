@@ -8,6 +8,7 @@ import com.neko.mcbot.agentcore.llm.Msg;
 import com.neko.mcbot.agentcore.llm.ToolCall;
 import com.neko.mcbot.agentcore.llm.ToolSpec;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
@@ -24,7 +25,7 @@ public final class OpenAiCompatProvider implements ChatProvider {
 
     public OpenAiCompatProvider(String name, String baseUrl, String apiKey, String model) {
         this.name = name;
-        this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        this.baseUrl = normalizeBaseUrl(baseUrl);
         this.apiKey = apiKey;
         this.model = model;
     }
@@ -37,6 +38,25 @@ public final class OpenAiCompatProvider implements ChatProvider {
     @Override
     public String endpoint() {
         return baseUrl + "/chat/completions";
+    }
+
+    private static String normalizeBaseUrl(String value) {
+        try {
+            String base = value == null ? "" : value.trim();
+            while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+            URI uri = URI.create(base);
+            if (!("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getHost() == null || uri.getUserInfo() != null
+                    || uri.getRawQuery() != null || uri.getRawFragment() != null) {
+                throw new IllegalArgumentException();
+            }
+            if (base.endsWith("/chat/completions")) {
+                base = base.substring(0, base.length() - "/chat/completions".length());
+            }
+            return base;
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("API address must be an HTTP(S) URL without credentials or query parameters");
+        }
     }
 
     /** 换道重试用：只改 baseUrl，其余（key/model/名）照旧。 */

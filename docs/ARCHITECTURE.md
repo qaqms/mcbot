@@ -12,7 +12,7 @@
 ├─ Minecraft 客户端（主人）  src/client/
 │    AgentRunner：大脑宿主（agent-core AgentLoop）
 │    BridgeHttp：127.0.0.1 桥（对 neko）
-│    McbotPanelScreen：G 面板（配置/召唤/聊天/叫停）
+│    McbotPanelScreen：G 面板（任务/模型/同伴三页，滚动、固定操作区）
 │    ⇅ 自定义 payload mcbot:c2s / mcbot:s2c（单 JSON 信封）
 │
 └─ Minecraft 服务器（联机服） src/main/
@@ -30,8 +30,8 @@
 |---|---|---|
 | 服务器主线程 | 三道闸后的一切：工具执行、Scheduler tick、假玩家 | 世界操作只在这条线 |
 | 客户端主线程（渲染） | `AgentRunner.tick()` 超时巡检、面板、聊天注入 | GUI 调用必须 `mc.execute()` 到此线 |
-| HttpClient 线程 | SSE 流、AgentLoop 全部回调（onReply/onToolInvoked…） | 碰 GUI 前必须 hop；碰桥事件环安全（自带锁） |
-| mcbot-bridge 线程池（4，daemon） | REST/MCP/SSE 处理 | 进大脑一律经 AgentRunner 的并发安全入口 |
+| HttpClient 线程 | HTTP/SSE 传输与解析 | CallbackChatEngine 将流式信号和整轮结果送到客户端主线程 |
+| mcbot-bridge 线程池（8，daemon） | REST/MCP/SSE 处理 | 投令/取消/回答先 hop 客户端主线程；状态可读快照；关闭时关闭线程池 |
 
 实锤教训：GUI 不 hop 会报 `Rendersystem called from wrong thread`（曾真实发生，已修）。
 
@@ -62,7 +62,7 @@ src/client/          客户端
   agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(模型侧描述)
   bridge/            BridgeHttp(JDK HttpServer 适配)/BridgeEvents(生产者总线)
   cfg/               ClientConfig（client.json + MCBOT_* 环境变量覆盖）
-  ui/                McbotPanelScreen（G 面板）
+  ui/                McbotPanelScreen / PanelLayout / PanelFields（G 面板、GUI 像素布局、完整输入/密钥掩码）
 ```
 
 ## 4. 网络协议与三道闸
@@ -76,9 +76,14 @@ src/client/          客户端
   等价于“模型吐了一坨超大参数 → 主人被踢线”。出站 S2C 也按字节量，超限时**不是截断**
   （截断只造出非法 JSON → 对端静默丢弃 → 那个 seq 白等 90s TIMEOUT），
   而是换一条**保留 seq 的合法瘦身回执**，把“范围改小”教给模型；客户端另有发送前自检。
-- **C2S kind**：`summon` / `dismiss` / `tool_call{seq,tool,args}` / `cancel` / `answer`。
-- **S2C kind**：`tool_result{seq,ok,feedback,data?}` / `summon_result` / `dismiss_result` /
+- **C2S kind**：`summon` / `dismiss` / `companion_status` / `tool_call{seq,tool,args}` / `cancel` / `answer`。
+- **S2C kind**：`tool_result{seq,ok,feedback,data?}` / `summon_result` / `dismiss_result` / `companion_state` /
   `cancel_ack` / `event`（服务器主动播报，当前无生产者——留给任务进度事件）。
+- 全局 C2S receiver 只在 mod 初始化注册一次；每条消息取当前 dispatcher，并校验所属服务器，
+  不捕获第一张单人世界。停服取消 scheduler 全部槽位并清空计划缓存；遣散立即取消对应任务。
+  同伴生命周期回执带结构化 `companion` 字段；JOIN 查询当前主人在当前世界的同伴。
+  自动 `companion_state` 同步只更新同伴页与桥公共 state，不写聊天或 transcript；
+  手动召唤/遣散的操作回执保留原有反馈。
 - **三道闸**（`ServerToolDispatcher.handle`，按序）：
   ① 尺寸/格式（`C2s.CODEC` 显式字节闸 + `Envelope.decode` 判空丢弃）；
   ② 速率：按玩家 token bucket，容量 60、补充 20/秒，超频回 `DENIED:消息过于频繁`；
@@ -88,11 +93,11 @@ src/client/          客户端
 ## 5. 大脑回路（AgentLoop）
 
 ```
-submit(指令) → pump → step → [压缩?] → LLM(流式) → turn
-  turn 无 tool_calls → onReply(作答) → pump 下一条
+submit(task_id, 指令) → pump → onTaskStarted → step → LLM(流式) → turn
+  turn 无 tool_calls → onReply(展示) → onTaskFinished(COMPLETED) → [链尾压缩?] → pump
   turn 有 tool_calls → 串行执行（ToolExecutor）→ 每条回执进对话 → step
-叫停（cancelDirective）：清队列 + 标记；在下一个步边界生效；
-  若正停在流式回答上，整轮作废（不执行其工具、不留悬挂 tool_calls）。
+cancelTask(id)：匹配活动/排队项；0 全部。活动项立即终止并合成补账，旧回调按代际号丢弃。
+close()：取消全部并拒绝后续 submit；配置重载/断线先关闭旧 loop 再丢引用。
 ```
 
 ### 5.1 受理即回执与 PARK（R2-S4 阶段 2）
@@ -117,7 +122,7 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 - **PARK 不计步**：`steps` 只在 `step()` 里涨，所以等一条 3 分钟的移动不会吃掉 40 步帽。
 - **PARK 的铁律**：解锁（叫停/新指令）之前，必须给**每一条** in-flight 的 `tool_call`
   补一条合成回执（`CANCELLED:`/`SUPERSEDED:`）。少一条，下一次请求里那个 tool_call 就有
-  id 找不到配对的消息 → OpenAI 400，整段历史作废。唯一实现是 `AgentLoop.supersedeAll`。
+  id 找不到配对的消息 → OpenAI 400，整段历史作废。取消/顶替的唯一补账实现是 `AgentLoop.stopActive`。
 - 客户端侧两段式等待收在 `PendingJobs<T>`：`seq → 终局` / 受理后转 `jobId → job_event`，
   凭据（那个 future）跟着转段搬；**超时口径只有一处**：受理后的上限 = 服务端报的
   `cap_ticks`×50ms + 15s 余量（`JOB_GRACE_MS`）。
@@ -149,15 +154,22 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
   适配层 `BridgeHttp`（客户端）：JDK HttpServer 绑 `127.0.0.1:57121`，
   `Authorization: Bearer <token>`（token 在 `mcbot/bridge.token`，常量时间比较），
   SSE `Last-Event-ID` 从 200 条 `EventRing` 补发，15 秒心跳。
+- 外部任务契约 v1.0：BridgeContract 共享输入 Schema 给 MCP discovery；
+  status 与 SSE data 带 contract_version/session_id，桥重建换 session、事件编号重新从 1 起。
+  REST/MCP 严格参数类型，安全 error_code；body 超限为 413。SSE 补发与订阅在同一锁内排序，
+  不把旧桥游标带进新世界；无持久任务查询/幂等提交，超时与连接丢失不能自动重发。
 - 生命周期：JOIN 起、DISCONNECT 关；桥只服务当前进世界的主人。
-- 事件四类帧：`progress`（工具回执/护栏）/ `done`（作答）/ `question`（ask_owner 反问，
-  带 `question_id`）/ `state`（叫停/召唤等状态变化）。**任务级归组**：帧内 `task_id` 由
-  投令时分配，`POST /v1/task` 的 `fragments` 只收同一 task_id（未标号的公共帧除外）。
-- 完整契约见 `docs/BRIDGE.md`。
+- 事件四类帧：progress（工具回执/护栏）、done（唯一任务终态，含 status）、question（反问，
+  带 question_id）、state（queued/running/PARK/回答确认/公共生命周期）。仅匹配任务的 done
+  结束窗口；task_id=0 为公共事件，不结束其他任务。状态与取消详见桥契约。
+- 任务编号在投令时分配，但 current_task 只在 onTaskStarted 更新；排队不改变活动任务归属。
+  ask 等答由 TaskReplies 按任务编号配对，不取其他任务的回复。
+- fragments 兼容收集本任务及公共事件的所有非空 text，不是 progress 专用字段；
+  结构化处理依赖 SSE。完整权威契约、机器 Schema/示例路径及连接器验收见 `docs/BRIDGE.md`。
 
 ## 7. 身体层（假玩家）
 
-- 身份：`offlineUuid(name)`（OfflinePlayer 公式）→ 名册（`mcbot/companions.json`）记归属；
+- 身份：`offlineUuid(name)`（OfflinePlayer 公式）→ 名册（`<世界目录>/mcbot/companions.json`）记归属；
   背包/坐标在原版 playerdata `.dat`。`placeNewPlayer` 全流程进场（FakeConnection：
   EmbeddedChannel + 丢弃一切出站发包 + 吞 disconnect；keep-alive 因出站被丢而自然失效）。
 - 进场后**必须重设**游戏模式/无敌（placeNewPlayer 会重放旧存档数据），再做
@@ -175,19 +187,45 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
   执行期每 20 节点复核未来 5 节点，变了就地重规划（≤2 次）；同层走路保持 0.45 格/tick
   滑步节奏（M4 行为视觉回归）。搜索分帧：每 tick 最多展开 300 节点，主线程永不卡崩。
 
-## 8. 配置文件与运行目录（`<gameDir>/mcbot/`）
+## 8. 配置文件与运行目录
 
 | 文件 | 归属进程 | 说明 |
 |---|---|---|
-| `client.json` | 客户端 | `{base_url, model, api_key, persona}`；`MCBOT_*` 环境变量优先覆盖；缺任一必填 = 大脑不启动 |
-| `companions.json` | 服务器 | 名册（uuid/name/ownerUuid/ownerName），Gson |
-| `bridge.token` | 客户端 | 桥鉴权 token，首次进世界随机生成，跨重启稳定 |
-| `skills/*.md` | 客户端 | 技能笔记原文拼进 system prompt |
-| `autotest.flag` | 服务器 | 存在即启动约 3 秒后跑 SelfTest 并自删（仅开发） |
+| `<gameDir>/mcbot/client.json` | 客户端 | `{base_url, model, api_key, persona}`；`MCBOT_*` 环境变量优先覆盖；缺任一必填 = 大脑不启动 |
+| `<世界目录>/mcbot/companions.json` | 服务器 | 该存档的名册（uuid/name/ownerUuid/ownerName），Gson；同一存档重进恢复，不跨存档召唤 |
+| `<gameDir>/mcbot/bridge.token` | 客户端 | 桥鉴权 token，首次进世界随机生成，跨重启稳定 |
+| `<gameDir>/mcbot/skills/*.md` | 客户端 | 技能笔记原文拼进 system prompt |
+| `<gameDir>/mcbot/autotest.flag` | 服务器 | 存在即启动约 3 秒后跑 SelfTest 并自删（仅开发） |
+| `<gameDir>/mcbot/autotest-stop.flag` | 服务器 | 开发验收链结束后自删并正常停服；未设置则保持运行 |
+
+旧实例级名册仅在当前世界尚无名册时迁移：必须有同 UUID 的 `playerdata/*.dat` 才导入，
+迁移结果（包括空列表）写入当前世界，旧文件保留且不修改。匹配原版玩家数据证明它曾在此世界出现，
+不能区分旧 bug 造成的误重进；此类既有伙伴可在该世界正常遣散。
 
 ## 9. 交互入口速查
 
 - 键位：**G** 开面板（`key.mcbot.panel`，MISC 分类，可重映射）。
+- 面板：任务页派发/停止与换行记录；模型页完整配置/安全错误提示/连接测试；同伴页召唤/遣散。
+  模型/记录区域可滚动，切页与 resize 复用输入控件保留草稿；仅完整落入视口的表单控件可交互。
+  密钥通过 EditBox.addFormatter 星号显示，覆写读屏消息避免朗读原值。
+- 查看状态/扫描附近直接派发白名单只读游戏工具，不调用模型、不生成 agent task，
+  不干扰当前任务；同伴页显示当前世界的生命周期回执。未召唤仍由 owner 闸拒绝工具。
+- 模型页连接测试：ModelConnectionTest 使用独立 LlmClient，仅声明 connection_probe，
+  本地补配对工具回执后再请求最终文字，游戏工具不参与，配置不自动保存。
+  非 200 为 LlmFailure（HTTP 状态/网页类别），未知异常不回显原文；200 空流不作为成功作答。
+- 模型通信当前仅实现 OpenAI 兼容 Chat Completions SSE；模型名称可自定义，
+  但尚未实现 Responses 或 Anthropic Messages。LlmClient 向宿主回调 ResponseDiagnostics：
+  每次 HTTP 尝试只包含状态码、固定格式/结束原因/服务错误枚举及字节/帧/解析错误计数，
+  不含 URL、请求正文、密钥或远端文本。RequestDiagnostics 在发请求前统计实际出站 JSON：
+  角色/规模、工具配对/参数结构及流式选项；只含枚举与数值，不保留内容或内容哈希。
+  任务写 `[brain] llm request/response`，面板测试写 `[model-test] llm request/response`，
+  按本进程唯一 request 编号配对，避免相邻行误配或依赖游戏未收集的 System.Logger。
+  ServiceErrorDiagnostics 将 error.code/type/param/status 映射到本地固定类别，
+  错误文本匹配只记 MESSAGE_HINT，未知值 UNKNOWN，不回显原文；普通 JSON 错误诊断
+  捕获上限 16384 字符，超限单独标记。此诊断不新增其他模型协议，也不改出站请求。
+  HTTP 200 内的 error 帧单独报服务错误（即使此前有部分文字也不算正常成功），
+  error 出现后后续帧不再触发新工具，已早派发动作不能回滚；200 HTML 报地址/网页问题。
+  空响应仍失败、不自动重试，单次失败不是不兼容的证明。
 - 聊天：`@bot <指令>`（不进服务器聊天）；整句 `停/停下/停手/取消/别干了/别做了/cancel/stop`
   = 叫停（不走模型）。
 - 服务器命令（OP，gamemaster 级）：`/mcbot ping|summon <名>|dismiss <名>|list`。
@@ -207,8 +245,7 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |
 | 前缀(R2-S2) | FOLD_KEEP_TAIL=12；折叠只在 index<foldCheckpoint 冻结区；prefix reset 全库仅两事件（compaction / directive-boundary）；system 换发仅指令边界；压缩链尾 finishChain（叫停链不压） |
-| 流式(R2-A) | SSE 逐行回调（自实现 BodySubscriber，增量 UTF-8 解码+跨 chunk 攒半行/半字符/CRLF）；闭合判定=顶层括号配平 **且** schema required 齐；就绪信号每 index 一生一次；工具就绪即在回调线程派发（execute 只投递不阻塞）；记账按 index 顺序折叠；同一 index 的 arguments 只许累积一次 |
+| 流式(R2-A/F0) | SSE 逐行解析；闭合判定=顶层括号配平且 required 齐；客户端 CallbackChatEngine 送主线程；仅 index 0 早派发，后序延迟串行；记账按 index 原序；arguments 只累积一次 |
 | 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具仅 move_to(3600tick)/break_block(1200tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
 | 名册 | v1 每主人 1 同伴；名字 `[a-z0-9_]{2,16}` |
-

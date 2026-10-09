@@ -3,6 +3,7 @@ package com.neko.mcbot.agentcore.loop;
 import com.neko.mcbot.agentcore.convo.Conversation;
 import com.neko.mcbot.agentcore.llm.AssistantTurn;
 import com.neko.mcbot.agentcore.llm.ChatEngine;
+import com.neko.mcbot.agentcore.llm.LlmFailure;
 import com.neko.mcbot.agentcore.llm.Msg;
 import com.neko.mcbot.agentcore.llm.ToolCall;
 import com.neko.mcbot.agentcore.llm.ToolSpec;
@@ -19,7 +20,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 /**
@@ -29,7 +29,15 @@ import java.util.function.Supplier;
  */
 public final class AgentLoop {
 
+    public enum TaskStatus { COMPLETED, FAILED, CANCELLED, SUPERSEDED }
+
     public interface Listener {
+        default void onTaskStarted(long taskId) {
+        }
+
+        default void onTaskFinished(long taskId, TaskStatus status, String text) {
+        }
+
         default void onReply(String text) {
         }
 
@@ -107,10 +115,10 @@ public final class AgentLoop {
      * 一条指令里最多允许几个工具调用"提前派发"。
      *
      * <p><b>为什么是 1 而不是全部</b>：早派发在流式过程中就把 payload 发出去，
-     * 这些调用**不走 {@link #awaitAndRecord} 的串行链**。而 mod 侧的执行器背后只有
+     * 这些调用**不走 {@link #runTools} 的串行链**。而 mod 侧的执行器背后只有
      * 一具身体 + 单槽调度器（忙即回 BUSY），所以同轮若多个"占身体"的调用一起早派发，
      * 只有第一个能进槽，其余立刻被拒——**一条 BUSY 教学换一次白跑的往返**。
-     * 只早派发首个就同时拿到两件事：单调用场景零损失（仍然提前起跑），
+     * 只早派发 index 0 就同时拿到两件事：单调用场景零损失（仍然提前起跑），
      * 多调用场景退回 R2-A 之前的串行语义（第二个起，等轮落地后按 index 依次发）。
      *
      * <p>纯只读工具（status/scan_area）其实可以并行，但 agent-core 不认识"哪些工具占身体"，
@@ -158,29 +166,29 @@ public final class AgentLoop {
      *  链中不换 system 前缀）；宿主若自己管缓存则不传。 */
     private final PromptBuilder promptCache;
 
-    private final ArrayDeque<String> pending = new ArrayDeque<>();
+    private record Directive(long id, String text) {
+    }
+
+    private final ArrayDeque<Directive> pending = new ArrayDeque<>();
+    private Directive activeDirective;
+    private long generation;
+    private boolean closed;
+    private StepReactor activeReactor;
     private boolean running;
-    /** 主人叫停标记：在当前链的下一个步边界生效；换发新指令时清零。 */
-    private volatile boolean cancelRequested;
     private int steps;
     private String lastCallKey;
     private int repeatCount;
     private boolean stuckAbort;
-    /** 本步的早派发反应器（R2-A）；一步一个，步首新建、收尾置空。 */
-    private StepReactor reactor;
     /** 本步工具调用的落账账本；非 null = "这一步的工具还没全部写进对话"。 */
     private Ledger ledger;
     /**
      * PARK 标记（R2-S4）：这条指令的工具里有"已受理、还没结果"的长活，链挂起等事件。
      *
      * <p>与非 PARK 的区别只有一个但很关键：PARK 期间**没有下一个步边界**来消费
-     * {@link #cancelRequested} 或推进指令队列，所以叫停/换发必须在本地就地解锁并补齐回执
+     * 取消或推进指令队列，所以叫停/换发必须在本地就地解锁并补齐回执
      * （见 {@link #cancelDirective()} / {@link #submit(String)}）。
      */
     private volatile boolean parked;
-
-    /** 已被早派发的 index：跨 future 回调串行化，保证一个 index 只派发一次。 */
-    private final Set<Integer> earlyDispatched = ConcurrentHashMap.newKeySet();
 
     public AgentLoop(ChatEngine engine, List<ToolSpec> tools, ToolExecutor executor,
                      Config cfg, Listener listener, Supplier<String> systemPrompt,
@@ -208,37 +216,82 @@ public final class AgentLoop {
     }
 
     public synchronized void submit(String directive) {
-        if (parked) {
-            // 新指令 = PARK 解锁。**铁律**：解锁前必须给每个 in-flight job 补一条合成回执，
-            // 否则那条 tool_call 永远没有配对的 tool 消息——OpenAI 对"assistant.tool_calls
-            // 有 id 却找不到对应 tool 消息"是直接 400，整段历史就废了。
-            // 顺带把挂起的那条链作废（它的续跑已经没有意义了）。
-            supersedeAll("SUPERSEDED:我收到了新指令，这件事被顶掉了，不会再给你它的结果。"
-                    + "要做就重新发一次。");
-            ledger = null;
-            running = false;
+        submit(0, directive);
+    }
+
+    public synchronized void submit(long taskId, String directive) {
+        if (closed) {
+            throw new IllegalStateException("agent loop is closed");
         }
-        pending.add(directive);
+        if (directive == null || directive.isBlank()) {
+            throw new IllegalArgumentException("directive must not be blank");
+        }
+        if (parked) {
+            discardQueued(TaskStatus.SUPERSEDED, "SUPERSEDED:新指令替换了尚未执行的任务。");
+            stopActive(TaskStatus.SUPERSEDED,
+                    "SUPERSEDED:我收到了新指令，这件事被顶掉了。要做就重新发一次。", false);
+        }
+        pending.add(new Directive(taskId, directive));
         if (!running) {
             running = true;
             pump();
         }
     }
 
-    /**
-     * 主人叫停：排队中的指令直接丢弃；正在跑的这条在下一个边界停下
-     * （若它正等某个工具回执，服务端会把该任务的 future 以 CANCELLED 完成，链即续跑到步首）。
-     *
-     * <p>PARK 期间没有"下一个边界"可等（链是挂起的），所以这里就地解锁：先补齐 CANCELLED 合成回执，
-     * 再推一步让 {@link #consumeCancel()} 收尾并回一句"先停手"。
-     */
+    /** 本地立即终止并补齐工具配对；宿主负责同时叫停服务端身体。 */
     public synchronized void cancelDirective() {
-        pending.clear();
-        cancelRequested = true;
-        if (parked) {
-            supersedeAll("CANCELLED:主人主动叫停了这件事。别自作主张续上，等主人的下一步指示。");
-            step();
+        discardQueued(TaskStatus.CANCELLED, "CANCELLED:主人取消了尚未执行的任务。");
+        if (activeDirective != null) {
+            stopActive(TaskStatus.CANCELLED,
+                    "CANCELLED:主人主动叫停了这件事。别自作主张续上，等主人的下一步指示。", true);
+            pump();
         }
+    }
+
+    public synchronized boolean cancelTask(long taskId) {
+        if (taskId == 0) {
+            boolean hadTask = activeDirective != null || !pending.isEmpty();
+            cancelDirective();
+            return hadTask;
+        }
+        if (activeDirective != null && activeDirective.id() == taskId) {
+            stopActive(TaskStatus.CANCELLED, "CANCELLED:主人叫停了这件事。", true);
+            pump();
+            return true;
+        }
+        var it = pending.iterator();
+        while (it.hasNext()) {
+            Directive d = it.next();
+            if (d.id() == taskId) {
+                it.remove();
+                listener.onTaskFinished(d.id(), TaskStatus.CANCELLED,
+                        "CANCELLED:主人取消了尚未执行的任务。");
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public synchronized long currentTaskId() {
+        return activeDirective == null ? 0 : activeDirective.id();
+    }
+
+    public synchronized int queuedTasks() {
+        return pending.size();
+    }
+
+    public synchronized boolean isParked() {
+        return parked;
+    }
+
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        discardQueued(TaskStatus.CANCELLED, "CANCELLED:大脑会话已关闭。");
+        stopActive(TaskStatus.CANCELLED, "CANCELLED:大脑会话已关闭。", false);
+        running = false;
     }
 
     /**
@@ -249,15 +302,18 @@ public final class AgentLoop {
      * 真结果到了就该被丢掉，而不是把已经写好的对话再改一遍。
      */
     public synchronized void onJobEvent(String jobId, ToolOutcome outcome) {
-        if (jobId == null || ledger == null) {
+        if (jobId == null || closed) {
             return;
         }
-        int idx = ledger.indexOfJob(jobId);
+        int idx = ledger == null ? -1 : ledger.indexOfJob(jobId);
         if (idx < 0) {
+            if (activeReactor != null) {
+                activeReactor.rememberJobEvent(jobId, outcome);
+            }
             return;
         }
         ledger.resolve(idx, outcome);
-        if (ledger.flush()) {
+        if (ledger.flush() && ledger.dispatchComplete) {
             ledger = null;
             parked = false;
             listener.onParked(false, 0);
@@ -271,27 +327,58 @@ public final class AgentLoop {
      * <p>为什么必须合成而不是"留着以后再说"：协议要求每条 tool_call 都有配对的 tool 消息，
      * 而这条指令的历史**马上**就会被下一条指令的请求带出去。没有合成回执 = 下次请求 400。
      */
-    private void supersedeAll(String syntheticText) {
-        if (ledger == null) {
-            parked = false;
-            return;
+    private void stopActive(TaskStatus status, String text, boolean reply) {
+        generation++;
+        if (activeReactor != null) {
+            activeReactor.seal();
+            activeReactor = null;
         }
-        for (int idx : ledger.outstanding()) {
-            ledger.resolve(idx, ToolOutcome.synthetic(syntheticText));
+        if (ledger != null) {
+            for (int i = 0; i < ledger.calls.size(); i++) {
+                ledger.resolve(i, ToolOutcome.synthetic(text));
+            }
+            ledger.flush();
+            ledger = null;
         }
-        ledger.flush();
+        if (parked) {
+            listener.onParked(false, 0);
+        }
         parked = false;
-        listener.onParked(false, 0);
+        Directive stopped = activeDirective;
+        if (stopped != null) {
+            if (reply) {
+                listener.onNotice("cancelled by owner");
+                listener.onReply("（收到，我先停手，等你的下一步指示。）");
+            }
+            listener.onTaskFinished(stopped.id(), status, text);
+        }
+        activeDirective = null;
+        running = false;
     }
 
-    private void pump() {
-        String d = pending.poll();
-        if (d == null) {
-            running = false;
-            cancelRequested = false;
+    private void discardQueued(TaskStatus status, String text) {
+        while (!pending.isEmpty()) {
+            Directive d = pending.poll();
+            listener.onTaskFinished(d.id(), status, text);
+        }
+    }
+
+    private boolean isCurrent(long expectedGeneration) {
+        return !closed && activeDirective != null && generation == expectedGeneration;
+    }
+
+    private synchronized void pump() {
+        if (closed) {
             return;
         }
-        cancelRequested = false; // 叫停只对当时那条链有效，不追溯新指令
+        Directive d = pending.poll();
+        if (d == null) {
+            running = false;
+            return;
+        }
+        activeDirective = d;
+        generation++;
+        running = true;
         convo.onDirectiveBoundary(); // 熔断计数随新指令重置
         convo.onNewDirective();     // R2-B：折叠检查点归零（合法 prefix reset 之二）
         if (promptCache != null) {
@@ -304,119 +391,122 @@ public final class AgentLoop {
         // 新指令不继承上一条的账本/PARK（换发路径已在 submit 里补齐合成回执）
         ledger = null;
         parked = false;
-        convo.add(new Msg.User(d));
+        listener.onTaskStarted(d.id());
+        convo.add(new Msg.User(d.text()));
         step();
     }
 
-    /** 消费叫停标记：命中则回一句停手并推进到下一条（队列已被清空即下线）。 */
-    private boolean consumeCancel() {
-        if (!cancelRequested) {
-            return false;
-        }
-        cancelRequested = false;
-        listener.onNotice("cancelled by owner");
-        listener.onReply("（收到，我先停手，等你的下一步指示。）");
-        pump();
-        return true;
-    }
-
-    private void step() {
-        if (consumeCancel()) {
+    private synchronized void step() {
+        if (closed || activeDirective == null) {
             return;
         }
         if (stuckAbort) {
-            listener.onReply("[内部] 我在同一个操作上反复无进展，先停下了。");
-            finishChain();
+            finishCurrent(TaskStatus.FAILED, "[内部] 我在同一个操作上反复无进展，先停下了。");
             return;
         }
         if (++steps > cfg.maxStepsPerDirective()) {
-            listener.onReply("[内部] 这个任务步数超限，我停下了。");
-            finishChain();
+            finishCurrent(TaskStatus.FAILED, "[内部] 这个任务步数超限，我停下了。");
             return;
         }
 
         // R2-B：步边界推进折叠检查点（必须在 outboundHistory 之前），
         // 本次请求的字节前缀自此对本步之前的历史固定。
         convo.onStepBoundary();
-        // R2-A：本步的早派发状态清空（上一步的已在 awaitAndRecord 里消化干净）。
-        clearEarly();
-        reactor = new StepReactor();
-        Runnable finish = () -> {
-            reactor = null;
-            finishChain(); // R2-B：压缩挪链尾，不在 step 关键路径上等摘要
-        };
-        engine.chat(systemPrompt.get(), convo.outboundHistory(), tools, reactor, true)
-                .thenAccept(turn -> {
-                    convo.noteUsage(turn);
-                    listener.onUsage(turn.promptTokens(), turn.completionTokens(), turn.cachedTokens());
-                    // 缓存浪费诊断（评估 §5.2）：读上一轮的 prompt 与本轮的 cached 做增量对比。
-                    // 只在这里记账，不参与任何判断——它存在的意义是"前缀退化时有人立刻看得见"。
-                    lastCacheWaste = cacheWasteOf(prevPromptTokens, turn.promptTokens(),
-                            turn.cachedTokens());
-                    prevPromptTokens = turn.promptTokens() > 0 ? turn.promptTokens() : prevPromptTokens;
-                    listener.onStreamStats(reactor.stats());
-                    reactor.seal(); // 此后到达的工具就绪信号不再派发（它们已过时）
-                    Map<Integer, CompletableFuture<ToolOutcome>> started = reactor.takeStarted();
-                    if (consumeCancel()) {
-                        if (!started.isEmpty()) {
-                            // 早派发的副作用已经发生且撤不回：如实告诉主人，别装作什么都没做。
-                            listener.onNotice("已派发作废 " + started.size() + " 项（叫停优先）");
-                        }
-                        clearEarly();
-                        finish.run();
-                        return;
-                    }
-                    convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
-                    if (!turn.hasToolCalls() && started.isEmpty()) {
-                        listener.onReply(turn.text());
-                        finish.run();
-                        return;
-                    }
-                    // 同一指令里必须继续问模型（回执已进对话）；finishChain 是"这条指令完了"的出口，
-                    // 在这里调会把工具回执直接丢掉、链断在工具调用上（R2-A 分支重写时踩过）。
-                    runTools(started, turn).thenRun(this::afterTools);
-                })
+        // 每步独立持有反应器，旧流的回调不能改写下一步的派发登记。
+        long stepGeneration = generation;
+        StepReactor reactor = new StepReactor(stepGeneration);
+        activeReactor = reactor;
+        CompletableFuture<AssistantTurn> response;
+        try {
+            response = java.util.Objects.requireNonNull(
+                    engine.chat(systemPrompt.get(), convo.outboundHistory(), tools, reactor, true));
+        } catch (RuntimeException t) {
+            response = CompletableFuture.failedFuture(t);
+        }
+        response.thenAccept(turn -> handleTurn(stepGeneration, reactor, turn))
                 .exceptionally(t -> {
-                    listener.onReply("[内部] 模型调用失败：" + msg(t));
-                    clearEarly();
-                    finish.run();
+                    synchronized (AgentLoop.this) {
+                        if (!isCurrent(stepGeneration) || activeReactor != reactor) {
+                            return null;
+                        }
+                        reactor.seal();
+                        finishCurrent(TaskStatus.FAILED, LlmFailure.userMessage(t));
+                    }
                     return null;
                 });
     }
 
-    private static String msg(Throwable t) {
-        return t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+    private synchronized void handleTurn(long stepGeneration, StepReactor reactor, AssistantTurn turn) {
+        if (!isCurrent(stepGeneration) || activeReactor != reactor) {
+            return;
+        }
+        convo.noteUsage(turn);
+        listener.onUsage(turn.promptTokens(), turn.completionTokens(), turn.cachedTokens());
+        lastCacheWaste = cacheWasteOf(prevPromptTokens, turn.promptTokens(), turn.cachedTokens());
+        prevPromptTokens = turn.promptTokens() > 0 ? turn.promptTokens() : prevPromptTokens;
+        listener.onStreamStats(reactor.stats());
+        reactor.seal();
+        convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
+        if (!turn.hasToolCalls()) {
+            finishCurrent(TaskStatus.COMPLETED, turn.text());
+            return;
+        }
+        Ledger led = new Ledger(turn.toolCalls(), reactor);
+        ledger = led;
+        runTools(reactor.startedSnapshot(), turn, led, stepGeneration)
+                .thenRun(() -> afterTools(led, stepGeneration));
+    }
+
+    private void finishCurrent(TaskStatus status, String text) {
+        Directive finished = activeDirective;
+        listener.onReply(text);
+        listener.onTaskFinished(finished.id(), status, text);
+        activeDirective = null;
+        activeReactor = null;
+        finishChain();
     }
 
     /**
-     * 本步的早派发反应器：既然是"到达即回调"，就必须决定在哪个线程把工具启动起来。
-     *
-     * <p><b>为什么就地启动而不是排队回主线程</b>：排到主线程相当于把省下来的挂起时间
-     * 又还回去了（主线程每拍才跑一次 tick）。{@code executor.execute} 契约上只做
-     * "投递并立刻返回 future"（mod 侧就是发一个 payload），不阻塞，所以直接在回调线程
-     * 调用它是安全的；真正可能久等的 {@code thenAccept} 仍在原线程异步等。
+     * 本步的早派发反应器：流式中只提前启动 index 0，其余调用按最终轮次原序串行。
+     * 宿主可用 CallbackChatEngine 把回调送到主线程，纯库不依赖特定线程调度器。
      *
      * <p><b>顺序纪律</b>：{@code onToolCallReady} 的到达顺序被刻意忽略——最终写
-     * {@code Msg.Tool} 时一律按 index 升序（{@link #awaitAndRecord}），因为 OpenAI 协议要求
+     * {@code Msg.Tool} 时一律按 index 升序（{@link #runTools}），因为 OpenAI 协议要求
      * tool 消息与 assistant.tool_calls 严格配对且同序；打转判定也据此串行推进。
      */
     private final class StepReactor implements TurnSink {
+        private final long stepGeneration;
         private final TurnTimings timings = new TurnTimings();
+        private final Set<Integer> earlyDispatched = ConcurrentHashMap.newKeySet();
         private final Map<Integer, CompletableFuture<ToolOutcome>> started = new ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.AtomicBoolean sealed =
                 new java.util.concurrent.atomic.AtomicBoolean();
         /** 本步已经占掉早派发额度的数量（上限 {@link #MAX_EARLY_DISPATCH}）。 */
         private final java.util.concurrent.atomic.AtomicInteger earlySlots =
                 new java.util.concurrent.atomic.AtomicInteger();
+        private final Map<String, ToolOutcome> jobEvents = new java.util.HashMap<>();
+
+        StepReactor(long stepGeneration) {
+            this.stepGeneration = stepGeneration;
+        }
 
         void seal() {
             sealed.set(true);
         }
 
-        Map<Integer, CompletableFuture<ToolOutcome>> takeStarted() {
-            Map<Integer, CompletableFuture<ToolOutcome>> copy = new java.util.TreeMap<>(started);
-            started.clear();
-            return copy;
+        Map<Integer, CompletableFuture<ToolOutcome>> startedSnapshot() {
+            return new java.util.TreeMap<>(started);
+        }
+
+        void rememberJobEvent(String jobId, ToolOutcome outcome) {
+            for (var future : started.values()) {
+                if (!future.isDone() || future.isCompletedExceptionally() || future.isCancelled()) continue;
+                ToolOutcome r = future.getNow(null);
+                if (r != null && r.accepted() && jobId.equals(r.jobId())) {
+                    jobEvents.putIfAbsent(jobId, outcome);
+                    return;
+                }
+            }
         }
 
         StreamStats stats() {
@@ -427,24 +517,31 @@ public final class AgentLoop {
 
         @Override
         public void onToolCallReady(int index, ToolCall call) {
-            if (sealed.get() || !earlyDispatched.add(index)) {
-                return;
+            synchronized (AgentLoop.this) {
+                if (index != 0 || sealed.get() || !isCurrent(stepGeneration) || !earlyDispatched.add(index)) {
+                    return;
+                }
+                if (earlySlots.incrementAndGet() > MAX_EARLY_DISPATCH) {
+                    return;
+                }
+                started.put(index, executeTool(call));
             }
-            // 额度纪律：只让最先就绪的那个（们）提前起跑。理由见 MAX_EARLY_DISPATCH——
-            // 同轮多个"占身体"的调用一起发出去，服务端单槽只会收下第一个，其余白拿 BUSY。
-            // 超额的调用不在这里发，改由 awaitAndRecord 按 index 依次串行执行。
-            if (earlySlots.incrementAndGet() > MAX_EARLY_DISPATCH) {
-                return;
-            }
-            // 与整轮落地后的路径同构：executor.execute 只投递、不阻塞（mod 侧就是发一个 payload），
-            // 所以就地启动是安全的；真正可能久等的等待仍在 awaitAndRecord 里异步进行。
-            started.put(index, executor.execute(call.name(), call.argsJson()));
         }
     }
 
-    /** 早派发用：清空本步的早派发登记（下一步开始前调用）。 */
-    private void clearEarly() {
-        earlyDispatched.clear();
+    private CompletableFuture<ToolOutcome> executeTool(ToolCall call) {
+        try {
+            return java.util.Objects.requireNonNull(executor.execute(call.name(), call.argsJson()))
+                    .handle((outcome, failure) -> failure == null && outcome != null
+                            ? outcome : toolFailure());
+        } catch (RuntimeException failure) {
+            return CompletableFuture.completedFuture(toolFailure());
+        }
+    }
+
+    private static ToolOutcome toolFailure() {
+        // 不回显执行器异常原文：异常可能夹带端点凭据或请求内容。
+        return new ToolOutcome(false, "INTERNAL:工具执行失败，没有收到有效结果。向主人说明情况，别猜测已完成。");
     }
 
     /**
@@ -462,11 +559,14 @@ public final class AgentLoop {
         private final List<ToolCall> calls;
         private final ToolOutcome[] outcomes;
         private final String[] jobIds;
+        private final StepReactor reactor;
         /** 已按序写入 convo 的前缀长度（不变式：它之前的槽位全部非空）。 */
         private int flushed;
+        private boolean dispatchComplete;
 
-        Ledger(List<ToolCall> calls) {
+        Ledger(List<ToolCall> calls, StepReactor reactor) {
             this.calls = calls;
+            this.reactor = reactor;
             this.outcomes = new ToolOutcome[calls.size()];
             this.jobIds = new String[calls.size()];
         }
@@ -481,6 +581,10 @@ public final class AgentLoop {
         /** 受理：只登记 jobId，槽位保持"未到达"。 */
         void accepted(int idx, ToolOutcome r) {
             jobIds[idx] = r.jobId();
+            ToolOutcome earlyEvent = reactor.jobEvents.remove(r.jobId());
+            if (earlyEvent != null) {
+                resolve(idx, earlyEvent);
+            }
             ToolCall tc = calls.get(idx);
             listener.onToolAccepted(tc.name(), tc.argsJson(), r.feedback(), r.jobId());
         }
@@ -511,9 +615,9 @@ public final class AgentLoop {
                 ToolCall tc = calls.get(flushed);
                 ToolOutcome r = outcomes[flushed];
                 convo.add(new Msg.Tool(tc.id(), tc.name(), r.feedback(), r.ok()));
+                flushed++;
                 listener.onToolInvoked(tc.name(), tc.argsJson(), r.ok(), r.feedback());
                 noteResult(tc.name(), tc.argsJson(), r);
-                flushed++;
             }
             return flushed == outcomes.length;
         }
@@ -527,11 +631,11 @@ public final class AgentLoop {
      * 等到 {@code job_event} 再来续。PARK 期间不计步（{@code steps} 只在 {@code step()} 里涨），
      * 所以长活不会把 40 步帽吃掉。
      */
-    private void afterTools() {
-        if (ledger == null) {
-            step();
+    private synchronized void afterTools(Ledger led, long stepGeneration) {
+        if (!isCurrent(stepGeneration) || ledger != led) {
             return;
         }
+        led.dispatchComplete = true;
         if (ledger.flush()) {
             ledger = null;
             step();
@@ -559,21 +663,34 @@ public final class AgentLoop {
      * {@link Ledger#flush()} / {@link #afterTools()}。
      */
     private CompletableFuture<Void> runTools(
-            Map<Integer, CompletableFuture<ToolOutcome>> early, AssistantTurn turn) {
-        Ledger led = new Ledger(turn.toolCalls());
-        ledger = led;
+            Map<Integer, CompletableFuture<ToolOutcome>> early, AssistantTurn turn,
+            Ledger led, long stepGeneration) {
         CompletableFuture<Void> chain = CompletableFuture.completedFuture(null);
         for (int i = 0; i < turn.toolCalls().size(); i++) {
             final int idx = i;
             ToolCall tc = turn.toolCalls().get(i);
             CompletableFuture<ToolOutcome> started = early.get(i);
-            CompletableFuture<ToolOutcome> result =
-                    started != null ? started : executor.execute(tc.name(), tc.argsJson());
-            chain = chain.thenCompose(ignored -> result).thenAccept(r -> {
-                if (r.accepted()) {
-                    led.accepted(idx, r);
-                } else {
-                    led.resolve(idx, r);
+            chain = chain.thenCompose(ignored -> {
+                synchronized (AgentLoop.this) {
+                    if (!isCurrent(stepGeneration) || ledger != led) {
+                        return CompletableFuture.completedFuture(ToolOutcome.synthetic(
+                                "CANCELLED:这个操作所属的任务已终止，没有继续执行。"));
+                    }
+                    if (started != null) {
+                        return started;
+                    }
+                    return executeTool(tc);
+                }
+            }).thenAccept(r -> {
+                synchronized (AgentLoop.this) {
+                    if (!isCurrent(stepGeneration) || ledger != led) {
+                        return;
+                    }
+                    if (r.accepted()) {
+                        led.accepted(idx, r);
+                    } else {
+                        led.resolve(idx, r);
+                    }
                 }
             });
         }
@@ -610,9 +727,21 @@ public final class AgentLoop {
      * 压缩成功后 Conversation 内部已调 noteCompacted（真数归零 + prefix reset），
      * 时机仍在"重写历史"的同一同步块里，R0 回归钉不破。
      */
-    private void finishChain() {
+    private synchronized void finishChain() {
         if (convo.needsCompaction()) {
-            convo.compact(engine).whenComplete((v, t) -> pump());
+            long expectedGeneration = generation;
+            try {
+                convo.compact(engine).whenComplete((v, t) -> {
+                    synchronized (AgentLoop.this) {
+                        if (!closed && generation == expectedGeneration) {
+                            pump();
+                        }
+                    }
+                });
+            } catch (RuntimeException failure) {
+                listener.onNotice("历史压缩失败，保留原文继续。");
+                pump();
+            }
         } else {
             pump();
         }

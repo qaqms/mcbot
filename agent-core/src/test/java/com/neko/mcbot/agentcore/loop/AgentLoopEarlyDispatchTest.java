@@ -120,31 +120,19 @@ class AgentLoopEarlyDispatchTest {
         assertTrue(h.get(2) instanceof Msg.Tool, "第三条应是工具回执");
     }
 
-    /**
-     * 多个工具：结果<b>记账</b>必须按 index 升序，与"谁先完成"完全无关。
-     *
-     * <p>造法：只提前报第 0 个（第 1、2 个等整轮落地才派发），并把三个 future 全交给测试线程，
-     * 按 <b>2 → 1 → 0 的逆序</b>完成，让"完成顺序"与"index 顺序"严格相反。
-     *
-     * <p><b>断言必须放在完成中途</b>：若只在全部完成后再看历史，{@code allOf}（只等齐、
-     * 不排序）也会因为"最终都写进去了"而通过——那样的断言对实现没有鉴别力。
-     * 这里在只完成 c 的那一刻就检查"已记账集合"，排序与非排序实现在此刻必然不同：
-     * 有序实现一个都还没写（在等 a），非排序实现已经写了 c。
-     */
+    /** 首个工具可以早起跑，后续工具必须等前一个回执，记账仍与调用顺序一致。 */
     @Test
-    void toolResultsAreRecordedInIndexOrder() {
+    void earlyToolFinishesBeforeLaterToolsAreDispatchedAndRecorded() {
         var engine = new ScriptedEngine().queue(toolTurn("a", "b", "c"), textTurn("都好了"));
         engine.streamingDelayMs = 100;
         engine.readyReportLimit = 1;
         var futures = new ConcurrentHashMap<String, CompletableFuture<ToolExecutor.ToolOutcome>>();
         var replies = new CopyOnWriteArrayList<String>();
-        var dispatched = new CountDownLatch(3);
 
         var loop = new AgentLoop(engine, List.of(),
                 (name, args) -> {
                     CompletableFuture<ToolExecutor.ToolOutcome> f = new CompletableFuture<>();
                     futures.put(name, f);
-                    dispatched.countDown();
                     return f;
                 },
                 AgentLoop.Config.defaults(),
@@ -157,21 +145,21 @@ class AgentLoopEarlyDispatchTest {
                 () -> "sys", 1_000_000);
 
         loop.submit("三件事");
-        assertTrue(await(dispatched), "三个工具都应被派发（早派发 1 个 + 整轮后 2 个）");
-
-        // 只完成最后一条（index 2）：有序记账此时必须"一格都还没写"
-        futures.get("c").complete(new ToolExecutor.ToolOutcome(true, "c ok"));
-        List<String> midway = recordedToolNames(loop);
-        assertTrue(midway.isEmpty(),
-                "index 0/1 还没落地时不许先写 index 2 的回执（否则配对顺序就乱了），实际: " + midway);
-
-        // 再把 1、0 逆序补齐；最终集合仍必须是 a,b,c
-        futures.get("b").complete(new ToolExecutor.ToolOutcome(true, "b ok"));
+        awaitTrue("整轮已落地", () -> loop.conversation().history().size() >= 2);
+        assertEquals(java.util.Set.of("a"), futures.keySet(),
+                "整轮落地也不能提前派发 b/c：服务端身体仍在执行 a");
+        assertTrue(recordedToolNames(loop).isEmpty());
         futures.get("a").complete(new ToolExecutor.ToolOutcome(true, "a ok"));
+        awaitTrue("b 起跑", () -> futures.containsKey("b"));
+        assertEquals(java.util.Set.of("a", "b"), futures.keySet(),
+                "b 没回执时 c 也不能起跑");
+        futures.get("b").complete(new ToolExecutor.ToolOutcome(true, "b ok"));
+        awaitTrue("c 起跑", () -> futures.containsKey("c"));
+        futures.get("c").complete(new ToolExecutor.ToolOutcome(true, "c ok"));
         awaitTrue("跑完", () -> replies.contains("都好了"));
 
         assertEquals(List.of("a", "b", "c"), recordedToolNames(loop),
-                "工具回执必须按 index 原序写回（完成顺序被故意做成逆序）");
+                "工具回执必须按 index 原序写回");
         var h = loop.conversation().history();
         var assistant = (Msg.Assistant) h.get(1);
         assertEquals(List.of("a", "b", "c"),

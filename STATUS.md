@@ -3,7 +3,531 @@
 > 给后续施工者（人或 AI）：先读仓内 `AGENTS.md`（纪律），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态：M0–M4 ✅ · M4.5/M4.6 ✅ · M6 桥接 ✅ 活体关账 · M8 DigAStar ✅ 双验收 · M5.1 闸① ✅ · 09-08 三线侦察定案+三设计卡 · **R1 无头全线收尾 ✅ 16:31**（S1–S4+S3b；⚠ 09-10 复查发现 `[m9] A3` 转红，原因未定，见 DEVELOPMENT §3）· **R2 波1 ✅ 已 merge（S1 感知 / S2 前缀）** · **R2-S3 真流式+早派发 ✅ 无头关账** · **R2-S4 阶段1 lastPlan 复用 ✅ 无头关账** · **R2-S4 阶段2 受理即回执 + PARK ✅ 无头关账（单测 145/145 全绿；`[r2c]` 六项全 true）** → 下一卡 R2-S4 阶段3（抢占 superseded + `remaining()` 续跑 + progress 事件入桥限速）
+## 当前状态（2026-10-09）：任务桥 v1.0 已固定并过自动化；连接器/新包真机仍待验，模型历史间歇错误未销账
+
+当前优先级由主人确认：先把 MC agent 的任务投递、执行、反问、取消、结束与会话清理跑稳，
+不新增聊天功能。对方开发 N.E.K.O 适配连接器，本仓负责 agent 本体与桥接输出契约。
+原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
+既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### F0 第九轮：五部分契约提交前核对（2026-10-09 17:00，Asia/Shanghai）
+
+- 主人授权在五部分基础契约无阻塞后提交推送。BRIDGE §0 增加“基础能力 / 字段与结果 /
+  事件规则 / 生命周期 / 契约测试”总表，明确各部分保证与不保证什么。
+  双方可以独立改内部实现，但必须保持已固定的可观察行为；破坏性变更须新版本并通知对方。
+- 核对发现 Schema 的 `\S` 与 Java String.isBlank 在 Unicode 空白判定上不完全一致；
+  Schema 改显式 Unicode 范围，不改实际输入处理。新增回归逐个对照 65536 个 BMP 字符，
+  并验全角空格拒绝/NBSP 接受，任务/问答的非空字符串定义保持同源；未扩展游戏/模型能力。
+- 修订前全量强制 build 21s 通过；修订后最终强制 build **23s / 20 个任务**，
+  XML **272/272**（agent-core 179 + 根工程 66 + clientTest 27），
+  failures/errors/skipped 全 0。新增 1 例，相对上一诊断包累计新增 20 例契约/HTTP 回归。
+  没有启动 MC/连接器、运行服务端 SelfTest 或请求真实模型，真机待验项保持不变。
+- 16:59:59 核验 build/libs 与 dist 的 SHA256 均为
+  `6bf2d5c38a0eba86855c817d426c49b3c3240c5eef4d7780b0f400d93dc9b99d`；
+  旧 dist 保留在 `dist/mcbot-0.1.0-before-contract-audit.jar`（9bcfa188…）。
+  游戏实例仍未替换（50c0675e…），配置、凭据与存档未改。
+- 58 个变更/新文件提交前实际凭据/token、禁入路径、新增绝对路径扫描全零，
+  diff --check 通过，核验时无 Java/javaw。提交范围包含本次契约依赖的既有 F0
+  生命周期、面板/世界隔离与模型诊断改动，不包含测试 JAR、run/logs、配置或凭据。
+- 远端核对 main 仍为 ac1dc10，现有本地分支 fix/task-lifecycle；
+  `push --dry-run` 成功，随后 ls-remote 确认仍仅 main，**没有实际推送或新建远端分支**。
+  此前本机 user.name/user.email 均未配置，因此未借用历史作者或伪造提交。
+- 17:08 主人明确授权使用本地凭据中的身份提交并推送此前更新。通过既有 Git 凭据
+  向 GitHub /user 核验账号为 qaqms，采用该账号数字 ID 对应的 GitHub noreply 邮箱，
+  仅为本仓设置提交身份；凭据只在内存使用，不输出、不写仓库或远端 URL。
+  复核 XML 仍为 272/272、两份 JAR 哈希一致；发布目标为 fix/task-lifecycle，
+  不直接改 main。实际发布以 Git 提交记录及远端同名分支 HEAD 核验为准，不以 dry-run 为证据。
+
+### F0 第八轮：固定连接器与 MC agent 的任务级接口（2026-10-09，Asia/Shanghai）
+
+**范围与交接**：
+- 主人明确进入“先固定连接器与 MC agent 之间的任务级接口”；本轮只推进 F0 对外契约，
+  不固定 agent 内部实现、不扩展聊天/游戏技能，不改宿主、只读参考、模型配置或存档。
+- `docs/BRIDGE.md` 为唯一权威 v1.0 规格，`dist/README-BRIDGE.md` 为上手索引。
+  固定既有 REST 路径、五个 MCP 工具名、任务窗口、终态、取消、问答及重连边界，
+  标明本轮类型校验/错误返回的兼容收口变更。文档 §6 含连接器离线/活体交接清单。
+- 新机器 Schema 与示例位于
+  `agent-core/src/main/resources/com/neko/mcbot/agentcore/bridge/`：
+  `bridge-v1.schema.json` / `bridge-v1.examples.json`，随模块打包；
+  BridgeContract 直接给 MCP tools/list 提供同一份输入定义，避免文档/发现两份定义漂移。
+
+**实现对齐**：
+- status 与每个 SSE data 增加 contract_version=1.0/session_id；同一桥稳定，重建桥换 UUID。
+  SSE id 只在该桥内递增、重建从 1 起，连接器按会话清零游标，旧任务不能自动重投。
+  配置重载不会重建桥，但旧任务/问题终止；没有历史任务查询/幂等提交，不用计数猜旧任务完成。
+- REST/MCP 共用严格非空字符串、整数与非负 64 位 task_id 校验；
+  wait_s 缺省 8/夹到 0..120 保留，未知字段忽略，非法参数不调用 backend。
+  JSON 严格解析；RPC 信封/工具错误分层，MCP 过期问题报 isError=true。
+- REST 安全 error_code 与 MCP JSON 错误统一，不回显异常/输入原文；
+  65536 字节请求体超限明确 413，不再因 IOException 直接无响应断开。
+- SSE 补发与订阅/发布在同一锁内排序，避免注册窗口重叠及并发发布顺序错乱。
+  HttpServer 可注入替身 backend 在本地随机回环端口测试，生产仍只绑既有 57121。
+- 保留 fragments 的真实兼容行为：本任务及公共事件所有非空 text 都会收集，
+  不限 progress；结构化处理依赖 SSE。ask 是同步等待任务结果的兼容入口，
+  135s 超时只释放等待项、不取消任务；取消回执不是服务器物理停机确认。
+- 明确外部 SSE progress 已有工具回执/受理/护栏生产者；
+  内部 job_event.phase=progress 只有预留接收，无服务器发送/限速实现，仍后置。
+
+**验证与产物（16:43–16:45 核验）**：
+- 首轮定向 `:agent-core:test clientTest` BUILD SUCCESSFUL in 30s；
+  最终 `build --rerun-tasks --console=plain --no-daemon` BUILD SUCCESSFUL in 22s，
+  20/20 任务执行。XML **271/271**（agent-core 178 + 根工程 66 + clientTest 27），
+  failures/errors/skipped 全 0；相对上一包新增 **19** 例（契约 13 + HTTP 6）。
+- 覆盖 MCP discovery 与 Schema 相等、示例 REST/MCP 返回一致、metadata/会话隔离、
+  早到事件/窗口/公共片段、类型/越界/坏 JSON/RPC 校验、安全异常、ask 超时不取消/不重投、
+  真 HTTP 鉴权/UTF-8/65536 字节边界、SSE 补发+实时/并发有序/200 条淘汰。
+  示例/Schema 均可解析且发现输入同源；未引入通用 JSON Schema validator，
+  输出行为由具体字段与示例回归断言覆盖，不宣称所有 Schema 分支都经第三方验证器验证。
+- 16:45:10 更新 build/libs 与 dist，SHA256 一致：
+  `9bcfa188608b5165688ee67d948fda2fe326db152e186c757738ea2c4dd5a8bd`。
+  旧 dist 备份 `dist/mcbot-0.1.0-before-bridge-v1.jar`，哈希
+  `50c0675eb193a3502079244c488caf4fff509dc34b9a25a81969078674da6b3b`。
+  内嵌 agent-core 与模块产物哈希一致，BridgeContract 与两个 JSON 资源均确认在包中。
+- **未替换游戏实例 mods 包**；仍是上一服务错误诊断包（50c067…）。
+  本轮未启动 MC/连接器、未请求真实模型、未改动凭据配置/存档；
+  本地测试不读取真实 token/client.json。收尾检查凭据扫描只在内存读已有值，不输出/复制。
+- 58 个变更/新文件的实际 key/token 扫描零命中，新增绝对路径零命中，
+  git diff --check 通过；核验时无 Java/javaw。未提交/推送，既有未提交改动保留。
+  src/main 本轮零新增修改，未跑服务端 SelfTest；后续动服务端仍须按原纪律回归。
+
+**尚未验收**：
+- 固定外部契约不代表 F0 关账。连接器开发者先按 §6 用替身接入，再共同验真实
+  task/progress/question/answer/done/cancel 与配置重载/退世界新会话。
+- 新 v1.0 包尚未真机运行；模型间歇错误、流式时延接线、身体位置/背包恢复、
+  一个真实动作/长活取消等保持原待验证项，不在本轮混入修复。
+
+### F0 第七轮：新诊断包真机日志复核（2026-10-09，Asia/Shanghai）
+
+**范围与安装核对**：
+- latest.log 会话 16:05:24–16:07:36，33295 字节；读取时先在内存替换实际 API key/token，
+  不把凭据或远端原始错误体写入仓库。
+- 已安装 JAR 与 dist SHA256 都为
+  `50c0675eb193a3502079244c488caf4fff509dc34b9a25a81969078674da6b3b`。
+  本轮仅复核日志并更新记录，不改代码、安装包、配置、凭据或存档，不调用远端或重跑构建。
+
+**模型与游戏工具真实结果**：
+- 两次独立连接测试：request 1/2（16:05:58–16:06:05）及 7/8（16:07:01–07），
+  每次工具轮 TOOL_CALLS → 文字轮 STOP，四次 HTTP 均成功。
+- 两张既有存档，同一客户端进程先 `(3)` 再 `(2)`（由保存日志及存档目录时间核对），
+  不是同一存档退出重进，也不是两张未召唤的新世界。各自恢复在册 steve，不据此判跨世界误召唤。
+- 第一存档：request 3/4（16:06:20–32）查状态闭环，request 5/6（16:06:32–41）扫描闭环。
+  第二存档：request 9/10（16:07:10–21）查状态闭环，request 11/12（16:07:21–29）扫描闭环。
+  共 **四个实际任务、八次任务 HTTP**，真实工具各执行一次，均有回执与最终汇报。
+  本次实际是每张存档状态/扫描分开投递，未把它写成“两次相同的状态+扫描合并任务”。
+- 总共 **12 个请求及 12 条配对响应**；全部 HTTP 200、SSE、errors=0、DONE=true、
+  empty=false、malformed=0、parse_errors=0、error_body_truncated=false、error_category=NONE。
+  六个工具轮和六个文字轮；SSE tools 帧数不等于游戏工具调用数量。
+- 全部请求的 missing_results/orphan_results/duplicate_calls/duplicate_results/
+  name_mismatches/invalid_calls/invalid_arguments/interrupted_groups 均 0。
+  两组游戏请求均使用 9 个工具定义、definition_bytes=3213、system_chars=333；
+  messages 从 2→4→6→8，request bytes 分别 4262→4620→4822→5353/5345。
+  最后一轮字节差不能在不存正文的前提下精确归因；未发现结构或流式选项差异。
+- stream=TRUE/include_usage=TRUE、tool_choice/parallel_tool_calls=ABSENT 的当前组合成功；
+  纯工具轮 null_assistant=1/2 也通过。不能把这些字段或小规模历史增长直接当故障原因。
+  本轮没有失败请求，无法进行成功/失败因果对照，更不能反推上一包三次错误的具体类别。
+
+**保存与剩余问题**：
+- 16:06:53 第一存档、16:07:35 第二存档所有维度均保存完成；两次桥按断线关闭，
+  16:07:36 正常 Stopping。未见新 mcbot 异常栈/卡保存；无新崩溃报告，
+  最近仍为 14:21:34 旧报告；复核时无 Java/javaw 进程。
+- Mojang 账号 401、Realms JWT、PerfOS 与 Java 25/LWJGL JNI 警告仍有，不能当模型失败证据。
+- `[brain] llm stream` 仍为 ttfb/ttft/first_tool=-1、chunks/deltas/early=0，
+  与请求 3/9 的游戏工具在模型整轮完成前已执行及真实 SSE 计数矛盾。
+  时延统计接线仍待修，不能据这些占位数断言未流式/未早派发或测算收益。
+- 两张存档的伙伴均先 0,0,0，再 SafeSpawn 移到 0,-60,0；本轮背包本来为空、
+  无伙伴移动样本。位置/背包持久化没有获得有效对照，不宣称恢复通过，也不单凭日志判数据丢失。
+
+**结论与下一步**：
+- 新摘要的真机接线及本轮短历史只读闭环通过。历史间歇流内错误保留观察，
+  不为取得失败样本而盲目重复付费请求；后续自然出现错误时按 request 配对安全分类。
+- F0 尚未关账。后续优先补流式统计接线和身体数据恢复验证，再验真实移动/长活取消/
+  反问/重载/重连及连接器；仍不扩展游戏技能。
+
+### F0 第六轮：服务错误类别与失败请求差异诊断（2026-10-09，Asia/Shanghai）
+
+**旧证据与本轮边界**：
+- 开工复核的 latest.log 仍为 15:30:50–15:35:03、29207 字节，三次 HTTP 200 流内错误
+  的事实不变；旧包没有错误字段分类与请求结构，无法事后还原具体原因。
+- 本轮只改 agent-core 模型诊断、客户端两处日志接线及显式探针/文档，不改服务端、
+  N.E.K.O、只读参考、凭据/配置/存档；不额外请求远端模型，不重放游戏动作，不开其他里程碑。
+
+**本轮落地**：
+- 新 ServiceErrorDiagnostics：error.code/type 的白名单映射，param 仅字段族，
+  status 仅常见固定状态；类别区分鉴权、权限、限流、额度、模型、上下文、工具协议、
+  参数、请求校验、策略、超时与上游/路由。只输出本地枚举/数值，未知为 UNKNOWN，
+  多帧不一致为 MIXED，不把原始错误字符串或内容哈希带出。
+- 有界 message 匹配仅标 MESSAGE_HINT，不当结构化证明。LlmFailure 的用户提示
+  使用同一安全分类，明确未知/线索/不会自动重发，不再对所有流内错误笼统建议查额度。
+- 非 200 / 200 JSON 错误支持跨行诊断；捕获上限 16384 字符，超限单独标记、
+  不解析残片猜根因。非流式 JSON 回答仍不接受，未新增 Responses/Messages 等模型协议。
+  网页 /v1 一次换道保持原规则；error 后的后续流帧不得再派发工具，
+  此前已早派发的动作不能回滚，本轮不宣称可回滚。
+- 新 RequestDiagnostics：统计实际序列化出站 body 的字节数、角色/字符规模、工具定义、
+  未配对/孤儿/重复调用与回执、名称不符、调用结构/参数对象异常、被中断的工具组，
+  以及末角色与 stream/include_usage/tool_choice/parallel_tool_calls。
+  不记录密钥、URL、模型名、提示词、参数、回执正文、ID 或内容哈希，不改/拦截原请求。
+- LlmClient 每次 HTTP 尝试分配本进程唯一 request 编号，request/response 同号，
+  /v1 换道另号并标 attempt=2。任务与连接测试各自写游戏 SLF4J 日志；
+  诊断 Consumer 抛异常不影响派发、结果或重试。ModelProbe 也使用同一安全摘要。
+
+**验证与部署**：
+- 定向本地 HTTP/分类/请求结构回归 build 17s 通过；15:55 全量
+  `build --rerun-tasks --console=plain --no-daemon`：BUILD SUCCESSFUL in 26s，
+  20/20 任务执行；XML **252/252**（agent-core 165 + 根工程 66 + clientTest 21），
+  failures/errors/skipped 全 0，相对上一包新增 22 例。
+- 新测试覆盖结构分类/未知隐私/弱线索/多帧冲突、实际 HTTP 请求与摘要逐字段一致、
+  调用回执配对/历史变化、跨行 JSON 额度分流、超限标记、错误后工具禁止、
+  错标 Content-Type 与 /v1 换道兼容、日志异常隔离及分类后的用户提示。
+  所有 HTTP 测试仅用本地替身，不消耗真实 API 用量。
+- 15:59:20 确认无 Java/javaw 后备份并安装，build/libs、dist、测试实例 mods 三份
+  SHA256 一致：`50c0675eb193a3502079244c488caf4fff509dc34b9a25a81969078674da6b3b`。
+  旧包备份 `dist/mcbot-0.1.0-before-service-error-diagnostics.jar`，
+  SHA256 为 `46065b4d360dce8502e81c912b3c1c7c88c49a9e120d60c994553acbe281cf22`。
+- JAR 内嵌 agent-core 与模块产物哈希一致，并确认两个新诊断类已打包；
+  ModelProbe 无参数编译/运行只显示用法，不发请求。53 个变更/新文件真实凭据/token
+  与新增绝对路径扫描零命中；无提交/推送。本轮 src/main 零新增改动，不重跑 SelfTest。
+
+**下一步与未完成**：
+- 主人用诊断包在同一配置/世界、已有伙伴时，从任务框连续两次发同一只读任务，
+  各次等结束再发；错误出现后保留日志不连续刷。按 request 配对查 error_category/source/
+  param 与历史/配对/流式选项差异，必要时再显式做独立连接测试或清会话对照。
+- 本包尚未真机复现流内错误，不能宣布已定位根因或修好服务。
+  UNKNOWN 要继续收证，不默认归服务宕机/额度/历史；结构相同不证明正文相同。
+  流式时延接线、身体数据恢复与剩余 F0 真机项保持待验证，未在本轮混入修复。
+
+### F0 第五轮：诊断包完整真机日志复核（2026-10-09，Asia/Shanghai）
+
+**范围与产物**：
+- 最新日志 15:30:50–15:35:03；安装包 SHA256 与上一节 model-diagnostics 包一致。
+  本轮只复核日志与记录证据，不调用远端模型、不改代码/配置/存档或替换包，未重跑构建。
+- 日志中两次完整保存（15:34:04 / 15:35:03），最终正常 Stopping；
+  无新增崩溃报告，最近仍为 14:21:34 的旧报告，收尾无 Java/javaw 进程。
+
+**已经通过的真实链路**：
+- 世界 A 15:32:49 恢复在册 steve；15:32:50 companion_state 静默同步，
+  status（2ms）与 scan_area（6ms）按钮正常。
+- 同一客户端退出 A 后进全新 B：15:34:15 旧名册匹配 0，
+  直到 15:34:19 主人手动召唤才出现 steve；B 的 status/scan 按钮正常。
+  这是同进程 A→B 后当前 dispatcher/receiver 及新世界隔离的正证，
+  不是完整 A→B→A/遣散/取消验收。
+- 模型页两次独立连接测试：15:33:08/11 与 15:33:50/53，
+  每次工具调用轮 TOOL_CALLS + 最终文字轮 STOP，四次 HTTP 都为 200 SSE、
+  errors=0、empty=false、DONE=true；证实新诊断确实进入游戏 latest.log。
+- 世界 B 三次实际任务闭环：15:34:29→38 模型 scan_area→真实回执→模型汇报；
+  15:34:39→45 模型 status→真实回执→模型汇报；
+  15:34:50→57 模型 scan_area→真实回执→模型汇报。
+  这些不是只读按钮的假替代，日志同时有 brain 模型轮、tool_result、tool 成功记录与最终回答。
+  三次共六次 HTTP，全部 DONE=true / errors=0 / empty=false / parse_errors=0。
+  回答与超平坦读数一致：未扫描出可行动方块，不能据此说扫描能力缺失。
+
+**仍有的真实问题，不销账**：
+- 世界 A 的三个模型任务在 15:33:16、15:33:49、15:33:58 报失败，摘要一致：
+  `http=200 format=SSE bytes=361 data=2 json=2 malformed=0 parse_errors=0
+  delta=1 message=0 tools=0 reasoning=0 refusal=0 errors=1 done=false finish=ABSENT empty=true`。
+  现已证实它们含远端 error 帧，不是无数据/坏 JSON 或客户端 provider 解析异常。
+  HTTP 200 只是响应头成功，不代表模型任务成功。
+- 15:33:48 那个任务中途确实成功调用 status 与 scan_area，下一轮 15:33:49 才报错；
+  因此不能解释成“不会调用游戏工具”。其余两次在本任务工具派发前失败。
+  全部六个任务共十次模型 HTTP：七次无错误响应、三次流内错误；不能把七次当七个成功任务。
+- 日志不存错误原文，仍无法区分上游故障、请求约束、会话内容或配额等具体原因。
+  新世界三次成功、旧世界三次失败是本轮关联，不证明“换世界修好模型”或存档本身致错；
+  也不把 Mojang 账号 401/Realms 错误当模型鉴权失败。
+- `[brain] llm stream` 的 ttfb/ttft/first_tool 均 -1、chunks/deltas 为 0，
+  与真实 llm response 的 SSE 帧计数矛盾；旧时延统计接线失真，不能用于性能结论，
+  不说明本次没收到流。cached=-1 仅表示后端未报告缓存读数。
+- A 重进的身体先出现在 0,0,0，再被 SafeSpawn 挪到 0,-60,0；
+  上次该世界召唤后的读数曾是 -4,-60,-5。安全落点自愈正常，但位置/背包持久化
+  尚需单独对照存档实测，不能凭“重进成功”宣称完整恢复数据通过。
+
+**结论与下一步**：
+- 面板必要修复、静默同步、A→B 新世界隔离/操作/保存、真实模型只读闭环有正证；
+  F0 整体仍未完成：流内错误具体原因、游戏动作、长活取消、反问、配置重载/重连与连接器未全验。
+- 后续模型定位先对 error 做本地固定类别映射、对照失败请求差异，仍不输出原始错误体，
+  不自动重复可能已执行的游戏动作。时延统计和身体数据恢复分别记录，不混作模型根因。
+
+### F0 第四轮：静默真机通过与模型空响应排查（2026-10-09，Asia/Shanghai）
+
+**最新真机（15:01:42–15:03:59，silent-join 包）**：
+- 15:03:25 新超平坦旧名册匹配 0；15:03:26 companion_state 正常同步，
+  没有再向聊天显示“当前世界尚未召唤伙伴”，本项获得真机正证。
+- 15:03:44/45 无伙伴检查正确拒绝；15:03:47 手动召唤 steve 成功，
+  15:03:48 status 成功（2ms），15:03:49 scan_area 成功（9ms）。
+- 15:03:56 停服、15:03:57 所有维度保存、15:03:59 Stopping，无新 mcbot 异常栈。
+  仍有此前原版账号 401/Realms、PerfOS 与 LWJGL 警告；不是新增模型失败证据。
+  本轮日志没有模型任务或模型连接测试，不能据此判断模型已恢复。
+- 已安装包 SHA256 与上一节一致；无新的崩溃报告（最近仍是 14:21:34 的旧报告）。
+  本次仅一个世界，跨存档 A→B→A 的客户端验收仍未替代。
+
+**独立真实模型探测（有限共 5 个 POST，不执行游戏动作）**：
+- 原磁盘配置的 connection_probe 单请求：HTTP 200，SSE 6 条 data / 5 条 JSON，
+  工具增量 2，finish=tool_calls，DONE=true，无异常/非法帧；约 3224ms。
+- JDK 21 + 当前真实 LlmClient、PromptBuilder、人设/技能与 ClientToolDefs 九工具定义：
+  “查看自己的状态，然后扫描附近并简报”首轮返回一个工具调用，没有游戏执行器参与。
+- ModelConnectionTest 两请求完成工具调用→本地配对回执→文字回答，tool_round_trip=true；
+  这能证明当前磁盘配置的工具协议可用，不等于游戏历史/线程/环境下实际任务已通过。
+- 接入新摘要后 15:15 再测真实九工具首轮：
+  `http=200 format=SSE bytes=1406 data=6 json=5 malformed=0 parse_errors=0 delta=4
+  message=0 tools=2 reasoning=0 refusal=0 errors=0 done=true finish=TOOL_CALLS empty=false`；
+  一个工具调用且 read_only=true。仅记录计数和分类，不输出正文/参数/密钥。
+- 历史 14:43:47 空响应尚未复现，不能确认根因，更不能宣布已修复。
+  独立探针没有重放游戏历史，也不模拟启动器环境变量或 Java 25 运行环境；
+  本轮不修改凭据/配置、不自动重试游戏任务、不新增其他模型协议。
+
+**补齐可诊断性及错误分流**：
+- 旧 System.Logger 摘要不在先前游戏 latest.log 中；现 LlmClient 回调只含固定类型和数值的
+  ResponseDiagnostics，AgentRunner/模型页分别接游戏 logger 的
+  `[brain] llm response` / `[model-test] llm response`，每次 HTTP 尝试一条，含成功和失败。
+  内容包括 HTTP、格式、字节/data/JSON/解析异常数、delta/message/tool/reasoning/refusal/error
+  帧数、DONE 与固定 finish 枚举；未知远端 finish 映射 OTHER，原文不跨边界。
+- HTTP 200 的 error 帧现在单独报 SERVICE_ERROR，不再混同空流或因部分文字伪报成功；
+  同一错误帧的工具字段不产生早派发信号。已早派发的先前动作不能回滚，本卡未宣称可回滚。
+  200 HTML 归网页问题；普通空流仍失败、不自动重试。未添加 JSON/Responses/Messages 兼容实现。
+- 新 tools/ModelProbe.java 是显式无游戏执行器源文件探针，不接 build、不自动循环；
+  只读取参数指定 client.json、输出分类/计数，具体调用与限制写入 DEVELOPMENT §4.1。
+- 新增 9 例真实本地 HTTP 回归：成功摘要、HTTP 200 错误/部分文字、JSON message 格式、
+  reasoning/refusal/未知结束原因隐私、非法载荷与 provider 解析计数分离、日志异常隔离、
+  空流无自动重试、错误帧不早派发、/v1 换道每次尝试计数独立。
+
+**最终验收与部署**：
+- 15:18 全量 `build --rerun-tasks --console=plain --no-daemon`：
+  BUILD SUCCESSFUL in 22s，20/20 任务执行；XML **230/230**
+  （agent-core 143 + 根工程 66 + clientTest 21），failures/errors/skipped 全 0。
+  仅既有过时 API/Gradle 10 警告；本轮服务端无新增改动，不重复启动 SelfTest。
+- 15:19:39 无 Java/javaw 进程后备份并安装诊断包，build/libs、dist、测试实例 mods 三份
+  SHA256 一致：`46065b4d360dce8502e81c912b3c1c7c88c49a9e120d60c994553acbe281cf22`。
+  旧包 `dist/mcbot-0.1.0-before-model-diagnostics.jar` 的 SHA256 为
+  `0972bd00de68d7ec0ade20eca67fa68d61c1a9f233a0263bd8981053fab13d73`。
+  不改原版存档、其他 mod、宿主/只读参考或客户端凭据；未提交推送。
+- JAR 内嵌 agent-core 与本轮模块产物 SHA256 一致，打包客户端含新的游戏日志回调；
+  ModelProbe 无参数启动只输出用法、不发请求。49 个变更/新文件实际凭据/token 扫描零命中，
+  新增行/新文件机器路径零命中，git diff --check 通过，全部命令完成后无 Java/javaw 进程。
+
+**下一次真机重点**：模型页测试连接一次 → 保存/确认现有配置 → 已有伙伴的世界，
+在任务输入框发“查看自己的状态，然后扫描附近并简报”（不是点击只读按钮），
+等结果后正常退出；用两类 llm response 摘要与真实 tool_result 对照。
+新摘要是否在真实游戏日志出现、实际任务闭环和历史空响应根因仍待确认，不销 F0 验收项。
+
+### F0 第三轮日志复核与入世界静默提示（2026-10-09，Asia/Shanghai）
+
+**真机日志事实（14:41:44–14:44:02，旧 world-fix 包）**：
+- 14:42:13 全新超平坦迁移匹配 0 名伙伴，未出现自动恢复 steve；14:42:14 JOIN 状态同步
+  被客户端通用分支当作聊天显示，主人要求去掉“当前世界尚未召唤伙伴”的自动提示。
+- 14:43:22/28 未召唤时只读检查正常被 owner 闸拒绝；14:43:31 主人手动召唤 steve 成功。
+  14:43:35 status 成功（1ms，位置 7,-60,-8）；14:43:38 scan_area 成功（5ms），
+  超平坦当前扫描未找到可行动方块，主人在附近。
+- 14:43:45 模型任务启动，14:43:47 返回 EMPTY_STREAM，未见模型派发游戏工具；
+  不能宣称自定义模型任务已通过。当前日志缺少空响应格式诊断，响应结构与根因仍未确定。
+  本轮不发送额外付费探测、不修改主人模型配置，也不自动重试游戏指令。
+- 14:44:00 正常停服，14:44:02 三维度全部保存并 Stopping，未复现保存卡死。
+  本次只进一个世界，不能替代同一客户端进程跨世界生命周期验收。
+- 未见新增 mcbot 异常栈。账号 user-properties 401 与 Realms JWT 错误属于原版账号服务，
+  不是模型凭据 401；另有 PerfOS 注册表及 LWJGL Unsupported JNI version 警告，
+  日志使用 Java 25，不能仅凭这些警告推断本次模型失败原因。
+
+**本轮改动与验收**：
+- AgentRunner 明确处理 `companion_state`：更新结构化伙伴名及同伴页回执，继续发布
+  task_id=0 的桥公共 state；不调用 say、不写聊天或 transcript。
+  有伙伴时的自动恢复同步也静默；手动召唤/遣散、只读检查与其他操作反馈不变。
+- 新 CompanionStateTest 两例：无伙伴同步仍更新面板/桥且无聊天记录；
+  已恢复伙伴同步静默，随后空状态清除旧名。测试不启动 MC，不访问磁盘配置或真实模型。
+- 14:56 全量强制重跑 `build --rerun-tasks --console=plain --no-daemon`：
+  BUILD SUCCESSFUL in 22s，20/20 任务执行；XML **221/221**
+  （agent-core 134 + 根工程 66 + clientTest 21），failures/errors/skipped 全 0。
+  仅既有过时 API 与 Gradle 10 兼容性警告；本轮服务端代码零新增改动，不重复起 SelfTest。
+- 14:56:50 确认无 Java/javaw 进程后，备份旧测试包至
+  `dist/mcbot-0.1.0-before-silent-join.jar`，再替换 dist 与主人指定实例 mods 的 JAR；
+  build/libs、dist、已安装包 SHA256 三份一致：
+  `0972bd00de68d7ec0ade20eca67fa68d61c1a9f233a0263bd8981053fab13d73`。
+  备份 SHA256 为 `ee36cad54a88451092981632f022566f3a2db7ac1b5fd978509af280b218d839`。
+  未修改原版存档、客户端凭据或其他 mod；未提交推送。
+- 47 个变更/新文件实际凭据与 token 扫描零命中，新增行/新文件机器路径扫描零命中；
+  git diff --check 通过（仅既有 LF/CRLF 提醒），收尾无 Java/javaw 进程。
+
+**下一步与仍待验收**：
+- 静默提示的本轮新包尚未真机点击验收；进入已有/全新世界检查聊天无自动伙伴状态提示，
+  G 同伴页仍显示正确状态，再测同进程 A→B→A、召唤/遣散及保存退出。
+- 模型连接/实际工具往返仍是 F0 阻塞项；先收集安全的格式证据并解决空响应，
+  不提前新增游戏技能，不把只读按钮成功等同于模型任务成功。
+
+### F0 第二轮真机：世界隔离与生命周期（2026-10-09，Asia/Shanghai）
+
+**主人反馈与日志事实**：
+- 主人确认新版面板布局可用。13:53:07、13:53:24 两个新超平坦在没有召唤时，
+  都先记录 steve 从 `(0,0,0)` 进场及“随服务器重进”；身体 playerdata 属世界，
+  名册却取实例目录，因而跨存档错误恢复。改为 `server.getWorldPath(LevelResource.ROOT)` 下保存。
+- 13:53:40 遣散有回执；14:02:20 普通世界 status 返回“没有在册的同伴”，随后模型
+  14:02:23 正常汇报。当前普通世界没有伙伴，这不是模型鉴权失败。
+- Fabric 5.1.6 本地源 JAR 明确说明 registerGlobalReceiver 重复注册返回 false 且不替换；
+  旧代码在 SERVER_STARTED 注册并捕获该次 dispatcher，后续世界仍用首个世界对象。
+  现在初始化时仅注册一次，每条消息取当前 dispatcher 并与 context.server() 比较身份。
+- 14:03:03 / 14:10:11 扫描指令模型返回无有效内容，没有对应 scan_area 执行记录。
+  当前配置下，一次无游戏动作的 connection_probe POST 实测 HTTP 200、text/event-stream、
+  5 个 SSE 记录且有工具调用；原失败的响应内容未保存，根因仍不能仅凭旧日志确定。
+  当前服务不是“必然不支持 Chat Completions”；也未冒称其所有请求均兼容。
+
+**修复与边界**：
+- 名册按存档隔离；旧实例名册只在新路径不存在且当前世界有匹配 UUID 的 playerdata 时导入，
+  迁移结果（含空列表）落盘，旧文件不改。旧 bug 已在某个世界留下的伙伴可能迁移，
+  此类既有伙伴需在该世界正常遣散；不会仅凭共享名册向真正新世界导入。
+- 停服取消全部 scheduler 槽并清空 PathTask 计划缓存；遣散立即取消对应身体任务。
+- JOIN 查询当前世界同伴，生命周期回执携带结构化 companion 名称；同伴页显示操作回执，
+  未连服务端/非法名字本地明确提示，不再靠聊天字符串推断新服务端的同伴状态。
+- 状态/扫描按钮直调白名单只读工具，不经过模型、不进入 agent task，不干扰活动模型任务。
+  无伙伴仍由服务端 owner 闸拒绝；这是查看真实身体/附近，不是全世界透视。
+- 模型协议仍仅 OpenAI 兼容 Chat Completions SSE；未实现 Responses/Anthropic Messages。
+  空响应提示不再断言协议不支持，日志只增加本地格式分类/chunks/deltas，不记录原始响应或密钥。
+
+**服务端实测（独立开发存档）**：
+- 14:22:24–14:23:21 `runServer`，通过 autotest.flag + autotest-stop.flag 启动/正常收服，
+  仅绑定回环，不用控制台 stdin。`[f0-world]` 当前存档名册/dispatcher/receiver 装配三 true。
+- `[m5a]` 四 true；`[m4]` 真挖/移动/存箱成功；`[m4b]` busy=true、cancel=true、空槽=false，
+  wait 正常完成；`[m8]` A 确认=true/清单2，B 到达及墙打通=true，C 箱未动=true，D 干净失败=true。
+- `[r2d]` 六项 true、`[r2c]` 策略与契约通过；`[f0-world]` 遣散取消任务/再召唤/停服槽清空三 true。
+  开发启动生成区及净带探测出现一次 Can't keep up，未出现 mod ERROR 或任务异常。
+- 本次 seed=12345、view-distance=4 下 `[m9] A3` 为 true；这只是新增观察，不证明历史问题已解决，
+  本卡未研究其原因，不销掉已知债务。
+- 14:31:14–14:32:07 第二次启动同一开发存档，14:31:27 明确记录“同伴 steve 随服务器重进”；
+  装配/生命周期及 m4b/m8/r2d/r2c 再次通过，正常停服。两次均无需 stdin，最后无遗留 Java 进程。
+
+**最终构建与部署**：
+- 强制重跑 `build --rerun-tasks --console=plain --no-daemon`：BUILD SUCCESSFUL in 20s，
+  20/20 任务执行；XML **219/219**（agent-core 134 + 根工程 66 + clientTest 19），
+  failures/errors/skipped 均 0。相对上一包新增名册隔离/迁移 8 例、错误提示 1 例。
+- SHA256：`ee36cad54a88451092981632f022566f3a2db7ac1b5fd978509af280b218d839`；
+  build/libs、dist、主人指定的测试实例 mods 三份一致。
+  确认游戏进程已退出后替换 JAR，上一包保留为 `dist/mcbot-0.1.0-before-world-fix.jar`，
+  SHA256 仍为 `7f30203476cbab581c3c9f8b76acfd60d7f97c89f1e7772837f4df83aa3589f9`。
+  未修改主人配置/凭据/原版存档/Fabric API；开发服只使用仓库忽略的 run 目录。
+- 46 个变更/新文件的真实凭据及 token 扫描零命中，新增行/新文件机器路径扫描零命中，
+  git diff --check 通过（仅既有 LF/CRLF 提醒）；未提交推送。
+
+**仍待验收**：
+- 本卡服务端无头实测不等于客户端同进程切换世界、按钮点击及桥连接器真机通过。
+  重测清单：全新 A 无伙伴 → 召唤/状态/扫描 → 退出进 B 无伙伴 → 召唤/遣散 →
+  返回 A 恢复其伙伴 → 自定义模型任务。无须删除配置/原版玩家数据或密钥。
+- 保留前两轮尚未提交的工作区改动；本轮只推进 F0，不新增游戏技能或修改宿主/只读参考。
+
+### F0 退出卡住的崩溃补证（2026-10-09）
+
+- 主人补充：此前卡在“保存游戏”，随后用任务管理器结束。指定实例仅发现
+  `crash-2026-10-09_14.21.34-client.txt`，报告 Time=14:21:34、
+  Description=Client shutdown、java.lang.Error: Watchdog；latest.log 仍止于 14:10:49。
+- 不是只凭报告顶部的 GLFW 等待栈归因：完整 Thread Dump 中 Server thread 等待
+  CompletableFuture.join，调用链是区块读取 → SafeSpawn.isStandable:33 →
+  SafeSpawn.findNear:14 → SummonService.summon:62 →
+  ServerToolDispatcher.handle:48 → McbotMod.lambda$onInitialize$0:93。
+  说明退出前服务器已卡在召唤的区块读取，不能进入正常停服保存流程。
+- javap 对比保留的旧包与当前安装包：旧 lambda$onInitialize$0 的参数含捕获的
+  ServerToolDispatcher，当前包不捕获 dispatcher，而是 getstatic 当前对象并
+  belongsTo(context.server()) 校验；结合 13:53/13:54 的连续换世界日志，
+  支持旧 receiver 访问已关闭世界、区块等待无法完成的根因。
+- 这份报告早于当前包 14:27:00 的构建时间，不能算新包回归。重新核对已安装 SHA256
+  与本节第二轮最终产物一致，当前无 Java/javaw 进程；未再改代码或改用户存档。
+  当前包已经包含对应根因修复，但单人客户端“换世界→召唤→保存退出”仍待真机确认。
+- 强杀可能丢失未写盘进度；报告未给出存档损坏证据，也不据此保证所有数据完整。
+  退出超时报告不等于用户操作造成了最初卡死；本次只补定位证据，不销其他验收债务。
+
+### F0 真机阻塞项修复（2026-10-09，Asia/Shanghai）
+
+**主人首测与定位证据**：
+- 主人启动器实例 latest.log：11:34:54 保存完整长模型名，11:35:06 保存时尾部被截至 32 字符；
+  11:39:30 / 11:40:15 模型调用失败，但旧回路只展示通用错误，无法区分凭据/模型/网络问题。
+- 只读取客户端配置的非敏感元数据：当前密钥长度恰为 32；未输出或复制密钥。
+  使用原配置向其既定服务 GET /models，**HTTP 401**。这能证明当前凭据不被接受，
+  不能证明完整密钥下的模型名可用或工具调用兼容；也不把 Minecraft 账号的 401 当模型故障。
+- javap 确认 EditBox 构造器 maxLength 默认 32，setValue 当场 substring 截断；
+  旧面板先 setValue 再 setMaxLength(256)，所以重开面板后保存会破坏原有长模型名/密钥。
+  新 clientTest 在实际 MC EditBox（非仿造控件）上复现这个顺序问题。
+- 旧面板固定 y 游标配置区、无宽度限制的记录、标题与 token 共用顶行、底部输入与操作区无分隔；
+  小 GUI 视口必然越界/重叠。配置字段列表还会在 init 重复累积。
+
+**修复范围**：
+- PanelFields 先设置长度上限再赋值；长 API 地址/模型名/密钥/任务输入完整保留。
+  不自动修补旧配置，丢失的字符串只能由主人重新粘贴完整值。
+- G 面板分任务/模型/同伴三页；按 GUI 像素宽高布局，操作区固定，表单与换行记录可滚动/拖动滚动条。
+  仅完全进入视口的表单控件可交互；切页/resize 复用输入控件保留草稿，
+  标签不再用空按钮，回车只在任务输入框聚焦时派发，工具回执/护栏加入记录。
+- 密钥通过 addFormatter 默认星号显示，读屏消息也不包含原值；
+  桥端点只显示在独立状态行，令牌改为模型页主动复制，不全串展示。
+- LlmFailure 只展示本地产生的错误类别和 HTTP 状态，未知异常/远端原始错误体不回显；
+  401/403/404/400/422/429/5xx 可区分，HTTP 200 无有效 SSE 内容不得伪报成功。
+- 自定义地址支持根地址、/v1、完整 /chat/completions；拒绝带 URL 凭据/查询参数的地址，
+  防止完整路径重复追加；/v1 网页换道后的失败只通知一次。
+- 模型页测试连接使用当前草稿、独立 LlmClient，两轮流式 connection_probe 往返；
+  不派发游戏动作、不自动保存，文字回答不能假装工具兼容。测试期间修改配置会提示重新测试。
+  未配置/无效地址在客户端安全提示，不因 URI 异常导致进世界失败。
+
+**验证与产物**：
+- 完整强制重跑 build：**BUILD SUCCESSFUL in 20s，20/20 任务执行**；最终补密钥显示测试
+  与面板回执后再 build：**BUILD SUCCESSFUL in 17s**。
+- 最终 XML：**210/210**（agent-core 133 + 根工程 66 + 新 clientTest 11），
+  failures/errors/skipped 均 0；相对上一 F0 包新增 25 例。
+  GUI 布局覆盖 7 种宽度 × 7 种高度，检查边界/分区/操作按钮、表单可达性、滚动条两端；
+  实际 EditBox 测长模型/密钥/任务、resize、掩码和读屏隐私。
+- 最终包 SHA256：`7f30203476cbab581c3c9f8b76acfd60d7f97c89f1e7772837f4df83aa3589f9`。
+  build/libs、dist 与主人明确指定的测试实例 mods 包一致；旧包备份为
+  `dist/mcbot-0.1.0-before-panel-fix.jar`（不安装进 mods，按既有 ignore 不入仓）。
+  只替换测试 JAR，未修改主人配置、凭据、存档或 Fabric API。
+- 变更文件的真实凭据/token 与机器绝对路径扫描零命中；git diff --check 通过。
+
+**仍待验收**：
+- 没有运行新包的实际 MC 图形界面截图验收；布局与输入框测试不等于 GPU 渲染/点击真机通过。
+- 当前原凭据 401，无法完成其真实模型工具往返；主人需重新填写完整密钥/完整模型名，
+  测试连接通过后依次验证 status/scan/移动/取消/反问/重载/重连。已有 steve 无须重复召唤。
+- 本轮 src/main 身体/服务端零改动，未运行 SelfTest；后续修改服务端仍须 [m4*]/[m8] 回归。
+  N.E.K.O 宿主与只读参考未改，连接器未联调；[m9] A3 与其他既有债务不宣称解决。
+
+### F0 基础任务闭环（2026-10-09 10:40，Asia/Shanghai）
+
+**已修复的实问题**：
+1. 投递 B 就改 current_task，导致仍在跑的 A 的事件被标成 B；改为由 onTaskStarted 更新，
+   每个终态携带明确编号，结束后 current_task=0，状态另带 queued_tasks/pending_asks。
+2. 桥将所有 state 当 done，PARK、回答确认、公共生命周期会虚假结束任务；现在只认严格
+   匹配编号的 done，新增 completed/failed/cancelled/superseded，done=true 只表示结束。
+3. REST 取消从整条路径提取数字，把 /v1 的 1 混入 task_id；改为只读取任务路径段。
+   正数取消指定活动/排队项，0 取消全部，未知/已结束编号返回 false，不影响其他任务。
+4. ask 用 FIFO 吃下一次任意回复，可能把 A 的作答发给问 B 的调用方；TaskReplies 按编号配对，
+   投令前登记，超时释放应答等待项，失败/取消/顶替不作为成功作答返回。
+5. 取消、配置重载、断线只丢引用/等边界，旧模型或工具 future 仍能回来执行；现在立即终止、
+   补齐未完成 tool_call 的合成回执、关闭旧 loop、清理 pending 工具/job/问题/ask，代际隔离旧回调。
+   客户端桥绑定当前 runner；S2C 处理捕获所属 runner，旧连接排队动作不能写进新会话。
+6. 工具 future 在串行链外提前创建，实际上后续工具一起执行；改为链内延迟派发。
+   仅 index 0 可流式早派发，后序就绪不能抢跑；同步/异步异常和空结果回配对 INTERNAL 回执。
+7. 早派发的 job 在整轮模型完成前已结束，ledger 未建时结果会丢失；当前步暂存已认领 job 终态，
+   建账时消费，避免永久 PARK。CallbackChatEngine 将模型结果与流式信号送到客户端同一主线程队列。
+8. CLI 一次性闩锁使第二次输入不等待自己的回答；每轮独立等答，超时结束会话。
+   模型/执行器错误不回显异常原文，避免端点凭据或请求详情进入聊天与桥。
+
+**自动化证据**：
+- 改桥之前 /v1/task 的三个新回归用例确实红（state 误终止、公共 done 误终止、缺少失败 status）。
+  完整构建中的编号取消用例又抓到 v1 路径数字混入缺陷，修正后绿。
+- 10:39 `./gradlew build --rerun-tasks --console=plain --no-daemon`：BUILD SUCCESSFUL in 18s，
+  18/18 任务执行；XML 共 **185/185**（agent-core 119 + 根工程 66），0 failures/errors/skipped。
+  本卡相对远端基线新增 40 例，覆盖基本回路、任务生命周期、应答配对、回调队列、桥终态与等待清理。
+- 新建/恢复 Git 工作区时仅导入远端 .git 元数据，未覆盖本地源码。origin 为主人提供的仓库，
+  基线 ac1dc10，当前工作分支 fix/task-lifecycle。本机缺少 Git user.name/user.email，未冒用身份提交或推送。
+- 文档同步 `docs/BRIDGE.md` / `dist/README-BRIDGE.md` / `docs/ARCHITECTURE.md` / `docs/ROADMAP.md`。
+  最终复跑 `./gradlew build` 仍绿（19s）；构建包已复制至 `dist/mcbot-0.1.0.jar`，该产物按既有 gitignore 不进版本控制。
+  包 SHA256 = `89e5cc71d3a87ed9551bd674fe635d9d86618a8e7c4e9d24785f9b0d709ee758`，
+  build/libs 与 dist 相同，META-INF/jars/agent-core-0.1.0.jar 与模块产物 SHA256 相同。
+  `git diff --check` 通过；改动文件凭据模式与机器绝对路径检查零发现。
+
+**尚未验收与限制**：
+- 本轮仅 agent-core/src/client 与文档改动，服务端 src/main、宿主与只读参考未改；未跑 runServer SelfTest，
+  它无法覆盖客户端桥/模型队列。下次动服务端必须补 [m4*]/[m8] 级回归。
+- **未运行真实 MC 客户端或 N.E.K.O 连接器**，不把单测/编译等同于新版本端到端通过。
+  真机要验状态/扫描、一个动作、中途取消、反问回答、配置重载和断线重连，见 BRIDGE §6。
+- 客户端逻辑取消立即生效；身体叫停仍需 C2S 到服务器，done(cancelled)/ok=true 不保证服务器已确认停止。
+  断线期间最后事件不保证送达，连接器要将连接丢失视为未知，不能自行报成功。
+- completed 表示大脑正常作答，不是目标达成的独立证明；工具失败后模型也可能正常汇报障碍。
+- 旧 HTTP 模型请求未物理中断，可继续到返回/超时，但其派发与结果已被隔离；关闭后迟到的摘要
+  可以更新旧 Conversation，却不能启动旧排队任务（有单测）。
+- 服务端仍为单槽 BUSY；PARK 顶替是先取消再新投令，不是 scheduler preempt/remaining() 续跑。
+  progress 服务端生产/限速、合成冶炼、界面增强及 [m9] A3 排查均未纳入本卡。
+- 编译仍有现存过时 API 提示及 Gradle 10 兼容性警告，不影响本轮构建通过。
+
+**下一步**：先用本轮测试包完成 MC 基础真机清单，再让连接器按 task_id + done.status 联调；
+基础验收不达标就回此卡修复，不提前开游戏技能扩展。
 
 ### R2-S4 阶段 2 关账证据（受理即回执 + PARK，2026-09-10）
 
@@ -774,6 +1298,11 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 世界路径与正常停服（F0 第二轮） | javap：MinecraftServer.getWorldPath(LevelResource)、LevelResource.ROOT/PLAYER_DATA_DIR、MinecraftServer.halt(boolean) 均存在；名册取当前世界 ROOT，开发验收 opt-in 标记走 halt(false) |
+| 全局 receiver 生命周期（F0 第二轮） | Fabric networking 5.1.6 源 JAR：registerGlobalReceiver 已注册则返回 false 且不替换，覆盖当前及未来连接；handler 在服务器线程调用，Context.server() 可取实际服务器。因此只能初始化注册一次并动态选当前 dispatcher |
+| EditBox 初始值与隐私（F0 真机修复） | 构造器 maxLength 默认 32；setValue 先按该值截断，因此必须先 setMaxLength 再 setValue。存在 addFormatter(EditBox.TextFormatter)，format(String,int) 返回 FormattedCharSequence；可覆写 createNarrationMessage 屏蔽读屏原值，无需 setShouldMaskInput |
+| GUI 布局与鼠标（F0 真机修复） | AbstractWidget.setRectangle(width,height,x,y)；Screen.resize(int,int) 走 repositionElements/rebuildWidgets。鼠标为 mouseClicked(MouseButtonEvent,boolean)、mouseDragged(MouseButtonEvent,double,double)、mouseReleased(MouseButtonEvent)，滚轮 mouseScrolled(double,double,double,double)；EditBox 可直接 addRenderableWidget |
+| 客户端任务入队（F0） | `BlockableEventLoop.execute(Runnable)` 先 `wrapRunnable`，`scheduleExecutables()` true 时 schedule，否则 doRunTask；宿主用 Minecraft.execute 统一承接桥命令/流式工具/整轮回调，不能依赖任意回调线程直接操作网络或世界 |
 | TicketType（1.21.11） | **无公开 `create(name, comparator, timeout)`**（那是更老版本/他映射的写法）；但 record 构造公开：`new TicketType(long timeoutTicks, int flags)`，flags=FLAG_LOADING/FLAG_SIMULATION/FLAG_PERSIST 等；自定义票类型无需 mixin/AW |
 | `addTicketWithRadius(type, pos, r)` | 实为**单条票** `new Ticket(type, ChunkLevel.byStatus(FULL) - r)` 落在中心 chunk（半径靠 level 逐级衰减扩散，非逐 chunk 加票）；`addTicket(long,Ticket)` 对**同 type 同 level** 的已有票只 `resetTicksLeft()` 不新增——"每拍续票不撤"安全且幂等，多同伴共 chunk 互不抽干；超时递减在 `TicketStorage.purgeStaleTickets`（canTicketExpire 门），关闭时 `deactivateTicketsOnClosing`，无 PERSIST 不落盘 |
 | `ChunkPos` 取块坐标 | 方法叫 `getBlockAt(int,int,int)` / `getMiddleBlockPosition(int)` / `getWorldPosition()`；**无 `getBlockPosition`**（凭记忆写会编译炸） |

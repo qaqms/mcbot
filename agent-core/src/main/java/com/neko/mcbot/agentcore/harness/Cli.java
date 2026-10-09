@@ -10,17 +10,18 @@ import com.neko.mcbot.agentcore.provider.OpenAiCompatProvider;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
  * M2 验收 harness：零 MC 依赖的命令行回路（本地工具 now / add）。
  * 用法（环境变量给端点与 key）：
- *   MCBOT_BASE_URL=https://api.deepseek.com MCBOT_API_KEY=sk-xxx MCBOT_MODEL=deepseek-chat \
+ *   配置 MCBOT_BASE_URL / MCBOT_API_KEY / MCBOT_MODEL 后运行：
  *     ./gradlew :agent-core:run --console=plain -q
  */
 public final class Cli {
@@ -33,6 +34,12 @@ public final class Cli {
         ChatEngine engine = new LlmClient(
                 new OpenAiCompatProvider("cli", baseUrl, apiKey, model), Duration.ofSeconds(180));
 
+        runSession(engine, new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8)),
+                System.out, Duration.ofMinutes(3));
+    }
+
+    public static void runSession(ChatEngine engine, BufferedReader in, PrintStream out,
+                                  Duration replyTimeout) throws Exception {
         List<ToolSpec> tools = List.of(
                 new ToolSpec("now", "获取当前系统时间", "{\"type\":\"object\",\"properties\":{}}"),
                 new ToolSpec("add", "两个整数求和", """
@@ -58,31 +65,30 @@ public final class Cli {
             }
         };
 
-        var done = new CountDownLatch(1);
+        var replies = new LinkedBlockingQueue<String>();
         AgentLoop loop = new AgentLoop(engine, tools, exec, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
                     public void onToolInvoked(String name, String argsJson, boolean ok, String feedback) {
-                        System.out.println("  [tool] " + name + " " + argsJson
+                        out.println("  [tool] " + name + " " + argsJson
                                 + " -> " + (ok ? "✔ " : "✘ ") + feedback);
                     }
 
                     @Override
                     public void onReply(String text) {
-                        System.out.println("bot> " + text);
-                        done.countDown();
+                        replies.offer(text);
                     }
 
                     @Override
                     public void onNotice(String text) {
-                        System.out.println("  [notice] " + text);
+                        out.println("  [notice] " + text);
                     }
                 },
                 () -> PromptBuilder.build("你在命令行里给工程师当助手，善用工具再回答。", List.of()),
                 12000);
 
-        System.out.println("mcbot agent-core CLI (exit 退出)");
-        BufferedReader in = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
+        out.println("mcbot agent-core CLI (exit 退出)");
+        out.print("you> ");
         String line;
         while ((line = in.readLine()) != null) {
             if (line.isBlank()) {
@@ -92,10 +98,15 @@ public final class Cli {
                 break;
             }
             loop.submit(line);
-            done.await(3, TimeUnit.MINUTES);
-            System.out.print("you> ");
+            String reply = replies.poll(replyTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            if (reply == null) {
+                out.println("等待回答超时，会话已停止。");
+                loop.cancelDirective();
+                return;
+            }
+            out.println("bot> " + reply);
+            out.print("you> ");
         }
-        System.exit(0);
     }
 
     private static String require(String env) {

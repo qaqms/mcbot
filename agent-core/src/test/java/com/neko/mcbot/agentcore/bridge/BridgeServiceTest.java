@@ -121,6 +121,55 @@ class BridgeServiceTest {
     }
 
     @Test
+    void parkedOrAnsweredStateIsNotTaskCompletion() {
+        var ring = new EventRing(50);
+        BridgeBackend backend = emittingBackend(ring, id -> {
+            ring.add("state", "{\"ev\":\"state\",\"task_id\":" + id + ",\"parked\":true}");
+            ring.add("state", "{\"ev\":\"state\",\"task_id\":" + id + ",\"text\":\"answered q1\"}");
+        });
+        var result = svc(backend, ring).handle("POST", "/v1/task", "{\"text\":\"work\",\"wait_s\":0}");
+        var body = com.google.gson.JsonParser.parseString(result.body()).getAsJsonObject();
+        assertFalse(body.get("done").getAsBoolean(),
+                "waiting for an action or answering a question must not finish the task");
+    }
+
+    @Test
+    void unscopedDoneDoesNotFinishAnotherTask() {
+        var ring = new EventRing(50);
+        BridgeBackend backend = emittingBackend(ring,
+                id -> ring.add("done", "{\"ev\":\"done\",\"task_id\":0,\"text\":\"unrelated\"}"));
+        var result = svc(backend, ring).handle("POST", "/v1/task", "{\"text\":\"work\",\"wait_s\":0}");
+        var body = com.google.gson.JsonParser.parseString(result.body()).getAsJsonObject();
+        assertFalse(body.get("done").getAsBoolean(), "only this task's terminal event can finish it");
+    }
+
+    @Test
+    void failedTaskIsTerminalButNotSuccessful() {
+        var ring = new EventRing(50);
+        BridgeBackend backend = emittingBackend(ring, id -> ring.add("done",
+                "{\"ev\":\"done\",\"task_id\":" + id + ",\"status\":\"failed\",\"text\":\"unavailable\"}"));
+        var result = svc(backend, ring).handle("POST", "/v1/task", "{\"text\":\"work\",\"wait_s\":0}");
+        var body = com.google.gson.JsonParser.parseString(result.body()).getAsJsonObject();
+        assertTrue(body.get("done").getAsBoolean());
+        assertEquals("failed", body.get("status").getAsString());
+    }
+
+    private static BridgeBackend emittingBackend(EventRing ring, java.util.function.LongConsumer emit) {
+        var fake = new Fake(ring);
+        return new BridgeBackend() {
+            @Override public long submitTask(String text) {
+                long id = fake.submitTask(text);
+                emit.accept(id);
+                return id;
+            }
+            @Override public CompletableFuture<String> ask(String text) { return fake.ask(text); }
+            @Override public boolean answer(String q, String text) { return fake.answer(q, text); }
+            @Override public String statusJson() { return fake.statusJson(); }
+            @Override public boolean cancel(long id) { return fake.cancel(id); }
+        };
+    }
+
+    @Test
     void statusAskAnswerRoutes() throws Exception {
         var ring = new EventRing(50);
         var fake = new Fake(ring);
@@ -132,6 +181,8 @@ class BridgeServiceTest {
         // ask 超时（后端 future 永不完成，svc 超时 250ms）
         var to = service.handle("POST", "/v1/ask", "{\"text\":\"聊什么\"}");
         assertEquals(504, to.status());
+        assertTrue(fake.askFuture.isCancelled(), "an expired HTTP waiter must release its task reply slot");
+        fake.askFuture = new CompletableFuture<>();
         fake.askFuture.complete("今天天气不错");
         var ok = service.handle("POST", "/v1/ask", "{\"text\":\"聊什么\"}");
         assertEquals(200, ok.status());
@@ -192,4 +243,63 @@ class BridgeServiceTest {
         assertEquals(3, since2.get(0).id());
         assertEquals("progress", since2.get(0).type());
     }
+
+    @Test
+    void mcpAskFailureIsAnErrorNotASuccessfulAnswer() {
+        var ring = new EventRing(50);
+        var fake = new Fake(ring);
+        fake.askFuture.completeExceptionally(new IllegalStateException("cancelled"));
+        var result = svc(fake, ring).handle("POST", "/mcp",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+                        + "\"params\":{\"name\":\"mcbot_ask\",\"arguments\":{\"text\":\"work\"}}}");
+        var payload = com.google.gson.JsonParser.parseString(result.body()).getAsJsonObject()
+                .getAsJsonObject("result");
+        assertTrue(payload.get("isError").getAsBoolean());
+    }
+
+    @Test
+    void taskCollectorStopsAtItsFirstTerminalEvent() {
+        var ring = new EventRing(50);
+        var backend = emittingBackend(ring, id -> {
+            ring.add("done", "{\"task_id\":" + id + ",\"status\":\"cancelled\",\"text\":\"stopped\"}");
+            ring.add("done", "{\"task_id\":" + id + ",\"status\":\"completed\",\"text\":\"late\"}");
+        });
+        var response = svc(backend, ring).handle("POST", "/v1/task", "{\"text\":\"work\",\"wait_s\":0}");
+        var body = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
+        assertEquals("cancelled", body.get("status").getAsString());
+        assertEquals(1, body.getAsJsonArray("fragments").size());
+    }
+
+    @Test
+    void restAndMcpForwardTheRequestedCancellationScope() {
+        var ring = new EventRing(50);
+        var seen = new ArrayList<Long>();
+        var backend = new BridgeBackend() {
+            @Override public long submitTask(String text) { return 1; }
+            @Override public CompletableFuture<String> ask(String text) { return new CompletableFuture<>(); }
+            @Override public boolean answer(String q, String text) { return false; }
+            @Override public String statusJson() { return "{}"; }
+            @Override public boolean cancel(long id) { seen.add(id); return id == 22 || id == 0; }
+        };
+        var service = svc(backend, ring);
+        assertTrue(service.handle("POST", "/v1/task/22/cancel", "").body().contains("true"));
+        assertTrue(service.handle("POST", "/v1/task/99/cancel", "").body().contains("false"));
+        service.handle("POST", "/mcp", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+                + "\"params\":{\"name\":\"mcbot_cancel\",\"arguments\":{}}}");
+        assertEquals(List.of(22L, 99L, 0L), seen);
+    }
+
+    @Test
+    void cancelledAndSupersededAreTerminalTaskStatuses() {
+        for (String status : List.of("cancelled", "superseded")) {
+            var ring = new EventRing(50);
+            var backend = emittingBackend(ring, id -> ring.add("done", "{\"task_id\":" + id
+                    + ",\"status\":\"" + status + "\"}"));
+            var response = svc(backend, ring).handle("POST", "/v1/task", "{\"text\":\"work\",\"wait_s\":0}");
+            var body = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
+            assertTrue(body.get("done").getAsBoolean());
+            assertEquals(status, body.get("status").getAsString());
+        }
+    }
+
 }

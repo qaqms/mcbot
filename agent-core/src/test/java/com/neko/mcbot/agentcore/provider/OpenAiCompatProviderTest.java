@@ -11,6 +11,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class OpenAiCompatProviderTest {
 
@@ -86,6 +88,32 @@ class OpenAiCompatProviderTest {
     @Test
     void endpointNormalizesBaseUrl() {
         assertEquals("https://api.deepseek.com/chat/completions", p.endpoint());
+    }
+
+    @Test
+    void fullChatEndpointDoesNotGetThePathAppendedTwice() {
+        assertEquals("https://example.test/v1/chat/completions",
+                new OpenAiCompatProvider("test", " https://example.test/v1/chat/completions/// ",
+                        "key", "model").endpoint());
+    }
+
+    @Test
+    void urlValidationNeverEchoesCredentials() {
+        for (String url : List.of("https://private:password@example.test/v1",
+                "https://example.test/v1?token=private", "not-a-url")) {
+            var failure = assertThrows(IllegalArgumentException.class,
+                    () -> new OpenAiCompatProvider("test", url, "key", "model"));
+            assertFalse(failure.getMessage().contains("private"));
+            assertFalse(failure.getMessage().contains(url));
+        }
+    }
+
+    @Test
+    void longModelNameIsSentVerbatim() {
+        String model = "custom-model-with-a-long-expiration-suffix";
+        var body = new OpenAiCompatProvider("test", "https://example.test/v1", "key", model)
+                .buildBody("sys", List.of(), List.of());
+        assertEquals(model, body.get("model").getAsString());
     }
 
     private static JsonObject wrapDelta(JsonObject delta) {

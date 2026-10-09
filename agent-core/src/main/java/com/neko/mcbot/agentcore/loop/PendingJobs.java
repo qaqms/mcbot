@@ -122,6 +122,26 @@ public final class PendingJobs<T> {
         return tools.size();
     }
 
+    public synchronized Job<T> peekJob(String jobId) {
+        return jobId == null ? null : jobs.get(jobId);
+    }
+
+    /** 移除一个任务的全部等待凭据；先移除再由宿主兑现，避免回调重入污染新任务。 */
+    public synchronized List<T> drain(java.util.function.Predicate<T> belongsToTask) {
+        List<T> out = new ArrayList<>();
+        tools.values().removeIf(t -> {
+            if (!belongsToTask.test(t.ticket())) return false;
+            out.add(t.ticket());
+            return true;
+        });
+        jobs.values().removeIf(j -> {
+            if (!belongsToTask.test(j.ticket())) return false;
+            out.add(j.ticket());
+            return true;
+        });
+        return out;
+    }
+
     public int pendingJobs() {
         return jobs.size();
     }

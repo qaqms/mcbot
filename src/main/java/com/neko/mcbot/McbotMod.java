@@ -54,7 +54,26 @@ public final class McbotMod implements ModInitializer {
         PayloadTypeRegistry.playC2S().register(McbotPayloads.C2s.TYPE, McbotPayloads.C2s.CODEC);
         PayloadTypeRegistry.playS2C().register(McbotPayloads.S2c.TYPE, McbotPayloads.S2c.CODEC);
 
+        // Global receivers survive integrated-server restarts; never capture one world's dispatcher.
+        ServerPlayNetworking.registerGlobalReceiver(McbotPayloads.C2s.TYPE, (payload, context) -> {
+            if (payload.oversize()) {
+                LOG.warn("闸①：C2S 信封超过 {}B，丢弃（来自 {}）",
+                        WireSize.MAX_ENVELOPE_BYTES, context.player().getGameProfile().name());
+                return;
+            }
+            Envelope env = Envelope.decode(payload.json);
+            if (env == null) {
+                LOG.warn("信封解析失败，丢弃 (from {})", context.player().getGameProfile().name());
+                return;
+            }
+            ServerToolDispatcher current = dispatcher;
+            if (current != null && current.belongsTo(context.server())) {
+                current.handle(context.player(), env);
+            }
+        });
+
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            com.neko.mcbot.path.PathTask.clearPlanCache();
             CompanionRoster roster = new CompanionRoster(server);
             roster.load();
 
@@ -73,28 +92,12 @@ public final class McbotMod implements ModInitializer {
             summonService = service;
             service.respawnAllFromRoster();
 
-            ServerToolDispatcher dispatcher = new ServerToolDispatcher(server, service, tools);
-            McbotMod.dispatcher = dispatcher;
-            ServerPlayNetworking.registerGlobalReceiver(McbotPayloads.C2s.TYPE,
-                    (payload, context) -> {
-                        // 闸①：超尺寸包在 codec 里已被换成哨兵（不抛异常，所以连接不会被踢）。
-                        if (payload.oversize()) {
-                            LOG.warn("闸①：C2S 信封超过 {}B，丢弃（来自 {}）",
-                                    WireSize.MAX_ENVELOPE_BYTES,
-                                    context.player().getGameProfile().name());
-                            return;
-                        }
-                        Envelope env = Envelope.decode(payload.json);
-                        if (env == null) {
-                            LOG.warn("信封解析失败，丢弃 (from {})",
-                                    context.player().getGameProfile().name());
-                            return;
-                        }
-                        dispatcher.handle(context.player(), env);
-                    });
+            McbotMod.dispatcher = new ServerToolDispatcher(server, service, tools);
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            scheduler.cancelAll("服务器已关闭。");
+            com.neko.mcbot.path.PathTask.clearPlanCache();
             SummonService service = summonService;
             summonService = null;
             toolRegistry = null;

@@ -11,7 +11,7 @@ public interface BridgeBackend {
     /** 投递一条指令给大脑，返回分配的 task_id（事件流按它归组）。 */
     long submitTask(String text);
 
-    /** 问一句话，等大脑的下一次作答。超时由 BridgeService 统一控制。 */
+    /** 投递并等待本条任务的作答，不能消费其他任务的结果；超时由 BridgeService 控制。 */
     CompletableFuture<String> ask(String text);
 
     /** 回答同伴的反问（ask_owner 产生的 question_id）。无此问题时返回 false。 */
@@ -20,6 +20,6 @@ public interface BridgeBackend {
     /** 同伴/大脑状态，已序列化好的 JSON 对象字符串。 */
     String statusJson();
 
-    /** 叫停大脑当前这条链（v1 全局一条链，task_id 仅日志用）。 */
+    /** 取消指定活动/排队任务；0 取消全部。未知或已结束的编号返回 false。 */
     boolean cancel(long taskId);
 }

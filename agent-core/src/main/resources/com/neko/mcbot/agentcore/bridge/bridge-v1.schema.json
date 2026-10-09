@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mcbot task-level bridge v1.0",
+  "description": "Validate one wire payload using the corresponding $defs entry. Unknown fields are allowed for additive compatibility.",
+  "$defs": {
+    "taskInput": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string", "pattern": "[^\\u0009-\\u000D\\u001C-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200A\\u2028\\u2029\\u205F\\u3000]"},
+        "wait_s": {"type": "integer", "default": 8, "description": "Clamped to 0..120 seconds; this is only a response collection window."}
+      },
+      "required": ["text"]
+    },
+    "askInput": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string", "pattern": "[^\\u0009-\\u000D\\u001C-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200A\\u2028\\u2029\\u205F\\u3000]"},
+        "companion": {"type": "string", "description": "Compatibility field; ignored. The current owner's companion is used."}
+      },
+      "required": ["text"]
+    },
+    "answerInput": {
+      "type": "object",
+      "properties": {
+        "question_id": {"type": "string", "pattern": "[^\\u0009-\\u000D\\u001C-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200A\\u2028\\u2029\\u205F\\u3000]"},
+        "text": {"type": "string", "pattern": "[^\\u0009-\\u000D\\u001C-\\u0020\\u1680\\u2000-\\u2006\\u2008-\\u200A\\u2028\\u2029\\u205F\\u3000]"}
+      },
+      "required": ["question_id", "text"]
+    },
+    "statusInput": {"type": "object", "properties": {}},
+    "cancelInput": {
+      "type": "object",
+      "properties": {
+        "task_id": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807, "default": 0}
+      }
+    },
+    "taskResult": {
+      "type": "object",
+      "properties": {
+        "task_id": {"type": "integer", "minimum": 1},
+        "done": {"type": "boolean"},
+        "status": {"enum": ["completed", "failed", "cancelled", "superseded"]},
+        "fragments": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["task_id", "done", "fragments"],
+      "allOf": [{
+        "if": {"properties": {"done": {"const": true}}},
+        "then": {"required": ["status"]},
+        "else": {"not": {"required": ["status"]}}
+      }]
+    },
+    "askResult": {
+      "type": "object",
+      "properties": {"answer": {"type": "string"}},
+      "required": ["answer"]
+    },
+    "okResult": {
+      "type": "object",
+      "properties": {"ok": {"type": "boolean"}},
+      "required": ["ok"]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "error": {"type": "string"},
+        "error_code": {"enum": ["INVALID_REQUEST", "UNAUTHORIZED", "NOT_FOUND", "BODY_TOO_LARGE", "ANSWER_TIMEOUT", "TASK_FAILED", "INTERNAL"]}
+      },
+      "required": ["error", "error_code"]
+    },
+    "status": {
+      "type": "object",
+      "properties": {
+        "contract_version": {"const": "1.0"},
+        "session_id": {"type": "string", "format": "uuid"},
+        "in_game": {"type": "boolean"},
+        "brain_enabled": {"type": "boolean"},
+        "companion": {"type": "string"},
+        "model": {"type": "string"},
+        "current_task": {"type": "integer", "minimum": 0},
+        "queued_tasks": {"type": "integer", "minimum": 0},
+        "pending_asks": {"type": "integer", "minimum": 0},
+        "pending_tools": {"type": "integer", "minimum": 0},
+        "pending_jobs": {"type": "integer", "minimum": 0},
+        "pending_questions": {"type": "integer", "minimum": 0},
+        "parked": {"type": "boolean"},
+        "parked_jobs": {"type": "integer", "minimum": 0},
+        "accept_mode": {"type": "boolean"},
+        "late_results": {"type": "integer", "minimum": 0}
+      },
+      "required": ["contract_version", "session_id", "in_game", "brain_enabled", "companion"]
+    },
+    "event": {
+      "type": "object",
+      "properties": {
+        "contract_version": {"const": "1.0"},
+        "session_id": {"type": "string", "format": "uuid"},
+        "ev": {"enum": ["progress", "done", "question", "state"]},
+        "task_id": {"type": "integer", "minimum": 0},
+        "text": {"type": "string"},
+        "tool": {"type": "string"},
+        "ok": {"type": "boolean"},
+        "job_id": {"type": "string"},
+        "question_id": {"type": "string"},
+        "status": {"type": "string"},
+        "parked": {"type": "boolean"},
+        "outstanding": {"type": "integer", "minimum": 0}
+      },
+      "required": ["contract_version", "session_id", "ev", "task_id"],
+      "allOf": [
+        {
+          "if": {"properties": {"ev": {"const": "done"}}},
+          "then": {
+            "required": ["text", "status"],
+            "properties": {
+              "task_id": {"minimum": 1},
+              "status": {"enum": ["completed", "failed", "cancelled", "superseded"]}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"ev": {"const": "question"}}},
+          "then": {
+            "required": ["question_id", "text"],
+            "properties": {"task_id": {"minimum": 1}, "question_id": {"pattern": "^q[1-9][0-9]*$"}}
+          }
+        },
+        {
+          "if": {"properties": {"ev": {"const": "progress"}}},
+          "then": {"required": ["text"], "properties": {"task_id": {"minimum": 1}}}
+        }
+      ]
+    }
+  }
+}

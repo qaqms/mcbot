@@ -21,8 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -41,10 +41,12 @@ public final class BridgeHttp implements BridgeEvents.Sink {
     private static volatile BridgeHttp instance;
 
     private final HttpServer server;
+    private final ExecutorService executor;
     private final EventRing ring = new EventRing(200);
     private final BridgeService service;
     private final String token;
     private final List<SseClient> clients = new CopyOnWriteArrayList<>();
+    private final Object eventLock = new Object();
 
     private static final class SseClient {
         final HttpExchange ex;
@@ -90,31 +92,41 @@ public final class BridgeHttp implements BridgeEvents.Sink {
     }
 
     private BridgeHttp() throws IOException {
-        token = loadOrCreateToken();
-        // ask 超时 135s：必须 > 反问的 120s——否则 neko 经 /v1/ask 链上触发 ask_owner 时
-        // HTTP 先 504 放弃、大脑还在空等反问，答案回来只塞进已作废的 future。
-        service = new BridgeService(new RunnerBackend(), ring, 135_000);
-        server = HttpServer.create(
-                new InetSocketAddress(InetAddress.getByName("127.0.0.1"), PORT), 4);
-        // 池 4→8：每个 SSE 长连接永久占一条线程，4 条 = 2 个 SSE + 2 个长 wait 即饥饿。
-        // 彻底解法（SSE 不占线程）归 R2-C 一并设计。
-        server.setExecutor(Executors.newFixedThreadPool(8, r -> {
-            Thread t = new Thread(r, "mcbot-bridge");
-            t.setDaemon(true);
-            return t;
-        }));
-        server.createContext("/", this::route);
-        server.start();
+        this(new RunnerBackend(McbotClient.runner()), loadOrCreateToken(), PORT);
         BridgeEvents.attach(this);
         McbotMod.LOG.info("桥接已启动 {}（token 见 mcbot/bridge.token）", endpoint());
     }
 
-    private void stop() {
+    BridgeHttp(BridgeBackend backend, String token, int port) throws IOException {
+        this.token = token;
+        // ask 超时 135s：必须 > 反问的 120s——否则 neko 经 /v1/ask 链上触发 ask_owner 时
+        // HTTP 先 504 放弃、大脑还在空等反问，答案回来只塞进已作废的 future。
+        service = new BridgeService(backend, ring, 135_000);
+        server = HttpServer.create(
+                new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 4);
+        // 池 4→8：每个 SSE 长连接永久占一条线程，4 条 = 2 个 SSE + 2 个长 wait 即饥饿。
+        // 彻底解法（SSE 不占线程）归 R2-C 一并设计。
+        executor = Executors.newFixedThreadPool(8, r -> {
+            Thread t = new Thread(r, "mcbot-bridge");
+            t.setDaemon(true);
+            return t;
+        });
+        server.setExecutor(executor);
+        server.createContext("/", this::route);
+        server.start();
+    }
+
+    int port() {
+        return server.getAddress().getPort();
+    }
+
+    void stop() {
         BridgeEvents.detach(this);
         for (SseClient c : clients) {
             c.out.add("STOP");
         }
         server.stop(0);
+        executor.shutdownNow();
         McbotMod.LOG.info("桥接已关闭");
     }
 
@@ -122,11 +134,15 @@ public final class BridgeHttp implements BridgeEvents.Sink {
 
     @Override
     public void event(String type, JsonObject data) {
-        EventRing.Event e = ring.add(type, data.toString());
-        String frame = "id: " + e.id() + "\nevent: " + type + "\ndata: " + e.dataJson() + "\n\n";
-        for (SseClient c : clients) {
-            c.out.add(frame);
+        synchronized (eventLock) {
+            EventRing.Event e = service.recordEvent(type, data);
+            String frame = frame(e);
+            for (SseClient c : clients) c.out.add(frame);
         }
+    }
+
+    private static String frame(EventRing.Event e) {
+        return "id: " + e.id() + "\nevent: " + e.type() + "\ndata: " + e.dataJson() + "\n\n";
     }
 
     // ---- 路由 ----
@@ -140,17 +156,24 @@ public final class BridgeHttp implements BridgeEvents.Sink {
                 return;
             }
             if (!authorized(ex)) {
-                write(ex, 401, "application/json", "{\"error\":\"missing or bad bearer token\"}");
+                write(ex, 401, "application/json",
+                        BridgeService.err("UNAUTHORIZED", "missing or bad bearer token"));
                 return;
             }
             if (path.equals("/v1/events") && ex.getRequestMethod().equals("GET")) {
                 sse(ex);
                 return;
             }
-            String body = readBody(ex);
+            String body;
+            try {
+                body = readBody(ex);
+            } catch (BodyTooLarge oversized) {
+                write(ex, 413, "application/json", BridgeService.err("BODY_TOO_LARGE", "body exceeds 65536 bytes"));
+                return;
+            }
             BridgeService.Rest r = service.handle(ex.getRequestMethod(), path, body);
             if (r == null) {
-                write(ex, 404, "application/json", "{\"error\":\"unknown route\"}");
+                write(ex, 404, "application/json", BridgeService.err("NOT_FOUND", "unknown route"));
                 return;
             }
             if (r.status() == 202) {
@@ -163,7 +186,7 @@ public final class BridgeHttp implements BridgeEvents.Sink {
         } catch (RuntimeException e) {
             McbotMod.LOG.error("桥接路由异常", e);
             try {
-                write(ex, 500, "application/json", "{\"error\":\"internal\"}");
+                write(ex, 500, "application/json", BridgeService.err("INTERNAL", "internal"));
             } catch (IOException ignored) {
             }
         } finally {
@@ -210,13 +233,12 @@ public final class BridgeHttp implements BridgeEvents.Sink {
         ex.sendResponseHeaders(200, 0);
         OutputStream os = ex.getResponseBody();
         SseClient c = new SseClient(ex);
-        clients.add(c);
+        // Replay and subscription are one ordered operation, including concurrent publishers.
+        synchronized (eventLock) {
+            for (EventRing.Event e : ring.since(last)) c.out.add(frame(e));
+            clients.add(c);
+        }
         try {
-            for (EventRing.Event e : ring.since(last)) {
-                os.write(("id: " + e.id() + "\nevent: " + e.type()
-                        + "\ndata: " + e.dataJson() + "\n\n").getBytes(StandardCharsets.UTF_8));
-            }
-            os.flush();
             while (true) {
                 String f = c.out.poll(15, TimeUnit.SECONDS);
                 if (f == null) {
@@ -238,10 +260,12 @@ public final class BridgeHttp implements BridgeEvents.Sink {
     private static String readBody(HttpExchange ex) throws IOException {
         byte[] b = ex.getRequestBody().readNBytes(MAX_BODY + 1);
         if (b.length > MAX_BODY) {
-            throw new IOException("body too large");
+            throw new BodyTooLarge();
         }
         return new String(b, StandardCharsets.UTF_8);
     }
+
+    private static final class BodyTooLarge extends IOException {}
 
     private static void write(HttpExchange ex, int status, String ctype, String body) throws IOException {
         byte[] b = body.getBytes(StandardCharsets.UTF_8);
@@ -274,31 +298,44 @@ public final class BridgeHttp implements BridgeEvents.Sink {
     // ---- Backend：把桥的语义翻成 AgentRunner 动作 ----
 
     private static final class RunnerBackend implements BridgeBackend {
+        private final AgentRunner runner;
+
+        RunnerBackend(AgentRunner runner) {
+            this.runner = runner;
+        }
+
+        private <T> CompletableFuture<T> onClient(java.util.function.Supplier<T> action) {
+            var result = new CompletableFuture<T>();
+            Minecraft.getInstance().execute(() -> {
+                if (result.isDone()) return;
+                if (runner == null || McbotClient.runner() != runner) {
+                    result.completeExceptionally(new IllegalStateException("客户端会话已关闭"));
+                    return;
+                }
+                try { result.complete(action.get()); }
+                catch (RuntimeException failure) { result.completeExceptionally(failure); }
+            });
+            return result.orTimeout(5, TimeUnit.SECONDS);
+        }
+
         @Override
         public long submitTask(String text) {
-            AgentRunner r = McbotClient.runner();
-            return r == null ? -1 : r.submitTask(text);
+            return onClient(() -> runner.submitTask(text)).join();
         }
 
         @Override
         public java.util.concurrent.CompletableFuture<String> ask(String text) {
-            AgentRunner r = McbotClient.runner();
-            if (r == null) {
-                return java.util.concurrent.CompletableFuture.failedFuture(
-                        new IllegalStateException("尚未进世界，大脑不在线"));
-            }
-            return r.askNext(text);
+            return onClient(() -> runner.askNext(text)).join();
         }
 
         @Override
         public boolean answer(String questionId, String text) {
-            AgentRunner r = McbotClient.runner();
-            return r != null && r.answerQuestion(questionId, text);
+            return onClient(() -> runner.answerQuestion(questionId, text)).join();
         }
 
         @Override
         public String statusJson() {
-            AgentRunner r = McbotClient.runner();
+            AgentRunner r = McbotClient.runner() == runner ? runner : null;
             if (r == null) {
                 Minecraft mc = Minecraft.getInstance();
                 JsonObject o = new JsonObject();
@@ -312,12 +349,7 @@ public final class BridgeHttp implements BridgeEvents.Sink {
 
         @Override
         public boolean cancel(long taskId) {
-            AgentRunner r = McbotClient.runner();
-            if (r == null) {
-                return false;
-            }
-            Minecraft.getInstance().execute(r::requestCancel);
-            return true;
+            return onClient(() -> runner.cancelTask(taskId)).join();
         }
     }
 }

@@ -1,7 +1,5 @@
 package com.neko.mcbot.agentcore.llm;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neko.mcbot.agentcore.provider.ChatProvider;
@@ -41,26 +39,51 @@ import java.util.concurrent.Flow;
  * 增量解码语义与可单测的行切分，反而更省心。
  *
  * <p><b>错误分流为什么在 handler 里做</b>：非 200 时响应体是错误文章（CF 墙/网关页/JSON 错误体），
- * 不是 SSE，必须原样收下交给 {@link #summarizeError}；200 时那套完全用不上。
+ * 不是 SSE，只检查是否返回网页，错误体不会写进异常或用户消息；200 时那套完全用不上。
  * {@code BodyHandler.apply(ResponseInfo)} 拿得到 {@code statusCode()}，所以一次请求内就能
- * 选好收法；非 200 分支因此退化回"把行拼起来"的旧行为，对外语义零变化。
+ * 选好收法；非 200 分支只保留有界内容供网页识别。
  */
 public final class LlmClient implements ChatEngine {
 
+    private static final System.Logger LOG = System.getLogger(LlmClient.class.getName());
+    private static final java.util.concurrent.atomic.AtomicLong REQUEST_IDS =
+            new java.util.concurrent.atomic.AtomicLong();
     private final ChatProvider provider;
     private final HttpClient http;
     private final Duration timeout;
     private final java.util.function.LongSupplier clock;
+    private final java.util.function.Consumer<ResponseDiagnostics> diagnostics;
+    private final java.util.function.Consumer<RequestDiagnostics> requestDiagnostics;
 
     public LlmClient(ChatProvider provider, Duration timeout) {
         this(provider, timeout, Duration.ofSeconds(15), System::nanoTime);
     }
 
+    public LlmClient(ChatProvider provider, Duration timeout,
+                     java.util.function.Consumer<ResponseDiagnostics> diagnostics) {
+        this(provider, timeout, null, diagnostics);
+    }
+
+    public LlmClient(ChatProvider provider, Duration timeout,
+                     java.util.function.Consumer<RequestDiagnostics> requestDiagnostics,
+                     java.util.function.Consumer<ResponseDiagnostics> diagnostics) {
+        this(provider, timeout, Duration.ofSeconds(15), System::nanoTime, requestDiagnostics, diagnostics);
+    }
+
     public LlmClient(ChatProvider provider, Duration timeout, Duration connectTimeout,
                      java.util.function.LongSupplier nanoClock) {
+        this(provider, timeout, connectTimeout, nanoClock, null, null);
+    }
+
+    private LlmClient(ChatProvider provider, Duration timeout, Duration connectTimeout,
+                      java.util.function.LongSupplier nanoClock,
+                      java.util.function.Consumer<RequestDiagnostics> requestDiagnostics,
+                      java.util.function.Consumer<ResponseDiagnostics> diagnostics) {
         this.provider = provider;
         this.timeout = timeout;
         this.clock = nanoClock;
+        this.diagnostics = diagnostics;
+        this.requestDiagnostics = requestDiagnostics;
         this.http = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
     }
 
@@ -74,7 +97,10 @@ public final class LlmClient implements ChatEngine {
     public CompletableFuture<AssistantTurn> chat(String systemPrompt, List<Msg> convo, List<ToolSpec> tools,
                                                 TurnSink sink, boolean accumulate) {
         return chatOn(provider, true, systemPrompt, convo, tools, sink, accumulate,
-                new TurnTimings(clock));
+                new TurnTimings(clock)).whenComplete((turn, err) -> {
+            Throwable failure = unwrap(err);
+            if (failure != null && sink != null) sink.onComplete(null, failure);
+        });
     }
 
     /**
@@ -95,20 +121,33 @@ public final class LlmClient implements ChatEngine {
         StreamingTurnReader reader = new StreamingTurnReader(tools, accumulate);
         SseBodySubscriber body = new SseBodySubscriber(cp, reader, sink, timings);
         JsonObject requestBody = cp.buildBody(systemPrompt, convo, tools);
+        body.requestId = REQUEST_IDS.incrementAndGet();
+        body.attempt = mayRetryV1 ? 1 : 2;
+        String serialized = requestBody.toString();
+        if (requestDiagnostics != null) {
+            try {
+                requestDiagnostics.accept(RequestDiagnostics.from(body.requestId, body.attempt,
+                        requestBody, serialized.getBytes(StandardCharsets.UTF_8).length));
+            } catch (RuntimeException ignored) {
+                // Diagnostics neither modify the wire body nor affect request dispatch.
+            }
+        }
 
         HttpRequest request = HttpRequest.newBuilder(URI.create(cp.endpoint()))
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .headers(flatten(cp.authHeaders()))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString(), StandardCharsets.UTF_8))
+                .POST(HttpRequest.BodyPublishers.ofString(serialized, StandardCharsets.UTF_8))
                 .build();
 
         return http.sendAsync(request, info -> {
                     body.statusCode(info.statusCode());
+                    body.contentType(info.headers().firstValue("Content-Type").orElse(""));
                     return body;
                 })
                 .handle((resp, err) -> {
+                    reportDiagnostics(body);
                     Throwable failure = unwrap(err);
                     if (failure != null) {
                         throw new CompletionException(failure);
@@ -116,8 +155,8 @@ public final class LlmClient implements ChatEngine {
                     timings.markResponse();
                     int code = body.statusCode();
                     if (code != 200) {
-                        String summary = summarizeError(body.lines());
-                        if (mayRetryV1 && summary.startsWith("web page:")
+                        boolean html = isHtml(body.lines());
+                        if (mayRetryV1 && html
                                 && !cp.endpoint().contains("/v1/")) {
                             String alt = cp.endpoint().replaceFirst("/chat/completions$",
                                     "/v1/chat/completions");
@@ -126,26 +165,43 @@ public final class LlmClient implements ChatEngine {
                                         sink, accumulate, new TurnTimings(clock));
                             }
                         }
-                        throw new CompletionException(new IOException(
-                                cp.name() + " HTTP " + code + ": " + summary));
+                        throw new CompletionException(new LlmFailure(
+                                html ? LlmFailure.Kind.HTML : LlmFailure.Kind.HTTP, code, body.serviceError));
                     }
                     if (body.failure() != null) {
                         throw new CompletionException(body.failure());
                     }
-                    AssistantTurn turn = accumulate ? reader.builder().build() : null;
+                    if (body.errorFrames > 0) {
+                        throw new CompletionException(new LlmFailure(
+                                LlmFailure.Kind.SERVICE_ERROR, code, body.serviceError));
+                    }
+                    AssistantTurn parsed = reader.builder().build();
+                    if (parsed.text().isBlank() && parsed.toolCalls().isEmpty()) {
+                        LlmFailure.Kind kind = body.format == ResponseDiagnostics.Format.HTML
+                                ? LlmFailure.Kind.HTML : LlmFailure.Kind.EMPTY_STREAM;
+                        throw new CompletionException(new LlmFailure(kind, code));
+                    }
+                    AssistantTurn turn = accumulate ? parsed : null;
                     if (sink != null) {
                         sink.onCounters(timings.chunks(), timings.deltas(), timings.toolsReady());
                         sink.onComplete(turn, null);
                     }
                     return CompletableFuture.completedFuture(turn);
                 })
-                .thenCompose(f -> f)
-                .whenComplete((turn, err) -> {
-                    Throwable failure = unwrap(err);
-                    if (failure != null && sink != null) {
-                        sink.onComplete(null, failure);
-                    }
-                });
+                .thenCompose(f -> f);
+    }
+
+    private void reportDiagnostics(SseBodySubscriber body) {
+        ResponseDiagnostics snapshot = body.diagnostics();
+        if (diagnostics == null) {
+            if (snapshot.empty()) LOG.log(System.Logger.Level.WARNING, snapshot.summary());
+            return;
+        }
+        try {
+            diagnostics.accept(snapshot);
+        } catch (RuntimeException ignored) {
+            // Host logging must not change task results or trigger a retry.
+        }
     }
 
     /**
@@ -157,21 +213,34 @@ public final class LlmClient implements ChatEngine {
      * 所以 provider 走 {@code toolCallDeltaChecked}：写进去、同时把"写完了"带出来。
      */
     private static void onDataLine(String line, ChatProvider cp, StreamingTurnReader reader,
-                                   TurnSink sink, TurnTimings timings) {
+                                   TurnSink sink, TurnTimings timings, SseBodySubscriber body) {
         String s = line.trim();
         if (!s.startsWith("data:")) {
             return; // 注释行/事件名/心跳：不是数据，也不算 chunk
         }
+        body.dataLines++;
         String payload = s.substring(5).trim();
         if (cp.isTerminalData(payload)) {
+            body.done = true;
             return;
         }
         timings.markChunk();
+        com.google.gson.JsonElement el;
         try {
-            com.google.gson.JsonElement el = JsonParser.parseString(payload);
-            if (!el.isJsonObject()) {
-                return;
-            }
+            el = JsonParser.parseString(payload);
+        } catch (RuntimeException ignored) {
+            body.malformedFrames++;
+            return;
+        }
+        if (!el.isJsonObject()) {
+            body.malformedFrames++;
+            return;
+        }
+        body.observe(el.getAsJsonObject());
+        if (body.errorFrames > 0) {
+            return;
+        }
+        try {
             int before = reader.builder().textLength();
             reader.acceptChunk(cp, el.getAsJsonObject());
             if (sink == null) {
@@ -185,7 +254,7 @@ public final class LlmClient implements ChatEngine {
                 sink.onToolCallReady(ready.index(), ready.call());
             }
         } catch (RuntimeException ignored) {
-            // 个别端点会混入非 JSON 行，跳过比中断安全
+            body.parseErrors++;
         }
     }
 
@@ -199,29 +268,14 @@ public final class LlmClient implements ChatEngine {
     }
 
     /**
-     * 错误体归一：OpenAI 族正常回 JSON（取 error 对象）；站点首页/CF 墙是 HTML——
-     * 整坨塞进聊天和模型上下文毫无意义，折成一句人话。
+     * 仅识别网页以决定一次 /v1 换道；远端错误原文可能包含凭据，不进入异常。
      */
-    private static String summarizeError(List<String> lines) {
+    private static boolean isHtml(List<String> lines) {
         if (lines == null) {
-            return "(empty body)";
+            return false;
         }
         String raw = lines.stream().limit(50).reduce("", (a, b) -> (a + " " + b).trim());
-        if (raw.isEmpty()) {
-            return "(empty body)";
-        }
-        if (raw.startsWith("<")) {
-            return "web page: endpoint returned HTML (wrong path or bot-wall), not a JSON API";
-        }
-        try {
-            var j = JsonParser.parseString(raw);
-            if (j.isJsonObject() && j.getAsJsonObject().has("error")) {
-                raw = j.getAsJsonObject().get("error").toString();
-            }
-        } catch (RuntimeException notJson) {
-            // 保持原文截断
-        }
-        return raw.length() > 300 ? raw.substring(0, 300) + "…" : raw;
+        return raw.startsWith("<");
     }
 
     private static String[] flatten(java.util.Map<String, String> headers) {
@@ -262,7 +316,19 @@ public final class LlmClient implements ChatEngine {
         private final CompletableFuture<SseBodySubscriber> bodyDone = new CompletableFuture<>();
 
         private volatile int statusCode;
+        private long requestId;
+        private int attempt;
+        private ResponseDiagnostics.Format format = ResponseDiagnostics.Format.UNKNOWN;
+        private long bytes;
+        private int dataLines, jsonFrames, malformedFrames, parseErrors, deltaFrames, messageFrames;
+        private int toolFrames, reasoningFrames, refusalFrames, errorFrames;
+        private boolean done;
+        private ResponseDiagnostics.Finish finish = ResponseDiagnostics.Finish.ABSENT;
         private volatile Throwable failure;
+        private ServiceErrorDiagnostics serviceError = ServiceErrorDiagnostics.NONE;
+        private static final int ERROR_BODY_LIMIT = 16_384;
+        private final StringBuilder diagnosticBody = new StringBuilder();
+        private boolean diagnosticBodyTruncated;
 
         SseBodySubscriber(ChatProvider provider, StreamingTurnReader reader, TurnSink sink,
                           TurnTimings timings) {
@@ -278,6 +344,57 @@ public final class LlmClient implements ChatEngine {
 
         int statusCode() {
             return statusCode;
+        }
+
+        void contentType(String contentType) {
+            String type = contentType.toLowerCase(java.util.Locale.ROOT);
+            format = type.contains("text/event-stream") ? ResponseDiagnostics.Format.SSE
+                    : type.contains("json") ? ResponseDiagnostics.Format.JSON
+                    : type.contains("html") ? ResponseDiagnostics.Format.HTML
+                    : ResponseDiagnostics.Format.OTHER;
+        }
+
+        ResponseDiagnostics diagnostics() {
+            AssistantTurn turn = reader.builder().build();
+            return new ResponseDiagnostics(requestId, attempt, statusCode, format, bytes, dataLines, jsonFrames,
+                    malformedFrames, parseErrors, deltaFrames, messageFrames, toolFrames,
+                    reasoningFrames, refusalFrames, errorFrames, done, finish,
+                    turn.text().isBlank() && turn.toolCalls().isEmpty(), diagnosticBodyTruncated, serviceError);
+        }
+
+        private void observe(JsonObject chunk) {
+            jsonFrames++;
+            if (chunk.has("error") && !chunk.get("error").isJsonNull()) {
+                errorFrames++;
+                serviceError = serviceError.merge(ServiceErrorDiagnostics.from(chunk.get("error")));
+            }
+            var choices = chunk.get("choices");
+            if (choices == null || !choices.isJsonArray() || choices.getAsJsonArray().isEmpty()) return;
+            var first = choices.getAsJsonArray().get(0);
+            if (!first.isJsonObject()) return;
+            JsonObject choice = first.getAsJsonObject();
+            var reason = choice.get("finish_reason");
+            if (reason != null && reason.isJsonPrimitive() && reason.getAsJsonPrimitive().isString()) {
+                finish = switch (reason.getAsString()) {
+                    case "stop" -> ResponseDiagnostics.Finish.STOP;
+                    case "tool_calls" -> ResponseDiagnostics.Finish.TOOL_CALLS;
+                    case "length" -> ResponseDiagnostics.Finish.LENGTH;
+                    case "content_filter" -> ResponseDiagnostics.Finish.CONTENT_FILTER;
+                    case "function_call" -> ResponseDiagnostics.Finish.FUNCTION_CALL;
+                    default -> ResponseDiagnostics.Finish.OTHER;
+                };
+            }
+            if (choice.has("message") && choice.get("message").isJsonObject()) messageFrames++;
+            var delta = choice.get("delta");
+            if (delta == null || !delta.isJsonObject()) return;
+            deltaFrames++;
+            JsonObject object = delta.getAsJsonObject();
+            var tools = object.get("tool_calls");
+            if (tools != null && tools.isJsonArray() && !tools.getAsJsonArray().isEmpty()) toolFrames++;
+            var reasoning = object.get("reasoning_content");
+            if (reasoning != null && !reasoning.isJsonNull()) reasoningFrames++;
+            var refusal = object.get("refusal");
+            if (refusal != null && !refusal.isJsonNull()) refusalFrames++;
         }
 
         Throwable failure() {
@@ -302,6 +419,7 @@ public final class LlmClient implements ChatEngine {
         public void onNext(List<ByteBuffer> buffers) {
             try {
                 for (ByteBuffer in : buffers) {
+                    bytes += in.remaining();
                     drain(in);
                 }
             } catch (Throwable t) {
@@ -322,6 +440,17 @@ public final class LlmClient implements ChatEngine {
                 if (lineBuf.length() > 0) {
                     emitLine();
                 }
+                if (format == ResponseDiagnostics.Format.JSON && dataLines == 0 && !diagnosticBodyTruncated
+                        && !diagnosticBody.isEmpty()) {
+                    try {
+                        var el = JsonParser.parseString(diagnosticBody.toString());
+                        if (el.isJsonObject()) observe(el.getAsJsonObject());
+                        else malformedFrames++;
+                    } catch (RuntimeException ignored) {
+                        malformedFrames++;
+                    }
+                }
+                diagnosticBody.setLength(0);
             } catch (Throwable t) {
                 if (failure == null) {
                     failure = t;
@@ -374,12 +503,24 @@ public final class LlmClient implements ChatEngine {
             }
             String line = lineBuf.toString();
             lineBuf.setLength(0);
-            if (statusCode != 200) {
-                errLines.add(line);
+            if (statusCode != 200 && errLines.size() < 50) {
+                errLines.add(line.substring(0, Math.min(line.length(), 512)));
+            }
+            if (format == ResponseDiagnostics.Format.JSON
+                    && (statusCode != 200 || (!line.trim().startsWith("data:") && dataLines == 0))) {
+                if (!diagnosticBodyTruncated
+                        && line.length() + diagnosticBody.length() + 1 <= ERROR_BODY_LIMIT) {
+                    diagnosticBody.append(line).append('\n');
+                } else {
+                    diagnosticBodyTruncated = true;
+                    diagnosticBody.setLength(0);
+                }
                 return;
             }
-            onDataLine(line, provider, reader, sink, timings);
+            if (statusCode != 200) {
+                return;
+            }
+            onDataLine(line, provider, reader, sink, timings, this);
         }
     }
 }
-

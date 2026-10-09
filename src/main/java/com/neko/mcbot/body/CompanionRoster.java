@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-/** 名册：哪些 UUID 是同伴、各归属谁。服务器目录 mcbot/companions.json，重启后据此重进。 */
+/** 名册归属于当前存档；客户端模型配置仍归属于游戏实例。 */
 public final class CompanionRoster {
 
     /** 控制台召唤的占位主人（仅供测试/服主预配；无主人不能玩游戏内功能）。 */
@@ -29,15 +30,29 @@ public final class CompanionRoster {
     }
 
     private final Path store;
+    private final Path worldRoot;
+    private final Path legacyStore;
     private final List<Entry> entries = new ArrayList<>();
 
     public CompanionRoster(MinecraftServer server) {
-        this.store = FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("companions.json");
+        this(server.getWorldPath(LevelResource.ROOT),
+                FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("companions.json"));
+    }
+
+    CompanionRoster(Path worldRoot, Path legacyStore) {
+        this.worldRoot = worldRoot;
+        this.store = worldRoot.resolve("mcbot").resolve("companions.json");
+        this.legacyStore = legacyStore;
+    }
+
+    public Path store() {
+        return store;
     }
 
     public void load() {
         entries.clear();
         if (!Files.exists(store)) {
+            migrateLegacy();
             return;
         }
         try {
@@ -49,6 +64,27 @@ public final class CompanionRoster {
             }
         } catch (IOException | RuntimeException e) {
             LOG.error("名册读取失败，按空名册继续: {}", store, e);
+        }
+    }
+
+    private void migrateLegacy() {
+        if (!Files.exists(legacyStore)) return;
+        try {
+            List<Entry> loaded = GSON.fromJson(Files.readString(legacyStore, StandardCharsets.UTF_8),
+                    new TypeToken<List<Entry>>() { }.getType());
+            if (loaded != null) {
+                for (Entry entry : loaded) {
+                    // A shared roster alone is not evidence that this companion belongs to this world.
+                    if (entry != null && entry.uuid() != null && Files.isRegularFile(
+                            worldRoot.resolve("playerdata").resolve(entry.uuid() + ".dat"))) {
+                        entries.add(entry);
+                    }
+                }
+            }
+            save(); // Persist even an empty migration so a later visit cannot re-import dismissed entries.
+            LOG.info("旧名册迁移完成：当前存档匹配 {} 名同伴，实例旧名册保留", entries.size());
+        } catch (IOException | RuntimeException e) {
+            LOG.error("旧名册迁移失败，未改动旧文件", e);
         }
     }
 

@@ -44,6 +44,27 @@ test {
     useJUnitPlatform()
 }
 
+sourceSets {
+    clientTest {
+        compileClasspath += sourceSets.client.output + sourceSets.client.compileClasspath
+        runtimeClasspath += sourceSets.client.output + sourceSets.client.runtimeClasspath
+    }
+}
+
+configurations {
+    clientTestImplementation.extendsFrom testImplementation
+    clientTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+tasks.register('clientTest', Test) {
+    description = 'Client widget and responsive layout regressions without launching the game.'
+    testClassesDirs = sourceSets.clientTest.output.classesDirs
+    classpath = sourceSets.clientTest.runtimeClasspath
+    useJUnitPlatform()
+}
+
+check.dependsOn tasks.named('clientTest')
+
 processResources {
     inputs.property "version", project.version
     filesMatching("fabric.mod.json") {

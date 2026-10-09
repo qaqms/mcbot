@@ -31,6 +31,10 @@ public final class ServerToolDispatcher {
         this.registry = registry;
     }
 
+    public boolean belongsTo(MinecraftServer candidate) {
+        return server == candidate;
+    }
+
     /**
      * 三道闸的②③＋执行在这里；闸①（尺寸）在 {@code McbotPayloads.C2s.CODEC} 里已完成，
      * 超限包根本进不到这个方法。
@@ -51,6 +55,11 @@ public final class ServerToolDispatcher {
             case "dismiss" -> {
                 String result = summon.dismiss(sender, env.str("name"));
                 broadcast(sender, "dismiss_result", result);
+            }
+            case "companion_status" -> {
+                ServerPlayer companion = summon.companionOf(sender.getUUID());
+                broadcast(sender, "companion_state", companion == null
+                        ? "当前世界尚未召唤伙伴。" : "当前世界伙伴：" + companion.getGameProfile().name());
             }
             case "tool_call" -> handleToolCall(sender, env);
             case "cancel" -> {
@@ -271,6 +280,11 @@ public final class ServerToolDispatcher {
             body.addProperty("v", i);
         } else {
             body.addProperty("text", String.valueOf(payload));
+        }
+        if ("summon_result".equals(kind) || "dismiss_result".equals(kind)
+                || "companion_state".equals(kind)) {
+            ServerPlayer companion = summon.companionOf(owner.getUUID());
+            body.addProperty("companion", companion == null ? "" : companion.getGameProfile().name());
         }
         send(owner, kind, body);
     }

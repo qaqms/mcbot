@@ -22,6 +22,24 @@ class PendingJobsTest {
     private static final long T0 = 1_700_000_000_000L;
 
     @Test
+    void taskCleanupRemovesBothPhasesWithoutTouchingAnotherTask() {
+        var pending = new PendingJobs<Long>();
+        pending.registerTool(1, "status", T0, 90_000, 11L);
+        pending.registerTool(2, "move_to", T0, 210_000, 11L);
+        pending.acceptAsJob(2, "j1", 3600, T0);
+        pending.registerTool(3, "status", T0, 90_000, 22L);
+        assertNotNull(pending.peekJob("j1"));
+        assertNotNull(pending.peekJob("j1"), "observing progress must not consume the job");
+        assertEquals(List.of(11L, 11L), pending.drain(id -> id == 11));
+        assertEquals(1, pending.pendingTools());
+        assertEquals(0, pending.pendingJobs());
+        assertNull(pending.takeTool(1));
+        assertNull(pending.takeJob("j1"));
+        assertEquals(22L, pending.takeTool(3).ticket());
+        assertTrue(pending.drain(id -> true).isEmpty());
+    }
+
+    @Test
     void ackMigratesTheWaitFromSeqToJob() {
         PendingJobs<String> p = new PendingJobs<>();
         p.registerTool(7, "move_to", T0, 210_000, "tk");
@@ -100,7 +118,7 @@ class PendingJobsTest {
         p.registerTool(7, "move_to", T0, 210_000, "tk");
         p.acceptAsJob(7, "j1", 3600, T0);
 
-        // 一条 180s 帽的长活，在 200s 时还没超时（195s 才是线）
+        // 180s 帽的长活在 194s 尚未超时，195s 才是本地等待上限。
         assertEquals(0, p.sweepJobs(T0 + 194_000).size());
         List<PendingJobs.Job<String>> late = p.sweepJobs(T0 + 195_100);
         assertEquals(1, late.size());

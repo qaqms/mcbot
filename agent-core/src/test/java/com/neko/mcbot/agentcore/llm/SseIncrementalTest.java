@@ -110,6 +110,7 @@ class SseIncrementalTest {
         final AtomicReference<AssistantTurn> turn = new AtomicReference<>();
         final AtomicReference<Throwable> error = new AtomicReference<>();
         final AtomicInteger chunkCount = new AtomicInteger();
+        final AtomicInteger completions = new AtomicInteger();
         volatile long deltaAtMs = -1;
         volatile long readyAtMs = -1;
         volatile long completeAtMs = -1;
@@ -137,6 +138,7 @@ class SseIncrementalTest {
 
         @Override
         public void onComplete(AssistantTurn t, Throwable e) {
+            completions.incrementAndGet();
             turn.set(t);
             error.set(e);
             completeAtMs = now();
@@ -159,8 +161,13 @@ class SseIncrementalTest {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         for (Route r : routes) {
             server.createContext(r.path, ex -> {
+                if (!r.path.equals(ex.getRequestURI().getPath())) {
+                    ex.sendResponseHeaders(404, -1);
+                    ex.close();
+                    return;
+                }
                 r.hits.incrementAndGet();
-                drain(ex);
+                r.requestBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 ex.getResponseHeaders().add("Content-Type", r.contentType);
                 ex.sendResponseHeaders(r.status, 0);
                 try (OutputStream out = ex.getResponseBody()) {
@@ -199,6 +206,7 @@ class SseIncrementalTest {
         final long gapMs;
         final boolean rawBytes;
         final AtomicInteger hits = new AtomicInteger();
+        final AtomicReference<String> requestBody = new AtomicReference<>();
 
         Route(String path, int status, String contentType, List<String> pieces, long gapMs,
               boolean rawBytes) {
@@ -368,9 +376,336 @@ class SseIncrementalTest {
                 () -> f.get(20, TimeUnit.SECONDS));
         String msg = String.valueOf(e.getCause().getMessage());
         assertTrue(msg.contains("401"), "异常里要有状态码，实际: " + msg);
-        assertTrue(msg.contains("bad key"), "异常里要有服务端错误体，实际: " + msg);
+        assertTrue(e.getCause() instanceof LlmFailure);
+        assertTrue(!msg.contains("bad key"), "服务端原始错误体不得进入异常或用户消息");
         assertNotNull(probe.error.get(), "sink 也要收到失败通知");
         assertTrue(probe.readyIndexes.isEmpty(), "错误响应不得产生任何工具就绪信号");
+    }
+
+    @Test
+    void serverEchoedCredentialNeverEntersTheFailure() throws Exception {
+        String base = serve(List.of(new Route("/chat/completions", 401, "application/json",
+                List.of("{\"error\":{\"message\":\"Authorization: Bearer private-value\"}}"), 0, false)));
+        ExecutionException failure = assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15))
+                        .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS));
+        assertTrue(!failure.getCause().toString().contains("private-value"));
+        assertTrue(!LlmFailure.userMessage(failure).contains("private-value"));
+    }
+
+    @Test
+    void htmlWithHttp200IsNotReportedAsAnEmptySuccessfulReply() throws Exception {
+        String base = serve(List.of(new Route("/chat/completions", 200, "text/html",
+                List.of("<html>not an API</html>"), 0, false)));
+        ExecutionException failure = assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15))
+                        .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS));
+        assertTrue(failure.getCause() instanceof LlmFailure);
+        assertTrue(LlmFailure.userMessage(failure).contains("网页"));
+    }
+
+    @Test
+    void diagnosticSinkReceivesSuccessfulResponseShapeExactlyOnce() throws Exception {
+        String base = serve(List.of(Route.ok(List.of(textChunk("好"),
+                frame("{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}"),
+                "data: [DONE]\n\n"), 0)));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS);
+        assertEquals("好", turn.text());
+        assertEquals(1, diagnostics.size());
+        var shape = diagnostics.getFirst();
+        assertEquals(200, shape.http());
+        assertEquals(ResponseDiagnostics.Format.SSE, shape.format());
+        assertEquals(3, shape.dataLines());
+        assertEquals(2, shape.jsonFrames());
+        assertEquals(2, shape.deltaFrames());
+        assertEquals(0, shape.parseErrors());
+        assertEquals(ResponseDiagnostics.Finish.STOP, shape.finish());
+        assertTrue(shape.bytes() > 0);
+        assertTrue(shape.done());
+        assertTrue(!shape.empty());
+    }
+
+    @Test
+    void requestSummaryDescribesTheExactSentBodyAndMatchesTheResponse() throws Exception {
+        Route route = Route.ok(List.of(textChunk("好"), "data: [DONE]\n\n"), 0);
+        String base = serve(List.of(route));
+        List<RequestDiagnostics> requests = new ArrayList<>();
+        List<ResponseDiagnostics> responses = new ArrayList<>();
+        var client = new LlmClient(provider(base), Duration.ofSeconds(15), requests::add, responses::add);
+        List<Msg> history = List.of(new Msg.User("private-user"),
+                new Msg.Assistant("", List.of(new ToolCall("private-call", "move_to", "{\"x\":1}"))),
+                new Msg.Tool("private-call", "move_to", "private-result", true));
+        client.chat("private-system", history, List.of(MOVE_WITH_REQUIRED)).get(20, TimeUnit.SECONDS);
+        assertEquals(1, requests.size());
+        assertEquals(1, responses.size());
+        var request = requests.getFirst();
+        var actualBody = com.google.gson.JsonParser.parseString(route.requestBody.get()).getAsJsonObject();
+        assertEquals(RequestDiagnostics.from(request.requestId(), request.attempt(), actualBody,
+                route.requestBody.get().getBytes(StandardCharsets.UTF_8).length), request);
+        assertEquals(request.requestId(), responses.getFirst().requestId());
+        assertEquals(request.attempt(), responses.getFirst().attempt());
+        assertEquals(0, request.missingResults());
+        assertEquals(0, request.orphanResults());
+        assertTrue(!request.summary().contains("private"));
+        assertTrue(!responses.getFirst().toString().contains("private"));
+    }
+
+    @Test
+    void streamErrorCategoryAndParameterAreSafeAndDoNotTriggerRetry() throws Exception {
+        Route route = Route.ok(List.of(frame("{\"error\":{\"code\":\"context_length_exceeded\","
+                + "\"type\":\"invalid_request_error\",\"param\":\"messages[3]\","
+                + "\"message\":\"private-value\"}}")), 0);
+        String base = serve(List.of(route));
+        List<ResponseDiagnostics> responses = new ArrayList<>();
+        ExecutionException failure = assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), responses::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS));
+        var error = responses.getFirst().error();
+        assertEquals(ServiceErrorDiagnostics.Category.CONTEXT_LIMIT, error.category());
+        assertEquals(ServiceErrorDiagnostics.Source.CODE, error.source());
+        assertEquals(ServiceErrorDiagnostics.Param.MESSAGES, error.param());
+        assertEquals(1, route.hits.get());
+        assertTrue(LlmFailure.userMessage(failure).contains("上下文超限"));
+        assertTrue(!failure.getCause().toString().contains("private"));
+        assertTrue(!responses.getFirst().toString().contains("private"));
+    }
+
+    @Test
+    void prettyNon200JsonDistinguishesQuotaFromRateLimit() throws Exception {
+        Route route = new Route("/chat/completions", 429, "application/json",
+                List.of("{\n \"error\": {\n \"code\": \"insufficient_quota\",\n"
+                        + "\"message\":\"private-value\"\n }\n}"), 0, false);
+        String base = serve(List.of(route));
+        List<ResponseDiagnostics> responses = new ArrayList<>();
+        ExecutionException failure = assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), responses::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS));
+        assertEquals(429, responses.getFirst().http());
+        assertEquals(ServiceErrorDiagnostics.Category.QUOTA, responses.getFirst().error().category());
+        assertEquals(1, responses.getFirst().errorFrames());
+        assertTrue(LlmFailure.userMessage(failure).contains("额度"));
+        assertTrue(!LlmFailure.userMessage(failure).contains("private"));
+    }
+
+    @Test
+    void prettyHttp200JsonErrorIsClassifiedButNotAcceptedAsChat() throws Exception {
+        String base = serve(List.of(new Route("/chat/completions", 200, "application/json",
+                List.of("{\n\"error\": {\n\"code\":\"unsupported_parameter\","
+                        + "\"param\":\"stream_options.include_usage\","
+                        + "\"message\":\"private-value\"\n}\n}"), 0, false)));
+        List<ResponseDiagnostics> responses = new ArrayList<>();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), responses::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS));
+        var detail = responses.getFirst();
+        assertEquals(0, detail.dataLines());
+        assertEquals(0, detail.malformedFrames());
+        assertEquals(ServiceErrorDiagnostics.Category.UNSUPPORTED_PARAMETER, detail.error().category());
+        assertEquals(ServiceErrorDiagnostics.Param.STREAM_OPTIONS, detail.error().param());
+    }
+
+    @Test
+    void oversizedJsonErrorIsNotLoggedOrPartiallyGuessed() throws Exception {
+        String base = serve(List.of(new Route("/chat/completions", 400, "application/json",
+                List.of("{\"error\":{\"code\":\"private-code\",\"message\":\""
+                        + "private-value".repeat(2000) + "\"}}"), 0, false)));
+        List<ResponseDiagnostics> responses = new ArrayList<>();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), responses::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS));
+        assertTrue(responses.getFirst().errorBodyTruncated());
+        assertEquals(0, responses.getFirst().errorFrames());
+        assertTrue(!responses.getFirst().summary().contains("private"));
+    }
+
+    @Test
+    void misleadingJsonHeaderDoesNotBreakExistingSseOrHtmlFallback() throws Exception {
+        Route root = new Route("/chat/completions", 404, "application/json",
+                List.of("<html>private-value</html>"), 0, false);
+        Route v1 = new Route("/v1/chat/completions", 200, "application/json",
+                List.of(textChunk("好"), "data: [DONE]\n\n"), 0, false);
+        String base = serve(List.of(root, v1));
+        List<RequestDiagnostics> requests = new ArrayList<>();
+        List<ResponseDiagnostics> responses = new ArrayList<>();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15), requests::add, responses::add)
+                .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS);
+        assertEquals("好", turn.text());
+        assertEquals(2, requests.size());
+        assertEquals(2, responses.size());
+        assertEquals(1, requests.getFirst().attempt());
+        assertEquals(2, requests.getLast().attempt());
+        assertTrue(requests.getFirst().requestId() != requests.getLast().requestId());
+        assertEquals(requests.getFirst().requestId(), responses.getFirst().requestId());
+        assertEquals(requests.getLast().requestId(), responses.getLast().requestId());
+    }
+
+    @Test
+    void requestLoggingFailureCannotAlterDispatchOrCauseRetry() throws Exception {
+        Route route = Route.ok(List.of(textChunk("好"), "data: [DONE]\n\n"), 0);
+        String base = serve(List.of(route));
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15),
+                request -> { throw new IllegalStateException("private-value"); }, response -> {})
+                .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS);
+        assertEquals("好", turn.text());
+        assertEquals(1, route.hits.get());
+    }
+
+    @Test
+    void aKnownStreamErrorSuppressesToolsAndTextInSubsequentFrames() throws Exception {
+        String base = serve(List.of(Route.ok(List.of(frame("{\"error\":{\"code\":\"upstream_error\"}}"),
+                toolChunk(0, "call_1", "move_to", ARGS_HEAD + ARGS_TAIL),
+                textChunk("private-value"), "data: [DONE]\n\n"), 0)));
+        Probe probe = new Probe();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15))
+                        .chat("sys", List.of(new Msg.User("hi")), List.of(MOVE_WITH_REQUIRED), probe, true)
+                        .get(20, TimeUnit.SECONDS));
+        assertTrue(probe.readyIndexes.isEmpty());
+        assertTrue(probe.deltas.isEmpty());
+        assertEquals(1, probe.completions.get());
+    }
+
+    @Test
+    void http200StreamErrorIsNotAnEmptyReplyOrPartialSuccess() throws Exception {
+        String base = serve(List.of(Route.ok(List.of(textChunk("partial"),
+                frame("{\"error\":{\"message\":\"Authorization: Bearer private-value\"}}"),
+                "data: [DONE]\n\n"), 0)));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        Probe probe = new Probe();
+        ExecutionException failure = assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of(), probe, true)
+                        .get(20, TimeUnit.SECONDS));
+        assertTrue(LlmFailure.userMessage(failure).contains("响应中报告错误"));
+        assertTrue(!LlmFailure.userMessage(failure).contains("private-value"));
+        assertTrue(!failure.getCause().toString().contains("private-value"));
+        assertEquals(1, probe.completions.get());
+        assertNotNull(probe.error.get());
+        assertEquals(1, diagnostics.size());
+        assertEquals(1, diagnostics.getFirst().errorFrames());
+        assertTrue(!diagnostics.getFirst().summary().contains("partial"));
+        assertTrue(!diagnostics.getFirst().summary().contains("private-value"));
+    }
+
+    @Test
+    void nonStreamingJsonIsDiagnosedWithoutPretendingItWasAnSseSuccess() throws Exception {
+        String json = "{\"choices\":[{\"message\":{\"content\":\"private-value\"},"
+                + "\"finish_reason\":\"stop\"}]}";
+        String base = serve(List.of(new Route("/chat/completions", 200, "application/json",
+                List.of(json), 0, false)));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of())
+                        .get(20, TimeUnit.SECONDS));
+        var shape = diagnostics.getFirst();
+        assertEquals(ResponseDiagnostics.Format.JSON, shape.format());
+        assertEquals(0, shape.dataLines());
+        assertEquals(1, shape.messageFrames());
+        assertTrue(shape.empty());
+        assertTrue(!shape.summary().contains("private-value"));
+    }
+
+    @Test
+    void emptyReasoningAndRefusalFramesHaveSafeLocalCategories() throws Exception {
+        String base = serve(List.of(Route.ok(List.of(
+                frame("{\"choices\":[{\"delta\":{\"reasoning_content\":\"private-value\","
+                        + "\"refusal\":\"private-refusal\"},\"finish_reason\":\"private-reason\"}]}"),
+                "data: [DONE]\n\n"), 0)));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of())
+                        .get(20, TimeUnit.SECONDS));
+        var shape = diagnostics.getFirst();
+        assertEquals(1, shape.reasoningFrames());
+        assertEquals(1, shape.refusalFrames());
+        assertEquals(ResponseDiagnostics.Finish.OTHER, shape.finish());
+        assertTrue(shape.empty());
+        assertTrue(!shape.summary().contains("private"));
+    }
+
+    @Test
+    void malformedJsonAndProviderParseErrorsAreSeparateCounters() throws Exception {
+        String base = serve(List.of(Route.ok(List.of("data: not-json\n\n",
+                frame("{\"usage\":{\"prompt_tokens\":\"private-value\"},"
+                        + "\"choices\":[{\"delta\":{\"content\":\"ignored\"}}]}"),
+                textChunk("好"), "data: [DONE]\n\n"), 0)));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                .chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS);
+        assertEquals("好", turn.text());
+        assertEquals(1, diagnostics.getFirst().malformedFrames());
+        assertEquals(1, diagnostics.getFirst().parseErrors());
+        assertTrue(!diagnostics.getFirst().summary().contains("private-value"));
+    }
+
+    @Test
+    void brokenDiagnosticSinkDoesNotFailOrRetrySuccessfulRequest() throws Exception {
+        Route route = Route.ok(List.of(textChunk("好"), "data: [DONE]\n\n"), 0);
+        String base = serve(List.of(route));
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15), shape -> {
+            throw new IllegalStateException("private-value");
+        }).chat("sys", List.of(new Msg.User("hi")), List.of()).get(20, TimeUnit.SECONDS);
+        assertEquals("好", turn.text());
+        assertEquals(1, route.hits.get());
+    }
+
+    @Test
+    void emptyResponseDoesNotAutomaticallyRetryTheTask() throws Exception {
+        Route route = Route.ok(List.of("data: [DONE]\n\n"), 0);
+        String base = serve(List.of(route));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                        .chat("sys", List.of(new Msg.User("hi")), List.of())
+                        .get(20, TimeUnit.SECONDS));
+        assertEquals(1, route.hits.get());
+        assertEquals(1, diagnostics.size());
+        assertEquals(0, diagnostics.getFirst().jsonFrames());
+        assertTrue(diagnostics.getFirst().done());
+        assertTrue(diagnostics.getFirst().empty());
+    }
+
+    @Test
+    void toolFieldsInAnErrorFrameCannotProduceAnEarlyDispatch() throws Exception {
+        String error = "{\"error\":{\"message\":\"private-value\"},\"choices\":[{\"delta\":"
+                + "{\"tool_calls\":[{\"index\":0,\"id\":\"call\",\"function\":"
+                + "{\"name\":\"move_to\",\"arguments\":\"{\\\"x\\\":1,\\\"y\\\":2,\\\"z\\\":3}\"}}]}}]}";
+        String base = serve(List.of(Route.ok(List.of(frame(error), "data: [DONE]\n\n"), 0)));
+        Probe probe = new Probe();
+        assertThrows(ExecutionException.class,
+                () -> new LlmClient(provider(base), Duration.ofSeconds(15))
+                        .chat("sys", List.of(new Msg.User("hi")), List.of(MOVE_WITH_REQUIRED),
+                                probe, true).get(20, TimeUnit.SECONDS));
+        assertTrue(probe.readyIndexes.isEmpty());
+        assertTrue(probe.deltas.isEmpty());
+        assertEquals(1, probe.completions.get());
+    }
+
+    @Test
+    void pathFallbackReportsEachAttemptWithoutMixingResponseCounters() throws Exception {
+        Route root = new Route("/chat/completions", 404, "text/html",
+                List.of("<html>private-value</html>"), 0, false);
+        Route v1 = new Route("/v1/chat/completions", 200, "text/event-stream",
+                List.of(textChunk("好"), "data: [DONE]\n\n"), 0, false);
+        String base = serve(List.of(root, v1));
+        List<ResponseDiagnostics> diagnostics = new ArrayList<>();
+        Probe probe = new Probe();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15), diagnostics::add)
+                .chat("sys", List.of(new Msg.User("hi")), List.of(), probe, true)
+                .get(20, TimeUnit.SECONDS);
+        assertEquals("好", turn.text());
+        assertEquals(2, diagnostics.size());
+        assertEquals(404, diagnostics.getFirst().http());
+        assertEquals(ResponseDiagnostics.Format.HTML, diagnostics.getFirst().format());
+        assertEquals(0, diagnostics.getFirst().jsonFrames());
+        assertEquals(200, diagnostics.getLast().http());
+        assertEquals(1, diagnostics.getLast().jsonFrames());
+        assertEquals(1, probe.completions.get());
+        assertTrue(diagnostics.stream().noneMatch(shape -> shape.summary().contains("private-value")));
     }
 
     /** 根路径被网页接管时自动换道 /v1 重试一次（旧行为，不得因流式改造而丢）。 */
@@ -390,6 +725,20 @@ class SseIncrementalTest {
         assertEquals(1, root.hits.get(), "根路径只该被打一次");
         assertEquals(1, v1.hits.get(), "换道只该发生一次");
         assertEquals("换道成功", turn.text());
+    }
+
+    @Test
+    void failedV1RetryReportsOnlyOneCompletion() throws Exception {
+        Route root = new Route("/chat/completions", 404, "text/html",
+                List.of("<html>wrong path</html>"), 0, false);
+        Route v1 = new Route("/v1/chat/completions", 401, "application/json",
+                List.of("{\"error\":{\"message\":\"bad key\"}}"), 0, false);
+        String base = serve(List.of(root, v1));
+        Probe probe = new Probe();
+        assertThrows(ExecutionException.class, () -> new LlmClient(provider(base), Duration.ofSeconds(15))
+                .chat("sys", List.of(new Msg.User("hi")), List.of(), probe, true)
+                .get(20, TimeUnit.SECONDS));
+        assertEquals(1, probe.completions.get());
     }
 
     /** 换道不得把 baseUrl 写回客户端状态（否则后续请求全被带偏）。 */
@@ -440,5 +789,3 @@ class SseIncrementalTest {
         assertNotNull(probe.error.get(), "sink 必须收到失败通知");
     }
 }
-
-

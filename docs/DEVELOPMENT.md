@@ -42,6 +42,7 @@
 ```bash
 ./gradlew build                 # 全量：agent-core 测试 + mod 编译 + remapJar
 ./gradlew :agent-core:test      # 只跑大脑层单测（报告 agent-core/build/test-results）
+./gradlew clientTest           # 客户端实际 EditBox 与 GUI 像素布局测试，不启动游戏
 ./gradlew runServer             # 起开发服（25565，配合 autotest.flag 做无头验收）
 ./gradlew runClient             # 起开发客户端（需 GUI 环境）
 ```
@@ -80,6 +81,9 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
      玩家票与 `POST_TELEPORT` 语义要 javap 实测）、或 4 秒观察窗不够卸块。
      **在查清之前，别把 `[m9] A3` 当作回归信号，也别据此宣布 R1-S3b 仍然成立。**
 2. 判读基准都在日志行前缀里（`[m3]`/`[m4]`/`[m4b]`/`AUTOTEST`），STATUS 各节有逐条"期望值"。
+   可同时建立 `run/mcbot/autotest-stop.flag`，验收链结束后通过 server.halt(false) 正常停服，
+   不用控制台 stdin。`[f0-world]` 额外验当前存档名册/dispatcher/receiver 装配，
+   以及遣散取消任务、再召唤、停服槽清空；不能替代客户端同进程换世界实测。
 3. ⚠️ **不要用控制台 stdin 做验收**：经 gradle 管道喂命令连原版 `list` 都报
    "unexpected error" 且吞堆栈——harness 缺陷，与代码无关。一切自动化验收走 SelfTest
    （它直接 `dispatcher.execute`）。
@@ -91,6 +95,58 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
 开发服直连 `runClient`，或发测试包：`dist/` 两 jar 放进任意 1.21.11 Fabric 实例 `mods/`，
 进 `localhost:25565`，G 面板填 key → 召唤 → `@bot` 对话（详见 `dist/README-DIST.md`）。
 桥接自测（进世界后）见 `docs/BRIDGE.md` 底部清单。
+
+### 4.1 模型空响应诊断
+
+先区分任务与只读按钮：状态/扫描按钮不经过模型，成功不证明模型任务可用。
+模型页“测试连接”检查独立两轮工具往返；真正模型任务的诊断在
+`[brain] llm response`，连接测试在 `[model-test] llm response`。
+配对的 `[brain] llm request` / `[model-test] llm request` 记录实际出站 JSON 的结构计数。
+两类摘要均只含本地枚举、布尔与数值，不记录密钥、URL、模型名、提示词、工具参数、
+回执正文或内容哈希；`request` 是本进程内唯一的 HTTP 尝试编号，响应必须按它匹配请求，
+不能按异步日志的相邻行配对。`attempt=2` 仅表示既有非 200 网页触发的一次 /v1 换道。
+
+- `data=0`：没解析到 SSE data 行，结合 `format` 判断是否返回 JSON/网页或空体。
+- `message>0` 且 `delta=0`：发现整轮 message 形状，不是当前实现消费的 delta 流。
+- `malformed>0` / `parse_errors>0`：分别表示非对象/非法 JSON 载荷与 provider/回调消费异常。
+- `reasoning>0` / `refusal>0`：对应字段出现，不把思考或拒答原文伪装成正常回答。
+- `errors>0`：HTTP 200 中也可能有服务错误；该轮报失败，不因已有部分文本宣布成功。
+- `empty=true`：无已识别回答/工具。不得自动重发游戏任务，以免早派发动作重复执行。
+
+服务错误与失败请求差异（2026-10-09 补齐）：
+
+- `error_category` 区分鉴权、权限、限流、额度、模型不可用、上下文超限、工具协议、
+  不支持的参数、请求校验、内容策略、超时及上游/路由；未知值为 UNKNOWN，多帧冲突为 MIXED。
+  这是本地对白名单信号的归类，不是对真实根因的独立证明。
+- `error_source=CODE|TYPE|STATUS` 表示结构化证据；MESSAGE_HINT 只是有界错误文本的匹配线索。
+  `error_code` / `error_type` 本身也是本地类别，不是提供商原始字符串；
+  `error_param` 仅映射 model/messages/tools/tool_choice/stream/stream_options 等字段族。
+  不得把未知错误直接解释成余额不足、服务宕机或协议不兼容。
+- JSON 错误体可跨行解析，只保留最多 16384 字符供诊断，处理后清空。
+  `error_body_truncated=true` 表示捕获超限且没有推测其内容；此时 errors=0 不证明没有服务错误。
+  非流式 JSON 仍不当作成功的 Chat Completions 回答。HTTP 状态与流内错误状态分开记录。
+- 先对照成功/失败请求的 messages、各角色条数/字符数、工具定义数量/字节数；
+  再看 missing_results/orphan_results/duplicate_calls/duplicate_results/name_mismatches/
+  invalid_calls/invalid_arguments/interrupted_groups。配对统计按每个连续工具组检查，不输出 ID。
+  invalid_arguments 指参数不能解析为 JSON 对象，invalid_calls 指 ID/名称/type 的结构异常。
+- 对照 stream/include_usage/tool_choice/parallel_tool_calls 与 last_role。
+  null_assistant 是正常的纯工具调用形状，不能单凭它判错；回执折叠和压缩后统计的是实际出站视图。
+  摘要不改变请求、不拦截或重写历史，只用于定位；结构相同也不能证明正文相同。
+- 真机用同一配置与同一世界，在已有伙伴时从任务框连续两次发
+  “查看自己的状态，然后扫描附近并简报”，每次等终态后再发下一次，不点只读按钮代替。
+  遇错保留日志、不要反复刷；必要时再显式做一次独立连接测试或重置会话作对照，
+  不同时换模型/世界/人设/参数，否则无法归因。
+- 已识别 error 后不再派发后续流帧里的工具；此前已早派发的动作不能回滚。
+  不新增自动重试，不额外循环付费探测；旧日志没有结构摘要，无法事后还原其请求。
+
+仓内 `tools/ModelProbe.java` 是显式选择的无游戏执行器探针：
+先 `./gradlew build`，再用 JDK 21 源文件启动模式运行它，classpath 包含
+`build/classes/java/client`、`agent-core/build/classes/java/main` 和构建依赖的 Gson JAR
+（平台路径分隔符 Windows 为 `;`，其他系统为 `:`）。
+参数是 `<实例目录>/mcbot/client.json` 与 `task` 或 `connection`，**不要把密钥写成命令行参数**。
+`task` 单请求使用真实提示词/技能/九个工具定义，只统计响应，不执行任何游戏工具；
+`connection` 最多两请求，只使用本地 connection_probe 回执。会产生实际 API 用量，
+不得加入 build/定时任务或自动循环。它读取磁盘配置，不模拟启动器的环境变量覆盖与游戏历史。
 
 ## 5. 施工纪律（红线）
 

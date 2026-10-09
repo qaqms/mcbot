@@ -110,6 +110,7 @@ public final class SummonService {
         }
         roster.remove(entry);
         roster.save();
+        McbotMod.scheduler().cancel(entry.uuid(), "同伴已被遣散。");
         ServerPlayer player = server.getPlayerList().getPlayer(entry.uuid());
         if (player != null) {
             server.getPlayerList().remove(player);

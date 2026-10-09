@@ -34,17 +34,23 @@ public final class McbotClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(McbotPayloads.S2c.TYPE, (payload, context) -> {
             Envelope env = Envelope.decode(payload.json);
-            if (env != null && runner != null) {
-                context.client().execute(() -> runner.handleS2c(env));
+            AgentRunner target = runner;
+            if (env != null && target != null) {
+                context.client().execute(() -> {
+                    if (runner == target) target.handleS2c(env);
+                });
             }
         });
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             runner = new AgentRunner(ClientConfig.load());
             runner.start();
+            runner.sendLifecycle("companion_status", "");
             com.neko.mcbot.bridge.BridgeHttp.ensureStarted();
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            AgentRunner old = runner;
+            if (old != null) old.close();
             com.neko.mcbot.bridge.BridgeHttp.shutdown();
             runner = null;
         });

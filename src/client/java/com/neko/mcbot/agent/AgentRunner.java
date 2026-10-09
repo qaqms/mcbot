@@ -1,9 +1,12 @@
 package com.neko.mcbot.agent;
 
 import com.google.gson.JsonObject;
+import com.neko.mcbot.McbotClient;
 import com.neko.mcbot.agentcore.llm.LlmClient;
+import com.neko.mcbot.agentcore.llm.CallbackChatEngine;
 import com.neko.mcbot.agentcore.loop.AgentLoop;
 import com.neko.mcbot.agentcore.loop.PendingJobs;
+import com.neko.mcbot.agentcore.loop.TaskReplies;
 import com.neko.mcbot.agentcore.loop.ToolExecutor;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.agentcore.prompt.SkillLoader;
@@ -72,27 +75,30 @@ public final class AgentRunner implements ToolExecutor {
         };
     }
 
-    private ClientConfig cfg;
-    private final AtomicLong seqGen = new AtomicLong();
-    private final AtomicLong taskSeq = new AtomicLong();
+    private volatile ClientConfig cfg;
+    private static final AtomicLong seqGen = new AtomicLong();
+    private static final AtomicLong taskSeq = new AtomicLong();
+    private volatile boolean closed;
+
+    private record ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future) {
+        void complete(ToolOutcome outcome) { future.complete(outcome); }
+    }
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
      * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
      */
-    private final PendingJobs<CompletableFuture<ToolOutcome>> pending = new PendingJobs<>();
-    /** mcbot_ask 排队等作答的桥（onReply 按序喂给最早的问题）。 */
-    private final ArrayDeque<CompletableFuture<String>> askWaiters = new ArrayDeque<>();
+    private final PendingJobs<ToolTicket> pending = new PendingJobs<>();
+    private final TaskReplies askWaiters = new TaskReplies();
     private final ArrayDeque<String> transcript = new ArrayDeque<>();
     private volatile long currentTask;
     private volatile String companionName = "";
-    /** 迟到回执计数（效率评估 §6 的直接证据）：>0 说明超时帽配错、真结果被扔。 */
+    private volatile String lifecycleResult = "";
+    /** 已超时或取消的调用仍收到回执；只计数，不重新消费。 */
     private final AtomicLong lateResults = new AtomicLong();
     /** PARK 观测：受理之后链挂起、等 job 事件的数量（面板/桥可见）。 */
     private volatile boolean parked;
     private volatile int parkedJobs;
-    private AgentLoop loop;
-    /** R2-B 前缀缓存：启动读盘一次，链中不再逐步读 skills；换发只在指令边界。 */
-    private PromptBuilder promptCache;
+    private volatile AgentLoop loop;
 
     public AgentRunner(ClientConfig cfg) {
         this.cfg = cfg;
@@ -100,34 +106,57 @@ public final class AgentRunner implements ToolExecutor {
 
     /** 进世界后调用一次；重复调用安全。 */
     public void start() {
-        if (!cfg.brainEnabled || loop != null) {
+        if (closed || !cfg.brainEnabled || loop != null) {
             return;
         }
-        var engine = new LlmClient(
-                new com.neko.mcbot.agentcore.provider.OpenAiCompatProvider(
-                        "mcbot", cfg.baseUrl, cfg.apiKey, cfg.model),
-                java.time.Duration.ofSeconds(180));
+        com.neko.mcbot.agentcore.provider.OpenAiCompatProvider provider;
+        try {
+            provider = new com.neko.mcbot.agentcore.provider.OpenAiCompatProvider(
+                    "mcbot", cfg.baseUrl, cfg.apiKey, cfg.model);
+        } catch (IllegalArgumentException invalid) {
+            say("§c[mcbot] API 地址无效，请打开模型配置检查地址。§r");
+            LOG.warn("[brain] invalid API address; brain not started");
+            return;
+        }
+        var engine = new CallbackChatEngine(new LlmClient(provider,
+                java.time.Duration.ofSeconds(180),
+                diagnostic -> LOG.info("[brain] llm request {}", diagnostic.summary()),
+                diagnostic ->
+                    LOG.info("[brain] llm response {}", diagnostic.summary())),
+                Minecraft.getInstance()::execute);
         // R2-B：prefix 缓存也接上了——启动读一次盘，指令边界才允许换发（链中不换=不裂前缀）。
-        promptCache = new PromptBuilder(() -> PromptBuilder.build(cfg.persona, SkillLoader.load(
+        ClientConfig sessionCfg = cfg;
+        PromptBuilder sessionPrompt = new PromptBuilder(() -> PromptBuilder.build(sessionCfg.persona, SkillLoader.load(
                 FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"))));
         loop = new AgentLoop(engine, ClientToolDefs.SPECS, this, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
+                    public void onTaskStarted(long taskId) {
+                        currentTask = taskId;
+                        JsonObject d = new JsonObject();
+                        d.addProperty("status", "running");
+                        emit("state", taskId, d);
+                    }
+
+                    @Override
+                    public void onTaskFinished(long taskId, AgentLoop.TaskStatus status, String text) {
+                        boolean wasActive = currentTask == taskId;
+                        if (wasActive && status != AgentLoop.TaskStatus.COMPLETED) sendCancel();
+                        clearTaskWaits(taskId, status.name() + ":任务已终止。");
+                        if (wasActive) currentTask = 0;
+                        emitDone(taskId, status, text);
+                        askWaiters.finish(taskId, status, text);
+                    }
+
+                    @Override
                     public void onReply(String text) {
                         say("§b[同伴] §r" + text);
-                        synchronized (askWaiters) {
-                            if (!askWaiters.isEmpty()) {
-                                askWaiters.pollFirst().complete(text);
-                            }
-                        }
-                        JsonObject d = new JsonObject();
-                        d.addProperty("text", text);
-                        emit("done", d);
                     }
 
                     @Override
                     public void onToolInvoked(String name, String argsJson, boolean ok, String feedback) {
                         LOG.info("tool {} -> {} {}", name, ok ? "✔" : "✘", feedback);
+                        record("§7" + name + (ok ? " ✔ " : " ✘ ") + feedback + "§r");
                         JsonObject d = new JsonObject();
                         d.addProperty("text", name + (ok ? " ✔ " : " ✘ ") + feedback);
                         d.addProperty("tool", name);
@@ -138,6 +167,7 @@ public final class AgentRunner implements ToolExecutor {
                     @Override
                     public void onNotice(String text) {
                         LOG.info("loop notice: {}", text);
+                        record("§7（护栏）" + text + "§r");
                         JsonObject d = new JsonObject();
                         d.addProperty("text", "（护栏）" + text);
                         emit("progress", d);
@@ -189,10 +219,10 @@ public final class AgentRunner implements ToolExecutor {
                         emit("state", d);
                     }
                 },
-                () -> promptCache.get(),
+                sessionPrompt::get,
                 // 压缩闸门：6000 真 token（API 数优先，本地 CJK 感知估算兜底）。
                 // 参考实测：固定开销≈350，每步只追加；这个数给中转站通道留了延迟余地。
-                promptCache,
+                sessionPrompt,
                 6_000);
         LOG.info("大脑已上线：{} / {}", cfg.baseUrl, cfg.model);
     }
@@ -200,18 +230,8 @@ public final class AgentRunner implements ToolExecutor {
     /** 面板"保存并应用"：落盘配置并重建大脑（对话历史清零属预期；悬着的问题就地终止）。 */
     public void reconfigure(ClientConfig newCfg) {
         ClientConfig.save(newCfg);
+        shutdownBrain();
         cfg = newCfg;
-        loop = null;
-        for (var q : questionRecords.values()) {
-            q.future.complete(new ToolOutcome(false, "INTERNAL:大脑热重启，这个问题作废。"));
-        }
-        questionRecords.clear();
-        synchronized (askWaiters) {
-            for (var f : askWaiters) {
-                f.completeExceptionally(new IllegalStateException("大脑热重启"));
-            }
-            askWaiters.clear();
-        }
         start();
         if (newCfg.brainEnabled) {
             say("§a[mcbot] 配置已保存，大脑已重启：" + newCfg.model + "§r");
@@ -224,6 +244,37 @@ public final class AgentRunner implements ToolExecutor {
         return cfg;
     }
 
+    public void close() {
+        closed = true;
+        shutdownBrain();
+    }
+
+    private void shutdownBrain() {
+        AgentLoop old = loop;
+        if (old == null || old.currentTaskId() == 0) sendCancel();
+        if (old != null) old.close();
+        loop = null;
+        currentTask = 0;
+        parked = false;
+        parkedJobs = 0;
+        latestQuestion = null;
+        clearTaskWaits(0, "CANCELLED:会话已重载或关闭。");
+    }
+
+    private void clearTaskWaits(long taskId, String text) {
+        ToolOutcome stopped = ToolOutcome.synthetic(text);
+        var tickets = pending.drain(t -> t.taskId() == taskId);
+        var questions = new ArrayList<QuestionRecord>();
+        questionRecords.entrySet().removeIf(e -> {
+            if (e.getValue().taskId != taskId) return false;
+            if (latestQuestion != null && latestQuestion.equals(e.getKey())) latestQuestion = null;
+            questions.add(e.getValue());
+            return true;
+        });
+        tickets.forEach(t -> t.complete(stopped));
+        questions.forEach(q -> q.future.complete(stopped));
+    }
+
     public List<String> transcriptSnapshot() {
         synchronized (transcript) {
             return new ArrayList<>(transcript);
@@ -231,6 +282,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     public void handleS2c(Envelope env) {
+        if (closed) return;
         switch (env.kind()) {
             case "tool_result" -> {
                 long seq = env.num("seq", -1);
@@ -248,6 +300,11 @@ public final class AgentRunner implements ToolExecutor {
             }
             case "job_ack" -> onJobAck(env);
             case "job_event" -> onJobEvent(env);
+            case "companion_state" -> {
+                companionName = env.str("companion");
+                lifecycleResult = env.str("text");
+                emitState(lifecycleResult);
+            }
             case "event" -> {
                 say("§7[同伴] " + env.str("text") + "§r");
                 emitState(env.str("text"));
@@ -255,11 +312,9 @@ public final class AgentRunner implements ToolExecutor {
             default -> {
                 String text = env.body().has("text") ? env.str("text") : env.kind();
                 say("§7[mcbot] " + text + "§r");
-                var m = java.util.regex.Pattern.compile("同伴 (\\w+) 出现了").matcher(text);
-                if (m.find()) {
-                    companionName = m.group(1);
-                } else if (text.contains("离开了")) {
-                    companionName = "";
+                if (env.body().has("companion")) {
+                    companionName = env.str("companion");
+                    lifecycleResult = text;
                 }
                 emitState(text);
             }
@@ -293,15 +348,18 @@ public final class AgentRunner implements ToolExecutor {
         String jobId = env.str("job_id");
         String phase = env.str("phase");
         String text = env.str("text");
+        var known = pending.peekJob(jobId);
+        if (known == null || known.seq() != env.num("seq", -1)) return;
         if ("progress".equals(phase)) {
             // 进度帧不进对话（模型不需要、也看不懂"第 3/7 格"），只喂给桥与面板
             JsonObject d = new JsonObject();
             d.addProperty("text", text);
             d.addProperty("job_id", jobId);
             d.addProperty("tool", env.str("tool"));
-            emit("progress", d);
+            emit("progress", known.ticket().taskId(), d);
             return;
         }
+        if (!List.of("done", "failed", "cancelled", "superseded").contains(phase)) return;
         var j = pending.takeJob(jobId);
         if (j == null) {
             // 正常：叫停/换发时大脑已经本地补过合成回执，这条真结果就该被丢掉。
@@ -311,32 +369,68 @@ public final class AgentRunner implements ToolExecutor {
         LOG.info("[brain] job {} {} phase={} {}ms", jobId, j.tool(), phase,
                 System.currentTimeMillis() - j.acceptedAtMs());
         boolean ok = "done".equals(phase);
-        if (loop != null) {
-            loop.onJobEvent(jobId, new ToolOutcome(ok, text));
+        if (j.ticket().owner() == loop && loop != null) {
+            j.ticket().owner().onJobEvent(jobId, new ToolOutcome(ok, text));
         }
     }
 
     /** 面板召唤/遣散按钮：与 /mcbot 命令同权限（服务器按发送者校验 owner）。 */
     public void sendLifecycle(String kind, String name) {
+        if (closed || !ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
+            lifecycleResult = "未连接装有 mcbot 的服务器，操作未发送。";
+            say("§c[mcbot] " + lifecycleResult + "§r");
+            return;
+        }
+        if (("summon".equals(kind) || "dismiss".equals(kind))
+                && !name.matches("[A-Za-z0-9_]{2,16}")) {
+            lifecycleResult = "名字需要 2-16 位英文字母、数字或下划线。";
+            say("§c[mcbot] " + lifecycleResult + "§r");
+            return;
+        }
         JsonObject body = new JsonObject();
         body.addProperty("name", name);
+        lifecycleResult = "请求已发送，等待当前世界回执。";
         ClientPlayNetworking.send(new McbotPayloads.C2s(new Envelope(kind, body).encode()));
+    }
+
+    public String companionName() {
+        return companionName;
+    }
+
+    public String lifecycleResult() {
+        return lifecycleResult;
+    }
+
+    /** Read-only panel inspections are independent of the model and any active agent task. */
+    public void inspect(String name) {
+        if (!List.of("status", "scan_area").contains(name)) {
+            throw new IllegalArgumentException("Only read-only panel inspections are allowed");
+        }
+        record("§9我> §r" + ("status".equals(name) ? "查看状态" : "扫描附近"));
+        executeRemote(name, "{}", 0, null).whenComplete((result, failure) ->
+                Minecraft.getInstance().execute(() -> {
+                    if (closed || McbotClient.runner() != this) return;
+                    say("§7[mcbot] " + (failure == null ? result.feedback() : "检查失败，请重试。") + "§r");
+                }));
     }
     /** 主线程周期调用：工具/长活/问题超时兜底。 */
     public void tick() {
+        if (closed) return;
         long now = System.currentTimeMillis();
         for (var t : pending.sweepTools(now)) {
+            if (t.ticket().owner() != null) sendCancel();
             t.ticket().complete(new ToolOutcome(false,
                     "TIMEOUT:这次操作 " + (t.timeoutMs() / 1000)
                             + " 秒没有结果，先别重复这个操作，向主人说明情况。"));
         }
         for (var j : pending.sweepJobs(now)) {
+            sendCancel();
             // 长活超时必须**同样交给大脑**：不交的话 PARK 就永远解不开，整条链静默卡死
             // （比收到一条 TIMEOUT 教学坏得多——模型连"我卡住了"都看不到）。
             LOG.warn("[brain] job {} 本地等满 {}s 仍未收到事件，按超时解锁 PARK",
                     j.jobId(), j.timeoutMs() / 1000);
-            if (loop != null) {
-                loop.onJobEvent(j.jobId(), new ToolOutcome(false,
+            if (j.ticket().owner() == loop && loop != null) {
+                j.ticket().owner().onJobEvent(j.jobId(), new ToolOutcome(false,
                         "TIMEOUT:这件事等了 " + (j.timeoutMs() / 1000)
                                 + " 秒还没有结果（服务端可能已掉线）。别重复这个操作，先向主人说明情况。"));
             }
@@ -350,8 +444,10 @@ public final class AgentRunner implements ToolExecutor {
     private final class QuestionRecord {
         final CompletableFuture<ToolOutcome> future;
         final long at;
+        final long taskId;
 
-        QuestionRecord(CompletableFuture<ToolOutcome> f) {
+        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f) {
+            this.taskId = taskId;
             this.future = f;
             this.at = System.currentTimeMillis();
         }
@@ -366,19 +462,35 @@ public final class AgentRunner implements ToolExecutor {
 
     /** 主人指令统一入口（聊天/桥共用）。返回分配的 task_id。 */
     public long submitTask(String text) {
+        if (text == null || text.isBlank()) throw new IllegalArgumentException("text must not be blank");
         long id = taskSeq.incrementAndGet();
-        currentTask = id;
+        submitTask(id, text);
+        return id;
+    }
+
+    private void submitTask(long id, String text) {
         record("§9我> §r" + text);   // 面板回看只记主人原话：注入是给模型的上下文，不是主人说过的话
-        if (loop == null) {
+        AgentLoop brain = loop;
+        if (closed || brain == null) {
             say("§c[mcbot] 大脑未配置：打开面板（默认 G）填 base_url/model/api_key 后保存。§r");
-            emitState("大脑未配置，指令未执行");
-            return id;
+            String reason = "大脑不在线，指令未执行";
+            emitDone(id, AgentLoop.TaskStatus.FAILED, reason);
+            askWaiters.finish(id, AgentLoop.TaskStatus.FAILED, reason);
+            return;
         }
         // R2-D 准星注入：把“主人刚说这句话时正盯着什么”拼到 user 文本尾。
         // 读不到（未进世界/准星空/跨线程异常）就吐个空串，“没得看”不能变成“看不看得到都要”的噪声。
         String hint = crosshairHint();
-        loop.submit(hint.isEmpty() ? text : text + "\n" + hint);
-        return id;
+        JsonObject queued = new JsonObject();
+        queued.addProperty("status", "queued");
+        emit("state", id, queued);
+        try {
+            brain.submit(id, hint.isEmpty() ? text : text + "\n" + hint);
+        } catch (IllegalStateException stopped) {
+            String reason = "大脑会话已关闭，指令未执行";
+            emitDone(id, AgentLoop.TaskStatus.FAILED, reason);
+            askWaiters.finish(id, AgentLoop.TaskStatus.FAILED, reason);
+        }
     }
 
     /**
@@ -392,9 +504,7 @@ public final class AgentRunner implements ToolExecutor {
      * （与 scan_area 同一套词），坐标用绝对。准星够不着时 {@code hitResult} 本身就是 MISS：
      * 拿不到确定位置时“猜一个”比“不说”坑得多。
      *
-     * <p>线程：{@code /v1/task} 是在 HTTP 线程上直接调 {@code submitTask} 的，而 hitResult/客户端
-     * level 由渲染线程维护。这里只读不写，且 {@code HitResult}/{@code BlockPos}/{@code BlockState}
-     * 字段都是不可变的；一旦真碰上正在拆除的 level（退世界瞬间等），统一吃掉异常当成“没得看”。
+     * <p>线程：桥接投令先进入客户端主线程，再读取准星与世界；退世界时读不到就不注入。
      */
     private static String crosshairHint() {
         try {
@@ -441,31 +551,41 @@ public final class AgentRunner implements ToolExecutor {
         submitTask(text);
     }
 
-    /** 叫停：服务端中止进行中的任务（回执会作为 CANCELLED 流回大脑），本地链在下一个边界停。 */
+    /** 全局叫停保留给游戏内按钮；桥接可按任务编号取消。 */
     public void requestCancel() {
-        if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
-            ClientPlayNetworking.send(
-                    new McbotPayloads.C2s(new Envelope("cancel", new JsonObject()).encode()));
-        }
-        if (loop != null) {
-            loop.cancelDirective();
-        }
-        emitState("主人叫停了当前任务");
+        cancelTask(0);
     }
 
-    /** 桥接 mcbot_ask：排队等大脑的下一次作答。 */
+    public boolean cancelTask(long taskId) {
+        AgentLoop brain = loop;
+        if (closed) return false;
+        boolean cancelled = brain != null && brain.cancelTask(taskId);
+        if (taskId == 0 && !cancelled) sendCancel();
+        return cancelled;
+    }
+
+    private void sendCancel() {
+        Minecraft.getInstance().execute(() -> {
+            if (com.neko.mcbot.McbotClient.runner() != AgentRunner.this) return;
+            if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
+                ClientPlayNetworking.send(new McbotPayloads.C2s(
+                        new Envelope("cancel", new JsonObject()).encode()));
+            }
+        });
+    }
+
+    /** 先登记编号再投令，同步完成也不会抢答其他任务。 */
     public CompletableFuture<String> askNext(String text) {
-        CompletableFuture<String> f = new CompletableFuture<>();
-        synchronized (askWaiters) {
-            askWaiters.addLast(f);
-        }
-        submitTask(text);
+        if (text == null || text.isBlank()) throw new IllegalArgumentException("text must not be blank");
+        long id = taskSeq.incrementAndGet();
+        CompletableFuture<String> f = askWaiters.register(id);
+        submitTask(id, text);
         return f;
     }
 
     /** 回答同伴的 ask_owner 反问。qid 形如 "q12"。 */
     public boolean answerQuestion(String qid, String text) {
-        if (qid == null || !qid.startsWith("q")) {
+        if (closed || qid == null || !qid.startsWith("q") || text == null || text.isBlank()) {
             return false;
         }
         try {
@@ -480,7 +600,7 @@ public final class AgentRunner implements ToolExecutor {
             rec.future.complete(new ToolOutcome(true, "主人说：" + text));
             JsonObject d = new JsonObject();
             d.addProperty("text", "主人已回答 " + qid);
-            emit("state", d);
+            emit("state", rec.taskId, d);
             return true;
         } catch (NumberFormatException e) {
             return false;
@@ -493,10 +613,13 @@ public final class AgentRunner implements ToolExecutor {
     public String statusJson() {
         JsonObject o = new JsonObject();
         o.addProperty("in_game", Minecraft.getInstance().level != null);
-        o.addProperty("brain_enabled", cfg != null && cfg.brainEnabled);
+        o.addProperty("brain_enabled", !closed && loop != null);
         o.addProperty("model", cfg == null ? "" : cfg.model);
         o.addProperty("companion", companionName);
         o.addProperty("current_task", currentTask);
+        AgentLoop brain = loop;
+        o.addProperty("queued_tasks", brain == null ? 0 : brain.queuedTasks());
+        o.addProperty("pending_asks", askWaiters.size());
         o.addProperty("pending_tools", pending.pendingTools());
         // R2-S4：长活是"第二段等待"，它和普通工具待办必须分开看——
         // 合在一起数的话，"卡在工具上"和"正常在等一条 3 分钟的移动"分不出来。
@@ -505,23 +628,30 @@ public final class AgentRunner implements ToolExecutor {
         o.addProperty("parked_jobs", parkedJobs);
         o.addProperty("accept_mode", cfg == null || cfg.acceptMode);
         o.addProperty("pending_questions", questionRecords.size());
-        // 效率诊断：迟到回执数（>0 即超时帽配错，真结果被丢弃）；桥的 /v1/status 直接可见
+        // 取消/超时后的迟到回执可见，但不再参与新任务。
         o.addProperty("late_results", lateResults.get());
         return o.toString();
     }
 
     @Override
     public CompletableFuture<ToolOutcome> execute(String name, String argsJson) {
+        if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
         }
+        return executeRemote(name, argsJson, currentTask, loop);
+    }
+
+    private CompletableFuture<ToolOutcome> executeRemote(String name, String argsJson,
+                                                        long taskId, AgentLoop owner) {
+        if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
         if (!ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
             return CompletableFuture.completedFuture(
                     new ToolOutcome(false, "DENIED:尚未连上装有 mcbot 的服务器。"));
         }
         long seq = seqGen.incrementAndGet();
         JsonObject body = new JsonObject();
-        body.addProperty("seq", (int) seq);
+        body.addProperty("seq", seq);
         body.addProperty("tool", name);
         // R2-S4：**显式点名**要不要受理即回执。服务端对没有这个字段的请求一律按老语义
         // （同步回执）处理——老客户端不认识 job_ack，擅自换形态会让它白等到超时。
@@ -546,16 +676,27 @@ public final class AgentRunner implements ToolExecutor {
                             + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），服务器不会收。"
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
-        pending.registerTool(seq, name, System.currentTimeMillis(), toolTimeoutMs(name, argsJson), f);
-        ClientPlayNetworking.send(new McbotPayloads.C2s(json));
+        ToolTicket ticket = new ToolTicket(taskId, owner, f);
+        pending.registerTool(seq, name, System.currentTimeMillis(), toolTimeoutMs(name, argsJson), ticket);
+        Minecraft.getInstance().execute(() -> {
+            if (closed || f.isDone()) return;
+            if (ticket.owner() != null && (ticket.owner() != loop || ticket.taskId() != currentTask)) return;
+            if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
+                ClientPlayNetworking.send(new McbotPayloads.C2s(json));
+            } else {
+                pending.takeTool(seq);
+                f.complete(new ToolOutcome(false, "DENIED:服务器连接已关闭。"));
+            }
+        });
         return f;
     }
 
-    /** 本地工具：问题进事件流（question 帧），答案从 answerQuestion 回来；5 分钟无回复超时。 */
+    /** 本地工具：问题按任务归属，120 秒无回复超时。 */
     private CompletableFuture<ToolOutcome> askOwner(String argsJson) {
         long seq = seqGen.incrementAndGet();
         CompletableFuture<ToolOutcome> f = new CompletableFuture<>();
-        questionRecords.put(seq, new QuestionRecord(f));
+        long taskId = currentTask;
+        questionRecords.put(seq, new QuestionRecord(taskId, f));
         String text;
         try {
             var el = com.google.gson.JsonParser.parseString(
@@ -570,35 +711,48 @@ public final class AgentRunner implements ToolExecutor {
         JsonObject d = new JsonObject();
         d.addProperty("question_id", "q" + seq);
         d.addProperty("text", text);
-        emit("question", d);
+        emit("question", taskId, d);
         return f;
     }
 
     /** 问题超时巡检（客户端主线程 tick 里调）。 */
     private void sweepQuestionTimeouts() {
         long now = System.currentTimeMillis();
+        var expired = new ArrayList<QuestionRecord>();
         questionRecords.entrySet().removeIf(e -> {
             if (now - e.getValue().at > QUESTION_TIMEOUT_MS) {
-                if (latestQuestion != null && latestQuestion == e.getKey()) {
+                if (latestQuestion != null && latestQuestion.equals(e.getKey())) {
                     latestQuestion = null; // 超时作废，别留悬指针
                 }
-                e.getValue().future.complete(new ToolOutcome(false,
-                        "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。"));
+                expired.add(e.getValue());
                 return true;
             }
             return false;
         });
+        expired.forEach(q -> q.future.complete(new ToolOutcome(false,
+                "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。")));
     }
 
     private void emitState(String text) {
         JsonObject d = new JsonObject();
         d.addProperty("text", text);
-        emit("state", d);
+        emit("state", 0, d);
+    }
+
+    private void emitDone(long taskId, AgentLoop.TaskStatus status, String text) {
+        JsonObject d = new JsonObject();
+        d.addProperty("text", text);
+        d.addProperty("status", status.name().toLowerCase(java.util.Locale.ROOT));
+        emit("done", taskId, d);
     }
 
     private void emit(String kind, JsonObject data) {
+        emit(kind, currentTask, data);
+    }
+
+    private void emit(String kind, long taskId, JsonObject data) {
         data.addProperty("ev", kind);
-        data.addProperty("task_id", currentTask);
+        data.addProperty("task_id", taskId);
         BridgeEvents.publish(kind, data);
     }
 
