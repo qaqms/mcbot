@@ -18,7 +18,7 @@
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
 
-### 阶段收尾：文档同步与发布前复核（2026-10-10 02:14，Asia/Shanghai）
+### 阶段收尾：文档同步、复核与发布（2026-10-10 02:16，Asia/Shanghai）
 
 - 按维护者决定，本轮停止扩展功能，整理并提交当前 F0 检查点，不将 F0 整体关账。
   README、ARCHITECTURE、DEVELOPMENT、TOOLS、ROADMAP 与测试包说明同步当前证据：
@@ -44,7 +44,15 @@
   failures/errors/skipped 全 0。仅既有过时 API 与 Gradle 10 兼容性警告。
   JAR SHA256 仍为 `f18f491c319cddc044f126854bcded93850fd52e26c8d400ea48dc85d3fb88ab`；
   list-java 无 Java 进程。未再起 MC/模型/连接器，也未修改玩家配置或存档。
-  构建与扫密通过不冒充远端发布成功；实际提交/推送结果在核验后补记。
+  构建与扫密通过不冒充远端发布成功；实际发布核验见下条。
+- **发布核验**：源码/回归/文档检查点提交 `37963c3`
+  （Fix companion persistence and stream timing; record F0 checkpoint）。
+  首次直连 GitHub 443 失败，未进入鉴权；使用本机已有系统代理的命令级配置后推送成功，
+  未修改系统代理、Git 全局代理或仓内构建设置，代理地址不写入受版本控制文件。
+  02:16:48 `ls-remote` 确认远端 fix/companion-persistence 与本地提交同为
+  `37963c3121bde3a6c71dcdbaa4349cb3bbdde32e`，main 仍为 `20f63a6`。
+  未强推、未合并 main、未创建 PR；本条仅记录已核验发布结果，
+  随后单独提交文档收尾记录，不重算或新增测试通过数量。
 
 ### F0 第十五轮：模型链路恢复、真实拾取与单人状态级恢复（2026-10-10 02:04，Asia/Shanghai）
 
