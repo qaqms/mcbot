@@ -142,20 +142,18 @@ public final class LlmClient implements ChatEngine {
                 .build();
 
         return http.sendAsync(request, info -> {
+                    timings.markResponse();
                     body.statusCode(info.statusCode());
                     body.contentType(info.headers().firstValue("Content-Type").orElse(""));
                     return body;
                 })
                 .handle((resp, err) -> {
+                    var snapshot = timings.snapshot();
                     reportDiagnostics(body);
                     Throwable failure = unwrap(err);
-                    if (failure != null) {
-                        throw new CompletionException(failure);
-                    }
-                    timings.markResponse();
                     int code = body.statusCode();
-                    if (code != 200) {
-                        boolean html = isHtml(body.lines());
+                    boolean html = code != 200 && isHtml(body.lines());
+                    if (failure == null && code != 200) {
                         if (mayRetryV1 && html
                                 && !cp.endpoint().contains("/v1/")) {
                             String alt = cp.endpoint().replaceFirst("/chat/completions$",
@@ -165,6 +163,12 @@ public final class LlmClient implements ChatEngine {
                                         sink, accumulate, new TurnTimings(clock));
                             }
                         }
+                    }
+                    reportTimings(sink, snapshot);
+                    if (failure != null) {
+                        throw new CompletionException(failure);
+                    }
+                    if (code != 200) {
                         throw new CompletionException(new LlmFailure(
                                 html ? LlmFailure.Kind.HTML : LlmFailure.Kind.HTTP, code, body.serviceError));
                     }
@@ -183,12 +187,25 @@ public final class LlmClient implements ChatEngine {
                     }
                     AssistantTurn turn = accumulate ? parsed : null;
                     if (sink != null) {
-                        sink.onCounters(timings.chunks(), timings.deltas(), timings.toolsReady());
                         sink.onComplete(turn, null);
                     }
                     return CompletableFuture.completedFuture(turn);
                 })
                 .thenCompose(f -> f);
+    }
+
+    private static void reportTimings(TurnSink sink, TurnTimings.Snapshot snapshot) {
+        if (sink == null) return;
+        try {
+            sink.onCounters(snapshot.chunks(), snapshot.deltas(), snapshot.toolsReady());
+        } catch (RuntimeException ignored) {
+            // Observation must not turn a completed action into a failed request.
+        }
+        try {
+            sink.onTimings(snapshot);
+        } catch (RuntimeException ignored) {
+            // Deliver independently of the optional legacy counter hook.
+        }
     }
 
     private void reportDiagnostics(SseBodySubscriber body) {
@@ -243,15 +260,14 @@ public final class LlmClient implements ChatEngine {
         try {
             int before = reader.builder().textLength();
             reader.acceptChunk(cp, el.getAsJsonObject());
-            if (sink == null) {
-                return;
-            }
             String textDelta = reader.builder().textTail(before);
             if (!textDelta.isEmpty()) {
-                sink.onTextDelta(textDelta);
+                timings.onTextDelta(textDelta);
+                if (sink != null) sink.onTextDelta(textDelta);
             }
             for (StreamingTurnReader.ReadyCall ready : reader.drainReady()) {
-                sink.onToolCallReady(ready.index(), ready.call());
+                timings.onToolCallReady(ready.index(), ready.call());
+                if (sink != null) sink.onToolCallReady(ready.index(), ready.call());
             }
         } catch (RuntimeException ignored) {
             body.parseErrors++;

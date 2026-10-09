@@ -29,7 +29,11 @@ public interface TurnSink {
     default void onComplete(AssistantTurn turn, Throwable error) {
     }
 
-    /** 进度计数（可选）：收到的 SSE 数据行数、文本增量段数、工具调用就绪数。 */
+    /** 进度计数（可选）：非终止 SSE 数据行数、文本增量段数、工具调用就绪数。 */
     default void onCounters(int chunks, int deltas, int toolCallsReady) {
+    }
+
+    /** 最终 HTTP 尝试的传输快照，成功/失败均在 onComplete 之前交付；观测异常不影响请求。 */
+    default void onTimings(TurnTimings.Snapshot timings) {
     }
 }

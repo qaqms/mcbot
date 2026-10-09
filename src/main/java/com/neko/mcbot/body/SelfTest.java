@@ -31,6 +31,10 @@ public final class SelfTest {
         if (done) {
             return;
         }
+        if (PersistenceSelfTest.runIfRequested(server)) {
+            done = true;
+            return;
+        }
         Path flag = FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("autotest.flag");
         if (!Files.exists(flag)) {
             return;

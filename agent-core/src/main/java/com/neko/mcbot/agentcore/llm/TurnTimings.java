@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ul>
  *   <li>{@code ttfb}：发起请求 → 收到 HTTP 响应头（首个数据行之前）。</li>
  *   <li>{@code ttft}：发起请求 → 第一段文本增量。</li>
- *   <li>{@code first_tool}：发起请求 → 第一个工具调用的参数写完（= 早派发真正发生的时刻）。</li>
+ *   <li>{@code first_tool}：发起请求 → 第一个工具调用的参数写完，不代表执行器已派发。</li>
  *   <li>{@code after_chunk}：第一个数据行 → 第一段文本增量（中转站"攒够一波再吐"的直接证据）。</li>
  *   <li>{@code after_tool}：第一个数据行 → 第一个工具就绪（"文本慢但工具早"是常见形态）。</li>
  * </ul>
@@ -52,7 +52,7 @@ public final class TurnTimings implements TurnSink {
         ttfb.compareAndSet(-1, since(t0));
     }
 
-    /** 收到一行 SSE 数据（心跳/注释行不算，由调用方筛）。 */
+    /** 收到一行非终止 SSE 数据（心跳/注释/[DONE] 不算，由调用方筛）。 */
     public void markChunk() {
         chunks.incrementAndGet();
         firstChunk.compareAndSet(-1, since(t0));
@@ -114,8 +114,18 @@ public final class TurnTimings implements TurnSink {
         return afterChunkToTool.get();
     }
 
-    /** 该轮是否发生过早派发（工具在整轮落地前就绪 ≥1 个）。 */
-    public boolean earlyDispatched() {
-        return toolsReady.get() > 0;
+    /** 在传输结束后冻结；客户端队列的延迟不能改变传输时间。 */
+    public Snapshot snapshot() {
+        return new Snapshot(t0, since(t0), ttfbMs(), ttftMs(), firstToolMs(),
+                afterChunkMs(), afterToolMs(), chunks(), deltas(), toolsReady());
+    }
+
+    public record Snapshot(long requestStartedNanos, long elapsedMs, long ttfb, long ttft,
+                           long firstTool, long afterChunk, long afterTool,
+                           int chunks, int deltas, int toolsReady) {
+        /** 仅用于同进程、同 nanoTime 时钟域的实际派发打点，不输出原始时钟值。 */
+        public long sinceRequestMs(long eventNanos) {
+            return (eventNanos - requestStartedNanos) / 1_000_000L;
+        }
     }
 }

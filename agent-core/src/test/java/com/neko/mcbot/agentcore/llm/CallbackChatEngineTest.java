@@ -51,15 +51,56 @@ class CallbackChatEngineTest {
         var engine = new CallbackChatEngine(delegate, queue::add);
         var result = engine.chat("SYS", List.of(), List.of(), new TurnSink() {
             @Override public void onToolCallReady(int index, ToolCall call) { order.add("tool"); }
+            @Override public void onCounters(int c, int d, int r) { order.add("counters"); }
+            @Override public void onTimings(TurnTimings.Snapshot timings) { order.add("timings"); }
             @Override public void onComplete(AssistantTurn turn, Throwable error) { order.add("complete"); }
         }, true);
         result.thenRun(() -> order.add("turn"));
         sinks.getFirst().onToolCallReady(0, new ToolCall("c1", "status", "{}"));
+        sinks.getFirst().onCounters(1, 0, 1);
+        sinks.getFirst().onTimings(new TurnTimings().snapshot());
         sinks.getFirst().onComplete(TEXT, null);
         source.complete(TEXT);
         assertTrue(order.isEmpty());
         while (!queue.isEmpty()) queue.remove().run();
-        assertEquals(List.of("tool", "complete", "turn"), order);
+        assertEquals(List.of("tool", "counters", "timings", "complete", "turn"), order);
+    }
+
+    @Test
+    void queuedObservationFailuresDoNotPreventFinalDelivery() {
+        var queue = new ArrayDeque<Runnable>();
+        ChatEngine delegate = new ChatEngine() {
+            @Override public CompletableFuture<AssistantTurn> chat(String s, List<Msg> h, List<ToolSpec> t) {
+                return CompletableFuture.completedFuture(TEXT);
+            }
+            @Override public CompletableFuture<AssistantTurn> chat(String s, List<Msg> h, List<ToolSpec> t,
+                                                                     TurnSink sink, boolean accumulate) {
+                sink.onCounters(1, 1, 0);
+                sink.onTimings(new TurnTimings().snapshot());
+                return CompletableFuture.completedFuture(TEXT);
+            }
+        };
+        var result = new CallbackChatEngine(delegate, queue::add)
+                .chat("SYS", List.of(), List.of(), new TurnSink() {
+                    @Override public void onCounters(int c, int d, int r) {
+                        throw new IllegalStateException("observer");
+                    }
+                    @Override public void onTimings(TurnTimings.Snapshot timings) {
+                        throw new IllegalStateException("observer");
+                    }
+                }, true);
+        while (!queue.isEmpty()) assertDoesNotThrow(queue.remove()::run);
+        assertEquals(TEXT, result.join());
+    }
+
+    @Test
+    void nullSinkStillDeliversTheTurnOnTheProvidedQueue() {
+        var queue = new ArrayDeque<Runnable>();
+        var result = new CallbackChatEngine((s, h, t) -> CompletableFuture.completedFuture(TEXT), queue::add)
+                .chat("SYS", List.of(), List.of(), null, true);
+        assertFalse(result.isDone());
+        while (!queue.isEmpty()) queue.remove().run();
+        assertEquals(TEXT, result.join());
     }
 
     @Test

@@ -136,7 +136,23 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 字段在顶层全出现——只看配平会把 `{"x":1}` 这种半截参数当成品派发。
 写回纪律不变：`Msg.Tool` 一律按 index 原序记账（协议要求与 `assistant.tool_calls` 严格同序），
 所以等待是**顺序折叠**而不是 `allOf`（后者只保证都到、不保证按序）。
-打点 `ttfb/ttft/first_tool/after_chunk/after_tool/chunks/deltas/early` 经 `onStreamStats` 出到 `[brain] llm stream`。
+传输层在响应头到达时记录 `ttfb`，消费文本增量/闭合工具时记录 `ttft/first_tool` 与计数。
+最终尝试（成功或失败）的 `TurnTimings.Snapshot` 经 `TurnSink.onTimings`、`CallbackChatEngine`
+同一有序队列送到当前 StepReactor，在整轮处理之前冻结统计；取消/关闭后的旧流不发布统计。
+打点 `ttfb/ttft/first_tool/after_chunk/after_tool/chunks/deltas/ready/early/first_dispatch/stream`
+经 `onStreamStats` 出到 `[brain] llm stream`。口径不能混用：
+
+- `chunks` 为非终止 SSE data 行（包含 finish/usage/错误/非法载荷，排除心跳和 `[DONE]`）；
+  `ResponseDiagnostics.data` 包含终止 data 行，因此通常多一行，不是统计矛盾。
+- `ready` 为传输层已闭合的工具数；`first_tool` 为首个工具就绪时间，与 index 0 的实际派发不等价。
+- `early` 为整轮处理前通过就绪回调实际调用执行器的次数（只限 index 0），
+  不表示服务端已受理，也不保证网络传输仍未结束。
+- `first_dispatch` 为最终 HTTP 尝试起点到首次调用执行器，包含客户端队列延迟；
+  `stream` 为请求到传输完成的耗时，不含随后客户端排队。若前者晚于后者，不能宣称省下流式等待。
+- 未发生的时间为 -1；失败也报告已有统计，失败轮的 cache_waste 为 -1。
+  只实现旧接口、不提供快照的引擎不伪造传输时间；观测回调异常不改变任务结果。
+  既有一次 `/v1` 换道每次重建计时器，仅交付最终尝试快照，不混入前次耗时和计数。
+
 回滚开关：把 `AgentLoop` 的 `engine.chat(..., reactor, true)` 换回三参 `chat(...)` 即走旧路径（代码保留同语义）。
 
 护栏数值：每指令 40 步；同一调用连续 3 次 → Nudge 换思路、5 次 → 停链——但只有
@@ -173,10 +189,21 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 ## 7. 身体层（假玩家）
 
 - 身份：`offlineUuid(name)`（OfflinePlayer 公式）→ 名册（`<世界目录>/mcbot/companions.json`）记归属；
-  背包/坐标在原版 playerdata `.dat`。`placeNewPlayer` 全流程进场（FakeConnection：
-  EmbeddedChannel + 丢弃一切出站发包 + 吞 disconnect；keep-alive 因出站被丢而自然失效）。
-- 进场后**必须重设**游戏模式/无敌（placeNewPlayer 会重放旧存档数据），再做
-  **安全落点检查**（存档点不可站 → 就近挪 → 世界出生点）。
+  背包/坐标在原版 `playerdata/<uuid>.dat`，名册不备份身体数据。
+  **1.21.11 的 `placeNewPlayer` 不负责加载存档**：SummonService 先调用
+  `PlayerList.loadPlayerData(NameAndId)`，以 `TagValueInput` / `ServerPlayer.load` 恢复身体，
+  用 `ServerPlayer.SavedPosition.MAP_CODEC` 选择存档维度，再 `snapTo` 确定入场坐标/朝向。
+  之后才通过 `placeNewPlayer` 注册身体（FakeConnection：EmbeddedChannel + 丢弃出站发包 +
+  吞 disconnect；不在 ServerConnectionListener 的连接表，因此没有 connection tick/keep-alive）。
+- 进场后**必须重设**游戏模式/无敌，以覆盖存档中的值。服务器重进在**身体实际维度**做
+  **安全落点检查**（存档点不可站 → 就近挪 → 该维度出生点）；缺失/不可用维度退回主世界出生点。
+  显式召唤仍在原有主人附近/主世界出生点进场，读取同 UUID 的旧背包但不沿用旧位置。
+  遣散与停服均走 `PlayerList.remove`，该方法先保存玩家再移除，不另外维护第二份身体存档。
+  主世界/下界的跨进程位置、朝向、非空背包及遣散再召唤已有专项 SelfTest 正证；
+  单人同进程退出世界再进入已有位置、非空背包占用与手持物正证，
+  完整背包逐槽对照和整客户端重启仍待验。坐骑/在途末影珍珠不在本轮恢复验收范围。
+- `status` 只返回位置、生命/饥饿、36 格背包占用、手持物与着火状态，不枚举完整背包。
+  重进世界会重建大脑历史；没有此前拾取回执时，模型不能凭占用数还原其他物品清单。
 - 每同伴一个活跃任务槽（无队列）：忙时工具层直接回 `BUSY` 教学回执。
 - 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 静默失效 →
   手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
@@ -200,6 +227,8 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | `<gameDir>/mcbot/skills/*.md` | 客户端 | 技能笔记原文拼进 system prompt |
 | `<gameDir>/mcbot/autotest.flag` | 服务器 | 存在即启动约 3 秒后跑 SelfTest 并自删（仅开发） |
 | `<gameDir>/mcbot/autotest-stop.flag` | 服务器 | 开发验收链结束后自删并正常停服；未设置则保持运行 |
+| `<gameDir>/mcbot/autotest-persistence-seed.flag` | 服务器 | 独立身体恢复验收第一进程：设置主世界/下界样本，正常停服；只允许 `mcbot-persistence-*` 开发世界 |
+| `<gameDir>/mcbot/autotest-persistence-verify.flag` | 服务器 | 独立第二进程：对照实际 UUID `.dat` 与在线身体，核验后测试遣散再召唤，正常停服 |
 
 旧实例级名册仅在当前世界尚无名册时迁移：必须有同 UUID 的 `playerdata/*.dat` 才导入，
 迁移结果（包括空列表）写入当前世界，旧文件保留且不修改。匹配原版玩家数据证明它曾在此世界出现，
@@ -239,7 +268,7 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | 位置 | 数值 |
 |---|---|
 | AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
-| 超时 | LLM 180s；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**（M4.6 由 300s 降，本行曾漂移）；桥 ask **135s**（R0 对齐：必须 > 反问 120s）；task 窗口 ≤120s |
+| 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |

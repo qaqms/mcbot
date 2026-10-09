@@ -9,8 +9,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.players.NameAndId;
+import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.storage.LevelData;
+import net.minecraft.world.level.storage.TagValueInput;
+import net.minecraft.world.phys.Vec2;
+import net.minecraft.world.phys.Vec3;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -20,8 +24,8 @@ import java.util.UUID;
 
 /**
  * 同伴生命周期：召唤 / 遣散 / 服务器重启重进 / 停服清理。
- * 身体走 placeNewPlayer 全流程（假玩家由此成为在册玩家），连接是 FakeConnection；
- * 名册（roster）记录归属，位置/背包由原版玩家存档负责，二者互为备份。
+ * 入场前读取原版玩家存档，再由 placeNewPlayer 注册身体，连接是 FakeConnection；
+ * 名册记录归属，原版玩家存档记录身体，名册本身不备份位置或背包。
  */
 public final class SummonService {
 
@@ -62,26 +66,25 @@ public final class SummonService {
                 ? SafeSpawn.findNear(overworld, owner.blockPosition())
                 : overworld.getRespawnData().pos();
 
-        CompanionPlayer companion = new CompanionPlayer(
-                server, overworld, profile, ClientInformation.createDefault(),
-                owner != null ? owner.getUUID() : CompanionRoster.NO_OWNER);
-        companion.setRespawnPosition(
-                new ServerPlayer.RespawnConfig(
-                        LevelData.RespawnData.of(overworld.dimension(), where, 0.0F, 0.0F), true),
-                false);
-
+        CompanionPlayer companion;
         FakeConnection connection = new FakeConnection();
         connections.put(companionUuid, connection);
         try {
+            companion = loadCompanion(profile,
+                    owner != null ? owner.getUUID() : CompanionRoster.NO_OWNER, where, false);
+            companion.setRespawnPosition(
+                    new ServerPlayer.RespawnConfig(
+                            LevelData.RespawnData.of(overworld.dimension(), where, 0.0F, 0.0F), true),
+                    false);
             playerList.placeNewPlayer(connection, companion,
                     CommonListenerCookie.createInitial(profile, false));
         } catch (RuntimeException e) {
             connections.remove(companionUuid);
             connection.closeQuietly();
-            McbotMod.LOG.error("placeNewPlayer 失败", e);
+            McbotMod.LOG.error("同伴读取存档或进场失败", e);
             return "召唤失败：" + e.getMessage();
         }
-        // join 之后强制游戏模式与无敌（placeNewPlayer 会重放旧存档数据）
+        // Override persisted game mode/invulnerability only after loading and joining.
         companion.setGameMode(GameType.SURVIVAL);
         companion.setInvulnerable(true); // M4 战斗里程碑再放开伤害
         companion.teleportTo(where.getX() + 0.5, where.getY(), where.getZ() + 0.5);
@@ -131,18 +134,18 @@ public final class SummonService {
                 continue;
             }
             GameProfile profile = new GameProfile(entry.uuid(), entry.name());
-            CompanionPlayer companion = new CompanionPlayer(
-                    server, server.overworld(), profile,
-                    ClientInformation.createDefault(), entry.ownerUuid());
-            FakeConnection connection = new FakeConnection();
-            connections.put(entry.uuid(), connection);
+            FakeConnection connection = null;
             try {
+                CompanionPlayer companion = loadCompanion(profile, entry.ownerUuid(),
+                        server.overworld().getRespawnData().pos(), true);
+                connection = new FakeConnection();
+                connections.put(entry.uuid(), connection);
                 server.getPlayerList().placeNewPlayer(connection, companion,
                         CommonListenerCookie.createInitial(profile, false));
                 companion.setGameMode(GameType.SURVIVAL);
                 companion.setInvulnerable(true);
                 // .dat 可能停在死角（上次硬杀/被埋/被水淹）：进场后检查落点，不可站就挪
-                ServerLevel lvl = server.overworld();
+                ServerLevel lvl = companion.level();
                 BlockPos here = companion.blockPosition();
                 if (!SafeSpawn.isStandable(lvl, here)) {
                     BlockPos safe = SafeSpawn.findNear(lvl, here);
@@ -156,9 +159,34 @@ public final class SummonService {
                 McbotMod.LOG.info("同伴 {} 随服务器重进", entry.name());
             } catch (RuntimeException e) {
                 connections.remove(entry.uuid());
-                connection.closeQuietly();
+                if (connection != null) {
+                    connection.closeQuietly();
+                }
                 McbotMod.LOG.error("同伴 {} 重进失败", entry.name(), e);
             }
+        }
+    }
+
+    private CompanionPlayer loadCompanion(GameProfile profile, UUID ownerUuid, BlockPos fallback,
+                                          boolean restorePosition) {
+        // In 1.21.11 placeNewPlayer no longer loads data; vanilla does this in PrepareSpawnTask.
+        var data = server.getPlayerList().loadPlayerData(new NameAndId(profile));
+        try (var problems = new ProblemReporter.ScopedCollector(McbotMod.LOG)) {
+            var input = data.map(tag -> TagValueInput.create(problems, server.registryAccess(), tag));
+            var saved = input.flatMap(value -> value.read(ServerPlayer.SavedPosition.MAP_CODEC))
+                    .orElse(ServerPlayer.SavedPosition.EMPTY);
+            var savedLevel = saved.dimension().map(server::getLevel);
+            ServerLevel level = restorePosition ? savedLevel.orElse(server.overworld()) : server.overworld();
+            CompanionPlayer companion = new CompanionPlayer(server, level, profile,
+                    ClientInformation.createDefault(), ownerUuid);
+            input.ifPresent(companion::load);
+            Vec3 fallbackPosition = new Vec3(fallback.getX() + 0.5, fallback.getY(), fallback.getZ() + 0.5);
+            Vec3 position = restorePosition && savedLevel.isPresent()
+                    ? saved.position().orElse(fallbackPosition) : fallbackPosition;
+            Vec2 rotation = saved.rotation().orElse(Vec2.ZERO);
+            // Explicit summon/fallback positions must be chosen before login packets/world registration.
+            companion.snapTo(position, rotation.x, rotation.y);
+            return companion;
         }
     }
 

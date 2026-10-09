@@ -89,24 +89,30 @@ public final class AgentLoop {
      *
      * @param ttfb         发起请求 → 响应头
      * @param ttft         发起请求 → 首段文本增量
-     * @param firstTool    发起请求 → 第一个工具就绪（早派发真正发生的时刻）
+     * @param firstTool    发起请求 → 第一个工具就绪，不包含客户端队列延迟
      * @param afterChunk   首个数据行 → 首段文本（中转站攒批的直接证据）
      * @param afterTool    首个数据行 → 首个工具就绪
-     * @param chunks       收到的 SSE 数据行数
+     * @param chunks       收到的非终止 SSE 数据行数（不含 [DONE]）
      * @param deltas       文本增量段数
-     * @param toolsReady   提前就绪（= 被早派发）的工具数
+     * @param toolsReady   传输层工具就绪数，不等于实际派发数
      * @param accumulated  是否仍拼了整轮（false = 走了"只要过程"的路径）
+     * @param earlyDispatched 整轮处理前经就绪回调实际调用执行器的次数，不代表服务端受理
+     * @param firstDispatch 发起请求 → 首次实际调用执行器，包含客户端队列延迟
+     * @param streamDuration 发起请求 → 传输结束；首次派发可能晚于它
      */
     public record StreamStats(long ttfb, long ttft, long firstTool, long afterChunk, long afterTool,
                               int chunks, int deltas, int toolsReady, boolean accumulated,
-                              long cacheWaste) {
+                              long cacheWaste, int earlyDispatched, long firstDispatch,
+                              long streamDuration) {
 
         /** 一行可 grep 的观测格式；宿主直接 LOG.info。 */
         public String format() {
             return "ttfb=" + ttfb + "ms ttft=" + ttft + "ms first_tool=" + firstTool
                     + "ms after_chunk=" + afterChunk + "ms after_tool=" + afterTool
                     + "ms chunks=" + chunks + " deltas=" + deltas
-                    + " early=" + toolsReady + " accumulated=" + accumulated
+                    + " ready=" + toolsReady + " early=" + earlyDispatched
+                    + " first_dispatch=" + firstDispatch + "ms stream=" + streamDuration
+                    + "ms accumulated=" + accumulated
                     + " cache_waste=" + cacheWaste;
         }
     }
@@ -429,6 +435,7 @@ public final class AgentLoop {
                         if (!isCurrent(stepGeneration) || activeReactor != reactor) {
                             return null;
                         }
+                        reactor.reportStats(-1);
                         reactor.seal();
                         finishCurrent(TaskStatus.FAILED, LlmFailure.userMessage(t));
                     }
@@ -444,7 +451,7 @@ public final class AgentLoop {
         listener.onUsage(turn.promptTokens(), turn.completionTokens(), turn.cachedTokens());
         lastCacheWaste = cacheWasteOf(prevPromptTokens, turn.promptTokens(), turn.cachedTokens());
         prevPromptTokens = turn.promptTokens() > 0 ? turn.promptTokens() : prevPromptTokens;
-        listener.onStreamStats(reactor.stats());
+        reactor.reportStats(lastCacheWaste);
         reactor.seal();
         convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
         if (!turn.hasToolCalls()) {
@@ -476,7 +483,8 @@ public final class AgentLoop {
      */
     private final class StepReactor implements TurnSink {
         private final long stepGeneration;
-        private final TurnTimings timings = new TurnTimings();
+        private TurnTimings.Snapshot timings;
+        private Long firstDispatchNanos;
         private final Set<Integer> earlyDispatched = ConcurrentHashMap.newKeySet();
         private final Map<Integer, CompletableFuture<ToolOutcome>> started = new ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.AtomicBoolean sealed =
@@ -509,21 +517,42 @@ public final class AgentLoop {
             }
         }
 
-        StreamStats stats() {
-            return new StreamStats(timings.ttfbMs(), timings.ttftMs(), timings.firstToolMs(),
-                    timings.afterChunkMs(), timings.afterToolMs(), timings.chunks(),
-                    timings.deltas(), timings.toolsReady(), true, lastCacheWaste);
+        void reportStats(long cacheWaste) {
+            var stats = timings == null
+                    ? new StreamStats(-1, -1, -1, -1, -1, 0, 0, 0, true,
+                            cacheWaste, started.size(), -1, -1)
+                    : new StreamStats(timings.ttfb(), timings.ttft(), timings.firstTool(),
+                            timings.afterChunk(), timings.afterTool(), timings.chunks(),
+                            timings.deltas(), timings.toolsReady(), true, cacheWaste, started.size(),
+                            firstDispatchNanos == null ? -1 : timings.sinceRequestMs(firstDispatchNanos),
+                            timings.elapsedMs());
+            try {
+                listener.onStreamStats(stats);
+            } catch (RuntimeException ignored) {
+                // A diagnostic listener cannot fail or replay a task.
+            }
+        }
+
+        @Override
+        public void onTimings(TurnTimings.Snapshot snapshot) {
+            synchronized (AgentLoop.this) {
+                if (!sealed.get() && isCurrent(stepGeneration) && activeReactor == this) {
+                    timings = snapshot;
+                }
+            }
         }
 
         @Override
         public void onToolCallReady(int index, ToolCall call) {
             synchronized (AgentLoop.this) {
-                if (index != 0 || sealed.get() || !isCurrent(stepGeneration) || !earlyDispatched.add(index)) {
+                if (index != 0 || sealed.get() || !isCurrent(stepGeneration)
+                        || activeReactor != this || !earlyDispatched.add(index)) {
                     return;
                 }
                 if (earlySlots.incrementAndGet() > MAX_EARLY_DISPATCH) {
                     return;
                 }
+                firstDispatchNanos = System.nanoTime();
                 started.put(index, executeTool(call));
             }
         }

@@ -90,9 +90,39 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
 4. 收服：`gradlew --stop` 放 daemon；若 `run/world/session.lock` 卡下次启动，
    是孤儿 java——`powershell -File tools/list-java.ps1` 找 `MC-RUN` PID 再 `taskkill //PID x //F`。
 
+### 3.1 身体位置与非空背包恢复（独立双进程）
+
+入口仍由 SelfTest 检查，不经过模型或控制台 stdin。**仅用于独立开发存档**：
+先在 `run/server.properties` 设置未使用的 `level-name=mcbot-persistence-<测试名>`、
+回环 `server-ip=127.0.0.1` 与空闲端口。普通世界名会被工装拒绝。
+不要与 `autotest.flag` 同时使用，后者会清背包、改地形，污染恢复样本。
+
+1. 创建 `run/mcbot/autotest-persistence-seed.flag`，运行 `./gradlew runServer`。
+   工装只允许在无 seed 标记、无同名样本的世界写入：主世界 `(37.5,90,-42.5)`、
+   下界 `(53.5,90,29.5)`，各铺安全平台，设置确定朝向与六个非空槽位
+   （圆石 23、耐久损耗 17 的铁镐、原木 11、钻石 3、金胸甲、副手火把 7），选中槽 4。
+   `[f0-persist] SEED PASS` 后自动 `halt(false)`，等正常保存与 Gradle 进程结束。
+2. 保留 seed 日志；**测试旧包失败路径前先复制整个开发世界**，因为旧包重进后的空身体
+   会在下一次正常保存时覆盖原 `.dat`。复制须在停服后完成，不能复制正在写入的世界。
+   seed 标记在该世界的 `mcbot/persistence-fixture.txt`，不在实例级名册旁。
+3. 同一开发世界创建 `run/mcbot/autotest-persistence-verify.flag`，再起一个新进程。
+   工装先读取实际 UUID `.dat`，核对存档维度/坐标/朝向/背包；
+   再独立核对当前在线身体的身份、相同状态及全部空/非空槽位。
+   两名同伴都通过后，才测试遣散再召唤：相同 UUID、按显式召唤语义到主世界出生点、
+   保留旧背包。之后恢复样本姿态并正常停服，允许再次创建 verify flag 做第三进程复核。
+4. 判读：每名同伴 `result` 的 identity/disk/body/position/rotation/inventory 全 true；
+   `resummon` 的 sameUuid/freshSpawn/inventory/matches 全 true；最后 `VERIFY PASS`。
+   **Gradle BUILD SUCCESSFUL 不等于专项通过**，必须检查上述日志，无 `FAILED`/`VERIFY FAIL`。
+   两种 phase flag 同时存在会拒绝执行；phase flag 都自删，且本工装无需 autotest-stop.flag。
+
+该验收不替代单人客户端保存重进、同进程换世界，也不覆盖坐骑或在途末影珍珠恢复。
+没有 phase flag 时，不生成 seed 标记、不修改身体或地形。
+
 ## 4. 真实端到端（客户端侧）
 
-开发服直连 `runClient`，或发测试包：`dist/` 两 jar 放进任意 1.21.11 Fabric 实例 `mods/`，
+开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，
+另行准备对应 Fabric API，两 jar 放进任意 1.21.11 Fabric 实例 `mods/`。
+`dist/` 保留部署说明、不提交 JAR；不得把该目录的历史包当作最新构建。
 进 `localhost:25565`，G 面板填 key → 召唤 → `@bot` 对话（详见 `dist/README-DIST.md`）。
 桥接自测（进世界后）见 `docs/BRIDGE.md` 底部清单。
 
@@ -112,6 +142,17 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
 - `reasoning>0` / `refusal>0`：对应字段出现，不把思考或拒答原文伪装成正常回答。
 - `errors>0`：HTTP 200 中也可能有服务错误；该轮报失败，不因已有部分文本宣布成功。
 - `empty=true`：无已识别回答/工具。不得自动重发游戏任务，以免早派发动作重复执行。
+
+连接超时与慢响应须分开判读：
+
+- `http=0` 是未取得 HTTP 状态的本地占位，不是服务器返回的状态码；
+  `bytes=data=0` 且 `ttfb=-1` 表示没有响应头/流数据证据，不是服务返回了空 SSE。
+- 默认连接建立限制为 15s；任务请求 timeout 为 180s，模型页独立连接测试请求为 30s。
+  约 15 秒失败且没有响应头，强烈符合连接阶段超时；没有异常子类型时不推断具体 TCP/TLS 原因。
+  响应头等待超过 15 秒后仍成功并不矛盾，不能因此判连接限制失效或改大工具回执帽。
+- DNS/TCP/无凭据 HEAD 只能帮助排查端点与网络；根路径 403 不等于实际模型鉴权失败，
+  后续成功也不能事后证明旧请求连接了哪个 IP 或网络故障已经永久消除。
+  不固定旧 IP、不关闭证书校验、不自动重发可能已派发游戏动作的请求。
 
 服务错误与失败请求差异（2026-10-09 补齐）：
 
@@ -161,6 +202,9 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
    关账必须写证据（时间戳+日志行），已知偏差必须写明。
 5. 提交前扫密：`git add -A` 后核对暂存清单不含 `run/`、`*.jar`（wrapper 除外）、
    含 `sk-` 字样的内容；token/密钥永不落 `.git/config` 与远端 URL。
+   推送使用既有凭据管理器或 GitHub CLI credential helper，不将令牌拼进远端 URL、
+   命令参数、文档或日志。环境变量凭据失效时，可仅在该次进程临时去掉覆盖，
+   检查已有登录；不删除或覆盖用户的凭据存储。
 
 ## 6. javap 防漂移速查
 

@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-09）：任务桥 v1.0 已固定并过自动化；连接器/新包真机仍待验，模型历史间歇错误未销账
+## 当前状态（2026-10-10）：身体恢复已获服务端专项与单人状态级正证，模型链路和真实拾取本轮正常；完整背包/移动挖掘/ACCEPT 长活/连接器仍待真机验，上游历史错误根因未销账
 
 当前优先级：稳定 MC agent 的任务投递、执行、反问、取消、结束与会话清理，
 不新增独立聊天功能。
@@ -17,6 +17,308 @@
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### 阶段收尾：文档同步与发布前复核（2026-10-10 02:14，Asia/Shanghai）
+
+- 按维护者决定，本轮停止扩展功能，整理并提交当前 F0 检查点，不将 F0 整体关账。
+  README、ARCHITECTURE、DEVELOPMENT、TOOLS、ROADMAP 与测试包说明同步当前证据：
+  流式统计接线、双维度身体恢复、执行中 wait 取消、真实拾取、单人状态级恢复，
+  以及仍待验的完整背包/整客户端重启、移动挖掘/ACCEPT 取消、反问、活动任务生命周期与连接器。
+  TOOLS 的 ask_owner 旧 300s 文案对齐代码 120s；明确连接 15s 与请求 180s/30s 的区别。
+- Git 元数据已恢复：从已有文档与本机其他副本确认原远端，再用 GitHub CLI 查询核对；
+  当前 origin 为无凭据的原仓库地址，远端 main 基线 `20f63a6`。
+  只创建本副本的 Git 元数据与索引，不 checkout/覆盖源码，不改其他副本、宿主或只读参考。
+  当前发布分支 `fix/companion-persistence`，不直接改 main，不强推。
+- 环境变量 GitHub 凭据返回 401；仅在发布命令进程内临时去掉该覆盖后，
+  已有 GitHub CLI 登录确认属于维护者账号且可访问目标仓库。
+  提交身份沿用既有 Git 配置；推送走命令级 credential helper，
+  不读取/回显令牌内容、不将凭据写入 URL/仓库，也不删除或改写用户凭据存储。
+- 本轮源码零新增修改，提交范围包含此前尚未发布的流式统计修复、身体恢复修复、
+  相应回归与隔离 SelfTest 工装，以及文档；所有历史证据保留各轮当时的发布状态。
+  当前暂存 21 个文件，`diff --cached --check` 通过；
+  暂存危险路径/凭据模式/机器绝对路径检查均零命中，不含 run/logs/build、
+  client.json/bridge.token/companions.json 或 JAR。
+- **发布前全量复核**：`build --rerun-tasks --console=plain --no-daemon`
+  使用单次命令直连参数，BUILD SUCCESSFUL **27s / 20 个任务全部执行**。
+  02:14:16 实核 XML **283/283**（agent-core 190 + 根工程 66 + clientTest 27），
+  failures/errors/skipped 全 0。仅既有过时 API 与 Gradle 10 兼容性警告。
+  JAR SHA256 仍为 `f18f491c319cddc044f126854bcded93850fd52e26c8d400ea48dc85d3fb88ab`；
+  list-java 无 Java 进程。未再起 MC/模型/连接器，也未修改玩家配置或存档。
+  构建与扫密通过不冒充远端发布成功；实际提交/推送结果在核验后补记。
+
+### F0 第十五轮：模型链路恢复、真实拾取与单人状态级恢复（2026-10-10 02:04，Asia/Shanghai）
+
+- 只读维护者新一轮 latest.log、实例 JAR 与 status/collect 实现；本轮没有网络探测、
+  读取密钥/配置/令牌、模型调用、源码修改、存档操作或安装包。
+  实例 JAR 仍为第十三轮修复包 f18f491c…88ab。进程窗口为 02:00:32–02:04:02，
+  同一客户端进程两次进入同一显示名世界，不混用上一进程 request 编号。
+- **模型链路正证**：latest.log:153–196 / 236–247 共 8 次 brain 请求与 8 个响应，
+  全部 attempt=1 / HTTP 200 / SSE / done=true / empty=false，
+  malformed/parse_errors/errors 与出站工具配对/重复/参数结构异常计数均 0；
+  4 轮 STOP、4 轮 TOOL_CALLS，均完成实际回复或游戏工具回执。
+  本轮没有 model-test 请求，不能写为独立连接测试通过。
+  日志仍显示与第十四轮相同 base URL 和模型名；不能据此推断维护者调整了哪些网络设置。
+  本轮证明当前观察窗口已可用，不证明上一轮超时或历史 UPSTREAM 根因解决；
+  上轮可疑 DNS/HEAD 对照不是“该域名永久失效”的结论。
+- **时延**：7 次响应头等待在 2534–3519ms；request=2 为 34552ms，
+  整轮 34761ms，最终正常工具调用，不是超时。
+  15 秒是连接建立限制，不是所有响应头等待的统一上限；
+  本轮没有把任务请求的 180 秒上限误改为 15 秒。
+  仍不能从 ttfb 单独区分网络、网关排队或后端生成。
+- **真实拾取闭环**（02:02:01–02:02:43）：request=2 触发 scan_area，
+  request=3 触发 collect，服务端反馈丛林原木/白桦木按钮/丛林木/去皮丛林原木各 1，
+  request=4 正常汇报。02:03:02 的实际 status 回执为背包 4/36、手持 1 个丛林原木，
+  与最初 02:01:10 的空背包形成对照；不是只读按钮成功冒充真实模型工具链。
+  本轮只验拾取，不扩展为移动/挖掘、ACCEPT/PARK 或取消已通过。
+- **单人状态级恢复**：02:03:24 正常退出世界，Saving players/worlds 与
+  All dimensions are saved 完整；02:03:26 同进程重进，steve 自动入场坐标
+  (-3.5,-60,9.5)，与本轮初次入场相同，无坏落点自愈警告。
+  request=7 于 02:03:40 得到实际 status：位置 (-4,-60,9)、生命/饥饿 20、
+  背包 4/36、手持 1 个丛林原木，与退出前 status 一致；request=8 正常回复。
+  重进后的首个请求只有 system/user，证明新大脑历史重新建立，而非延续旧拾取对话。
+  这取得单人世界卸载/重载后的身体位置、非空背包占用与手持物正证，
+  不等同于整客户端重启，也未逐槽核对其他物品类型/数量、朝向/耐久/副手。
+- **“没有完整清单”不是丢物证据**：重进后模型正确指出 status 只提供占用与手持物，
+  StatusTool 的 feedback/data 确实不枚举背包；没有旧 collect 历史时不能从 4/36 推出其余明细。
+  不以模型文字猜测代替身体状态，不因此修改持久化或添加新工具。
+- 02:04:01–02:04:02 第二次正常保存退出完整；启动 Mojang/Realms 401 不属于模型链路。
+  当前应继续独立测试世界的真实移动/挖掘和 ACCEPT 取消，并补完整背包对照；
+  wait 执行中取消已有第十二轮正证，无需重复刷模型。
+  本轮仅更新 STATUS/ROADMAP，未构建；283/283 仍引用第十三轮。
+
+### F0 第十四轮：模型连接超时与端点解析排查（2026-10-10 01:58，Asia/Shanghai）
+
+- 本轮只读玩家测试实例日志/JAR 与相关源码，执行无凭据 DNS、TCP 和 HTTPS HEAD 对照；
+  未读取 client.json 或桥令牌、未调用模型、未改代码/系统网络/配置/存档、未安装包。
+  实例 JAR 与第十三轮 build/libs 的 SHA256 同为 f18f491c…88ab，排除此次使用旧包。
+- **游戏证据**：最新进程 01:40:11 启动至 01:45:36 退出，
+  latest.log:167–180 / 235–250 共 5 次 HTTP 尝试（brain 2 次、model-test 3 次），
+  全部 attempt=1，约 15 秒失败，均 http=0 / format=UNKNOWN / bytes=data=0。
+  两个任务统计 stream=15237ms/15002ms，ttfb/ttft/first_tool/first_dispatch 均 -1，
+  ready/early=0；没有响应头、流帧或模型工具派发证据。
+  本地 status/scan_area 于 01:44:12–13 成功，不代表模型网络正常。
+  出站结构计数无配对/重复/参数异常，不能由此推断服务已收到请求。
+- **超时口径**：LlmClient 默认 connectTimeout=15s，AgentRunner 请求 timeout=180s，
+  模型页连接测试请求 timeout=30s。此次失败时长强烈符合连接阶段超时，
+  不是等满 180 秒后的模型处理失败；现有日志未保留异常子类型，不能从日志进一步分离 TCP/TLS。
+  http=0 是本地“未取得 HTTP 状态”占位，不是服务返回的状态码；
+  errors=0 / error_category=NONE 也不证明远端服务健康。
+- **同机网络对照**（01:55–01:58，均无 Authorization/POST/模型请求）：
+  首次系统 A 查询得到 103.73.220.77，无凭据 HEAD 等满 12 秒未连通，
+  对该 IP 的 TCP 443 等待 6 秒亦失败。
+  同期 AAAA 查询出现 CNAME www.shopify.com；随后系统 A 查询变为
+  104.18.42.163 / 172.64.145.93，HEAD 在约 0.48 秒返回 HTTP 403。
+  同一 JDK 21 新进程解析到后两者、ProxySelector 选择 DIRECT，HEAD 约 1 秒返回 403。
+  阿里 DNS 的 HTTPS A/AAAA 查询也报告 api.mengluo.work → www.shopify.com，
+  A 为同一组地址、AAAA 无最终地址；hosts 没有相关覆盖。
+  Cloudflare DNS HTTPS 查询被重置、Google DNS HTTPS 与 1.1.1.1 查询超时，
+  不将失败的对照当作其他解析器的确认结果。
+- **结论边界**：已取得连接阶段失败与排查时端点解析异常/变化的证据；
+  不能事后证明游戏进程使用了哪个缓存 IP，不能判定域名停服、DNS 污染或具体网络设备根因。
+  HTTPS DNS 对照复现该 CNAME，因此不能只归咎本机 DNS 缓存。
+  根路径 HEAD 403 不等于实际 chat/completions 的鉴权/协议测试，
+  更不作为“密钥无效”证据。优先向服务提供方确认当前官方 API base URL 与域名状态，
+  不把旧 IP 写进 hosts、不关闭证书校验、不以拉长超时或自动重试掩盖未通的连接。
+- 本轮不将单人身体恢复关账：日志只有自动重进/召唤，没有退出前非空背包与坐标对照。
+  仅更新本节，未构建；283/283 自动化仍引用第十三轮，不冒充本轮重跑。
+  当前模型链路需先恢复，再继续 F0 真实动作/ACCEPT 取消等真机验收。
+
+### F0 第十三轮：身体位置与非空背包恢复（2026-10-10 01:33，Asia/Shanghai）
+
+- 本轮只推进身体持久化专项；不改宿主、只读参考、模型配置、桥/工具协议或调度策略。
+  所有 MC 实验使用项目 `run/` 内新建的独立开发世界，回环监听、专用端口；
+  未读写玩家测试实例存档、未安装 JAR、未调用真实模型。当前副本无 `.git`，不声称提交/推送。
+- **先复现再修**：新增由 SelfTest 挂接的 PersistenceSelfTest，专用 seed/verify flags，
+  两种 flag 互斥、自删并正常 `halt(false)`；拒绝非 `mcbot-persistence-*` 世界，
+  seed 拒绝已有样本，verify 不经过原动作链（防背包被工装清空）。
+  样本为主世界 `(37.5,90,-42.5)` 与下界 `(53.5,90,29.5)`，确定朝向；
+  六个非空槽位含圆石 23、损耗 17 的铁镐、原木 11、钻石 3、金胸甲、副手火把 7，选中槽 4。
+  比较所有空/非空槽位及 ItemStack components，不以“名册里有伙伴”或空背包冒充恢复验收。
+- **红证**：01:22:59 seed 两名同伴 matches=true，01:23:00 正常保存三维度。
+  停服后先复制完整世界到修复验证目录，再让旧流程重进原实验目录。
+  01:24:08 两名样本均 `identity=true disk=true body=false position=false rotation=false inventory=false`，
+  `VERIFY FAIL`。实际 UUID `.dat` 仍含正确维度、位置与物品，但在线身体都落到主世界出生点，
+  背包为空/selected=0。保存链没有丢数据；缺的是入场加载步骤。
+  本次正常停服会将错误身体再写回原实验目录，所以修复验证必须使用提前保留的样本副本。
+- **根因/API 实证**：javap 官方映射字节码确认 1.21.11 `PlayerList.placeNewPlayer`
+  只用传入身体的 level/position 注册入场，没有读档调用；原版在 PrepareSpawnTask 中
+  用 `loadPlayerData(NameAndId)` 与 SavedPosition codec 选维度，Ready.spawn 再加载身体后进场。
+  原 SummonService 直接 new + place，错误地假定 place 会读档。
+  `PlayerList.remove` 会先 `save(player)` 再移除；本轮不更改原版保存出口。
+- **修复**：召唤/重进共享入场前加载，使用原版 loadPlayerData（保留原版数据升级/回退），
+  TagValueInput + ServerPlayer.load 恢复背包/身体字段，SavedPosition 选择实际维度，
+  入场前 snapTo 确定位置/朝向；缺失/不可用维度回退主世界出生点。
+  重进后的安全检查改用身体实际维度，不再总检查主世界。
+  显式召唤仍到既有主人附近/主世界出生点，读取旧背包但不沿用旧位置；
+  生存/无敌设置仍覆盖存档值，不新增私有身体存档或自动迁移用户数据。
+- **绿证**：使用旧流程正常保存、未经重发物品的同一份样本副本，
+  01:27:56 与 01:29:15 两个独立新进程中，两名同伴的
+  identity/disk/body/position/rotation/inventory 均 true。主世界/下界、朝向、耐久与 selected=4
+  全匹配；每次随后遣散再召唤，sameUuid/freshSpawn/inventory/matches 均 true，
+  01:27:57 / 01:29:16 两次 `VERIFY PASS`，均正常保存退出，无 `(0,0,0)` 自愈掩盖恢复。
+  复制的 level.dat 保留旧世界显示名，日志中的 ServerLevel 名称不等于其新存档目录名。
+- **服务端回归**：另建动作验收世界，01:31:35–01:32:12 跑完整既有 SelfTest；
+  `[m5a]` 四项 true；`[m3]` 白名单/owner/seq=42/速率链仍成立；
+  `[m4]` 放置/真挖/移动/存箱成功；`[m4b]` busy=true/cancel=true/空槽=false，wait 正常结束；
+  `[m8]` A NEED_CONFIRM 清单 2 格且内联/B 到达且打通/C 箱子不动/D 干净 NO_PATH；
+  `[r2d]` 分类/坐标/尺寸/朝向通过；`[r2c]` 策略及五契约断言通过；
+  `[f0-world]` 当前世界装配、遣散取消、再召唤、停服槽清空全 true。
+  `[m9]` A1=true/A2=false/A3旧家自清=false、新家=true，保持已登记历史红项，不宣称全链全绿。
+- **构建**：工装阶段强制 build 27s、修复后强制 build 28s，均 20/20 任务执行；
+  XML 实核 **283/283**（agent-core 190 + 根工程 66 + clientTest 27），
+  failures/errors/skipped 均 0；新跨进程场景属于 SelfTest，不加算到 JUnit 数量。
+  最终 `build/libs/mcbot-0.1.0.jar` SHA256：
+  `f18f491c319cddc044f126854bcded93850fd52e26c8d400ea48dc85d3fb88ab`；
+  未更新 dist 或用户实例。仅既有过时 API/Gradle 10 警告。
+  文档同步后再强制全量构建 25s / 20/20 任务执行，01:36:20 实核 XML 仍 283/283、
+  JAR 哈希一致，list-java 仍无 Java 进程。
+- **证据/收尾**：`run/persistence-evidence/` 保留 red-seed.log、red-verify.log、
+  fixed-verify-1.log、fixed-verify-2.log、body-regression.log（本地工装产物，不入仓）；
+  前两次恢复日志 result 分别在 82/85 与 77/80 行，红证在 79/82 行。
+  所有五次服务进程/Gradle 命令均已结束，01:32:40 list-java 无 Java 进程。
+  ARCHITECTURE §7 与 DEVELOPMENT §3.1 已同步新契约和复跑方式。
+- **验收边界**：本项服务端自动化可以关账，单人客户端正常保存重进仍待换包后实测；
+  未验证坐骑、在途末影珍珠、坏落点/缺失维度分支或活动任务保存清理，不将其计为已通过。
+  修复不会自动找回旧包已覆盖的物品；没有对用户 `.dat` / `.dat_old` 做修复操作。
+  后续仍按 F0：先单人恢复与真实动作，再 ACCEPT/PARK 取消、反问/重载/重连及连接器。
+  已有流式统计/执行中 wait 取消真机证据保留；上游流内错误根因与 `[m9] A3` 未销账。
+
+### F0 第十二轮：执行中 wait 取消补测（2026-10-10 01:11，Asia/Shanghai）
+
+- 来源为同一测试实例新进程的 `logs/latest.log`，快照 197 行，
+  观察窗口 01:01:48 启动至 01:08:07 正常保存停服；上一进程已轮转为
+  `2026-10-09-1.log.gz`，其中 23:58:07–23:58:08 的保存退出链完整，不混用两进程 request 编号。
+  实例 JAR 哈希仍为 ba013eed…85b75cb，与统计修复包一致。
+- **第一次命中执行中 wait**（latest.log:151–163）：01:03:08 投令，
+  request=1 于 01:03:18 正常工具轮落地（ready=1/early=1，first_dispatch=10045ms）。
+  01:03:34 本地取消产生 CANCELLED 合成工具回执与“先停手”回复；
+  服务端记录 `tool wait 15748ms`，发送取消工具回执及 cancel_ack，
+  客户端显示“已叫停 steve 手头的活”。这是实际占用调度槽的 wait 被中止，
+  与上一轮 wait 已结束后的“手头没有任务”不同。
+- **第二次命中执行中 wait**（latest.log:164–176）：01:06:09 新指令，
+  request=2 于 01:06:15 工具轮落地，01:06:16 取消；
+  服务端 `tool wait 749ms`，再次确认“已叫停”。两次均未收到“等完了”的成功回执。
+  补测按维护者的 60 秒 wait 清单进行，现有安全日志不输出 arguments，
+  不从计数反推实际 seconds；执行中取消的正证来自服务端槽命中与取消回执。
+- **不续跑及新任务正证**：首次取消到下一条新指令间隔约 155 秒，
+  第二次取消到纯文本新指令间隔约 103 秒，均无旧 wait 成功回复、续发模型请求或工具。
+  01:07:59 新指令 request=3，01:08:02 正常回复“新任务正常。”，
+  ttfb/ttft=2748ms、chunks=7、deltas=4、ready/early=0。
+  新请求工具配对/重复/参数结构异常计数均 0，合成取消回执没有破坏后续出站配对。
+- 本进程共 3 次模型 HTTP 尝试、3 个响应与 3 条流式统计；
+  均 attempt=1、HTTP 200/SSE、errors/malformed/parse_errors=0。
+  这不销除上一进程 request=9 的 UPSTREAM 样本或宣称模型历史间歇错误已解决。
+- **迟到日志的观测偏差**（latest.log:162/175）：两条 WARN 写“已被超时收走”，
+  feedback 实为 CANCELLED。源码 AgentRunner.clearTaskWaits 在取消时已 drain 等待票据，
+  随后的服务端取消回执进入 takeTool 为空的迟到分支，按设计丢弃；
+  当前日志文案将超时/取消/会话清理混称为超时，且注释把 late_results 增加直接归因于超时帽，
+  该归因不成立。记录为诊断文案债务，不按这两条 WARN 判 wait 超时或取消失败；
+  本轮不修改 Java、事件契约或 late_results 含义。
+- **恢复线索**（latest.log:124–127）：重进时 steve 初始 `(0,0,0)`，
+  日志报告该落点不可站立并移到 `(0,-60,0)`，随后“随服务器重进”。
+  上一进程 status 曾报 `(9,-60,9)`；这不能视为精确位置恢复通过。
+  未读取存档/NBT、未核对伙伴 UUID 或做退出前非空背包对照，
+  不单凭该警告宣称存档丢失，也不直接修改持久化逻辑；下一专项优先建立受控证据。
+- 01:08:06–01:08:07 桥关闭、玩家退出、服务器停服、Saving players/worlds 与
+  All dimensions are saved 完整。只证明本次正常收尾，不替代活动任务断线/重载清理或数据恢复验收。
+- 本轮仅只读日志/JAR/相关源码，并更新 STATUS 与路线图；
+  未读取模型配置/令牌、未请求模型、未改存档或安装包、未构建。
+  自动化 283/283 仍引用第十轮，不冒充本轮重跑。执行中 wait 取消项可以关账，
+  不扩展为 move_to/break_block 的 ACCEPT/PARK 取消、恢复、反问或连接器全链验收。
+
+### F0 第十一轮：新统计包真机日志复核（2026-10-09 23:57，Asia/Shanghai）
+
+- 来源为维护者提供的测试实例 `logs/latest.log`；本轮复核快照 264 行，
+  观察窗口为 23:43:00 启动至 23:54:22 最后回复。当前日志已核对为 2026-10-09，
+  旧压缩日志的文件名/内容不混入本轮验收。仅只读日志与 JAR，不读取模型配置、桥令牌或存档。
+- 实例为 MC 1.21.11 / Fabric Loader 0.19.5 / Fabric API 0.141.6+1.21.11 / Java 21；
+  实例 mcbot JAR 与本轮 build/libs 的 SHA256 完全一致（ba013eed…85b75cb），
+  排除本次只安装了历史同版本号旧包。23:48:25 保存配置后开始本轮模型测试。
+- 共观察 12 次 HTTP 尝试：独立连接测试 request=1/2 两轮成功；
+  真实大脑 request=3–12 共 10 轮，9 轮正常、1 轮返回流内错误；
+  9 条当前任务流式统计，被取消的 request=9 没有发布旧统计。
+  全部请求 attempt=1，无 `/v1` 换道；出站工具配对/重复/参数结构异常计数全零，
+  响应 malformed/parse_errors 全零。HTTP 200 不将错误轮伪装成成功。
+- **纯文本正证**（latest.log:174–177，23:48:58，request=3）：
+  回复“测试完成。”，ttfb=11921ms、ttft=12217ms、chunks=6、deltas=3，
+  ready/early=0、first_tool/first_dispatch=-1、stream=12217ms；
+  response.data=7 比 chunks 多终止行。文本增量数不等于所有 delta 形状帧数，空/控制增量不计文本。
+- **真实工具与最终汇报正证**（latest.log:186–208，23:49:22–23:49:56）：
+  request=4 执行 status，request=5 执行 scan_area，request=6 正常文字汇报；
+  两个工具轮均 ready=1/early=1，工具回执成功。request=6 的
+  ttfb=7080ms、ttft=7081ms、chunks=78、deltas=75、stream=10873ms，
+  文本轮工具字段为 -1 符合“未发生”口径，不是统计未接通。
+- **真实派发与传输结束的区别**：6 个工具轮中，request=8 的 first_dispatch=9449ms，
+  stream=10239ms，执行器调用提前约 790ms；另 5 个工具轮 first_dispatch 晚于 stream 1–9ms。
+  因此不能仅凭 early=1 声称每轮都在网络结束前执行或获得显著端到端加速。
+  9 个统计样本的 ttfb 在 7080–12641ms，主要等待发生在响应头到达前；
+  现有日志不能进一步分离网络、代理排队与后端生成原因，不以此擅自修改模型/端点。
+- **取消的实际范围**（latest.log:213–240）：wait 于 23:50:24 后起跑，
+  23:50:56 成功回执“这 30 秒等完了”（服务端计时 32255ms）；随后 status 于 23:51:06 已完成，
+  request=9 在等模型回复。23:52:13 用户取消时，服务端回“手头没有进行中的任务”。
+  本样本证明模型等待阶段逻辑取消与身体叫停请求已发生，**不证明执行中的 wait/移动被中断**。
+  原测试清单将 wait 的日志视为开始/受理提示不准确：当前 wait 走完成回执，
+  服务端工具计时日志在 future 完成时输出。补测不能等“等完了”再取消。
+- **迟到流隔离与新任务正证**（latest.log:237–264）：取消后，23:53:41 新指令产生 request=10，
+  23:53:54 旧 request=9 才返回；没有旧 onStreamStats、旧回复或后续工具派发。
+  新任务 request=10/11 的 status/scan_area 正常，request=12 于 23:54:22 正常汇报。
+  这只确认本观察窗口的旧回调隔离，不当作断线/重载或跨世界验收。
+- **新增自然失败样本**（latest.log:243）：request=9 为 HTTP 200/SSE，
+  data=43、errors=1、finish=ABSENT、empty=false，
+  error_category=UPSTREAM、error_source=TYPE、error_type=UPSTREAM、error_status=0。
+  这是服务返回的结构化 type 被本地归类，不证明具体提供商、网络或中转内部根因。
+  请求工具配对无结构异常也不能证明正文语义无误；已取消的任务不因部分文本/迟到错误恢复。
+  不重发旧任务，不循环付费探测。历史间歇错误由“无新样本”变为已有上游类别样本，根因仍未销账。
+- 启动阶段的 Mojang 用户属性/Realms 鉴权 401 与上述模型 HTTP 200/SSE 不是同一链路，
+  不将它们作为本轮模型失败原因。本轮未修改 Java/资源、未构建、未替换包、未发起任何模型请求。
+  更新仅记录验收事实与路线图；11 例新增回归及 283/283 自动化证据仍取上一轮，不冒充本轮重跑。
+- 流式统计接线的新包真机项可以关账；F0 整体不关账。
+  仍需执行中的长活取消、身体位置/非空背包受控保存重进、真实动作、反问回答、
+  配置重载/重连及连接器联合验收；`[m9] A3` 保持另卡未解。
+
+### F0 第十轮：流式时延与计数接线修复（2026-10-09 23:14，Asia/Shanghai）
+
+- 范围只含客户端/agent-core 流式统计与必要回归，不改游戏动作、工具账本/PARK、
+  桥 v1.0 的字段或任务语义，不改宿主、只读参考、模型配置、凭据与存档。
+  当前开发副本没有 `.git`；下方历史提交/远端/实例哈希保留为历史证据，不作本副本当前状态证明。
+- 修复三个已确认的断点：`ttfb` 原在整轮完成后才记录，现移到 HTTP BodyHandler 响应头回调；
+  文本/工具就绪原未更新传输层计时器，现每个已识别事件同步更新；
+  StepReactor 原读取未被填充的本地计时器，现接收最终尝试的不可变 `TurnTimings.Snapshot`。
+- 新增可选 `TurnSink.onTimings`，CallbackChatEngine 与已有流式/整轮回调共用有序队列。
+  成功与失败均在完成回调前交付快照；取消/关闭后的旧流不写入当前步骤或发布旧统计。
+  保留既有一次 `/v1` 换道，每次重新起表，仅交付最终尝试，不新增失败/游戏任务自动重试。
+  counters/timings/流式统计监听器异常按观测失败处理，不改变请求或任务终态。
+- 明确口径：`chunks` 为非终止 data 行，不含心跳和 `[DONE]`，而响应诊断 `data` 包含终止行；
+  `ready` 为传输层工具就绪数，`early` 为整轮处理前经就绪回调实际调用执行器的次数，
+  仍只限 index 0，既不等于服务端受理，也不保证网络传输仍未结束。
+  新增 `first_dispatch`（请求到执行器调用，包含客户端排队）与 `stream`（请求到传输完成）。
+  首个就绪工具未必是 index 0，不能把 first_dispatch - first_tool 一概解释成纯队列耗时。
+  失败轮 cache_waste=-1，不沿用上轮读数；未发生的时间仍为 -1。
+- 本轮新增 11 例，覆盖确定时钟/不可变快照、响应头先于延迟正文、文本和闭合工具计数、
+  `/v1` 尝试起点隔离、延迟客户端队列、多个就绪但只派发一次、取消/关闭旧回调、
+  失败轮部分统计、空 sink 与观测异常隔离；强化既有 SSE 失败/重试/不累积路径断言。
+  原有早派发只执行一次、后序串行记账、PARK、生命周期、桥/客户端回归一并通过。
+- 环境证据：Gradle 9.5.1，构建 daemon 使用用户级配置中的 JDK 21。
+  初次普通/堆栈/离线测试均阻塞在 Loom 的 Minecraft 版本清单下载（ConnectException），
+  未进入测试阶段；获准仅在本次命令用 `-Dhttp.proxyHost= -Dhttps.proxyHost=` 直连后恢复。
+  仓内/用户级代理及 Java 配置未修改，不为换机写入新绝对路径。
+- `:agent-core:test` 首次成功 **2m 6s / 4 任务**。
+  随后强制全量 `build --rerun-tasks --console=plain --no-daemon`（同上述单次直连参数）
+  **BUILD SUCCESSFUL in 42s / 20 任务全部执行**。
+  XML **283/283**（agent-core 190 + 根工程 66 + clientTest 27），
+  failures/errors/skipped 全 0，比历史 272 增加 11 项。
+  23:17 再次强制全量复核 **29s / 20 任务全部执行**，最新 XML 仍为 283/283；
+  按 GBK 解码输出后仅见既有过时 API 与 Gradle 10 兼容性警告。
+- 已产出 `build/libs/mcbot-0.1.0.jar`，未复制到 dist 或替换游戏实例。
+  两次构建 SHA256 一致：
+  `ba013eede3bd8592ea0e562b2224ad07864f41def3e3f814e8e69475885b75cb`。
+  核验内嵌 `META-INF/jars/agent-core-0.1.0.jar` 包含新 Snapshot、StreamStats 与 CallbackChatEngine；
+  23:18 获准运行 `tools/list-java.ps1`，未发现 Java 进程；所改 Java 文件无冲突标记或行尾空白。
+  本轮未启动 MC/连接器、未运行服务端 SelfTest、未调用真实模型。
+  本修复不涉及新的 MC API 或服务端业务，不以自动化结果代替真机动作/取消/反问验收。
+- 后续顺序保持 F0：先在真实游戏日志复核新统计，再用受控保存/重启验证身体位置与背包恢复，
+  取得证据后才决定是否修持久化；真实动作、长活取消、反问回答、配置重载/重连与连接器仍待验。
+  模型历史间歇流内 error 根因与 `[m9] A3` 均未销账。
 
 ### 协作文档整理（2026-10-09 17:22，Asia/Shanghai）
 
@@ -1335,6 +1637,10 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 | `BlockHitResult.getType()` | **读私有 miss 标志：一个 BlockHitResult 对象可以本身就是 MISS**——判命中必须比 `getType()!=MISS`，不能只 `instanceof BlockHitResult`（R2-S1 javap 实测） |
 | 客户端方块读 | `Level.getBlockState(BlockPos)` 声明在 `net.minecraft.world.level.Level`，`ClientLevel` **不覆写**→客户端可直接用；`hasChunkAt` 是 `LevelReader` 默认方法；`Direction.fromYRot(double)`/`CropBlock.getMaxAge()`/`BlockStateBase.hasBlockEntity()` public 可用（后者省逐格 BE 查表） |
 | 假玩家进场 | `PlayerList.placeNewPlayer(Connection, ServerPlayer, CommonListenerCookie)`；cookie 用 `CommonListenerCookie.createInitial(GameProfile, false)`（record：profile/latency/ClientInformation/transferred） |
+| 玩家存档加载（F0 第十三轮） | javap 字节码：placeNewPlayer 不读档；`PlayerList.loadPlayerData(NameAndId): Optional<CompoundTag>`（NameAndId 有 GameProfile 构造）。原版 PrepareSpawnTask 先解析 SavedPosition 选 level，Ready.spawn 在 place 前 `ServerPlayer.load(ValueInput)`，然后 snapTo；不是调用 place 就自动恢复 |
+| 玩家输入与位置（F0 第十三轮） | `TagValueInput.create(ProblemReporter, HolderLookup.Provider, CompoundTag): ValueInput`；`new ProblemReporter.ScopedCollector(Logger)` 可 try-with-resources；`ValueInput.read(MapCodec<T>)`；`ServerPlayer.SavedPosition.MAP_CODEC` 返回 dimension/position/rotation 三个 Optional；`Entity.load(ValueInput)` 会读 Pos/Rotation，维度选择仍需在身体构造前完成；`snapTo(Vec3,float,float)` 公开 |
+| 玩家保存出口（F0 第十三轮） | `PlayerList.remove(ServerPlayer)` 字节码先 `save(player)` 再移除身体/索引；save 调 `PlayerDataStorage.save(Player)`；`saveAll()` 遍历在线玩家同出口。读盘测试用 `NbtIo.readCompressed(Path,NbtAccounter.unlimitedHeap())` 与 `LevelResource.PLAYER_DATA_DIR` |
+| 身体恢复工装（F0 第十三轮） | `Inventory.getSelectedSlot/setSelectedSlot`、getItem/setItem/getContainerSize；`ItemStack.matches(a,b)` 比较计数与 components，setDamageValue/getDamageValue；`ServerPlayer.teleportTo(ServerLevel,double,double,double,Set<Relative>,float,float,boolean): boolean` 用于双维度样本；Vec2.ZERO/x/y 均公开 |
 | 客户端信息类 | `net.minecraft.server.level.ClientInformation`（**不在** network 包），`createDefault()` |
 | ServerPlayer 构造 | `(MinecraftServer, ServerLevel, GameProfile, ClientInformation)` ✓ 公开可子类 |
 | GameProfile | authlib **7.0.61** 起为 record：`new GameProfile(uuid, name)`，访问器 `id()/name()`（**无 getName/getId**） |
@@ -1434,8 +1740,8 @@ fabric `KeyBindingHelper.registerKeyBinding(KeyMapping)`。
 1. 加入/退出消息未隐藏（需拦截玩家列表广播，方案留给 M3 网络层一并定，属装饰性）。
 2. 控制台召唤的同伴 owner=NO_OWNER，仅测试/预配用。
 3. 同伴 v1 全程 `setInvulnerable(true)`，M4 战斗里程碑放开。
-4. 新召唤会 `teleportTo` 到主人脚边/世界出生点；重启重进位置由原版玩家存档恢复。
-5. 名册文件：`run/mcbot/companions.json`（Gson)；同伴背包/位置存原版 playerdata（`run/world/players/*.dat`），dismiss 不删存档（保留再召唤复原，清档策略待定）。`.dat` 落点坏点已由进场安全落点检查自愈（见 M4 收尾备忘）。
+4. 新召唤到主人附近/主世界出生点，读取旧背包但不沿用旧位置；重启由 SummonService 在 placeNewPlayer 前显式读取原版玩家存档（2026-10-10 更正，不再假定 place 自行加载）。
+5. 名册在 `<世界目录>/mcbot/companions.json`（Gson）；同伴背包/位置存原版 `playerdata/<uuid>.dat`。dismiss 不删存档；重进在身体实际维度检查安全落点。历史 M1 的“重进成功”未验非空背包，身体恢复以顶部 F0 第十三轮对照证据为准。
 6. 服务端工具现共 **8/14**（status/scan_area/break/collect/place/move_to/transfer/wait）；剩余：craft/smelt/inspect_block/wait_until(并入 wait)/talk/navigate(并入 move_to)/attack——craft、smelt、inspect 随 M5 上。
 
 ## M0 验收证据

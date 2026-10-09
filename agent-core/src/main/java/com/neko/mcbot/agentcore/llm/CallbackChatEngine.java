@@ -22,6 +22,7 @@ public final class CallbackChatEngine implements ChatEngine {
     @Override
     public CompletableFuture<AssistantTurn> chat(String system, List<Msg> history, List<ToolSpec> tools,
                                                  TurnSink sink, boolean accumulate) {
+        if (sink == null) return deliver(delegate.chat(system, history, tools, null, accumulate));
         TurnSink queued = new TurnSink() {
             @Override public void onTextDelta(String delta) {
                 client.execute(() -> sink.onTextDelta(delta));
@@ -33,7 +34,22 @@ public final class CallbackChatEngine implements ChatEngine {
                 client.execute(() -> sink.onComplete(turn, error));
             }
             @Override public void onCounters(int chunks, int deltas, int ready) {
-                client.execute(() -> sink.onCounters(chunks, deltas, ready));
+                client.execute(() -> {
+                    try {
+                        sink.onCounters(chunks, deltas, ready);
+                    } catch (RuntimeException ignored) {
+                        // Queuing must preserve the transport's observation-only contract.
+                    }
+                });
+            }
+            @Override public void onTimings(TurnTimings.Snapshot timings) {
+                client.execute(() -> {
+                    try {
+                        sink.onTimings(timings);
+                    } catch (RuntimeException ignored) {
+                        // Logging failures must not interrupt delivery of the final future.
+                    }
+                });
             }
         };
         return deliver(delegate.chat(system, history, tools, queued, accumulate));

@@ -291,9 +291,10 @@ S4 的设计（新活顶掉旧活 + 保留已算路径）正是为它准备的�
    平时应接近 0。**它是诊断不是统计**：一冒头就说明有人往系统提示/工具表里塞了会变的东西。
    落点：`AgentRunner` 的 `onUsage` 里算，`Conversation` 存上一轮 prompt。
    **这是防止前缀缓存静默退化的唯一低成本手段**，强烈建议随 S4 一起做。
-3. **每步时延分解**：R2-S3 已打 `ttfb/ttft/first_tool/after_chunk/after_tool/chunks/deltas/early`，
+3. **每步时延分解**：F0 修正传输统计接线，保留 `ttfb/ttft/first_tool/after_chunk/after_tool/chunks/deltas`，
+   分列 `ready`（就绪数）/`early`（执行器派发数），新增 `first_dispatch`/`stream`。
    真机跑一个"挖 3 块石头进箱"，把每轮的 `after_chunk`（中转站攒批程度）和
-   `first_tool` vs 整轮耗时（早派发省了多少）记下来。
+   `first_dispatch` vs `stream` 记下来；仅 `first_tool` 提前不能证明实际早派发省下等待。
    **第一件要看的就是 `after_chunk`**：若它接近整轮耗时，说明中转站不分片（§0 的 ⚠ 已预警），
    此时任何流式优化都不会更快——**先换端点，再谈优化**。
 4. **轮数基线**：同一任务记录**总轮数**与**总时长**。现基线是 8 轮/20–50s，R2 卡目标 3 轮/6–14s。

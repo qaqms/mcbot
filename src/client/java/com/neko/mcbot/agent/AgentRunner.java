@@ -184,7 +184,7 @@ public final class AgentRunner implements ToolExecutor {
                     @Override
                     public void onStreamStats(AgentLoop.StreamStats stats) {
                         // R2-A 打点：回答"这一轮卡在哪"。
-                        // ttft 大而 ttfb 小 → 中转站在攒批；first_tool 远早于整轮结束 → 早派发真省了时间。
+                        // first_tool 是传输就绪，first_dispatch 才是执行器派发；二者不能混为一谈。
                         LOG.info("[brain] llm stream {}", stats.format());
                     }
 

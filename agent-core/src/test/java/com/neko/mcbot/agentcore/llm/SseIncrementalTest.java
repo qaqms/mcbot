@@ -15,9 +15,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -110,6 +112,9 @@ class SseIncrementalTest {
         final AtomicReference<AssistantTurn> turn = new AtomicReference<>();
         final AtomicReference<Throwable> error = new AtomicReference<>();
         final AtomicInteger chunkCount = new AtomicInteger();
+        final AtomicInteger deltaCount = new AtomicInteger();
+        final AtomicInteger readyCount = new AtomicInteger();
+        final List<TurnTimings.Snapshot> timings = new CopyOnWriteArrayList<>();
         final AtomicInteger completions = new AtomicInteger();
         volatile long deltaAtMs = -1;
         volatile long readyAtMs = -1;
@@ -138,6 +143,7 @@ class SseIncrementalTest {
 
         @Override
         public void onComplete(AssistantTurn t, Throwable e) {
+            assertEquals(1, timings.size(), "最终统计必须在完成回调之前交付，换道不能多报");
             completions.incrementAndGet();
             turn.set(t);
             error.set(e);
@@ -147,6 +153,13 @@ class SseIncrementalTest {
         @Override
         public void onCounters(int chunks, int deltas, int toolCallsReady) {
             chunkCount.set(chunks);
+            deltaCount.set(deltas);
+            readyCount.set(toolCallsReady);
+        }
+
+        @Override
+        public void onTimings(TurnTimings.Snapshot snapshot) {
+            timings.add(snapshot);
         }
     }
 
@@ -169,6 +182,7 @@ class SseIncrementalTest {
                 r.hits.incrementAndGet();
                 r.requestBody.set(new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 ex.getResponseHeaders().add("Content-Type", r.contentType);
+                r.beforeHeaders.run();
                 ex.sendResponseHeaders(r.status, 0);
                 try (OutputStream out = ex.getResponseBody()) {
                     for (String piece : r.pieces) {
@@ -207,6 +221,7 @@ class SseIncrementalTest {
         final boolean rawBytes;
         final AtomicInteger hits = new AtomicInteger();
         final AtomicReference<String> requestBody = new AtomicReference<>();
+        Runnable beforeHeaders = () -> {};
 
         Route(String path, int status, String contentType, List<String> pieces, long gapMs,
               boolean rawBytes) {
@@ -224,6 +239,89 @@ class SseIncrementalTest {
     }
 
     // ---- 用例 ----
+
+    @Test
+    void transportTimingsMeasureHeadersAndCountActualDeltasAndReadyCalls() throws Exception {
+        String base = serve(List.of(Route.ok(List.of(": heartbeat\n\n",
+                toolChunk(0, "call_1", "move_to", ARGS_HEAD),
+                toolChunk(0, null, null, ARGS_TAIL),
+                textChunk("a"), textChunk("b"),
+                frame("{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}"),
+                "data: [DONE]\n\n"), 80)));
+        Probe probe = new Probe();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15))
+                .chat("sys", List.of(), List.of(MOVE_WITH_REQUIRED), probe, true)
+                .get(20, TimeUnit.SECONDS);
+        var timings = probe.timings.getFirst();
+        assertEquals(5, timings.chunks(), "心跳和 DONE 不计为业务 chunk，finish 帧计入");
+        assertEquals(2, timings.deltas());
+        assertEquals(1, timings.toolsReady());
+        assertEquals(timings.chunks(), probe.chunkCount.get());
+        assertEquals(timings.deltas(), probe.deltaCount.get());
+        assertEquals(timings.toolsReady(), probe.readyCount.get());
+        assertTrue(timings.ttfb() >= 0);
+        assertTrue(timings.ttft() - timings.ttfb() >= 120,
+                "响应头计时不能等到整轮完成，首字前有心跳和两个工具帧");
+        assertTrue(timings.firstTool() >= timings.ttfb());
+        assertTrue(timings.ttft() > timings.firstTool());
+        assertTrue(timings.afterTool() >= 40);
+        assertTrue(timings.afterChunk() > timings.afterTool());
+        assertTrue(timings.elapsedMs() > timings.ttft());
+        assertEquals("{\"x\":1,\"y\":2,\"z\":3}", turn.toolCalls().getFirst().argsJson());
+    }
+
+    @Test
+    void brokenTimingAndCounterObserversCannotFailOrRetryRequest() throws Exception {
+        Route route = Route.ok(List.of(textChunk("ok"), "data: [DONE]\n\n"), 0);
+        String base = serve(List.of(route));
+        var completed = new AtomicInteger();
+        var snapshots = new AtomicInteger();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15))
+                .chat("sys", List.of(), List.of(), new TurnSink() {
+                    @Override public void onCounters(int c, int d, int r) {
+                        throw new IllegalStateException("observer");
+                    }
+                    @Override public void onTimings(TurnTimings.Snapshot timings) {
+                        snapshots.incrementAndGet();
+                        throw new IllegalStateException("observer");
+                    }
+                    @Override public void onComplete(AssistantTurn t, Throwable error) {
+                        assertNull(error);
+                        completed.incrementAndGet();
+                    }
+                }, true).get(20, TimeUnit.SECONDS);
+        assertEquals("ok", turn.text());
+        assertEquals(1, snapshots.get());
+        assertEquals(1, completed.get());
+        assertEquals(1, route.hits.get());
+    }
+
+    @Test
+    void fallbackTimingsStartAtTheFinalAttemptInsteadOfMixingRequestOrigins() throws Exception {
+        var clock = new AtomicLong();
+        Route root = new Route("/chat/completions", 404, "text/html",
+                List.of("<html>wrong path</html>"), 0, false);
+        Route v1 = new Route("/v1/chat/completions", 200, "text/event-stream",
+                List.of(textChunk("ok"), "data: [DONE]\n\n"), 0, false);
+        root.beforeHeaders = () -> clock.set(1_000_000_000L);
+        v1.beforeHeaders = () -> clock.set(3_000_000_000L);
+        String base = serve(List.of(root, v1));
+        Probe probe = new Probe();
+        var turn = new LlmClient(provider(base), Duration.ofSeconds(15),
+                Duration.ofSeconds(5), clock::get)
+                .chat("sys", List.of(), List.of(), probe, true).get(20, TimeUnit.SECONDS);
+        assertEquals("ok", turn.text());
+        assertEquals(1, root.hits.get());
+        assertEquals(1, v1.hits.get());
+        assertEquals(1, probe.timings.size());
+        var timings = probe.timings.getFirst();
+        assertEquals(1_000_000_000L, timings.requestStartedNanos());
+        assertEquals(2000, timings.ttfb());
+        assertEquals(2000, timings.ttft());
+        assertEquals(2000, timings.elapsedMs());
+        assertEquals(1, timings.chunks());
+        assertEquals(1, timings.deltas());
+    }
 
     @Test
     void deltasArriveWhileStreamIsStillOpen() throws Exception {
@@ -336,6 +434,7 @@ class SseIncrementalTest {
 
         assertNull(turn, "accumulate=false 时不该再拼整轮");
         assertEquals(List.of("甲", "乙"), probe.deltas, "即使不累积，增量仍要照发");
+        assertEquals(2, probe.timings.getFirst().deltas());
     }
 
     /** 中文跨 TCP 片段被切断：手写解码器必须把残缺的多字节序列攒住。 */
@@ -585,6 +684,9 @@ class SseIncrementalTest {
         assertNotNull(probe.error.get());
         assertEquals(1, diagnostics.size());
         assertEquals(1, diagnostics.getFirst().errorFrames());
+        assertEquals(2, probe.timings.getFirst().chunks());
+        assertEquals(1, probe.timings.getFirst().deltas());
+        assertEquals(0, probe.timings.getFirst().toolsReady());
         assertTrue(!diagnostics.getFirst().summary().contains("partial"));
         assertTrue(!diagnostics.getFirst().summary().contains("private-value"));
     }
@@ -683,6 +785,9 @@ class SseIncrementalTest {
         assertTrue(probe.readyIndexes.isEmpty());
         assertTrue(probe.deltas.isEmpty());
         assertEquals(1, probe.completions.get());
+        assertEquals(1, probe.timings.size());
+        assertEquals(1, probe.timings.getFirst().chunks());
+        assertEquals(0, probe.timings.getFirst().deltas());
     }
 
     @Test
@@ -705,6 +810,9 @@ class SseIncrementalTest {
         assertEquals(200, diagnostics.getLast().http());
         assertEquals(1, diagnostics.getLast().jsonFrames());
         assertEquals(1, probe.completions.get());
+        assertEquals(1, probe.timings.size());
+        assertEquals(1, probe.timings.getFirst().chunks());
+        assertEquals(1, probe.timings.getFirst().deltas());
         assertTrue(diagnostics.stream().noneMatch(shape -> shape.summary().contains("private-value")));
     }
 
