@@ -6,12 +6,12 @@
 ## 1. 三进程拓扑
 
 ```
-┌─ neko（桌面猫娘，外部进程）
-│    只看得到"任务级"接口（§6 桥接）
+┌─ N.E.K.O 宿主及适配连接器（外部进程）
+│    通过任务级接口接入（§6 桥接）
 │
-├─ Minecraft 客户端（主人）  src/client/
+├─ Minecraft 客户端（本地玩家）  src/client/
 │    AgentRunner：大脑宿主（agent-core AgentLoop）
-│    BridgeHttp：127.0.0.1 桥（对 neko）
+│    BridgeHttp：127.0.0.1 任务桥（供连接器接入）
 │    McbotPanelScreen：G 面板（任务/模型/同伴三页，滚动、固定操作区）
 │    ⇅ 自定义 payload mcbot:c2s / mcbot:s2c（单 JSON 信封）
 │
@@ -21,7 +21,7 @@
      CompanionScheduler：跨 tick 任务推进（END_SERVER_TICK）
 ```
 
-硬约束：**API key 与大脑只存在于主人客户端**；服务器只见工具调用的结果，不见模型；
+硬约束：**API key 与大脑只存在于所属玩家客户端**；服务器只见工具调用的结果，不见模型；
 桥只绑回环。三者各是一层信任边界。
 
 ## 2. 线程模型
@@ -73,7 +73,7 @@ src/client/          客户端
   交回 `C2s.OVERSIZED` 哨兵由接收处丢弃并记日志。为什么不靠原版 `STRING_UTF8`：
   它限的是**字符数**（32767，折算字节上限 98301 ≈ 96KB），且超限**抛** `DecoderException`，
   而 `Connection.exceptionCaught` 对非 `SkipPacketException` 一律关 channel——
-  等价于“模型吐了一坨超大参数 → 主人被踢线”。出站 S2C 也按字节量，超限时**不是截断**
+  因此模型生成超大参数可能导致玩家断线。出站 S2C 也按字节量，超限时**不是截断**
   （截断只造出非法 JSON → 对端静默丢弃 → 那个 seq 白等 90s TIMEOUT），
   而是换一条**保留 seq 的合法瘦身回执**，把“范围改小”教给模型；客户端另有发送前自检。
 - **C2S kind**：`summon` / `dismiss` / `companion_status` / `tool_call{seq,tool,args}` / `cancel` / `answer`。
@@ -81,7 +81,7 @@ src/client/          客户端
   `cancel_ack` / `event`（服务器主动播报，当前无生产者——留给任务进度事件）。
 - 全局 C2S receiver 只在 mod 初始化注册一次；每条消息取当前 dispatcher，并校验所属服务器，
   不捕获第一张单人世界。停服取消 scheduler 全部槽位并清空计划缓存；遣散立即取消对应任务。
-  同伴生命周期回执带结构化 `companion` 字段；JOIN 查询当前主人在当前世界的同伴。
+  同伴生命周期回执带结构化 `companion` 字段；JOIN 查询当前本地玩家在当前世界的同伴。
   自动 `companion_state` 同步只更新同伴页与桥公共 state，不写聊天或 transcript；
   手动召唤/遣散的操作回执保留原有反馈。
 - **三道闸**（`ServerToolDispatcher.handle`，按序）：
@@ -148,7 +148,10 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 （或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
 长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。`ask_owner` 是唯一本地工具（不出客户端，见 §6）。
 
-## 6. 桥接（neko 入口）
+## 6. 桥接（连接器入口）
+
+mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务适配、用户回答与事件展示。
+连接器以外部任务契约为集成边界，不依赖内部游戏协议或寻路实现。
 
 - 内核 `BridgeService`（agent-core）：REST `/v1/*` + MCP `/mcp` 双接口一内核；
   适配层 `BridgeHttp`（客户端）：JDK HttpServer 绑 `127.0.0.1:57121`，
@@ -158,7 +161,7 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
   status 与 SSE data 带 contract_version/session_id，桥重建换 session、事件编号重新从 1 起。
   REST/MCP 严格参数类型，安全 error_code；body 超限为 413。SSE 补发与订阅在同一锁内排序，
   不把旧桥游标带进新世界；无持久任务查询/幂等提交，超时与连接丢失不能自动重发。
-- 生命周期：JOIN 起、DISCONNECT 关；桥只服务当前进世界的主人。
+- 生命周期：JOIN 起、DISCONNECT 关；桥只服务当前客户端的本地玩家。
 - 事件四类帧：progress（工具回执/护栏）、done（唯一任务终态，含 status）、question（反问，
   带 question_id）、state（queued/running/PARK/回答确认/公共生命周期）。仅匹配任务的 done
   结束窗口；task_id=0 为公共事件，不结束其他任务。状态与取消详见桥契约。
@@ -248,4 +251,4 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 | 流式(R2-A/F0) | SSE 逐行解析；闭合判定=顶层括号配平且 required 齐；客户端 CallbackChatEngine 送主线程；仅 index 0 早派发，后序延迟串行；记账按 index 原序；arguments 只累积一次 |
 | 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具仅 move_to(3600tick)/break_block(1200tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
-| 名册 | v1 每主人 1 同伴；名字 `[a-z0-9_]{2,16}` |
+| 名册 | v1 每位玩家 1 同伴；名字 `[a-z0-9_]{2,16}` |

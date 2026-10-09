@@ -1,10 +1,16 @@
 # 连接器与 MC agent 任务级契约（v1.0）
 
-> 本文是唯一权威规格，2026-10-09 固定 v1.0 基础接口；不是 F0 真机验收全部通过的声明。
-> 快速上手版见 `dist/README-BRIDGE.md`，连接器交接步骤见本文 §6。
-> 内核：`agent-core/.../bridge/BridgeService`（有单测）；HTTP 壳：`src/client/.../bridge/BridgeHttp`。
+> 本文是连接器接入与接口维护的唯一权威规格，2026-10-09 固定 v1.0 基础接口。
+> 接口已通过自动化回归，真实 MC + N.E.K.O 联合验收仍待完成。
+> 快速上手版见 `dist/README-BRIDGE.md`，接入与验收步骤见本文 §6。
+> 内核：`agent-core/.../bridge/BridgeService`；HTTP 适配层：`src/client/.../bridge/BridgeHttp`。
 
 ## 0. 固定范围与兼容规则
+
+**模块职责**：
+- **mcbot** 提供 MC agent 本体、游戏工具执行及任务桥，维护本契约、Schema、示例与桥接回归测试。
+- **连接器** 适配 N.E.K.O 等宿主的任务入口、用户回答与结果展示，处理任务关联、事件消费和会话重连。
+- **联合验收** 按 §6 验证完整任务链路；接口变更需协调兼容方案，不能仅以单侧测试代替联调。
 
 只固定外部任务层：**投递 → 状态/事件 → 必要时反问与回答 → 取消或最终结果**。
 连接器不调用原子游戏工具，不依赖 AgentLoop、C2S/S2C、寻路或模型供应商的内部协议。
@@ -19,11 +25,11 @@
 | 字段与结果 | Schema 的类型、必填/可选、默认、错误码及四种终态 | completed 是正常作答，不是目标成功证明；未知字段忽略 |
 | 事件规则 | task_id 归组、唯一 done、SSE 顺序/游标/去重 | 窗口 fragments 仅展示；200 条补发不是持久队列 |
 | 生命周期 | session_id、退出世界/重载/取消/问题过期 | 旧任务不跨世界续跑；断线结果未知，不能自动重投 |
-| 契约测试 | 本仓 Bridge/AgentLoop/TaskReplies 与本地 HTTP 回归 | 对方按 §6 验连接器；不等同真实 MC + N.E.K.O 已通过 |
+| 契约测试 | mcbot 的 Bridge/AgentLoop/TaskReplies 与本地 HTTP 回归 | 连接器按 §6 验证接入行为；真实 MC + N.E.K.O 链路另行联合验收 |
 
-双方可以各自开发内部实现，但每次改动须保持这些可观察行为并通过契约回归。
+各模块可以独立迭代内部实现，但每次改动须保持这些可观察行为并通过相应契约回归。
 仅增加可选字段可在 v1 内演进；新能力先补约定/示例/测试；删除字段、改变结果或事件语义、
-把可选字段变必填等破坏性变更须新版本并通知对方，不能以“内部重构”为由静默改契约。
+把可选字段变必填等破坏性变更须发布新版本，并提前与接入方协调迁移方案；内部重构不应静默改变契约。
 
 机器可读文件（UTF-8，随 agent-core JAR 打包）：
 
@@ -36,26 +42,26 @@
 - 回归：`BridgeContractTest`、`BridgeServiceTest`、客户端 `BridgeHttpContractTest`。
 
 冻结既有路径、五个工具名及字段含义；可以增加可选字段，连接器必须忽略未知字段。
-不删除或改义已有字段；破坏性变更另开版本并先交接。`contract_version:"1.0"` 出现在 status
+不删除或改义已有字段；破坏性变更另开版本并提前协调接入迁移。`contract_version:"1.0"` 出现在 status
 与每个 SSE data 中。旧包没有该字段时只作为旧版兼容接入，不当作 v1.0 验收通过。
 MCP initialize 的 `protocolVersion:"2025-03-26"` 是既有传输协议值，与任务契约版本不是一回事；
 本桥不是通用 MCP Streamable HTTP 服务（无会话协商、批请求及其它通知支持）。
 
-本轮收口变更：参数类型错误不再静默转字符串/截小数/取默认；REST 返回 400，
+v1.0 相对旧版的兼容变更：参数类型错误不再静默转字符串/截小数/取默认；REST 返回 400，
 MCP 返回工具错误。过期问题的 MCP 回答改为 isError=true；保留错误文本并新增 error_code。
 请求体超限修为确定的 413（旧实现直接断开连接，旧文档的 500 不准确）。
 
 ## 1. 监听与鉴权
 
 - 地址：`http://127.0.0.1:57121`（只绑回环，绝不 0.0.0.0；本地 HTTP，无 TLS）。
-- 生命周期：**客户端进世界起、退世界关**；桥只服务当前进世界的主人（一台机开多个
+- 生命周期：**客户端进世界起、退世界关**；桥只服务当前客户端的本地玩家（一台机开多个
   1.21.11 客户端会撞端口——v1 已知边界）。
 - 鉴权：`Authorization: Bearer <token>`；token = `<gameDir>/mcbot/bridge.token`
   文件内容（首次随机生成、跨重启稳定；G 面板模型页可复制令牌，底部仅显示端点，不展示 token）。
   校验用常量时间比较；不合法一律 401。SSE 允许 `?token=`（EventSource 发不了 header）。
 - JSON 请求/响应使用 UTF-8；建议请求头 `Content-Type: application/json`。
 - 请求体上限 **65536 字节**，超限 413。401/413 时不会提交任务。
-- 先鉴权再执行；OPTIONS 仅空返回 204，不执行任何任务。token 不进入日志或交接文件；
+- 先鉴权再执行；OPTIONS 仅空返回 204，不执行任何任务。token 不进入日志或共享文档；
   能带 header 时优先 header，SSE query token 同样是凭据，不记录完整 URL。
 
 ## 2. REST
@@ -157,7 +163,7 @@ job_id 是内部工作编号，不是 task_id。progress 不保证是实时百�
 **终态 status**：
 - `completed`：大脑正常结束并作答；不代表自然语言目标已经被独立验证成功，应结合 text/工具回执判断。
 - `failed`：大脑未配置、模型调用失败或护栏中止。
-- `cancelled`：主人取消、配置重载或断线关闭。
+- `cancelled`：用户取消、配置重载或断线关闭。
 - `superseded`：PARK 时收到新指令，旧活动项及其排队项被替换。
 
 连接器必须按 `task_id` 归组，以 `done` 为终态，不能根据 `state` 或文字猜测结束。
@@ -209,8 +215,8 @@ initialized 通知可无 id。
 | `mcbot_status` | `{}` | status JSON |
 | `mcbot_cancel` | `{task_id?}` | `{"ok":bool}`；缺省/0 为全部，正数为指定任务 |
 
-**全部工具是任务级的**——原子游戏操作（挖哪格/走哪去）永远不出现在这层：
-外部大脑是老板不是操作员。
+**全部工具是任务级的**。连接器提交任务并处理反馈，不直接调用挖掘、移动等原子游戏工具；
+具体动作的规划与执行由 MC agent 负责。
 成功/工具失败均用 `result.content[0]={"type":"text","text":"序列化 JSON"}`：
 先检查 result.isError，再将 text 解析为 task/status/answer/ok 或上述 error 对象。
 缺省 arguments 视为 {}，显式 null/数组拒绝；不合法工具参数不调用 backend。
@@ -224,16 +230,16 @@ neko ─ POST /mcp tools/call mcbot_task {"text":"看看附近有什么","wait_s
 大脑 → tool_call(status/scan_area) → 服务器执行 → tool_result
 帧   id:1 progress{scan_area ✔ …}   id:2 done{"东边 20 格有露出铜矿…"}
 neko ← REST/MCP 同步返回 {task_id:3, done:true, status:"completed", fragments:[…]}
-—— 若中途同伴发难（方向性决策）——
+—— 如任务需要用户确认（方向性决策）——
 帧   id:k question{"question_id":"q8","text":"铜矿在别人的房子底下，要挖吗？"}
 neko → 问用户 → POST /v1/answer {"question_id":"q8","text":"绕开他家，从上面进"}
-大脑 → 收到"主人说：绕开…"续跑 → 最终 done
+大脑 → 接收用户回答并继续任务 → 最终 done
 ```
 
-## 5.1 受理即回执（R2-S4 阶段 2）：长活不走一问一答
+## 5.1 内部实现参考：长任务受理与完成（R2-S4 阶段 2）
 
-`move_to`/`break_block` 这类要跑几秒到几分钟的活，**一问一答**是错的：模型在那边干等
-一整跳，既不能改主意也不能催。所以这两条工具改成两段式——先"受理"、后"结果"。
+本节说明 mcbot 内部 C2S/S2C 协议，不属于连接器必须实现的外部接口。
+`move_to`/`break_block` 等长任务采用两段式回执：先返回受理信息，再发送最终结果。
 
 C2S 的 `tool_call` 多一个**可选**字段 `accept`：
 
@@ -243,7 +249,7 @@ C2S 的 `tool_call` 多一个**可选**字段 `accept`：
 
 - **缺省（没有这个字段）= 老语义同步回执**。这是刻意的向后兼容：老客户端不认识
   `job_ack`，服务端擅自换形态会让它白等到 90 秒超时。要新形态就**由发送方点名**。
-- 客户端有 `client.json` 的 `accept_mode`（默认 true）作止血阀门；关掉即整条链退回今日语义。
+- 客户端 `client.json` 的 `accept_mode`（默认 true）是兼容回退开关；关闭后使用同步回执语义。
 
 S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）：
 
@@ -262,7 +268,7 @@ S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）�
    前缀是给**模型**看的契约；"要不要 park"是控制流，走 `ToolOutcome.accepted` **字段**，不认字符串。
 3. **`phase ∈ progress|done|failed|cancelled|superseded`**。`progress` 是预留接收相位，
    只播报不进对话，**当前服务端不生产，限速也未实现**；
-   1 帧/s/job、全局 4 帧/s 是后续计划，不是 v1.0 保证。其余四者解锁 PARK。`cancelled`（主人叫停）与
+   1 帧/s/job、全局 4 帧/s 是后续计划，不是 v1.0 保证。其余四者解锁 PARK。`cancelled`（用户取消）与
    `superseded`（被新指令顶掉）必须与 `failed` 分开，因为客户端补账的话术不同。
 4. **`cap_ticks` 是客户端等待上限的来源**，客户端的超时必须**严格大于** `cap*50ms`
    （agent-core 的 `PendingJobs.JOB_GRACE_MS` 给 15s 余量）。两边各拍一个常数，就是
@@ -272,12 +278,12 @@ S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）�
 （`seq → jobId`）改等 `job_event`；大脑收到受理**不把这条写进对话**，转 **PARK**——
 这条指令挂起、不再问模型（PARK 期间不计步），事件到了才按 index 原序补 `tool` 消息并开新轮。
 
-⚠️ **PARK 的铁律**：解锁（主人叫停 / 新指令 / 本地超时）之前，**每一条 in-flight 的
+⚠️ **PARK 的铁律**：解锁（用户取消 / 新指令 / 本地超时）之前，**每一条 in-flight 的
 `tool_call` 都必须有一条回执**，哪怕是本地合成的 `CANCELLED:`/`SUPERSEDED:`。少一条，
 下一次请求里那个 `assistant.tool_calls` 就有 id 找不到配对的 `tool` 消息——OpenAI 直接 400，
 一整段历史当场作废。`AgentLoop.stopActive` 是取消/顶替时补账的唯一实现，别在别处补回执。
 
-本轮生命周期修复在客户端用代际号丢弃旧模型/工具回调，并清理旧任务的 pending/question/ask。
+客户端通过代际号丢弃旧模型/工具回调，并清理旧任务的 pending/question/ask。
 PARK 顶替会先发 C2S cancel 再开始新任务；服务端单槽仍保留 BUSY，**不是** scheduler 抢占或
 `remaining()` 续跑。progress 的服务端生产与限速也仍是后续卡，不应据此宣称已完成。
 
@@ -306,13 +312,13 @@ PARK 顶替会先发 C2S cancel 再开始新任务；服务端单槽仍保留 BU
 - [ ] 未知可选字段不导致解析失败；错误码/RPC error/isError 三层都识别。
 - [ ] POST 超时、断线或环内缺帧标未知，不自动重发可能已执行的动作。
 
-本仓自动化入口：
+mcbot 桥接回归入口：
 `./gradlew :agent-core:test --tests '*Bridge*'` 与
 `./gradlew clientTest --tests '*BridgeHttpContractTest'`。
 测试使用本地回环随机端口和替身 backend，不读取真实 token/client.json，不请求远端模型。
 这些是桥的契约/HTTP 回归，不替代真实 MC + N.E.K.O 联调。
 
-**活体验收清单（新 v1.0 包与连接器仍须逐项实测）**：
+**端到端联合验收清单（v1.0 包与连接器仍须逐项实测）**：
 
 前置：装当前 `dist/mcbot-0.1.0.jar` + fabric-api；开发服开着；进世界（面板底部出现桥端点）。
 

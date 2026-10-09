@@ -1,15 +1,18 @@
-# mcbot 任务桥 v1.0（连接器上手）
+# mcbot 任务桥 v1.0（连接器接入指南）
 
 > 本页只是索引；唯一权威规格、Schema/示例路径、兼容变更与验收清单见仓内 `docs/BRIDGE.md`。
 
 > 前提：mcbot 客户端 mod 已进世界（桥随世界起、退世界关）。只监听 127.0.0.1:57121。
+
+mcbot 提供 MC agent 执行能力与任务桥；连接器负责宿主侧任务适配、用户回答与事件反馈。
+接入仅依赖任务级契约，不需要调用 mcbot 内部游戏工具或修改 agent 实现。
 
 ## 鉴权
 
 ```
 Authorization: Bearer <token>
 ```
-token = 你游戏目录 `mcbot/bridge.token` 文件内容（首次进世界自动生成，跨重启稳定）。
+token 为游戏实例目录中 `mcbot/bridge.token` 的文件内容（首次进世界自动生成，跨重启稳定）。
 G 面板底部显示端点；模型页的“复制桥接令牌”可复制 token，不再全串展示。
 
 ## 手动验证（Git Bash，JSON 必须 UTF-8）
@@ -47,14 +50,14 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 中文请求在终端编码不确定时使用 UTF-8 JSON 文件和 `--data-binary @文件名`，
 不要通过可能将中文转为本地编码的管道。也不要记录包含 token 的 URL。
 
-## 推荐任务闭环（neko 侧）
+## 推荐任务闭环（连接器侧）
 
 ```
 查询 status → 记录 session_id → 建立 SSE（先于投令）
-用户 → 猫娘(LLM) → mcbot_task("查看状态并扫描附近") → {task_id}
-事件流   → progress(工具回执/长活受理/护栏)         → 猫娘展示反馈
-question → 猫娘问用户 → mcbot_answer            → 同伴续跑
-done     → 读取 status 与 text → 猫娘汇报结束结果
+宿主任务 → 连接器 → mcbot_task("查看状态并扫描附近") → {task_id}
+事件流   → progress(工具回执/长活受理/护栏)         → 宿主展示反馈
+question → 宿主向用户确认 → 连接器 mcbot_answer      → 同伴续跑
+done     → 连接器读取 status 与 text               → 宿主展示结果
 ```
 
 `done:true` 只表示已结束。`status` 为 completed / failed / cancelled / superseded；
@@ -74,6 +77,6 @@ POST 超时/断开可能已执行；ask 等 135s 超时只释放等答，不自�
 
 参数严格按 Schema 类型传；REST 错误看 error_code，MCP 先看 JSON-RPC error /
 result.isError，再解析 content[0].text。新增字段忽略。
-连接器本地用替身做契约验收后，再共同进行真实 MC 联调；固定接口不代表 F0 全部完成。
+连接器先使用本地替身验证契约，再进行真实 MC + 宿主联合验收；接口固定不代表 F0 全部完成。
 
-原子游戏操作（挖这格、走去哪）不会出现在这层——猫娘是老板，不是操作员。
+连接器提交任务并消费事件；挖掘、移动等具体动作由 MC agent 规划和执行，不在任务桥中直接暴露。
