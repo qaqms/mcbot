@@ -6,6 +6,7 @@
   "description": "LLM-driven in-game companion (fake player) on Fabric, with a task-level local bridge for external AI controllers",
   "authors": ["neko"],
   "environment": "*",
+  "mixins": ["mcbot.mixins.json"],
   "entrypoints": {
     "main": ["com.neko.mcbot.McbotMod"],
     "client": ["com.neko.mcbot.McbotClient"]

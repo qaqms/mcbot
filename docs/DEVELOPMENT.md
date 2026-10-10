@@ -171,6 +171,20 @@ flag 自删，专项结束 halt(false) 正常保存停服，不需要客户端�
 inventory 的参数/回执配对、材料信息可见及缺料不自动重发。真实服务端专项直接运行实际工具，
 不替代玩家模型驱动、GUI/统计/成就事件、真实多人或连接器联合验收。
 
+### 3.4 冶炼草稿的离线回归
+
+```bash
+./gradlew clientTest --tests com.neko.mcbot.server.tools.SmeltToolArgumentsTest --tests com.neko.mcbot.agent.AgentRunnerSmeltTest
+```
+
+3 项参数测试覆盖 query/load/take、槽与数量边界、错模式字段拒绝；
+3 项实际 runner 测试覆盖模型 Schema、load → wait → query → take → inventory
+的调用/回执配对及 NOT_READY/BUSY 不自动重发。模型和游戏回执使用替身，
+不验证真实机器、Mixin 实际加载或原版烧制。
+tools/fixtures/smelting-pack 是独立开发数据包，当前尚无对应 SelfTest 专项入口，
+不安装到玩家世界，不加入生产资源。真实烧制、燃料桶返还、组件保全、失败原子性、
+机器保存重进和普通动作回归补齐前，冶炼卡保持草稿。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，

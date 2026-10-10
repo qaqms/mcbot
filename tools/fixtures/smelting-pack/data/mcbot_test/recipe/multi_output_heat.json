@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:smelting",
+  "category": "misc",
+  "ingredient": "minecraft:prismarine_shard",
+  "result": {"id": "minecraft:gold_nugget", "count": 3},
+  "experience": 0.0,
+  "cookingtime": 41
+}

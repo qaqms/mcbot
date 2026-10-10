@@ -29,7 +29,14 @@ public final class TransferTool implements ServerTool {
         if (c.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) > 6.5 * 6.5) {
             return new Result(false, "OUT_OF_REACH:离容器太远，先 move_to 过去。", null);
         }
-        if (!(c.level().getBlockEntity(pos) instanceof Container container)) {
+        if (!c.level().isLoaded(pos)) {
+            return new Result(false, "TARGET_LOST:容器所在区块未加载，先靠近后重试。", null);
+        }
+        var entity = c.level().getBlockEntity(pos);
+        if (entity instanceof net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity) {
+            return new Result(false, "DENIED:熔炉类机器须用 smelt query/load/take 按原料/燃料/产物槽操作。", null);
+        }
+        if (!(entity instanceof Container container)) {
             return new Result(false, "TARGET_LOST:(" + pos.toShortString() + ") 不是可存取容器。", null);
         }
         String filter = args.has("item") ? args.get("item").getAsString() : null;

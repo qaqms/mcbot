@@ -68,8 +68,15 @@ query=true 只读，必须看 can_craft，不能当作已制作。缺料或装�
 特殊动态配方、自定义 Recipe 子类、GUI/制作统计/成就事件不在本卡范围。
 13:57 完整构建 334/334（194 + 66 + 74），合成专项 28 个检查通过。
 本卡 JAR SHA256 为 `5ef9c70a24c67ba16a9245567c22a44530b3a998453a4f3b91ac2261d94893c6`。
-最新构建证据和哈希以 STATUS B2 为准，前述背包检查点哈希不能辨认合成后的新包；
+合成检查点构建证据和哈希见 STATUS B2，前述背包检查点哈希不能辨认合成后的新包；
 尚未安装到玩家实例或做模型驱动/连接器联合验收。接下来依次冶炼、攻击。
+
+当前工作分支另外包含冶炼草稿：smelt query/load/take 操作原版熔炉类三槽，
+原版 tick 自主烧制，装料/等待/取消不能当作产物已经到手。
+2026-10-10 PR 前完整源码快照 340/340（194 + 66 + 80），新增冶炼离线 6 项通过；
+真实机器/Mixin 加载与服务端专项未完成，仅作为 Draft，不替代已验收合成检查点。
+该快照 JAR SHA256 为 `eeff8cf759f54e198c0d606aae6b98f7e53fdae113de8219d93c39782f05a473`；
+构建产物未安装到玩家实例，后续版本以 STATUS 新记录为准。
 
 真机已确认执行中 wait 两次叫停、不续跑且后续新任务正常。
 10-10 02:01–02:03 的 8 次模型请求全部成功，扫描 → 真实拾取 → 最终汇报完整；
@@ -102,9 +109,9 @@ HTTP 401 表示当前凭据未通过鉴权，不意味着接口不支持自定�
 - **同伴仍无敌**（免死），战斗/死亡→复活链路未做。
 - **模型协议目前仅 Chat Completions 流式接口**，支持自定义模型名称，
   尚不支持 Responses 或 Anthropic Messages；一次空响应不能直接判定不兼容。
-- **工具共 12 个**：服务端 11（`status` `inventory` `equip` `craft` `scan_area` `break_block` `collect`
+- **工具共 13 个，含冶炼草稿**：服务端 12（`status` `inventory` `equip` `craft` `smelt` `scan_area` `break_block` `collect`
   `place_block` `move_to` `transfer` `wait`）+ 本地 1（`ask_owner`）。
-  **未做**：`smelt`、`attack`、`inspect_block`。
+  **未验收**：`smelt`；**未做**：`attack`、`inspect_block`。
 - **寻路**：R1 已加入加权启发式、memo、时间/节点双帽和 PARTIAL 降级，真机复杂山体终验仍待做；
   不会自行换工具。区块票 `[m9] A3` 旧家卸载仍是已知未解项，见仓内 STATUS。
 - 服务端仍是单槽 BUSY；客户端 PARK 顶替是取消再投令，尚非抢占续跑。

@@ -19,10 +19,10 @@ record Result(boolean ok, String feedback, JsonObject data)
 - **每同伴单活跃任务槽**：异步工具撞车直接回 `BUSY`（无队列——模型本就串行思考）。
 - 所有执行都发生在服务器主线程、作用于**发送者名下**的同伴（owner 校验在闸③）。
 
-## 2. 在册工具（11 服务端 + 1 本地）
+## 2. 在册工具（12 服务端 + 1 本地，含未验收冶炼草稿）
 
-> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 11 个），
-> 本表就是那 11 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
+> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 12 个），
+> 本表就是那 12 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
@@ -30,12 +30,13 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
 | `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
+| `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步，草稿 | query/load/take；原版熔炉类机器三槽与真实计数，原版 tick 自主烧制；真实服务端验收未完成 |
 | `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
 | `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、真战利品表（错工具真没掉落）、全客户端可见裂纹；掉落先背包后落地 |
 | `collect` | `x,y,z,r?` | 同步 | 吸指定点附近掉落物进背包 |
 | `place_block` | `x,y,z,item` | 同步 | 背包拿方块放（item 用注册路径如 `cobblestone`） |
 | `move_to` | `x,y,z,may_alter_terrain?` | 异步(≤3min) | **DigAStar（M8）**：节点=落脚点，会绕路/跳/落/挖穿/垫脚/搭桥；改动世界的路先回 `NEED_CONFIRM`+方块清单，点头（`may_alter_terrain=true` 重发）才执行；搜索预算 8000 节点/128 挖/放≤背包存量；执行期每 20 节点复核，世界变了自动重规划 |
-| `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 原版 `Container` 接口存取，堆叠合并（不开 GUI） |
+| `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 原版普通 `Container` 接口存取，堆叠合并（不开 GUI）；熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text` | **本地**（不出客户端） | 方向性决策问主人：question 事件进桥 → `/v1/answer` 回复续跑；120s 无回答回失败回执，tick 与回答入口都检查期限，再由大脑决定后续 |
 
@@ -43,7 +44,7 @@ record Result(boolean ok, String feedback, JsonObject data)
 没有待答问题、问题已回答或已过期时提示回答未提交，不作为新任务执行；
 普通任务仍从任务页、桥或不带回答前缀的 `@bot <指令>` 投递。
 
-未上（DESIGN §5 规划中）：`smelt`、`inspect_block`、`attack`、
+未上（DESIGN §5 规划中）：`inspect_block`、`attack`、
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。
 
 ### 2.1 背包明细与主手切换
@@ -116,6 +117,27 @@ requires_workbench、workbench（存在时）、ingredients、can_craft、query�
 feedback 同时列配方、单次材料/匹配存量、次数/计划数量、工作台坐标和失败原因，
 供下一轮模型读取；不序列化自定义名称或原始组件。
 隔离专项与离线接线见 DEVELOPMENT §3.3；玩家模型驱动与连接器联调待验。
+
+### 2.3 冶炼草稿（真实服务端未验收）
+
+`smelt {"x":2,"y":90,"z":0}` 默认 action=query，只读三槽、实际烧制/燃烧计数、
+配方、区块是否推进及等待建议。合法查询 ok=true 不代表机器正在烧制或已有新成品。
+目标须在同维度 5.5 格内、已加载且是未锁定的原版熔炉/高炉/烟熏炉。
+
+load 从背包 0-35 的 input_slot/fuel_slot 装料，至少提供一个来源槽；
+对应 input_count/fuel_count 为 1-64，默认 1。同一来源槽先预留原料再核对燃料，
+不能重复消费；组件不匹配、槽满、配方不支持、缺料或缺燃料时不移动物品。
+take 的 slot=input/fuel/output，默认 output；count 为最多取出数量 1-64，默认 64。
+背包装不下整次取出时保持两边不变；空产物槽返回 NOT_READY。
+不同 action 的多余参数直接拒绝，避免错模式移动物品。
+
+模型应按 inventory → load → wait → query/take → inventory 获取实际反馈。
+烧制由原版机器推进，工具不生成成品；装料成功、等待结束和取消均不证明烧制完成。
+取消 wait/agent task 不清机器，停止后续烧制须显式取回原料，燃烧余量仍按原版消耗。
+长任务占槽时只允许 query，load/take 返回 BUSY。
+暂仅支持原版普通烧制配方类且单原料产物数量为 1，拒绝多产物数据包配方。
+不支持模组机器、GUI/成就/经验领取流程；实际机器行为仍需专项证明。
+离线参数与 runner 接线测试见 DEVELOPMENT §3.4，未替代真实服务端或连接器验收。
 
 ## 3. 回执词汇表（模型行为约定）
 
