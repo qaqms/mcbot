@@ -180,11 +180,14 @@ public final class AgentLoop {
     private long generation;
     private boolean closed;
     private StepReactor activeReactor;
+    private CompletableFuture<AssistantTurn> activeResponse;
+    private int emptySearches;
     private boolean running;
     private int steps;
     private String lastCallKey;
     private int repeatCount;
     private boolean stuckAbort;
+    private boolean noTargetsAbort;
     /** 本步工具调用的落账账本；非 null = "这一步的工具还没全部写进对话"。 */
     private Ledger ledger;
     /**
@@ -338,13 +341,31 @@ public final class AgentLoop {
      */
     private void stopActive(TaskStatus status, String text, boolean reply) {
         generation++;
+        if (activeResponse != null) {
+            activeResponse.cancel(true);
+            activeResponse = null;
+        }
+        if (activeDirective != null) executor.stop(activeDirective.id(), text);
         if (activeReactor != null) {
+            if (ledger == null) {
+                // A cancelled stream has no complete assistant tool group to pair with.
+                for (var future : activeReactor.startedSnapshot().values()) {
+                    if (!future.isDone() || future.isCompletedExceptionally() || future.isCancelled()) continue;
+                    ToolOutcome receipt = future.getNow(null);
+                    if (receipt != null && !receipt.accepted())
+                        convo.add(new Msg.Nudge("[提前派发操作已停止，完整模型轮次未形成；真实回执]\n" + receipt.feedback()));
+                }
+            }
             activeReactor.seal();
             activeReactor = null;
         }
         if (ledger != null) {
             for (int i = 0; i < ledger.calls.size(); i++) {
-                ledger.resolve(i, ToolOutcome.synthetic(text));
+                CompletableFuture<ToolOutcome> future = ledger.dispatched.get(i);
+                ToolOutcome completed = future != null && future.isDone()
+                        && !future.isCompletedExceptionally() && !future.isCancelled() ? future.getNow(null) : null;
+                ledger.resolve(i, completed != null && !completed.accepted()
+                        ? completed : ToolOutcome.synthetic(text));
             }
             ledger.flush();
             ledger = null;
@@ -397,6 +418,8 @@ public final class AgentLoop {
         lastCallKey = null;
         repeatCount = 0;
         stuckAbort = false;
+        noTargetsAbort = false;
+        emptySearches = 0;
         // 新指令不继承上一条的账本/PARK（换发路径已在 submit 里补齐合成回执）
         ledger = null;
         parked = false;
@@ -410,7 +433,9 @@ public final class AgentLoop {
             return;
         }
         if (stuckAbort) {
-            finishCurrent(TaskStatus.FAILED, "[内部] 我在同一个操作上反复无进展，先停下了。");
+            finishCurrent(TaskStatus.FAILED, noTargetsAbort
+                    ? "NO_TARGETS:三次有界搜索未取得目标，先停止并汇报已查范围；空结果不证明资源不存在。"
+                    : "[内部] 我在同一个操作上反复无进展，先停下了。");
             return;
         }
         if (++steps > cfg.maxStepsPerDirective()) {
@@ -456,6 +481,8 @@ public final class AgentLoop {
         } catch (RuntimeException t) {
             response = CompletableFuture.failedFuture(t);
         }
+        if (!isCurrent(stepGeneration)) { response.cancel(true); return; }
+        activeResponse = response;
         response.thenAccept(turn -> handleTurn(stepGeneration, reactor, turn))
                 .exceptionally(t -> {
                     synchronized (AgentLoop.this) {
@@ -616,6 +643,7 @@ public final class AgentLoop {
         private final ToolOutcome[] outcomes;
         private final String[] jobIds;
         private final List<CompletableFuture<Void>> terminalGates;
+        private final List<CompletableFuture<ToolOutcome>> dispatched;
         private final StepReactor reactor;
         /** 已按序写入 convo 的前缀长度（不变式：它之前的槽位全部非空）。 */
         private int flushed;
@@ -626,13 +654,19 @@ public final class AgentLoop {
             this.outcomes = new ToolOutcome[calls.size()];
             this.jobIds = new String[calls.size()];
             this.terminalGates = new ArrayList<>();
-            for (int i = 0; i < calls.size(); i++) terminalGates.add(new CompletableFuture<>());
+            this.dispatched = new ArrayList<>();
+            for (int i = 0; i < calls.size(); i++) {
+                terminalGates.add(new CompletableFuture<>());
+                dispatched.add(null);
+            }
         }
 
         /** 一次真结果（同步回执、job 事件、或本地合成回执）。 */
         void resolve(int idx, ToolOutcome r) {
             if (outcomes[idx] == null) {
                 outcomes[idx] = r;
+                ToolCall call = calls.get(idx);
+                noteProgress(call.name(), r);
                 terminalGates.get(idx).complete(null);
             }
         }
@@ -732,14 +766,13 @@ public final class AgentLoop {
             CompletableFuture<ToolOutcome> started = early.get(i);
             chain = chain.thenCompose(ignored -> {
                 synchronized (AgentLoop.this) {
-                    if (!isCurrent(stepGeneration) || ledger != led) {
+                    if (!isCurrent(stepGeneration) || ledger != led || stuckAbort) {
                         return CompletableFuture.completedFuture(ToolOutcome.synthetic(
                                 "CANCELLED:这个操作所属的任务已终止，没有继续执行。"));
                     }
-                    if (started != null) {
-                        return started;
-                    }
-                    return executeTool(tc);
+                    CompletableFuture<ToolOutcome> future = started != null ? started : executeTool(tc);
+                    led.dispatched.set(idx, future);
+                    return future;
                 }
             }).thenCompose(r -> {
                 synchronized (AgentLoop.this) {
@@ -762,10 +795,32 @@ public final class AgentLoop {
         return chain;
     }
 
-    /**
-     * 打转判定：同调用**且同结果**才累计——TIMEOUT 后原参重试是合法恢复
-     * （参考项目用真事故换的教训），结果一变说明世界在动，不是空转。
-     */
+    /** Count facts before opening the terminal gate, so later calls cannot escape the search bound. */
+    private void noteProgress(String name, ToolOutcome r) {
+        var data = r.data();
+        boolean search = Set.of("scan_area", "find_resource", "workflow").contains(name);
+        var noTargets = data.get("no_targets");
+        if (!Set.of("status", "inventory", "inspect_block", "equip", "wait", "scan_area", "find_resource").contains(name)) {
+            for (String count : List.of("crafted_count", "consumed_count", "collected_count",
+                    "loaded_input_count", "loaded_fuel_count", "taken_count")) {
+                var value = data.get(count);
+                if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()
+                        && value.getAsDouble() > 0) { emptySearches = 0; break; }
+            }
+        }
+        if (search && noTargets != null && noTargets.isJsonPrimitive()
+                && noTargets.getAsJsonPrimitive().isBoolean()) {
+            if (noTargets.getAsBoolean()) {
+                if (++emptySearches >= 3) {
+                    stuckAbort = true;
+                    noTargetsAbort = true;
+                    listener.onNotice("NO_TARGETS:累计三次无目标查询，停止；改变参数或穿插状态查询不会重置。");
+                }
+            } else emptySearches = 0;
+        }
+    }
+
+    /** Repetition nudges follow the tool receipt, preserving the existing history order. */
     private void noteResult(String name, String argsJson, ToolOutcome r) {
         String key = signatureOf(name, argsJson) + '|' + r.ok() + '|' + r.feedback().hashCode();
         repeatCount = key.equals(lastCallKey) ? repeatCount + 1 : 1;
@@ -796,7 +851,10 @@ public final class AgentLoop {
         if (convo.needsCompaction()) {
             long expectedGeneration = generation;
             try {
-                convo.compact(engine).whenComplete((v, t) -> {
+                convo.compact((system, history, definitions) -> {
+                    activeResponse = engine.chat(system, history, definitions);
+                    return activeResponse;
+                }).whenComplete((v, t) -> {
                     synchronized (AgentLoop.this) {
                         if (!closed && generation == expectedGeneration) {
                             pump();

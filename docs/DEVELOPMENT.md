@@ -331,6 +331,28 @@ runner通过实际内部status信封和可控S2C验证每轮刷新、当前task�
 运行时标签加载/区块缓存、真实身体/世界/容器/菜单和单人模型/连接器联合验收仍待验，
 没有启动MinecraftServer/实体/玩家/真实模型，未增加progress网络生产者。
 
+### 3.10 有界流程与传输取消离线回归
+
+```bash
+./gradlew :agent-core:test clientTest --offline --console=plain --no-daemon
+```
+
+C6新增29项：AgentRunnerWorkflowTest19、AgentLoopSearchGuardTest5、
+LlmCancellationTest4、CallbackChatEngineTest新增1；原摘要生命周期测试补取消断言。
+实际runner/loop/BoundedWorkflow/PendingJobs/CallbackChatEngine运行，
+模型、游戏网络/原子工具回执和时钟由可控边界提供，不读取玩家配置或创建游戏世界。
+覆盖采集受理后等终态、单模型轮次烧制组合、整份拒绝、数量/步数/时限边界、
+缺制作/燃料条件/空目标、部分取出、失败/取消/重载结果保留与迟到隔离、
+授权编号保存不自动批准、长活帽/精确截止/排队未发送子调用清理。
+流式早派发尚未形成完整工具轮次时取消，以真实停止回执Nudge保留部分结果，不伪造工具配对。
+核心验证改半径/穿插状态不重置空搜索、第三次空结果不派发同轮后续动作、
+历史配对、新任务/物品进展重置、取消模型future及data复制。
+HTTP测试仅起临时127.0.0.1端口，用真实JDK HttpClient/SSE订阅：
+流中取消后服务端观察到连接关闭、响应头前取消不触发HTML换道，
+订阅者直接测试晚订阅取消与晚帧忽略；监听器/线程池结束关闭，不调用真实API。
+HTTP取消不回滚已发送的游戏动作；真实世界/机器/取消停手、模型与连接器另待验。
+请求预算与原版材料消耗、取整产量和掉落的区别见TOOLS §2.9，不是硬消费沙盒。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，

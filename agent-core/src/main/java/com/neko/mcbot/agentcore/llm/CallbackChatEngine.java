@@ -23,18 +23,24 @@ public final class CallbackChatEngine implements ChatEngine {
     public CompletableFuture<AssistantTurn> chat(String system, List<Msg> history, List<ToolSpec> tools,
                                                  TurnSink sink, boolean accumulate) {
         if (sink == null) return deliver(delegate.chat(system, history, tools, null, accumulate));
+        var result = new CompletableFuture<AssistantTurn>();
         TurnSink queued = new TurnSink() {
+            private void enqueue(Runnable action) {
+                if (!result.isCancelled()) client.execute(() -> {
+                    if (!result.isCancelled()) action.run();
+                });
+            }
             @Override public void onTextDelta(String delta) {
-                client.execute(() -> sink.onTextDelta(delta));
+                enqueue(() -> sink.onTextDelta(delta));
             }
             @Override public void onToolCallReady(int index, ToolCall call) {
-                client.execute(() -> sink.onToolCallReady(index, call));
+                enqueue(() -> sink.onToolCallReady(index, call));
             }
             @Override public void onComplete(AssistantTurn turn, Throwable error) {
-                client.execute(() -> sink.onComplete(turn, error));
+                enqueue(() -> sink.onComplete(turn, error));
             }
             @Override public void onCounters(int chunks, int deltas, int ready) {
-                client.execute(() -> {
+                enqueue(() -> {
                     try {
                         sink.onCounters(chunks, deltas, ready);
                     } catch (RuntimeException ignored) {
@@ -43,7 +49,7 @@ public final class CallbackChatEngine implements ChatEngine {
                 });
             }
             @Override public void onTimings(TurnTimings.Snapshot timings) {
-                client.execute(() -> {
+                enqueue(() -> {
                     try {
                         sink.onTimings(timings);
                     } catch (RuntimeException ignored) {
@@ -52,11 +58,18 @@ public final class CallbackChatEngine implements ChatEngine {
                 });
             }
         };
-        return deliver(delegate.chat(system, history, tools, queued, accumulate));
+        return deliver(delegate.chat(system, history, tools, queued, accumulate), result);
     }
 
     private CompletableFuture<AssistantTurn> deliver(CompletableFuture<AssistantTurn> source) {
-        var result = new CompletableFuture<AssistantTurn>();
+        return deliver(source, new CompletableFuture<>());
+    }
+
+    private CompletableFuture<AssistantTurn> deliver(CompletableFuture<AssistantTurn> source,
+                                                     CompletableFuture<AssistantTurn> result) {
+        result.whenComplete((v, t) -> {
+            if (result.isCancelled()) source.cancel(true);
+        });
         source.whenComplete((turn, error) -> client.execute(() -> {
             if (error == null) result.complete(turn);
             else result.completeExceptionally(error);

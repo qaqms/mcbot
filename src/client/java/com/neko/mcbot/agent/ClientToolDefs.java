@@ -11,6 +11,19 @@ public final class ClientToolDefs {
     }
 
     public static final List<ToolSpec> SPECS = List.of(
+            new ToolSpec("workflow", "将已确认的近身采集/放置/制作/烧制组合成1-12个明确步骤，一轮执行，逐步等待真实终态。"
+                    + "steps每项为tool与args，支持status/inventory/equip/scan_area/find_resource/inspect_block/"
+                    + "break_block/place_block/craft/smelt/wait；不支持移动/攻击/存取/拾取/反问/嵌套。"
+                    + "timeout_seconds默认180、最多300；制作count、装料input_count/fuel_count、取出count必须明确填写，"
+                    + "请求数合计≤128（放置算1件），明确挖放≤12格。这是请求预算，不限制原版配方取整产量/消耗或真实掉落。"
+                    + "全部参数先校验；失败/缺制作条件/搜索无目标/需确认立即停止，保留已完成回执，不重试。"
+                    + "只读任务须所有步骤只读；装料/等待成功不是成品完成，须查询和取出真实产物；取消不熄炉。"
+                    + "根据新状态确定真实槽与坐标，不在清单里猜搜索结果或合成后的槽号",
+                    "{\"type\":\"object\",\"properties\":{\"steps\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":12,"
+                            + "\"items\":{\"type\":\"object\",\"properties\":{\"tool\":{\"type\":\"string\"},"
+                            + "\"args\":{\"type\":\"object\"}},\"required\":[\"tool\",\"args\"],\"additionalProperties\":false}},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":300}},"
+                            + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
             new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
             new ToolSpec("find_resource", "只读定向查找材料方块：targets为方块ID或#方块标签，如#minecraft:logs、oak_log、iron_ore。"

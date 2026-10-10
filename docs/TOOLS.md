@@ -19,10 +19,10 @@ record Result(boolean ok, String feedback, JsonObject data)
 - **每同伴单活跃任务槽**：同步/异步动作统一占身体资源，目标区域冲突回 `BUSY`；只读查询不占锁。
 - 所有执行都发生在服务器主线程、作用于**发送者名下**的同伴（owner 校验在闸③）。
 
-## 2. 在册工具（15 服务端 + 1 本地，真实行为仍待验）
+## 2. 在册工具（15 服务端 + 2 本地，真实行为仍待验）
 
 > 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 15 个），
-> 本表就是那 15 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
+> 本表就是那 15 个 + 客户端本地的 `ask_owner` / `workflow`。别拿本表数字反推代码。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
@@ -42,12 +42,13 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
+| `workflow` | `steps,timeout_seconds?` | **本地** | 明确近身清单，1-12步/默认180最多300秒/请求量合计≤128；逐步等终态，失败/空搜索/缺条件/需确认即停 |
 
 游戏内 `@bot 答 <文本>` / `@bot answer <文本>` 只用于回答当前最新的有效问题。
 没有待答问题、问题已回答或已过期时提示回答未提交，不作为新任务执行；
 普通任务仍从任务页、桥或不带回答前缀的 `@bot <指令>` 投递。
 
-未上（DESIGN §5 规划中）：`inspect_block`、
+未上（DESIGN §5 规划中）：
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。
 
 ### 2.1 背包明细与主手切换
@@ -346,6 +347,53 @@ inspect_block只读6.5格内已完整加载的方块和其自己的Container，o
 物品显示注册ID/数量/耐久，原始组件与自定义名称不出站；不搬物品/开GUI/展开战利品，
 不合并双箱或读取整个存储网络。熔炉原料/燃料/产物的实时进度仍用smelt query。
 纯MC物品/状态与生产工具回归通过；实际区块缓存/身体/容器世界行为仍待验。
+
+### 2.9 有界流程组合（C6）
+
+`workflow` 只协调现有工具，不是脚本执行器或自动规划器：
+
+```json
+{"steps":[
+  {"tool":"smelt","args":{"x":2,"y":90,"z":0,"action":"load","input_slot":0,"input_count":3,"fuel_slot":1,"fuel_count":1}},
+  {"tool":"wait","args":{"seconds":30}},
+  {"tool":"smelt","args":{"x":2,"y":90,"z":0,"action":"query"}},
+  {"tool":"smelt","args":{"x":2,"y":90,"z":0,"action":"take","count":3}},
+  {"tool":"inventory","args":{}}
+],"timeout_seconds":90}
+```
+
+坐标、来源槽和数量须来自当前观测；示例不是固定配方/烧制时间承诺。
+允许 status/inventory/equip/scan_area/find_resource/inspect_block/break_block/place_block/
+craft/smelt/wait；不允许 move_to/attack/transfer/collect/ask_owner/嵌套workflow。
+近身采集用显式break_block坐标，不从搜索结果自动填参数、不移动或递归补材料。
+下一步若依赖新结果（例如制作后的物品槽），结束当前流程再规划。
+
+开始前校验整份参数/工具名单/数量/只读模式，错误的后半段不能先执行前半段。
+最多12步，每步挖放最多一个显式目标；时限默认180、1-300秒，子步骤等候也计时。
+制作执行count、装料input_count/fuel_count、取出count均须明确填写，
+连同放置每次1件，请求量合计≤128。预算限定**请求数量**，不是原版材料消费或产量上限：
+craft按完整配方取整且可能使用多格材料/返还物；break掉落和place多格效果由原版处理，
+不裁剪实际物品或把请求数当进包量；原工具的配方次数/范围/条件帽继续生效。
+没有数量契约的批量存取/拾取不纳入，未来须先补原子工具数量契约。
+
+每一步走现有task_id和executeRemote，三道闸/ServerActionGate/身体锁和原版条件仍生效。
+tool_result或真正job_event终态才推进，job_ack只转段等待，不进模型历史。
+失败（含部分副作用）、craft查询can_craft=false、搜索no_targets=true、
+机器无燃料/配方/输出阻塞/区块不推进或本批燃料不足、需确认即停，不重试/轮询。
+授权编号仍由runner保存，需要确认时退出流程，让模型走既有ask_owner明确确认。
+
+返回逐步真实反馈与terminal_steps/total_steps；ok=true仅表示清单各步取得成功终态，
+不证明主人目标达成、装料已烧完或take拿满请求数，短取出量按实际回执汇报。
+累计反馈超过12000 UTF-8字节不派发下一步，结果全文展示预算24000字节，
+超长单条明确标未展示全文，不把截断内容当授权清单。
+取消/重载/关闭/时限先停止推进、清子票并发cancel，保留已取得回执，在途效果未知；
+迟到终态不能启动下一步。不回滚已执行动作，不熄炉或自动取回装料；
+取消后必须按最新状态再决策。
+
+AgentLoop另设当前任务累计三次空搜索上限（含workflow搜索）：
+变半径/目标、插入status/inventory/inspect/wait均不重置，找到目标或实际物品进展可重置。
+第三次空结果停止本轮尚未派发工具并补配对回执，FAILED汇报范围，不声称资源不存在。
+新主人指令重置计数；原40步帽不扩大，不从反馈措辞猜no_targets。
 
 ## 3. 回执词汇表（模型行为约定）
 
