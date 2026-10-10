@@ -54,7 +54,7 @@ src/main/            公共+服务端
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
                      PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
-                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(10 个服务端工具)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(11 个服务端工具)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
@@ -231,6 +231,13 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   1.21.11 Inventory 有 36 个存储槽和 7 个装备映射槽（总 43），主手只选 0-8，
   equip 来源范围 0-35，不把装备槽当可选快捷栏。
 - 每同伴一个活跃任务槽（无队列）：忙时工具层直接回 `BUSY` 教学回执。
+- `craft` 是 SYNC：从当前服务器 RecipeManager 选普通 ShapedRecipe/ShapelessRecipe，
+  不硬编码材料或产量。2×2 随身，3×3 要求 5.5 格内已加载的工作台。
+  原版 StackedContents 以实际堆栈身份/Ingredient 谓词分配材料，真实 CraftingInput
+  再验 matches/assemble；整批复制模拟、返还物/成品组件合并与空间检查通过后提交。
+  只用 36 个存储槽，选中槽/装备不变，任一批失败全部不改背包；
+  query 只读且忙时可用，feedback 同时给配方/材料/次数/工作台/失败建议。
+  不递归制作缺料、不支持特殊动态配方或 GUI/制作统计/成就事件；细则见 TOOLS §2.2。
 - 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 静默失效 →
   手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
   `ClientboundBlockDestructionPacket`（-1 清除，onAbort 兜底），完成走
@@ -256,6 +263,7 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | `<gameDir>/mcbot/autotest-persistence-seed.flag` | 服务器 | 独立身体恢复验收第一进程：设置主世界/下界样本，正常停服；只允许 `mcbot-persistence-*` 开发世界 |
 | `<gameDir>/mcbot/autotest-persistence-verify.flag` | 服务器 | 独立第二进程：对照实际 UUID `.dat` 与在线身体，核验后测试遣散再召唤，正常停服 |
 | `<gameDir>/mcbot/autotest-inventory.flag` | 服务器 | 独立背包/主手交换专项；仅允许新 `mcbot-inventory-*` 开发世界，拒绝并存普通/恢复测试 flag，结束正常停服 |
+| `<gameDir>/mcbot/autotest-craft.flag` | 服务器 | 独立合成专项；仅允许新 `mcbot-craft-*` 开发世界，配套测试数据包仅复制到该世界，拒绝并存其他专项 flag，结束正常停服 |
 
 旧实例级名册仅在当前世界尚无名册时迁移：必须有同 UUID 的 `playerdata/*.dat` 才导入，
 迁移结果（包括空列表）写入当前世界，旧文件保留且不修改。匹配原版玩家数据证明它曾在此世界出现，

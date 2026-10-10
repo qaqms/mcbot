@@ -19,16 +19,17 @@ record Result(boolean ok, String feedback, JsonObject data)
 - **每同伴单活跃任务槽**：异步工具撞车直接回 `BUSY`（无队列——模型本就串行思考）。
 - 所有执行都发生在服务器主线程、作用于**发送者名下**的同伴（owner 校验在闸③）。
 
-## 2. 在册工具（10 服务端 + 1 本地）
+## 2. 在册工具（11 服务端 + 1 本地）
 
-> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 10 个），
-> 本表就是那 10 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
+> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 11 个），
+> 本表就是那 11 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
 | `status` | — | 同步 | 位置/生命/饥饿/背包占用/手持物 |
 | `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
 | `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
+| `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
 | `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
 | `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、真战利品表（错工具真没掉落）、全客户端可见裂纹；掉落先背包后落地 |
 | `collect` | `x,y,z,r?` | 同步 | 吸指定点附近掉落物进背包 |
@@ -42,7 +43,7 @@ record Result(boolean ok, String feedback, JsonObject data)
 没有待答问题、问题已回答或已过期时提示回答未提交，不作为新任务执行；
 普通任务仍从任务页、桥或不带回答前缀的 `@bot <指令>` 投递。
 
-未上（DESIGN §5 规划中）：`craft`、`smelt`、`inspect_block`、`attack`、
+未上（DESIGN §5 规划中）：`smelt`、`inspect_block`、`attack`、
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。
 
 ### 2.1 背包明细与主手切换
@@ -72,6 +73,50 @@ data 包含 `selected_slot`、`storage_size=36`、`slots_used`、
 长任务占槽期间返回 `BUSY:`，不会影响当前挖掘或移动。
 专项离线与真实服务端物品工装见 DEVELOPMENT §3.2；玩家模型驱动与连接器联合验收仍待安排。
 
+### 2.2 配方查询与合成
+
+`craft {"item":"stick","count":5,"query":true}` 仅查询；
+`craft {"item":"stick","count":5,"recipe":"minecraft:stick"}` 执行。
+item 是产物 ID，recipe 是可选的配方 ID，两者不必同名；不填命名空间默认 minecraft。
+count 默认 1，表示至少所需成品数，按完整配方次数向上取整：木棍每次 4 根，
+请求 5 根执行 2 次、产出 8 根，不丢弃多出的 3 根，也不把已有木棍抵扣本次请求。
+数字字符串、小数、越界、非法 ID、非布尔 query 均 DENIED。
+
+读取当前服务器 RecipeManager，不维护硬编码配方，不缓存旧数据包。
+支持实际类型为原版 ShapedRecipe/ShapelessRecipe 的普通有序/无序配方，
+包括数据包的同类配方与材料标签。按配方 ID 排序，自动选择整批当前可完成的配方；
+指定 recipe 时只检查该配方，产物必须匹配 item。
+不自动递归制作材料，不执行特殊动态配方（染色/修复等）、自定义 Recipe 子类、
+冶炼/切石/锻造。不模拟 GUI、配方书解锁、制作统计或成就事件。
+自动查询最多 4096 个加载配方、32 个匹配候选，超限请指定 recipe；
+每次至多 64 次配方执行。
+
+2×2 内的配方可随身合成。更大配方需要同伴所在维度、已加载区域、距离 5.5 格内
+的原版工作台；工具自动找最近工作台，查询反馈和 data 同时给坐标。
+不远程使用工作台，不自动放置或挖掉工作台。缺工作台先 scan_area/move_to，
+或显式 place_block 放背包里的工作台。
+只使用 0-35 存储槽作为材料与存放位置，不消耗副手/装备栏、不改变选中槽。
+长任务占槽时执行回 BUSY，query=true 仍允许只读查询。
+
+整批在 ItemStack 副本中模拟：使用原版 StackedContents 匹配重叠材料候选，
+以真实堆栈组件匹配 Ingredient，并再次用实际 CraftingInput 验证 matches/assemble。
+每次按真实 getRemainingItems 处理返还物（如牛奶桶返空桶），按完整组件合并，
+优先已有堆栈再空槽；全部容纳后才一次提交。
+任何一批缺料或成品/返还物装不下，整批回退、背包所有槽保持不变，绝不落地溢出。
+未参与制作的堆栈及装备保留组件、数量与耐久。
+
+query 合法且找到普通配方时 ok=true，即使材料/空间/工作台不足；
+必须看 can_craft，不能把查询成功当作已制作。
+data 给 recipe、requested_count、batches、produced_count（计划产量）、
+crafted_count（查询/失败为 0，执行成功为实际产量）、output_per_batch、
+requires_workbench、workbench（存在时）、ingredients、can_craft、query。
+材料项含 options、per_batch、required_count、available_count；options 最多展示 4 个，
+超出标 options_truncated。不同材料项共享候选，available_count 不能简单相加；
+实际能否制作以 can_craft 为准。
+feedback 同时列配方、单次材料/匹配存量、次数/计划数量、工作台坐标和失败原因，
+供下一轮模型读取；不序列化自定义名称或原始组件。
+隔离专项与离线接线见 DEVELOPMENT §3.3；玩家模型驱动与连接器联调待验。
+
 ## 3. 回执词汇表（模型行为约定）
 
 | 前缀 | 语义 | 期望的模型行为 |
@@ -81,6 +126,10 @@ data 包含 `selected_slot`、`storage_size=36`、`slots_used`、
 | `TARGET_LOST:` | 目标不在加载区/已被动过/已是空气 | 先靠近/重扫再下结论 |
 | `OUT_OF_REACH:` | 超出臂长（≈5.5 格） | `move_to` 靠近后重试 |
 | `WRONG_TOOL:` | 当前手持挖不动 | 去做/去找合适工具（回执会指方向） |
+| `NO_RECIPE:` | 没有匹配的普通合成配方 | 核对产物与配方 ID，特殊制作换对应工具 |
+| `MISSING_MATERIALS:` | 材料不足以完成整批合成 | 对照回执材料与 inventory，取得材料后再调用 |
+| `NEED_WORKBENCH:` | 合成需要附近工作台 | 扫描、靠近，或显式放置背包里的工作台 |
+| `INVENTORY_FULL:` | 整批成品或配方返还物装不下 | 存入容器腾出空间后再调用；本次未消耗材料 |
 | `UNBREAKABLE:` | 生存手段不可破坏 | 换目标 |
 | `PATH_BLOCKED:` | 前方堵死/超搜索盒 | 绕路/拆障/分短段重发 |
 | `NEED_CONFIRM:` | 最优路要改动世界（挖/放），未授权 | 把清单说给主人听；同意后带 `may_alter_terrain=true` 重发；主人不愿就换目的地 |
