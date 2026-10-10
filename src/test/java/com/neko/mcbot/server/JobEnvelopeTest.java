@@ -44,7 +44,7 @@ class JobEnvelopeTest {
     void acceptTextTeachesAllThreeThingsAtOnce() {
         String text = ServerToolDispatcher.acceptText(new MoveToTool(), args(12, 63, -4), "j7", 3600);
         assertTrue(text.contains("还没有结果") || text.contains("这条还没有结果"), text);
-        assertTrue(text.contains("别猜") && text.contains("别等"), text);
+        assertTrue(text.contains("别猜") && text.contains("别重发") && text.contains("后续工具等"), text);
         assertTrue(text.contains("j7"), "必须报出编号，模型才知道后续报的是哪一条：" + text);
         assertTrue(text.contains("12, 63, -4"), "要说清在干什么（可核对），而不是一句干巴巴的'已受理'：" + text);
     }

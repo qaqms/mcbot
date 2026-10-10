@@ -65,4 +65,9 @@ public interface ServerTool {
                                                CompanionScheduler scheduler) {
         return CompletableFuture.completedFuture(run(companion, args));
     }
+
+    default CompletableFuture<Result> runAuthorized(CompanionPlayer companion, JsonObject args,
+            CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {
+        return runAsync(companion, args, scheduler);
+    }
 }

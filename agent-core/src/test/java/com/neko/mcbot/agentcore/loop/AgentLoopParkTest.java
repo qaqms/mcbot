@@ -182,7 +182,7 @@ class AgentLoopParkTest {
         // 第 1 条（status）当场就有结果，但第 0 条还在跑 —— 此时一条都不能写
         assertTrue(toolMsgs(f.loop()).isEmpty(), "第 1 条不能越过第 0 条先写（协议要求同序配对）");
         // 而且整轮的工具都问过了（串行链照跑，只是不落账）
-        assertEquals(List.of("jobDig", "status"), f.tools().called);
+        assertEquals(List.of("jobDig"), f.tools().called, "后续工具必须等前一项终态");
 
         f.loop().onJobEvent("J-jobDig", new ToolOutcome(true, "挖完了"));
         awaitTrue("续跑", () -> f.engine().calls == 2);
@@ -244,10 +244,11 @@ class AgentLoopParkTest {
         var f = fixture(toolTurn("jobDig", "jobScan"), textTurn("我继续"));
         f.loop().submit("两件长活");
         awaitTrue("PARK", () -> f.rec().parks.get() == 1);
-        assertEquals(2, f.rec().parkOutstanding.get(0), "两条都在飞");
+        assertEquals(1, f.rec().parkOutstanding.get(0), "后续长任务尚未派发");
 
         // 只回一条：还差一条，不许 step（否则那次请求里 c1 没有配对回执）
         f.loop().onJobEvent("J-jobDig", new ToolOutcome(true, "挖完了"));
+        assertEquals(List.of("jobDig", "jobScan"), f.tools().called);
         assertEquals(1, f.engine().calls, "缺口没补齐就不该开新轮");
 
         f.loop().onJobEvent("J-jobScan", new ToolOutcome(true, "扫完了"));
@@ -270,5 +271,30 @@ class AgentLoopParkTest {
         f.loop().onJobEvent(null, new ToolOutcome(true, "？"));
         assertEquals(1, f.engine().calls);
         assertTrue(toolMsgs(f.loop()).isEmpty());
+    }
+
+    @Test
+    void cancelledDependentCallsArePairedButNeverDispatched() {
+        var f = fixture(toolTurn("jobDig", "place", "transfer"), textTurn("new task"));
+        f.loop().submit("dependent actions");
+        awaitTrue("PARK", () -> f.loop().isParked());
+        f.loop().cancelDirective();
+        assertEquals(List.of("jobDig"), f.tools().called);
+        assertEquals(3, toolMsgs(f.loop()).size());
+        assertTrue(toolMsgs(f.loop()).stream().allMatch(t -> t.content().startsWith("CANCELLED:")));
+        f.loop().onJobEvent("J-jobDig", new ToolOutcome(true, "late"));
+        assertEquals(List.of("jobDig"), f.tools().called);
+    }
+
+    @Test
+    void failedTerminalIsObservedBeforeDependentCall() {
+        var f = fixture(toolTurn("jobDig", "status"), textTurn("report"));
+        f.loop().submit("two calls");
+        awaitTrue("PARK", () -> f.loop().isParked());
+        f.loop().onJobEvent("J-jobDig", new ToolOutcome(false, "BREAK_FAILED:actual removal unknown"));
+        awaitTrue("finished", () -> f.engine().calls == 2);
+        assertEquals(List.of("jobDig", "status"), f.tools().called);
+        assertFalse(toolMsgs(f.loop()).getFirst().ok());
+        assertFalse(f.loop().isParked());
     }
 }

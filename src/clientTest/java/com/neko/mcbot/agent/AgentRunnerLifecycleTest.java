@@ -178,6 +178,8 @@ class AgentRunnerLifecycleTest {
 
     @Test void toolSendAlreadyQueuedBeforeReloadIsDroppedAndCancelPrecedesNewSend() {
         prepare(Wait.MODEL);
+        client.drain();
+        client.sent.clear();
         client.engine().early(0, MOVE);
         client.queue.removeFirst().run();
         assertEquals(1, status().get("pending_tools").getAsInt());
@@ -186,7 +188,8 @@ class AgentRunnerLifecycleTest {
         client.engine().tools(0, STATUS);
         client.drain();
         assertEquals(java.util.List.of("cancel", "tool_call"),
-                client.sent.stream().map(Envelope::kind).toList());
+                client.sent.stream().map(Envelope::kind)
+                        .filter(kind -> kind.equals("cancel") || kind.equals("tool_call")).toList());
         assertFalse(client.lastTool().bool("accept"));
         runner.handleS2c(result(client.lastTool().num("seq", -1)));
         client.engine().reply(1, "done");

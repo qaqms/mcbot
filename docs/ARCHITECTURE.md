@@ -58,7 +58,8 @@ src/main/            公共+服务端
                      BlockMining/BlockPlacement(单格与路径共用原版动作入口)
                      PathMaterials(规划/执行共用四种无附加组件垫料)
                      ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(12 个服务端工具)
-  task/              TickTask/CompanionScheduler
+                     ActionPermissions(服务端任务身份/一次性具体路线授权)/ServerActionGate(统一动作入口)
+  task/              TickTask/CompanionScheduler/ResourceLocks(身体与有界世界区域)
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
 src/client/          客户端
@@ -79,7 +80,9 @@ src/client/          客户端
   因此模型生成超大参数可能导致玩家断线。出站 S2C 也按字节量，超限时**不是截断**
   （截断只造出非法 JSON → 对端静默丢弃 → 那个 seq 白等 90s TIMEOUT），
   而是换一条**保留 seq 的合法瘦身回执**，把“范围改小”教给模型；客户端另有发送前自检。
-- **C2S kind**：`summon` / `dismiss` / `companion_status` / `tool_call{seq,tool,args}` / `cancel` / `answer`。
+- **C2S kind**：`summon` / `dismiss` / `companion_status` / `tool_call{seq,task_id,tool,args}` /
+  `task_begin{task_id,read_only}` / `task_end{task_id}` / `authorize{seq,task_id,authorization_id}` /
+  `cancel` / `answer`。任务控制由客户端宿主构造，模型只能填写工具 args。
 - **S2C kind**：`tool_result{seq,ok,feedback,data?}` / `summon_result` / `dismiss_result` / `companion_state` /
   `cancel_ack` / `event`（服务器主动播报，当前无生产者——留给任务进度事件）。
 - 全局 C2S receiver 只在 mod 初始化注册一次；每条消息取当前 dispatcher，并校验所属服务器，
@@ -92,6 +95,8 @@ src/client/          客户端
   ② 速率：按玩家 token bucket，容量 60、补充 20/秒，超频回 `DENIED:消息过于频繁`；
   ③ 白名单 + `args` 必须是 JSON 对象 + **owner 强校验**：`tool_call` 只能作用于
   发送者名下的同伴（名册 `ownerUuid == 发送者 UUID`），无从伪造"替别人下令"。
+- 动作入口随后检查服务端任务身份/维度与只读模式，经 ServerActionGate 取得身体和目标区域锁。
+  没有有效任务上下文的旧客户端只能查询；客户端/服务端须一起更新，外部桥 v1.0 不变。
 
 ## 5. 大脑回路（AgentLoop）
 
@@ -120,10 +125,12 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 
 - **受理不等于结果**：服务端的 `job_ack` 只表示"开始了"，回执里带 `accepted=true` 字段。
   Ledger 记下 `jobId` 但**槽位保持空**——把它当结果写进对话，就等于告诉模型事情做完了。
-- **落账必须保序**：一步里"第 0 条在跑、第 1 条当场有结果"是常态，而 `tool` 消息必须与
-  `assistant.tool_calls` 严格同序，所以第 1 条也不能先写。Ledger 只写"已到达的**前缀**"。
+- **终态后派发**：C3 用每槽 terminal gate 串联后续调用；受理不会打开 gate，
+  同轮后续工具等待前一项真正结束，保守地包括查询。早派发仍只启动 index 0。
+  Ledger 只写已到达前缀，模型下一轮必须获得本轮所有真正结果。
 - **PARK 不计步**：`steps` 只在 `step()` 里涨，所以等一条 3 分钟的移动不会吃掉 40 步帽。
-- 部分长活结束而整轮仍 PARK 时，onParked 更新剩余等待数；全部落账后才解除 PARK。
+- 长活终局解除本次 PARK，再派发后续工具；若后续又受理，则再次 PARK。
+  当前最多一条服务端长活在飞，不以同轮工具条数当作剩余长活数量。
 - **PARK 的铁律**：解锁（叫停/新指令）之前，必须给**每一条** in-flight 的 `tool_call`
   补一条合成回执（`CANCELLED:`/`SUPERSEDED:`）。少一条，下一次请求里那个 tool_call 就有
   id 找不到配对的消息 → OpenAI 400，整段历史作废。取消/顶替的唯一补账实现是 `AgentLoop.stopActive`。
@@ -243,7 +250,8 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   部分搬运允许已产生副作用，ok=false 的反馈仍给实际移动/剩余量，不自动回滚或重发。
   内部 Access 只隔离身体/世界观测，离线回归运行实际工具处理与真实 Inventory/ItemStack；
   挖掘采收/耐久已接入 C2 共享动作入口，真实运行另待验；
-  拾取距离/延迟/目标权限仍待 C3。
+  C3 的 collect 另约束身体6.5格、请求球体、加载/存活、延迟和原版 target，
+  target 通过只读 Mixin accessor 获取；不使用 getOwner（投掷来源），实际加载仍待验。
 - `craft` 是 SYNC：从当前服务器 RecipeManager 选普通 ShapedRecipe/ShapelessRecipe，
   不硬编码材料或产量。2×2 随身，3×3 要求 5.5 格内已加载的工作台。
   原版 StackedContents 以实际堆栈身份/Ingredient 谓词分配材料，真实 CraftingInput
@@ -280,14 +288,24 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   边统一建模为"清两格(挖)+补支撑(放)+移动"，派生 走/跳/落/下挖/向前挖/垫脚/搭桥。
   约束全在 LevelDigSampler：神圣集（容器/工作台/床/机关本体与其支撑+任意方块实体）、
   岩浆邻接否决、起点脚下不挖、单格挖>20s 不值、搜索盒水平 64/垂直 32。
-  要改世界的路先回 NEED_CONFIRM+清单，模型带 may_alter_terrain=true 重发才执行；
+  要改世界先回 NEED_CONFIRM+具体清单，主人确认后模型带 authorization_id 重发；
   执行期每 20 节点复核未来 5 节点，变了就地重规划（≤2 次）；同层走路保持 0.45 格/tick
   滑步节奏（M4 行为视觉回归）。搜索分帧：每 tick 最多展开 300 节点，主线程永不卡崩。
   C2 的 PathMaterials 统一规划预算与执行选料，只用存储槽四种无组件补丁垫料；
   放置确认后必须复核支撑，路径终态按实际挖/放/留地量汇报，失败/重规划清旧裂纹。
   DigSampler.feasibleDig 在搜索/memo/执行共用，拒绝 Double.MAX_VALUE 哨兵及无效代价；
   邻接岩浆/神圣支撑查询先检查加载，未知邻格保守否决。
-  may_alter_terrain 仍是旧布尔确认，服务端有限授权与重规划新增改动检查归 C3。
+  may_alter_terrain 不授予权限。ActionPermissions 授权绑定 owner/companion/task/维度/目的地，
+  每项含操作、坐标、完整 BlockState；缓存/重规划重建清单，逐格执行复核，
+  已执行后被补回的格子、新位置/操作/状态均重新确认。落脚格变化先重规划。
+  服务端完整清单通过 data 留在 runner，再由 ask_owner 的 question 展示给主人，
+  不采用模型替代文案；明确确认后 C2S authorize 得到真正回执才放行模型。
+  只读策略来自投令文本的明确标记/限制短语，只收紧权限，不声称理解任意自然语言限制。
+  普通任务保留原子动作能力，每次目标/局部范围仍受工具和原版规则限制，详见 TOOLS §2.6。
+  ResourceLocks 保持每次动作的身体及世界区域租约直到真正终局；
+  路径取得具体改动邻域，补充区域时原子拒绝冲突，失败/取消/超时/身体替换统一收尾。
+  正常终态用 onFinish，异常/中止用 onAbort；清理钩子失败也释放资源并完成唯一 future。
+  锁仅协调本插件，不排斥玩家/ticker/其他模组；未做服务器抢占/续跑/progress 生产。
 
 ## 8. 配置文件与运行目录
 
@@ -348,6 +366,7 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
 | 行动参数 | break 预检 5.5、执行 6.5；place 6.5 与 3×3×3 已加载/可交互邻域；滑步 ≤48 格、0.45 格/tick；挖掘用实时 getDestroyProgress，零硬度可立即完成、无效增量连续 10t 停手；新掉落范围目标 AABB 膨胀 0.5 |
 | 路径垫料(C2) | 存储 0-35；无 components patch 的圆石/深板岩圆石/泥土/下界岩；规划预算和执行选择同一谓词，装备/副手不算 |
+| 动作权限(C3) | 服务端 proposal TTL 180s，一次使用；最多256个独立改动，完整坐标/方块清单≤12000 UTF-8字节；每任务一个待确认方案；区域初始≤256，累计≤512，重规划重复区域去重；collect 中心/实体距身体≤6.5格且在请求球体内 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |

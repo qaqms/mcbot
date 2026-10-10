@@ -35,4 +35,9 @@ public abstract class TickTask {
     /** 超时中止时的收尾（默认回执教学式 TIMEOUT）。可覆写以清理状态（如中止挖掘进度）。 */
     public void onAbort() {
     }
+
+    /** Release transient action state after an ordinary terminal outcome. */
+    public void onFinish() {
+        onAbort();
+    }
 }
