@@ -51,6 +51,26 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 - 提交前逐组检查新增内容的凭据模式、机器绝对路径、运行产物及尾随空白。
   不提交 run/build/logs、玩家配置、令牌、世界或 JAR；凭据只在进程内使用。
   PR 发布链接与远端 SHA 以实际发布后核验记录为准，不以本节准备过程冒充推送成功。
+- **独立提交复核与发布结果**：三个拆分版本分别在独立验证工作区运行完整 build，
+  每次 20 个任务全执行；生命周期 324/324（1m13s）、背包 329/329（23s）、
+  合成 334/334（22s），XML failures/errors/skipped 全 0。
+  本地日志分别在 `build/pr-lifecycle-build-20261010.log`、
+  `build/pr-inventory-build-20261010.log`、`build/pr-craft-build-20261010.log`。
+  冶炼代码与本轮 340 项完整快照一致，后续只同步文档，不重算测试数量。
+- 四个功能分支通过 atomic push 新建，ls-remote 核验与本地提交一致：
+  生命周期 `d18a2d4022ec0e0e89a69270f25ceebdab59a64e`，
+  背包 `deabd5d6e32259c0b3703012edab6fdccd7e16df`，
+  合成 `1d30bff6214598dc49b7603901a9d7d412aa1bd9`，
+  冶炼初始草稿 `157a7fd1f9cede5b5b8390beb33ccaa991ca8838`。
+  main 仍为上述 cf859de 基线，无直接提交、合并或强推。
+- 实际 PR 已创建：
+  [#1 生命周期](https://github.com/qaqms/mcbot/pull/1) →
+  [#2 背包/主手](https://github.com/qaqms/mcbot/pull/2) →
+  [#3 合成](https://github.com/qaqms/mcbot/pull/3) →
+  [#4 冶炼草稿](https://github.com/qaqms/mcbot/pull/4)。
+  #1 基线 main，#2/#3/#4 分别基于前一功能分支；前三项开放评审，#4 保持 Draft。
+  按顺序合并，前项合并后将下一项基线改为 main；本轮没有执行合并。
+  此发布结果收尾记录随后单独提交至冶炼草稿分支，不改变功能或验收边界。
 
 ### B2 普通配方查询与合成（2026-10-10 14:03，Asia/Shanghai）
 
