@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：C1/C2 实现/离线完成，下一卡调度与权限；真实机器/动作、F0 与连接器待验
+## 当前状态（2026-10-11）：C1–C3 实现/离线完成，下一卡攻击；真实机器/动作、F0 与连接器待验
 
 当前优先级：连接器由协作者独立维护，本仓已收到首轮联调报告 PR #5，
 尚未接收连接器源码或补丁；按维护者授权先完善 MC agent 本体，
@@ -14,8 +14,9 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
 当前以开发与离线测试为主，暂不启动游戏客户端或真实服务端做验收；
 冶炼本轮实现与离线回归完成，真实行为及连接器联合验收另行挂账。
-当前 C1 物品守恒、C2 挖放语义完成实现与离线验证；
+当前 C1 物品守恒、C2 挖放语义、C3 调度与权限完成实现与离线验证；
 原版实际挖放/耐久/掉落、多格/组件/碰撞与路径真实支撑仍另行待验。
+当前客户端与服务端须一起更新；外部任务桥 v1.0 不变。
 
 **模块职责与协作边界**：
 - **mcbot**：提供 MC agent 本体、游戏执行能力与任务级桥接接口，并维护接口契约及回归测试。
@@ -26,6 +27,73 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### C3 调度与权限：实现与离线阶段完成（2026-10-11 00:14，Asia/Shanghai）
+
+- **范围/基线**：维护者安排进入 C3，在 C2 `b2f8b94e97263af3df6b93e0af51f4ea044c8297`
+  创建 fix/scheduling-permissions。C2 的 PR #7 仍 OPEN/Draft，C3 按依赖单独提交，
+  未合并 #7/main，未修改协作者 PR #5。只改本体；宿主/参考副本/连接器不动，
+  外部桥 v1.0 的 REST/MCP/SSE 字段、事件与终态不变。
+  未启动 runClient/runServer、真实世界/身体/服务器/模型，不安装产物到玩家实例。
+- **终态依赖**：AgentLoop 的 Ledger 增加每槽 terminal gate，受理不打开 gate，
+  同轮后续工具等前一项真正终态（保守地也包括查询）。流式仍只早派发 index 0，
+  早终态可在模型整轮前到达；每段长活分别 PARK/解锁，等待不计步。
+  取消补齐未派发调用的历史回执，旧事件不能再派发下一动作；教学同步明确不重发/轮询。
+  不新增服务端抢占、剩余路线续跑、progress 生产或限速。
+- **统一互斥/清理**：ServerActionGate 覆盖全部注册工具，同步/异步动作共用
+  CompanionScheduler.execute 的身体及有界世界区域租约。挖放/容器/机器锁目标邻域，
+  collect 锁查询区域；路径执行前原子扩展具体改动邻域，冲突 BUSY，不部分取得新锁。
+  初始区域≤256，累计≤512且去重；只读查询不占锁，仍受原工具条件限制。
+  task tick、正常终态、超时（恰好到帽）、取消、身体消失/同UUID替换/维度变化统一收尾；
+  正常 onFinish 与中止 onAbort 分开，保留 NEED_CONFIRM 的节点缓存。
+  派发抛错、future 异常和清理钩子自身抛错也释放资源，完成唯一终态/停止后续 tick。
+  资源释放在结果回调之前；锁仅协调本插件，不锁真实玩家、原版机器 ticker 或其他模组。
+- **任务策略**：客户端在主人投令时记录明确 `[只读]` / `[read-only]` 标记及已列出的
+  限制短语，只收紧权限，不从模型 args 读取模式。服务端保存 owner/companion/task_id/
+  维度及这一次身体引用；重新召唤即使 UUID 相同也不能继承旧权限。
+  只读只允许 status/inventory/scan_area、craft query=true、smelt query，
+  不允许移动/换装/制作/装取料/存取/拾取/挖放；扫描无目标不是动作授权。
+  普通任务保留现有原子操作能力，本次坐标/身体局部范围及原版规则仍由工具验证。
+  不是任意自然语言权限解析器，未识别表达不能声称已有可靠语义理解；确定只读使用明确标记。
+  C2S 新增 task_begin/task_end/authorize 和 tool_call.task_id，取消/结束/生命周期操作撤权。
+  缺任务上下文的旧客户端只能查询，须与服务端一起更新，外部桥无新权限端点。
+- **具体路线授权**：NEED_CONFIRM 由服务端提出一次性 authorization_id，
+  绑定当前任务/维度/目的地及每格的操作、坐标、完整 BlockState；180s过期，最多256项，
+  完整坐标/方块展示≤12000 UTF-8字节，超限缩短路线，不批准截断清单。
+  ask_owner 携带编号时实际问题使用服务端完整清单，忽略模型替代文案；
+  主人明确回答「确认」等白名单词才发 authorize，等待真正许可回执后才续跑。
+  拒绝/含糊/超时、伪造/错任务/错维度/过期编号均不授权；只读任务不能就地升级。
+  move_to 携带批准编号一次取走许可；may_alter_terrain 保留类型兼容但不授予权限。
+  节点缓存不存权限；复用/重规划重建清单，逐格执行检查，新增位置/操作/状态、
+  已执行后被补回的格子都须重新确认。下一落脚格脚/头/支撑变化先重规划，不直接进入障碍。
+- **拾取局部语义**：collect 中心及实际实体均限身体6.5格内，实体还须在请求球体内，
+  存活/已加载、hasPickUpDelay=false，target为空或匹配同伴UUID。
+  getOwner 是投掷来源，不能当拾取目标；私有 target 用只读 ItemTargetAccess 取得。
+  继续使用 C1 的实际入包/组件余量写回，不调用 playerTouch，不改变统计/成就或等待实体 ticker。
+- **离线证据**：新增 **39/39**：TaskPolicyTest 3、AgentLoopParkTest新增2，
+  ActionPermissionsTest 8、ResourceLocksTest 4、CompanionSchedulerTest 9、
+  ServerActionGateTest 4、AgentRunnerPermissionsTest 6、CollectToolOperationsTest新增3。
+  实际 loop/runner/调度器/权限/gate/锁与物品处理运行；模型/队列/回执/时钟、Bodies/
+  GroundItem 为可控依赖。完整身体与维度的观测由 Bodies 提供，无世界 TickTask 不访问 null 身体；
+  不能记为真实假玩家或物理停止通过。scope/重规划复核运行同一 Execution 决策，
+  PathTask 世界调用点、逐格授权与落脚格变化检查、更新 m8 的具体批准流程仅编译，未跑世界遍历。
+  拾取生产 eligibility 谓词另实测 UUID/加载/延迟/双距离，Mixin accessor 仅编译，未实际加载。
+  首轮旧并发用例1项失败，后续一次编译遇到同名 eligible 误解析，均修正；
+  早期失败/编译日志仅留 build/scheduling-tests-20261010*.log。
+  最终相关回归 BUILD SUCCESSFUL **25s**，日志 build/scheduling-regression-20261011.log；
+  身体/维度专项 BUILD SUCCESSFUL 27s，build/scheduling-focused-20261011.log。
+- **最终全量实核**：00:14:15 核对 build --offline --rerun-tasks --console=plain --no-daemon，
+  BUILD SUCCESSFUL **31s / 20个任务全部执行**，XML **476/476**
+  （agent-core199 + 根工程80 + clientTest197），failures/errors/skipped均0。
+  日志 build/scheduling-full-20261011-final.log；build/libs/mcbot-0.1.0.jar SHA256
+  `7e8062dee4ffe1e517734c910646c7aa5e480114431e2ddb3dfe181f4121ab96`。
+  只有既有过时API/Gradle10兼容提示，list-java未发现Java进程；日志/JAR不入仓。
+- **边界/后续**：真实服务端网络权限/问答/取消、身体停止/裂纹、缓存/重规划与路径动作、
+  拾取延迟/target/Mixin实际加载、玩家/ticker/第三方并发仍待安排；
+  锁/已加载邻域不是模组副作用沙盒，已完成的改动不回滚。
+  README/TOOLS/ARCHITECTURE/BRIDGE/DEVELOPMENT/ROADMAP/包说明同步。
+  下一卡C4攻击，本轮不写攻击/感知/组合流程；冶炼/F0/连接器/历史模型错误及 `[m9] A3` 不销账。
+  提交/推送与Draft PR发布以随后核验为准，不以构建通过冒充已发布。
 
 ### C2 挖放语义：实现与离线阶段完成（2026-10-10 23:19，Asia/Shanghai）
 
@@ -2178,6 +2246,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 拾取目标/维度（C3，10-10 javap + 编译，未运行实体/Mixin） | ItemEntity 私有 `UUID target` 与 `int pickupDelay`；`getOwner()` 返回 thrower 对应 Entity，不能代替 target；playerTouch 的字节码检查 pickupDelay==0 且 target为空或等于玩家UUID，`hasPickUpDelay()` 则为 pickupDelay>0。本体 collect 使用 hasPickUpDelay 和只读 target accessor，不宣称 playerTouch 已运行。ResourceKey.identifier() 可取得维度 ID，身体实例与提交时 ServerLevel 引用另外绑定 |
 | 破坏/耐久（C2，10-10 javap + 编译；未运行世界动作） | BlockState.getDestroySpeed(BlockGetter,BlockPos) 是硬度，getDestroyProgress(Player,BlockGetter,BlockPos) 按真实身体速度/硬度/采收门计算；零硬度可正无穷。ServerPlayerGameMode.destroyBlock(BlockPos) 使用真实主手 canDestroyBlock、限制检查、playerWillDestroy/removeBlock/destroy，非创造模式执行主手 mineBlock，只有移除且可采收才 playerDestroy；返回 true 不保证 removeBlock 成功，失败也可能已损耗耐久 |
 | 放置上下文（C2，10-10 javap + 编译） | BlockPlaceContext(Player,InteractionHand,ItemStack,BlockHitResult) 可用，构造时按目标 canBeReplaced 算 replaceClicked，默认 getClickedPos 可能转到相邻格；本体覆写 getClickedPos/canPlace 固定精确目标。DirectionalPlaceContext 使用 null Player，不用于本体。BlockItem.place 调状态/支撑/碰撞、多格/组件/setPlacedBy 等原版钩子后 consume(1)，失败不得额外 shrink；ItemStack.useOn 可能有消费回退，直接 place 避免菜单/食用 |
 | 挖放守卫/材料（C2） | gameMode.isSurvival、Level.mayInteract(Entity,BlockPos)、player.blockActionRestricted/hasCorrectToolForDrops/mayUseItemAt、ItemStack.canDestroyBlock 均可编译；BedItem/DoubleHighBlockItem/StandingAndWallBlockItem 为 BlockItem 子类，特殊子类需要各自上下文。getComponentsPatch().isEmpty 可识别普通原堆栈，新增/移除组件均为非空。Bootstrap 冻结注册表后不能 new Item/BlockItem（intrusive holder），离线使用已注册物品 |

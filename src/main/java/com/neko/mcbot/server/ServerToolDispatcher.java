@@ -24,6 +24,7 @@ public final class ServerToolDispatcher {
     private final SummonService summon;
     private final ToolRegistry registry;
     private final RateGuard rate = new RateGuard(20, 60);
+    private final ActionPermissions permissions = new ActionPermissions();
 
     public ServerToolDispatcher(MinecraftServer server, SummonService summon, ToolRegistry registry) {
         this.server = server;
@@ -49,10 +50,12 @@ public final class ServerToolDispatcher {
 
         switch (env.kind()) {
             case "summon" -> {
+                revokeTask(sender);
                 String result = summon.summon(sender, env.str("name"));
                 broadcast(sender, "summon_result", result);
             }
             case "dismiss" -> {
+                revokeTask(sender);
                 String result = summon.dismiss(sender, env.str("name"));
                 broadcast(sender, "dismiss_result", result);
             }
@@ -62,6 +65,40 @@ public final class ServerToolDispatcher {
                         ? "当前世界尚未召唤伙伴。" : "当前世界伙伴：" + companion.getGameProfile().name());
             }
             case "tool_call" -> handleToolCall(sender, env);
+            case "task_begin" -> {
+                CompanionPlayer cp = companionOfSender(sender);
+                Long taskId = taskId(env);
+                var mode = env.body().get("read_only");
+                if (cp == null || taskId == null || taskId <= 0 || mode == null
+                        || !mode.isJsonPrimitive() || !mode.getAsJsonPrimitive().isBoolean()) return;
+                McbotMod.scheduler().cancel(cp.getUUID(), "新任务替换原任务。");
+                permissions.begin(new ActionPermissions.Context(sender.getUUID(), cp.getUUID(),
+                        cp.level().dimension().identifier().toString(), taskId, mode.getAsBoolean()), cp);
+            }
+            case "task_end" -> {
+                Long taskId = taskId(env);
+                if (taskId == null) return;
+                CompanionPlayer cp = companionOfSender(sender);
+                Object original = permissions.body(sender.getUUID());
+                if (permissions.end(sender.getUUID(), taskId)) {
+                    if (cp != null && cp == original) McbotMod.scheduler().cancel(cp.getUUID(), "所属任务已结束。");
+                }
+            }
+            case "authorize" -> {
+                CompanionPlayer cp = companionOfSender(sender);
+                Long taskId = taskId(env);
+                ActionPermissions.Context context = cp == null || taskId == null ? null
+                        : permissions.current(sender.getUUID(), cp.getUUID(),
+                                cp.level().dimension().identifier().toString(), taskId, cp);
+                var tokenValue = env.body().get("authorization_id");
+                String token = tokenValue != null && tokenValue.isJsonPrimitive()
+                        && tokenValue.getAsJsonPrimitive().isString() && tokenValue.getAsString().length() <= 64
+                        ? tokenValue.getAsString() : "";
+                boolean granted = permissions.approve(context, token);
+                replyTool(sender, env.num("seq", -1), granted, granted
+                        ? "主人已批准该任务的具体路线清单；新增或变化的改动仍需重新确认。"
+                        : "DENIED:授权已过期、不属于当前任务或任务为只读，请重新查看清单。", null);
+            }
             case "cancel" -> {
                 CompanionPlayer cp = companionOfSender(sender);
                 if (cp == null) {
@@ -72,6 +109,7 @@ public final class ServerToolDispatcher {
                             ? "已叫停 " + cp.getGameProfile().name() + " 手头的活。"
                             : "它现在手头没有进行中的任务。");
                 }
+                permissions.end(sender.getUUID(), 0);
             }
             case "answer" -> McbotMod.LOG.info("(M3 暂存)主人对 {} 的回答: {}",
                     env.str("question_id"), env.str("text"));
@@ -103,17 +141,30 @@ public final class ServerToolDispatcher {
                     "DENIED:你没有在册的同伴，先召唤一个（/mcbot summon <名字>）。", null);
             return;
         }
+        Long taskId = taskId(env);
+        String dimension = companion.level().dimension().identifier().toString();
+        ActionPermissions.Context context = taskId == null ? null : permissions.current(
+                sender.getUUID(), companion.getUUID(), dimension, taskId, companion);
 
         // 受理即回执（R2-S4）：**客户端显式要求**才走 ACCEPT。
         // 缺省 false 是刻意的向后兼容——老客户端不认识 job_ack，若服务端擅自改形态，
         // 它那条 tool_call 会一直等到 90 秒超时。所以新增形态永远由发送方点名。
-        boolean wantAccept = env.body().has("accept") && env.body().get("accept").getAsBoolean()
+        boolean wantAccept = env.body().has("accept") && env.body().get("accept").isJsonPrimitive()
+                && env.body().get("accept").getAsJsonPrimitive().isBoolean() && env.body().get("accept").getAsBoolean()
                 && tool.acceptanceMode() == ServerTool.Acceptance.ACCEPT;
 
         long t0 = System.nanoTime();
         CompletableFuture<ServerTool.Result> fut;
         try {
-            fut = tool.runAsync(companion, args, McbotMod.scheduler());
+            JsonObject resourceArgs = args.deepCopy();
+            if ("collect".equals(toolName) && !args.has("x") && !args.has("y") && !args.has("z")) {
+                resourceArgs.addProperty("x", companion.blockPosition().getX());
+                resourceArgs.addProperty("y", companion.blockPosition().getY());
+                resourceArgs.addProperty("z", companion.blockPosition().getZ());
+            }
+            fut = ServerActionGate.execute(context, companion.getUUID(), dimension, toolName, resourceArgs,
+                    McbotMod.scheduler(), () -> tool.runAuthorized(companion, args,
+                            McbotMod.scheduler(), permissions, context));
         } catch (Throwable t) {
             McbotMod.LOG.error("工具 {} 派发异常", toolName, t);
             logToolTiming(toolName, t0, -1);
@@ -140,7 +191,8 @@ public final class ServerToolDispatcher {
                     return;
                 }
                 logToolTiming(toolName, t0, res == null ? -1 : res.feedback().length());
-                replyTool(sender, seq, res.ok(), res.feedback(), res.data());
+                if (res == null) replyTool(sender, seq, false, "INTERNAL:工具没有返回结果。", null);
+                else replyTool(sender, seq, res.ok(), res.feedback(), res.data());
             });
             return;
         }
@@ -176,11 +228,26 @@ public final class ServerToolDispatcher {
 
     private final java.util.concurrent.atomic.AtomicLong jobSeq = new java.util.concurrent.atomic.AtomicLong();
 
+    private static Long taskId(Envelope env) {
+        var value = env.body().get("task_id");
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return null;
+        try { return value.getAsBigDecimal().longValueExact(); }
+        catch (RuntimeException invalid) { return null; }
+    }
+
+    private void revokeTask(ServerPlayer owner) {
+        Object original = permissions.body(owner.getUUID());
+        permissions.end(owner.getUUID(), 0);
+        if (original instanceof CompanionPlayer cp) {
+            McbotMod.scheduler().cancel(cp.getUUID(), "同伴生命周期操作撤销旧任务。");
+        }
+    }
+
     /**
      * 受理回执的教学文案（**模板只此一处**）。
      *
      * <p>要教模型三件事：①这条还没有结果，别把它当结果；②别干等——它既不能改主意也不能
-     * 催，白等一轮只是烧一次 prefill+decode；③做完会**主动**报出编号，所以"我该不该再问一次"
+     * 催，轮询只是烧一次 prefill+decode；③做完会**主动**报出编号，所以"我该不该再问一次"
      * 这个问题根本不用问。这三句每个工具一字不差，模型才学一遍就够。
      *
      * <p>文本前缀是契约（{@code ACCEPTED:}），机器可读信号在回执的 outcome 字段里——
@@ -190,7 +257,7 @@ public final class ServerToolDispatcher {
         return com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome.ACCEPTED_PREFIX
                 + "我已开始「" + tool.acceptSubject(args) + "」编号 " + jobId
                 + "，最多约 " + Math.max(1, capTicks / 20) + " 秒。"
-                + "这条还没有结果——别猜、别等着，可以先回我一句话或做别的，"
+                + "这条还没有结果，别猜、别重发或轮询；后续工具等这件事结束，"
                 + "做完我会主动报 " + jobId + "。";
     }
 

@@ -9,6 +9,7 @@ import com.neko.mcbot.agentcore.loop.AgentLoop;
 import com.neko.mcbot.agentcore.loop.PendingJobs;
 import com.neko.mcbot.agentcore.loop.TaskReplies;
 import com.neko.mcbot.agentcore.loop.ToolExecutor;
+import com.neko.mcbot.agentcore.loop.TaskPolicy;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.agentcore.prompt.SkillLoader;
 import com.neko.mcbot.bridge.BridgeEvents;
@@ -102,6 +103,10 @@ public final class AgentRunner implements ToolExecutor {
     private volatile AgentLoop loop;
     private long brainGeneration;
     private final ClientServices client;
+    private final Map<Long, Boolean> taskPolicies = new ConcurrentHashMap<>();
+    private record AuthorizationPlan(long taskId, String summary) {
+    }
+    private final Map<String, AuthorizationPlan> authorizationPlans = new ConcurrentHashMap<>();
 
     /** Client side effects stay at this boundary so the real runner can be exercised offline. */
     interface ClientServices {
@@ -195,6 +200,10 @@ public final class AgentRunner implements ToolExecutor {
                     @Override
                     public void onTaskStarted(long taskId) {
                         currentTask = taskId;
+                        JsonObject scope = new JsonObject();
+                        scope.addProperty("task_id", taskId);
+                        scope.addProperty("read_only", taskPolicies.getOrDefault(taskId, true));
+                        sendTaskControl("task_begin", scope);
                         JsonObject d = new JsonObject();
                         d.addProperty("status", "running");
                         emit("state", taskId, d);
@@ -204,6 +213,13 @@ public final class AgentRunner implements ToolExecutor {
                     public void onTaskFinished(long taskId, AgentLoop.TaskStatus status, String text) {
                         boolean wasActive = currentTask == taskId;
                         if (wasActive && status != AgentLoop.TaskStatus.COMPLETED) sendCancel();
+                        if (wasActive) {
+                            JsonObject scope = new JsonObject();
+                            scope.addProperty("task_id", taskId);
+                            sendTaskControl("task_end", scope);
+                        }
+                        taskPolicies.remove(taskId);
+                        authorizationPlans.entrySet().removeIf(entry -> entry.getValue().taskId() == taskId);
                         clearTaskWaits(taskId, status.name() + ":任务已终止。");
                         if (wasActive) currentTask = 0;
                         emitDone(taskId, status, text);
@@ -353,6 +369,7 @@ public final class AgentRunner implements ToolExecutor {
                 long seq = env.num("seq", -1);
                 var p = pending.takeTool(seq);
                 if (p != null) {
+                    rememberAuthorization(env, p.ticket());
                     p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback")));
                 } else {
                     // 超时、取消、会话清理或重复包都可能迟到；计数不能单独证明超时帽错误。
@@ -431,6 +448,7 @@ public final class AgentRunner implements ToolExecutor {
         }
         LOG.info("[brain] job {} {} phase={} {}ms", jobId, j.tool(), phase,
                 client.nowMs() - j.acceptedAtMs());
+        rememberAuthorization(env, j.ticket());
         boolean ok = "done".equals(phase);
         if (j.ticket().owner() == loop && loop != null) {
             j.ticket().owner().onJobEvent(jobId, new ToolOutcome(ok, text));
@@ -510,11 +528,13 @@ public final class AgentRunner implements ToolExecutor {
         final CompletableFuture<ToolOutcome> future;
         final long at;
         final long taskId;
+        final String authorizationId;
 
-        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f) {
+        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f, String authorizationId) {
             this.taskId = taskId;
             this.future = f;
             this.at = client.nowMs();
+            this.authorizationId = authorizationId;
         }
     }
 
@@ -550,6 +570,7 @@ public final class AgentRunner implements ToolExecutor {
         queued.addProperty("status", "queued");
         emit("state", id, queued);
         try {
+            taskPolicies.put(id, TaskPolicy.readOnlyDirective(text));
             brain.submit(id, hint.isEmpty() ? text : text + "\n" + hint);
         } catch (IllegalStateException stopped) {
             String reason = "大脑会话已关闭，指令未执行";
@@ -664,7 +685,14 @@ public final class AgentRunner implements ToolExecutor {
             JsonObject d = new JsonObject();
             d.addProperty("text", "主人已回答 " + qid);
             emit("state", rec.taskId, d);
-            rec.future.complete(new ToolOutcome(true, "主人说：" + text));
+            if (rec.authorizationId == null) {
+                rec.future.complete(new ToolOutcome(true, "主人说：" + text));
+            } else if (TaskPolicy.affirmative(text) && !taskPolicies.getOrDefault(rec.taskId, true)) {
+                authorize(rec).whenComplete((outcome, failure) -> rec.future.complete(failure == null
+                        ? outcome : new ToolOutcome(false, "INTERNAL:授权没有有效回执，未批准。")));
+            } else {
+                rec.future.complete(new ToolOutcome(false, "DENIED:未获得明确许可，路线改动未授权。"));
+            }
             return true;
         } catch (NumberFormatException e) {
             return false;
@@ -729,6 +757,14 @@ public final class AgentRunner implements ToolExecutor {
             return CompletableFuture.completedFuture(
                     new ToolOutcome(false, "INTERNAL:模型给出的参数不是合法 JSON。"));
         }
+        if (!body.get("args").isJsonObject()) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "DENIED:工具参数须为 JSON 对象。"));
+        JsonObject args = body.getAsJsonObject("args");
+        if (taskPolicies.getOrDefault(taskId, false) && !TaskPolicy.observation(name, args)) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:主人要求只读，此任务不能移动或改动世界/物品。"));
+        }
+        body.addProperty("task_id", taskId);
         CompletableFuture<ToolOutcome> f = new CompletableFuture<>();
         String json = new Envelope("tool_call", body).encode();
         // 发送前自检：服务端闸①对超尺寸包是“丢弃 + 日志”，不会回话。若不在这里拦下，
@@ -760,16 +796,31 @@ public final class AgentRunner implements ToolExecutor {
         long seq = seqGen.incrementAndGet();
         CompletableFuture<ToolOutcome> f = new CompletableFuture<>();
         long taskId = currentTask;
-        questionRecords.put(seq, new QuestionRecord(taskId, f));
         String text;
+        String authorizationId = null;
         try {
             var el = com.google.gson.JsonParser.parseString(
                     argsJson == null || argsJson.isBlank() ? "{}" : argsJson);
             text = el.isJsonObject() && el.getAsJsonObject().has("text")
                     ? el.getAsJsonObject().get("text").getAsString() : String.valueOf(argsJson);
+            if (el.isJsonObject() && el.getAsJsonObject().has("authorization_id")) {
+                var value = el.getAsJsonObject().get("authorization_id");
+                if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+                    return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:授权编号无效。"));
+                }
+                authorizationId = value.getAsString();
+                AuthorizationPlan plan = authorizationPlans.get(authorizationId);
+                if (plan == null || plan.taskId() != taskId || taskPolicies.getOrDefault(taskId, true)) {
+                    return CompletableFuture.completedFuture(new ToolOutcome(false,
+                            "DENIED:没有属于当前任务的可批准路线，先查看具体清单。"));
+                }
+                // Approval is for the server's concrete scope, never a model-written substitute.
+                text = plan.summary() + "\n批准请回答「确认」，其他回答不授予路线改动权限。";
+            }
         } catch (RuntimeException e) {
             text = String.valueOf(argsJson);
         }
+        questionRecords.put(seq, new QuestionRecord(taskId, f, authorizationId));
         say("§d[同伴想问] §r" + text + " §7（回答：@bot 答 <文本>）§r");
         latestQuestion = seq;
         JsonObject d = new JsonObject();
@@ -777,6 +828,48 @@ public final class AgentRunner implements ToolExecutor {
         d.addProperty("text", text);
         emit("question", taskId, d);
         return f;
+    }
+
+    private void sendTaskControl(String kind, JsonObject body) {
+        client.executeOnClient(() -> {
+            if (client.isCurrentRunner(this) && client.canSend()) client.send(new Envelope(kind, body));
+        });
+    }
+
+    private void rememberAuthorization(Envelope envelope, ToolTicket ticket) {
+        if (ticket.owner() != loop || ticket.taskId() != currentTask) return;
+        var data = envelope.body().get("data");
+        if (data == null || !data.isJsonObject()) return;
+        var id = data.getAsJsonObject().get("authorization_id");
+        if (id != null && id.isJsonPrimitive() && id.getAsJsonPrimitive().isString()
+                && id.getAsString().length() <= 64) {
+            authorizationPlans.clear();
+            var summary = data.getAsJsonObject().get("authorization_summary");
+            if (summary != null && summary.isJsonPrimitive() && summary.getAsJsonPrimitive().isString()) {
+                authorizationPlans.put(id.getAsString(), new AuthorizationPlan(ticket.taskId(), summary.getAsString()));
+            }
+        }
+    }
+
+    private CompletableFuture<ToolOutcome> authorize(QuestionRecord question) {
+        long seq = seqGen.incrementAndGet();
+        JsonObject body = new JsonObject();
+        body.addProperty("seq", seq);
+        body.addProperty("task_id", question.taskId);
+        body.addProperty("authorization_id", question.authorizationId);
+        var future = new CompletableFuture<ToolOutcome>();
+        var ticket = new ToolTicket(question.taskId, loop, future);
+        pending.registerTool(seq, "authorize", client.nowMs(), TOOL_TIMEOUT_MS, ticket);
+        client.executeOnClient(() -> {
+            if (closed || future.isDone()) return;
+            if (question.taskId != currentTask || ticket.owner() != loop || !client.canSend()) {
+                pending.takeTool(seq);
+                future.complete(new ToolOutcome(false, "CANCELLED:任务已结束，授权没有发送。"));
+                return;
+            }
+            client.send(new Envelope("authorize", body));
+        });
+        return future;
     }
 
     /** 问题超时巡检（客户端主线程 tick 里调）。 */
@@ -802,7 +895,9 @@ public final class AgentRunner implements ToolExecutor {
 
     private void timeoutQuestion(QuestionRecord question) {
         question.future.complete(new ToolOutcome(false,
-                "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。"));
+                question.authorizationId == null
+                        ? "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。"
+                        : "TIMEOUT:主人未在2分钟内确认具体清单，路线改动未获许可；先停止并汇报。"));
     }
 
     private void emitState(String text) {

@@ -30,8 +30,10 @@ class CollectToolOperationsTest {
     private static final class Ground implements CollectTool.GroundItem {
         ItemStack stack;
         boolean discarded;
+        boolean eligible = true;
         Ground(ItemStack stack) { this.stack = stack; }
         @Override public ItemStack stack() { return stack; }
+        @Override public boolean eligible() { return eligible; }
         @Override public void settle(ItemStack remainder) {
             stack = remainder;
             discarded = remainder.isEmpty();
@@ -180,5 +182,39 @@ class CollectToolOperationsTest {
         assertTrue(result.feedback().length() < 1000);
         assertTrue(result.feedback().contains("minecraft:diamond"));
         assertTrue(ItemStack.matches(stack, f.inventory.getItem(0)));
+    }
+
+    @Test void remoteCenterIsRejectedBeforeGroundOrInventoryAccess() {
+        Fixture f = new Fixture();
+        assertTrue(f.execute("{\"x\":100,\"y\":90,\"z\":-3}").feedback().startsWith("OUT_OF_REACH:"));
+        assertFalse(f.reads.contains("items"));
+        assertFalse(f.reads.contains("inventory"));
+    }
+
+    @Test void delayedForeignOrOutOfBodyReachItemsAreNotConsumed() {
+        Fixture f = new Fixture();
+        Ground denied = new Ground(new ItemStack(Items.DIAMOND, 2));
+        denied.eligible = false;
+        Ground allowed = new Ground(new ItemStack(Items.DIRT, 3));
+        f.ground.add(denied);
+        f.ground.add(allowed);
+        var result = f.execute("{}");
+        assertEquals(3, result.data().get("collected_count").getAsInt());
+        assertEquals(2, denied.stack.getCount());
+        assertFalse(denied.discarded);
+        assertTrue(allowed.discarded);
+    }
+
+    @Test void liveEligibilityPredicateEnforcesDelayOwnerLoadingAndBothDistances() {
+        var body = java.util.UUID.randomUUID();
+        assertTrue(CollectTool.eligible(null, body, true, false, true, 1, 1, 3));
+        assertTrue(CollectTool.eligible(body, body, true, false, true, 1, 1, 3));
+        assertFalse(CollectTool.eligible(java.util.UUID.randomUUID(), body, true, false, true, 1, 1, 3));
+        assertFalse(CollectTool.eligible(null, body, false, false, true, 1, 1, 3));
+        assertFalse(CollectTool.eligible(null, body, true, true, true, 1, 1, 3));
+        assertFalse(CollectTool.eligible(null, body, true, false, false, 1, 1, 3));
+        assertFalse(CollectTool.eligible(null, body, true, false, true, 43, 1, 12));
+        assertFalse(CollectTool.eligible(null, body, true, false, true, 1, 10, 3));
+        assertFalse(CollectTool.eligible(null, body, true, false, true, Double.NaN, 1, 3));
     }
 }

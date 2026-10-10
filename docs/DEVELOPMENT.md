@@ -73,7 +73,7 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
      在基准点现铺）：早先"露天两排侧墙"版本会吃地形运气，本机实测 A* 从东端外侧绕进走廊，
      于是 A 报 `需确认=false`、整道验收门变成抽奖。**密闭版与出生点无关**，故现在不必先找净带；
      坑只剩一条：**别把东端塞子一起挖空**（`dx<=6` 写成 `dx<=7` 就复现漏法）。
-     判读基准：`A 需确认=true 且清单≥1` / `B 到达=true 且墙位被打通=true` / `C 箱子分毫未动=true` /
+  判读基准：`A 需确认=true 且清单≥1` / `B 工装明确批准具体清单=true，随后到达=true 且墙位被打通=true` / `C 箱子分毫未动=true` /
      `D 干净失败=true`。`[m8]` 开头会 `PathTask.clearPlanCache()`：m4 与 m8 用同一个
      `基准点.east(6)`，不清的话 A 会命中 m4 那条缓存，判读就不再是"A 搜、B 复用"。
      m4 的 `move_to 完成: false NEED_CONFIRM 放N格` 在凹凸地形下是正常语义（搭路=改世界需授权）。
@@ -254,7 +254,37 @@ WRONG_TOOL/BUSY/部分放置不自动重投，受理前/挖掘等待期间取消
 真实采收/附魔/耐久、裂纹显示、掉落/经验、朝向/碰撞/水中/替换/多格/组件放置、
 路径真实支撑与材料消耗、保存重进及普通动作回归均待维护者安排。
 3×3×3 已加载邻域不是任意模组钩子的沙盒，远处/延迟掉落和任意模组副作用不在保证内。
-统一授权/资源互斥/异常停手属于 C3，桥 v1.0、F0、冶炼及 `[m9] A3` 待验继续保留。
+统一授权/资源互斥/异常收尾见下节 C3，桥 v1.0、F0、冶炼及 `[m9] A3` 待验继续保留。
+
+### 3.7 调度与权限离线回归
+
+```bash
+./gradlew :agent-core:test --offline --tests com.neko.mcbot.agentcore.loop.AgentLoopParkTest --tests com.neko.mcbot.agentcore.loop.AgentLoopLifecycleTest --tests com.neko.mcbot.agentcore.loop.TaskPolicyTest
+./gradlew :test --offline --tests com.neko.mcbot.server.ActionPermissionsTest --tests com.neko.mcbot.task.ResourceLocksTest
+./gradlew clientTest --offline --tests com.neko.mcbot.task.CompanionSchedulerTest --tests com.neko.mcbot.server.ServerActionGateTest --tests com.neko.mcbot.agent.AgentRunnerPermissionsTest --tests com.neko.mcbot.server.tools.CollectToolOperationsTest
+```
+
+C3 新增39项（agent-core 5、根工程12、clientTest22），并修改旧并发假设回归。
+实际 AgentLoop/AgentRunner/CallbackChatEngine 执行同轮受理与终局依赖、早派发、
+只读无目标越界拒绝、完整服务端确认清单、明确/否定回答、授权回执等待、
+取消/迟到结果隔离与历史配对；模型/客户端队列/C2S/S2C 均为可控依赖，
+不调用模型、不启动 Minecraft、桥协议仍由既有契约回归验证。
+
+真实 CompanionScheduler 使用 Bodies 边界提供可控在线/丢失观测，
+TickTask 真实 tickSafe/年龄/终态/异常/清理计数；无世界任务不会访问 null 身体。
+测试执行生产 ServerActionGate、ResourceLocks 和 ActionPermissions 的同一实现，
+覆盖身体/容器/挖放区域冲突、只读查询可用、正常/异常/超时/取消清理，
+清理自身抛错仍完成唯一终态、派发抛错/异步异常停任务、状态/目标/操作变化、
+缓存/重规划清单越权、被补回格不能二次挖、撤销/超时/回拨/伪造/重复授权与范围上限，
+同UUID新身体不能继承旧任务，以及换维度在下次动作 tick 前中止。
+不把可控 Bodies 写成真实假玩家生命周期或物理停止已验。
+
+collect 操作继续用真实 Inventory/ItemStack；候选通过受控 GroundItem，
+另直接验证生产 eligibility 谓词的存活/延迟/target/加载/双距离条件。
+私有 target 的只读 Mixin accessor 仅编译，未加载 Mixin 或创建真实实体。
+PathTask 的生产调用点、逐格检查、下一落脚格变化重规划与更新的 m8 工装编译验证，
+没有运行真实世界遍历、清单确认网络链路、原版多人/机器 ticker 或第三方模组并发。
+完整强制构建和实核 XML 证据见 STATUS；真实行为待维护者安排，不以离线通过销账。
 
 ## 4. 真实端到端（客户端侧）
 

@@ -7,6 +7,9 @@ import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.server.BlockMining;
 import com.neko.mcbot.server.BlockPlacement;
 import com.neko.mcbot.server.PathMaterials;
+import com.neko.mcbot.server.ActionPermissions;
+import com.neko.mcbot.task.CompanionScheduler;
+import com.neko.mcbot.task.ResourceLocks.Region;
 import com.neko.mcbot.server.ServerTool.Result;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
@@ -51,7 +54,7 @@ public final class PathTask extends TickTask {
      * NEED_CONFIRM 后重发时的搜索结果复用缓存（R2-S4 "lastPlan"）。
      *
      * <p><b>为什么需要</b>：确认流是"两次 move_to"——第一次算出路、回 NEED_CONFIRM；
-     * 模型带 {@code may_alter_terrain=true} 重发时，旧的 {@link PathTask} 实例已经随
+     * 主人批准清单、模型带 {@code authorization_id} 重发时，旧的 {@link PathTask} 实例已经随
      * {@code Progress.Done} 被丢弃（{@code MoveToTool} 每次都 {@code new PathTask}），于是**同一条路
      * 要完整重搜一遍**（含 memo 重建、{@code liveify} 活体清单重算）。
      *
@@ -68,7 +71,10 @@ public final class PathTask extends TickTask {
     private enum Phase { SEARCH, REPLAN_SEARCH, EXECUTE }
 
     private final BlockPos target;
-    private final boolean mayAlterTerrain;
+    private final ActionPermissions permissions;
+    private final ActionPermissions.Context context;
+    private final ActionPermissions.Execution authorization;
+    private final CompanionScheduler scheduler;
     private final ServerLevel level;
     /** 计划缓存的槽位键；tick 里从同伴取（构造时拿不到），作废时用它清槽。 */
     private java.util.UUID cacheKey;
@@ -109,10 +115,15 @@ public final class PathTask extends TickTask {
     // 行走插值子状态（同层 WALK 沿用滑步节奏，视觉与 M4 版一致）
     private double wx, wy, wz;
 
-    public PathTask(ServerLevel level, BlockPos target, boolean mayAlterTerrain) {
+    public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
+                    ActionPermissions.Context context, ActionPermissions.Scope approved,
+                    CompanionScheduler scheduler) {
         this.level = level;
         this.target = target;
-        this.mayAlterTerrain = mayAlterTerrain;
+        this.permissions = permissions;
+        this.context = context;
+        this.authorization = new ActionPermissions.Execution(approved);
+        this.scheduler = scheduler;
     }
 
     @Override
@@ -226,16 +237,69 @@ public final class PathTask extends TickTask {
             }
             McbotMod.LOG.info("[path] 计划清单：{}", sb);
         }
-        if ((digs > 0 || places > 0) && !mayAlterTerrain) {
-            return new Progress.Done(new Result(false,
-                    "NEED_CONFIRM:" + (partialTail ? "本段（半程推进）" : "到 ") + target.toShortString()
-                            + " 需要改动世界——挖 " + digs + " 格、放 " + places + " 格。"
-                            + inlineList()
-                            + "确认就重发 move_to 并带 may_alter_terrain=true；不想改就换目的地。",
-                    confirmData(digs, places)));
+        var changes = changes(plan);
+        if (!changes.isEmpty()) {
+            if (changes.values().stream().anyMatch(change -> change.expectedState() == null)) {
+                return new Progress.Done(new Result(false, "TARGET_LOST:路线改动格未加载，已停止。", null));
+            }
+            if (!authorization.covers(changes)) {
+                return needConfirmation(changes, digs, places);
+            }
+            List<Region> regions = changes.values().stream().map(change -> {
+                BlockPos pos = BlockPos.of(change.position());
+                return new Region(context.dimension(), pos.getX() - 1, pos.getY() - 1, pos.getZ() - 1,
+                        pos.getX() + 1, pos.getY() + 1, pos.getZ() + 1);
+            }).toList();
+            if (scheduler == null || !scheduler.reserve(c.getUUID(), regions)) {
+                return new Progress.Done(new Result(false, "BUSY:路线改动区域被其他动作占用，已停手。", null));
+            }
         }
         phase = Phase.EXECUTE;
         return executeTick(c);
+    }
+
+    private java.util.Map<String, ActionPermissions.Change> changes(List<DigAStar.Step> plan) {
+        var changes = new java.util.LinkedHashMap<String, ActionPermissions.Change>();
+        for (var step : plan) {
+            for (long cell : step.dig()) addChange(changes, "dig", cell);
+            for (long cell : step.place()) addChange(changes, "place", cell);
+        }
+        return changes;
+    }
+
+    private void addChange(java.util.Map<String, ActionPermissions.Change> changes, String op, long cell) {
+        BlockPos pos = new BlockPos(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell));
+        var change = new ActionPermissions.Change(op, pos.asLong(), level.isLoaded(pos) ? level.getBlockState(pos) : null);
+        changes.put(ActionPermissions.key(change), change);
+    }
+
+    private Progress needConfirmation(java.util.Map<String, ActionPermissions.Change> changes, int digs, int places) {
+        clearCrack();
+        JsonObject data = confirmData(digs, places);
+        StringBuilder cells = new StringBuilder();
+        if (changes.size() <= 256) for (var change : changes.values()) {
+            BlockPos pos = BlockPos.of(change.position());
+            cells.append(change.operation()).append('@')
+                    .append(pos.toShortString()).append(' ')
+                    .append(sampler.blockName(pos.getX(), pos.getY(), pos.getZ())).append(';');
+        }
+        String id = com.neko.mcbot.common.WireSize.utf8Bytes(cells.toString()) > 12_000 ? null
+                : permissions.propose(new ActionPermissions.Scope(context, target.asLong(), changes));
+        if (id != null) data.addProperty("authorization_id", id);
+        String instruction = id == null ? "当前无有效任务权限或清单超过展示上限，请缩短路线并重新提交任务。"
+                : "用 ask_owner 携带 authorization_id=" + id
+                + " 展示完整清单征得主人明确确认，再用 move_to 携带相同 authorization_id 重发；模型布尔不能授权。";
+        if (id != null) data.addProperty("authorization_summary",
+                "路线目的地 " + target.toShortString() + "；挖 " + digs + " 格、放 " + places + " 格。具体清单：" + cells);
+        return new Progress.Done(new Result(false,
+                "NEED_CONFIRM:到 " + target.toShortString() + " 需要挖 " + digs + " 格、放 " + places
+                        + " 格。" + inlineList() + instruction, data));
+    }
+
+    private Progress checkChange(String op, BlockPos pos) {
+        var change = new ActionPermissions.Change(op, pos.asLong(), level.getBlockState(pos));
+        if (authorization.allows(change)) return null;
+        return needConfirmation(changes(liveify(path.subList(cursor, path.size()))), planDigs, planPlaces);
     }
 
     // ---- lastPlan 缓存（R2-S4）----
@@ -365,7 +429,7 @@ public final class PathTask extends TickTask {
 
     /**
      * 用裸 sampler 按**当前世界**重建每节点的挖/放清单并统计 planDigs/planPlaces。
-     * 为什么必须：NEED_CONFIRM 拿给主人点头、模型拿来决定 may_alter_terrain 的清单，
+     * 为什么必须：NEED_CONFIRM 拿给主人点头、服务端绑定授权范围的清单，
      * 如果是 memo 期（搜索跨 27 tick）的旧答案，就是在让主人批准一份"幽灵清单"。
      * 动作字节不重分类（仅播报语义）；执行期 mineOne/placeOne 本就逐格 live 判定，双层自晦。
      */
@@ -500,6 +564,18 @@ public final class PathTask extends TickTask {
             return running();
         }
 
+        // Newly blocked cells must replan before the body enters them.
+        if (!sampler.passable(next.x(), next.y(), next.z())
+                || !sampler.passable(next.x(), next.y() + 1, next.z())
+                || !sampler.support(next.x(), next.y() - 1, next.z())) {
+            if (replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
+                    "NO_PATH:下一落脚格已变化，重规划上限已到；已停止移动。", null));
+            replanBadKey = DigAStar.pack(next.x(), next.y(), next.z());
+            replanBadSet = true;
+            beginReplan(c);
+            executed = 0;
+            return running();
+        }
         // 3) 落位：同层走路用 0.45/tick 插值（视觉与滑步版一致），其余直接传送
         if (next.y() == c.blockPosition().getY() && next.action() == DigAStar.ACT_WALK) {
             double dx = next.x() + 0.5 - c.getX();
@@ -621,6 +697,8 @@ public final class PathTask extends TickTask {
         BlockPos pos = new BlockPos(x, y, z);
         if (!level.isLoaded(pos)) return miningFailure("TARGET_LOST:开路目标未加载，重新查看路线。");
         if (mining == null && sampler.cleared(x, y, z)) return null;
+        Progress permission = checkChange("dig", pos);
+        if (permission != null) return permission;
         if (digPos == null || !digPos.equals(pos)) {
             clearCrack();
             digPos = pos;
@@ -636,6 +714,7 @@ public final class PathTask extends TickTask {
         digPos = null;
         if (!result.data().get("removed").getAsBoolean()) return new Progress.Done(result);
         actualDigs++;
+        authorization.observed("dig", pos.asLong());
         leftoverItems += result.data().get("remaining_count").getAsInt();
         McbotMod.LOG.info("[path] 开路 {} 收进={} 留地={}", pos.toShortString(),
                 result.data().get("collected_count").getAsInt(), result.data().get("remaining_count").getAsInt());
@@ -654,12 +733,15 @@ public final class PathTask extends TickTask {
         BlockPos pos = new BlockPos(x, y, z);
         if (!level.isLoaded(pos)) return new Progress.Done(new Result(false, "TARGET_LOST:搭路目标未加载。", null));
         if (sampler.support(x, y, z)) return null;
+        Progress permission = checkChange("place", pos);
+        if (permission != null) return permission;
         if (!sampler.placeable(x, y, z)) return new Progress.Done(new Result(false,
                 "NO_PATH:计划的搭路格现在不可安全放置；重新查看路线。", null));
         Result result = BlockPlacement.place(BlockPlacement.forPlayer(c), pos,
                 PathMaterials.find(c.getInventory()), Direction.UP);
         if (!result.ok()) return new Progress.Done(result);
         actualPlaces++;
+        authorization.observed("place", pos.asLong());
         if (!sampler.support(x, y, z)) return new Progress.Done(new Result(false,
                 "PLACE_FAILED:材料已放置但未形成可站立支撑，已停止移动；查看现场。", result.data()));
         return null;
@@ -677,10 +759,14 @@ public final class PathTask extends TickTask {
         dropPlan(); // 任务作废了，别把一条已废的路留在缓存里给下一趟复用
     }
 
+    @Override public void onFinish() {
+        clearCrack();
+    }
+
     /** 供 MoveToTool 在提交前做的距离帽判断。 */
     public static boolean withinCap(BlockPos from, BlockPos to) {
-        return Math.abs(to.getX() - from.getX()) <= LevelDigSampler.RADIUS_XZ
-                && Math.abs(to.getZ() - from.getZ()) <= LevelDigSampler.RADIUS_XZ
-                && Math.abs(to.getY() - from.getY()) <= LevelDigSampler.RADIUS_Y;
+        return Math.abs((long) to.getX() - from.getX()) <= LevelDigSampler.RADIUS_XZ
+                && Math.abs((long) to.getZ() - from.getZ()) <= LevelDigSampler.RADIUS_XZ
+                && Math.abs((long) to.getY() - from.getY()) <= LevelDigSampler.RADIUS_Y;
     }
 }

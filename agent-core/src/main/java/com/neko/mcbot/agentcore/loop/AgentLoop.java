@@ -318,14 +318,15 @@ public final class AgentLoop {
             }
             return;
         }
-        ledger.resolve(idx, outcome);
-        if (ledger.flush() && ledger.dispatchComplete) {
-            ledger = null;
+        Ledger led = ledger;
+        if (parked) {
             parked = false;
             listener.onParked(false, 0);
-            step();
-        } else if (parked) {
-            listener.onParked(true, ledger.outstanding().size());
+        }
+        led.resolve(idx, outcome);
+        // Resolving the terminal gate may synchronously dispatch the remaining calls or next turn.
+        if (ledger == led) {
+            led.flush();
         }
     }
 
@@ -590,22 +591,25 @@ public final class AgentLoop {
         private final List<ToolCall> calls;
         private final ToolOutcome[] outcomes;
         private final String[] jobIds;
+        private final List<CompletableFuture<Void>> terminalGates;
         private final StepReactor reactor;
         /** 已按序写入 convo 的前缀长度（不变式：它之前的槽位全部非空）。 */
         private int flushed;
-        private boolean dispatchComplete;
 
         Ledger(List<ToolCall> calls, StepReactor reactor) {
             this.calls = calls;
             this.reactor = reactor;
             this.outcomes = new ToolOutcome[calls.size()];
             this.jobIds = new String[calls.size()];
+            this.terminalGates = new ArrayList<>();
+            for (int i = 0; i < calls.size(); i++) terminalGates.add(new CompletableFuture<>());
         }
 
         /** 一次真结果（同步回执、job 事件、或本地合成回执）。 */
         void resolve(int idx, ToolOutcome r) {
             if (outcomes[idx] == null) {
                 outcomes[idx] = r;
+                terminalGates.get(idx).complete(null);
             }
         }
 
@@ -666,9 +670,10 @@ public final class AgentLoop {
         if (!isCurrent(stepGeneration) || ledger != led) {
             return;
         }
-        led.dispatchComplete = true;
         if (ledger.flush()) {
             ledger = null;
+            if (parked) listener.onParked(false, 0);
+            parked = false;
             step();
             return;
         }
@@ -712,16 +717,21 @@ public final class AgentLoop {
                     }
                     return executeTool(tc);
                 }
-            }).thenAccept(r -> {
+            }).thenCompose(r -> {
                 synchronized (AgentLoop.this) {
                     if (!isCurrent(stepGeneration) || ledger != led) {
-                        return;
+                        return CompletableFuture.completedFuture(null);
                     }
                     if (r.accepted()) {
                         led.accepted(idx, r);
+                        if (led.outcomes[idx] == null) {
+                            parked = true;
+                            listener.onParked(true, led.outstanding().size());
+                        }
                     } else {
                         led.resolve(idx, r);
                     }
+                    return led.terminalGates.get(idx);
                 }
             });
         }

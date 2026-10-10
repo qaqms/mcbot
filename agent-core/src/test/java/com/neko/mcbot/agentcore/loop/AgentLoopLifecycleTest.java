@@ -265,20 +265,24 @@ class AgentLoopLifecycleTest {
         engine.responses.getFirst().complete(new AssistantTurn("", List.of(
                 new ToolCall("c1", "move_to", "{}"),
                 new ToolCall("c2", "break_block", "{}")), 0, 0, -1, "tool_calls"));
-        assertEquals(List.of(2), rec.parkedCounts);
+        assertEquals(List.of(1), rec.parkedCounts);
 
         loop.onJobEvent("j-break_block", new ToolOutcome(true, "broken"));
         assertTrue(loop.isParked());
-        assertEquals(List.of(2, 1), rec.parkedCounts);
+        assertEquals(List.of(1), rec.parkedCounts, "尚未派发的任务事件不能被认领");
         assertEquals(1, engine.responses.size());
         assertTrue(loop.conversation().history().stream().noneMatch(Msg.Tool.class::isInstance),
                 "the later result must not overtake the earlier call");
         loop.onJobEvent("j-break_block", new ToolOutcome(true, "duplicate"));
-        assertEquals(List.of(2, 1), rec.parkedCounts);
+        assertEquals(List.of(1), rec.parkedCounts);
 
         loop.onJobEvent("j-move_to", new ToolOutcome(true, "arrived"));
+        assertTrue(loop.isParked());
+        assertEquals(List.of(1, 0, 1), rec.parkedCounts);
+        assertEquals(1, engine.responses.size());
+        loop.onJobEvent("j-break_block", new ToolOutcome(true, "broken"));
         assertFalse(loop.isParked());
-        assertEquals(List.of(2, 1, 0), rec.parkedCounts);
+        assertEquals(List.of(1, 0, 1, 0), rec.parkedCounts);
         assertEquals(2, engine.responses.size());
         var receipts = loop.conversation().history().stream()
                 .filter(Msg.Tool.class::isInstance).map(Msg.Tool.class::cast).toList();

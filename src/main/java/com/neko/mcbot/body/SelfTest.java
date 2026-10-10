@@ -8,6 +8,8 @@ import com.neko.mcbot.common.ScanFormat;
 import com.neko.mcbot.common.WireSize;
 import com.neko.mcbot.path.PathTask;
 import com.neko.mcbot.server.ServerTool;
+import com.neko.mcbot.server.ActionPermissions;
+import com.neko.mcbot.server.ServerActionGate;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -359,9 +361,14 @@ public final class SelfTest {
         level.setBlockAndUpdate(base.east(4).above(), stone);
 
         // 场景 A：不带 may_alter_terrain → 必须 NEED_CONFIRM 且清单非空
+        var permissions = new ActionPermissions();
+        var taskContext = new ActionPermissions.Context(cp.ownerUuid(), cp.getUUID(),
+                level.dimension().identifier().toString(), 1, false);
+        permissions.begin(taskContext);
         JsonObject a = moveArgs(base.east(6));
         McbotMod.LOG.info("[m8] A 需确认流提交");
-        registry.get("move_to").runAsync(cp, a, sched).thenAccept(ra -> {
+        ServerActionGate.execute(taskContext, cp.getUUID(), taskContext.dimension(), "move_to", a, sched,
+                () -> registry.get("move_to").runAuthorized(cp, a, sched, permissions, taskContext)).thenAccept(ra -> {
             boolean needConfirm = !ra.ok() && ra.feedback().startsWith("NEED_CONFIRM:");
             int listed = ra.data() != null && ra.data().has("blocks")
                     ? ra.data().getAsJsonArray("blocks").size() : 0;
@@ -377,9 +384,14 @@ public final class SelfTest {
 
             // 场景 B：点头 → 挖穿到达
             JsonObject b = moveArgs(base.east(6));
-            b.addProperty("may_alter_terrain", true);
+            String authorization = ra.data() != null && ra.data().has("authorization_id")
+                    ? ra.data().get("authorization_id").getAsString() : "";
+            boolean approved = permissions.approve(taskContext, authorization);
+            b.addProperty("authorization_id", authorization);
+            McbotMod.LOG.info("[m8] B 工装明确批准具体清单={}", approved);
             McbotMod.LOG.info("[m8] B 确认后执行提交（看真挖耗时）");
-            registry.get("move_to").runAsync(cp, b, sched).thenAccept(rb -> {
+            ServerActionGate.execute(taskContext, cp.getUUID(), taskContext.dimension(), "move_to", b, sched,
+                    () -> registry.get("move_to").runAuthorized(cp, b, sched, permissions, taskContext)).thenAccept(rb -> {
                 boolean through = rb.ok();
                 // "打通"而不是"墙那一格变空气"：同伴只有 2 格高，穿墙只要清掉脚+头**两格**中的
                 // 任意一对（实测它会跳上墙顶再挖顶棚，走的是 (x,94+1..94+2) 那对）——
@@ -397,9 +409,9 @@ public final class SelfTest {
                 // 同伴拉回大道西端
                 cp.teleportTo(base.east(2).getX() + 0.5, base.getY(), base.east(2).getZ() + 0.5);
                 JsonObject c = moveArgs(base.east(6));
-                c.addProperty("may_alter_terrain", true);
                 McbotMod.LOG.info("[m8] C 箱子嵌墙提交");
-                registry.get("move_to").runAsync(cp, c, sched).thenAccept(rc -> {
+                ServerActionGate.execute(taskContext, cp.getUUID(), taskContext.dimension(), "move_to", c, sched,
+                        () -> registry.get("move_to").runAuthorized(cp, c, sched, permissions, taskContext)).thenAccept(rc -> {
                     boolean chestIntact = level.getBlockState(base.east(4))
                             .is(net.minecraft.world.level.block.Blocks.CHEST);
                     McbotMod.LOG.info("[m8] C 箱子分毫未动={} 结果 ok={}：{}",

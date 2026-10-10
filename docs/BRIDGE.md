@@ -259,7 +259,7 @@ S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）�
 
 ```json
 {"kind":"job_ack","seq":7,"job_id":"j3","tool":"move_to","cap_ticks":3600,
- "text":"ACCEPTED:我已开始「走到 12,63,-4」编号 j3，最多约 180 秒。这条还没有结果——别猜、别等着，可以先回我一句话或做别的，做完我会主动报 j3。"}
+ "text":"ACCEPTED:我已开始「走到 12,63,-4」编号 j3，最多约 180 秒。这条还没有结果，别猜、别重发或轮询；后续工具等这件事结束，做完我会主动报 j3。"}
 {"kind":"job_event","seq":7,"job_id":"j3","tool":"move_to","phase":"done","text":"到了 (12,63,-4) 附近…"}
 ```
 
@@ -268,7 +268,7 @@ S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）�
 1. **单终局**：一个 `seq` 要么收到 `tool_result`，要么收到 `job_ack`——**不会两条都来**。
    已经出结果的快路径（`DENIED`/`BUSY`/`TARGET_LOST`…）即使工具是 ACCEPT 模式也直接回
    `tool_result`：先 ack 再立刻报失败等于白多一跳，还会让模型以为"被打回了"和"跑完了"是两件事。
-2. **`job_ack` 自带教学**：文案必须以 `ACCEPTED:` 开头，且三句齐（还没结果 / 别干等 / 做完主动报编号）。
+2. **`job_ack` 自带教学**：文案必须以 `ACCEPTED:` 开头，且三句齐（还没结果 / 不重发轮询、后续工具等终态 / 做完主动报编号）。
    前缀是给**模型**看的契约；"要不要 park"是控制流，走 `ToolOutcome.accepted` **字段**，不认字符串。
 3. **`phase ∈ progress|done|failed|cancelled|superseded`**。`progress` 是预留接收相位，
    只播报不进对话，**当前服务端不生产，限速也未实现**；
@@ -293,6 +293,14 @@ S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）�
 这些属于内部会话隔离，不新增 v1.0 的协议字段或续跑能力。
 PARK 顶替会先发 C2S cancel 再开始新任务；服务端单槽仍保留 BUSY，**不是** scheduler 抢占或
 `remaining()` 续跑。progress 的服务端生产与限速也仍是后续卡，不应据此宣称已完成。
+
+C3 在内部 C2S 增加 task_begin/task_end/authorize 与 tool_call.task_id，
+同轮工具等待前一项真正终态。服务器根据当前任务策略与具体路线清单执行权限检查，
+模型的 may_alter_terrain 不能批准改动。客户端与服务端须一起更新，旧客户端仅可查询。
+外部 REST/MCP/SSE 的字段、事件、回答与终态契约不变；连接器仍只转发 question_id/text，
+路线批准 question 的 text 由完整服务端清单生成，主人回答「确认」才请求许可。
+需要明确只读边界时，将 `[只读]` 放入现有 task/ask 的 text，不新增权限接口或字段；
+任意自然语言限制的理解、物理停止与连接器联合验收仍不能由本轮离线测试证明。
 
 ## 6. 连接器接入与验收
 
