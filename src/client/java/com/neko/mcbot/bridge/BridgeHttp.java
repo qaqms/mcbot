@@ -297,18 +297,30 @@ public final class BridgeHttp implements BridgeEvents.Sink {
 
     // ---- Backend：把桥的语义翻成 AgentRunner 动作 ----
 
-    private static final class RunnerBackend implements BridgeBackend {
+    static final class RunnerBackend implements BridgeBackend {
         private final AgentRunner runner;
+        private final java.util.function.Supplier<AgentRunner> currentRunner;
+        private final java.util.concurrent.Executor client;
+        private final java.util.function.BooleanSupplier inGame;
 
         RunnerBackend(AgentRunner runner) {
+            this(runner, McbotClient::runner, Minecraft.getInstance()::execute,
+                    () -> Minecraft.getInstance().level != null);
+        }
+
+        RunnerBackend(AgentRunner runner, java.util.function.Supplier<AgentRunner> currentRunner,
+                      java.util.concurrent.Executor client, java.util.function.BooleanSupplier inGame) {
             this.runner = runner;
+            this.currentRunner = currentRunner;
+            this.client = client;
+            this.inGame = inGame;
         }
 
         private <T> CompletableFuture<T> onClient(java.util.function.Supplier<T> action) {
             var result = new CompletableFuture<T>();
-            Minecraft.getInstance().execute(() -> {
+            client.execute(() -> {
                 if (result.isDone()) return;
-                if (runner == null || McbotClient.runner() != runner) {
+                if (runner == null || currentRunner.get() != runner) {
                     result.completeExceptionally(new IllegalStateException("客户端会话已关闭"));
                     return;
                 }
@@ -335,11 +347,10 @@ public final class BridgeHttp implements BridgeEvents.Sink {
 
         @Override
         public String statusJson() {
-            AgentRunner r = McbotClient.runner() == runner ? runner : null;
+            AgentRunner r = currentRunner.get() == runner ? runner : null;
             if (r == null) {
-                Minecraft mc = Minecraft.getInstance();
                 JsonObject o = new JsonObject();
-                o.addProperty("in_game", mc.level != null);
+                o.addProperty("in_game", inGame.getAsBoolean());
                 o.addProperty("brain_enabled", false);
                 o.addProperty("companion", "");
                 return o.toString();

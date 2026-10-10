@@ -79,9 +79,13 @@ class AgentLoopLifecycleTest {
     private static final class Recorder implements AgentLoop.Listener {
         final List<Long> started = new ArrayList<>();
         final List<Finished> finished = new ArrayList<>();
+        final List<Integer> parkedCounts = new ArrayList<>();
         @Override public void onTaskStarted(long id) { started.add(id); }
         @Override public void onTaskFinished(long id, AgentLoop.TaskStatus status, String text) {
             finished.add(new Finished(id, status));
+        }
+        @Override public void onParked(boolean parked, int outstanding) {
+            parkedCounts.add(parked ? outstanding : 0);
         }
     }
 
@@ -249,5 +253,133 @@ class AgentLoopLifecycleTest {
         assertEquals("arrived", paired.content());
         engine.responses.get(1).complete(text("done"));
         assertEquals(List.of(new Finished(11, AgentLoop.TaskStatus.COMPLETED)), rec.finished);
+    }
+
+    @Test
+    void partialJobCompletionUpdatesParkCountWithoutRequestingTheModel() {
+        var engine = new Engine();
+        var rec = new Recorder();
+        var loop = loop(engine, rec, (name, args) -> CompletableFuture.completedFuture(
+                ToolOutcome.accepted("j-" + name, "ACCEPTED:started")));
+        loop.submit(11, "A");
+        engine.responses.getFirst().complete(new AssistantTurn("", List.of(
+                new ToolCall("c1", "move_to", "{}"),
+                new ToolCall("c2", "break_block", "{}")), 0, 0, -1, "tool_calls"));
+        assertEquals(List.of(2), rec.parkedCounts);
+
+        loop.onJobEvent("j-break_block", new ToolOutcome(true, "broken"));
+        assertTrue(loop.isParked());
+        assertEquals(List.of(2, 1), rec.parkedCounts);
+        assertEquals(1, engine.responses.size());
+        assertTrue(loop.conversation().history().stream().noneMatch(Msg.Tool.class::isInstance),
+                "the later result must not overtake the earlier call");
+        loop.onJobEvent("j-break_block", new ToolOutcome(true, "duplicate"));
+        assertEquals(List.of(2, 1), rec.parkedCounts);
+
+        loop.onJobEvent("j-move_to", new ToolOutcome(true, "arrived"));
+        assertFalse(loop.isParked());
+        assertEquals(List.of(2, 1, 0), rec.parkedCounts);
+        assertEquals(2, engine.responses.size());
+        var receipts = loop.conversation().history().stream()
+                .filter(Msg.Tool.class::isInstance).map(Msg.Tool.class::cast).toList();
+        assertEquals(List.of("c1", "c2"), receipts.stream().map(Msg.Tool::callId).toList());
+        assertEquals(List.of("arrived", "broken"), receipts.stream().map(Msg.Tool::content).toList());
+        engine.responses.get(1).complete(text("done"));
+    }
+
+    @Test
+    void closeWhileParkedPairsAllCallsAndIgnoresEventsAfterSessionReplacement() {
+        var engine = new Engine();
+        var rec = new Recorder();
+        var loop = loop(engine, rec, (name, args) -> CompletableFuture.completedFuture(
+                ToolOutcome.accepted("j-" + name, "ACCEPTED:started")));
+        loop.submit(11, "A");
+        loop.submit(22, "B");
+        engine.responses.getFirst().complete(new AssistantTurn("", List.of(
+                new ToolCall("c1", "move_to", "{}"),
+                new ToolCall("c2", "break_block", "{}")), 0, 0, -1, "tool_calls"));
+        assertTrue(loop.isParked());
+
+        loop.close();
+        loop.close();
+        assertFalse(loop.isParked());
+        assertEquals(0, loop.currentTaskId());
+        assertEquals(0, loop.queuedTasks());
+        assertEquals(2, rec.finished.size());
+        assertTrue(rec.finished.stream().allMatch(f -> f.status() == AgentLoop.TaskStatus.CANCELLED));
+        var history = loop.conversation().history();
+        var receipts = history.stream().filter(Msg.Tool.class::isInstance)
+                .map(Msg.Tool.class::cast).toList();
+        assertEquals(List.of("c1", "c2"), receipts.stream().map(Msg.Tool::callId).toList());
+        assertTrue(receipts.stream().allMatch(t -> !t.ok() && t.content().startsWith("CANCELLED:")));
+
+        var nextEngine = new Engine();
+        var nextRec = new Recorder();
+        var next = loop(nextEngine, nextRec, (name, args) -> fail("no tools"));
+        next.submit(33, "new session");
+        loop.onJobEvent("j-move_to", new ToolOutcome(true, "late arrival"));
+        loop.onJobEvent("j-break_block", new ToolOutcome(true, "late break"));
+        assertEquals(history, loop.conversation().history());
+        assertEquals(1, engine.responses.size());
+        assertEquals(33, next.currentTaskId());
+        assertEquals(List.of(new Msg.User("new session")), next.conversation().history());
+        nextEngine.responses.getFirst().complete(text("new done"));
+        assertEquals(List.of(new Finished(33, AgentLoop.TaskStatus.COMPLETED)), nextRec.finished);
+    }
+
+    @Test
+    void cancelBeforeAcceptanceCannotParkOrResumeTheFollowingTask() {
+        var engine = new Engine();
+        var rec = new Recorder();
+        var acceptance = new CompletableFuture<ToolOutcome>();
+        var loop = loop(engine, rec, (name, args) -> acceptance);
+        loop.submit(11, "A");
+        loop.submit(22, "B");
+        engine.responses.getFirst().complete(tool());
+        assertTrue(loop.cancelTask(11));
+        assertEquals(22, loop.currentTaskId());
+        var history = loop.conversation().history();
+
+        acceptance.complete(ToolOutcome.accepted("old-job", "ACCEPTED:late"));
+        loop.onJobEvent("old-job", new ToolOutcome(true, "late result"));
+        assertEquals(history, loop.conversation().history());
+        assertTrue(rec.parkedCounts.isEmpty());
+        assertEquals(2, engine.responses.size());
+        engine.responses.get(1).complete(text("B done"));
+        assertEquals(List.of(new Finished(11, AgentLoop.TaskStatus.CANCELLED),
+                new Finished(22, AgentLoop.TaskStatus.COMPLETED)), rec.finished);
+    }
+
+    @Test
+    void failedOrTimedOutJobUnlocksParkOnceAndKeepsTheFailedReceipt() {
+        for (String failure : List.of("INTERNAL:job failed", "TIMEOUT:job expired")) {
+            var engine = new Engine();
+            var rec = new Recorder();
+            var executed = new ArrayList<String>();
+            var loop = loop(engine, rec, (name, args) -> {
+                executed.add(name);
+                return CompletableFuture.completedFuture(
+                        ToolOutcome.accepted("j1", "ACCEPTED:started"));
+            });
+            loop.submit(11, "A");
+            engine.responses.getFirst().complete(tool());
+            assertTrue(loop.isParked());
+            loop.onJobEvent("j1", new ToolOutcome(false, failure));
+            assertFalse(loop.isParked());
+            assertEquals(List.of(1, 0), rec.parkedCounts);
+            assertEquals(2, engine.responses.size());
+            var receipt = assertInstanceOf(Msg.Tool.class, loop.conversation().history().getLast());
+            assertEquals("c1", receipt.callId());
+            assertFalse(receipt.ok());
+            assertEquals(failure, receipt.content());
+
+            loop.onJobEvent("j1", new ToolOutcome(true, "late success"));
+            assertEquals(receipt, loop.conversation().history().getLast());
+            assertEquals(2, engine.responses.size());
+            assertEquals(List.of("move_to"), executed);
+            engine.responses.get(1).complete(text("reported failure"));
+            assertEquals(List.of(new Finished(11, AgentLoop.TaskStatus.COMPLETED)), rec.finished,
+                    "a failed tool is distinct from the final task report");
+        }
     }
 }

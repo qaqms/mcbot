@@ -3,10 +3,12 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：身体恢复已获服务端专项与单人状态级正证，模型链路和真实拾取本轮正常；完整背包/移动挖掘/ACCEPT 长活/连接器仍待真机验，上游历史错误根因未销账
+## 当前状态（2026-10-10）：问答与活动任务生命周期离线验证完成，下一卡背包/主手切换；F0 剩余真机与连接器待验，上游历史错误根因未销账
 
-当前优先级：稳定 MC agent 的任务投递、执行、反问、取消、结束与会话清理，
-不新增独立聊天功能。
+当前优先级：连接器尚未提供，按维护者授权先完善 MC agent 本体，
+依次推进背包明细与工具切换、合成、冶炼、攻击，一次一个里程碑；不新增独立聊天功能。
+F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留。
+完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
 
 **模块职责与协作边界**：
 - **mcbot**：提供 MC agent 本体、游戏执行能力与任务级桥接接口，并维护接口契约及回归测试。
@@ -17,6 +19,123 @@
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### F0 活动任务配置重载与断线重连离线集成（2026-10-10 12:30，Asia/Shanghai）
+
+- 本轮只推进活动任务生命周期专项，不启动游戏/服务器或真实模型、不改宿主/连接器。
+  扩展既有 ClientServices 的客户端队列与网络副作用边界；
+  McbotClient 的 JOIN/DISCONNECT/S2C 转交给 ClientSession，沿用关闭旧 runner/桥、
+  建立新 runner、查询同伴、启动新桥的顺序。RunnerBackend 保留实际实现，
+  仅允许注入当前 runner 查询、客户端队列及进世界观测，以便离线接线。
+- **第一轮红证**：12:25:59 的 AgentRunnerLifecycleTest 17 项中 16 通过、1 失败；
+  closedRunnerCannotSaveConfigurationOrEmitReloadFeedback 证明关闭后 reconfigure
+  仍保存配置、替换内存配置并提示“大脑已重启”，实际不会启动大脑。
+  修复为关闭后直接拒绝重载。报告副本保留于
+  `build/lifecycle-red/AgentRunnerLifecycleTest.xml`。
+- **第二轮红证**：12:29:04 的 18 项中 16 通过、2 失败；
+  reloadDrainsPanelInspectionWithoutAddingItsOldReceiptToChat 与
+  inspectionDisplayAlreadyQueuedBeforeReloadDoesNotUpdateTheNewBrain 证明：
+  重载触发的旧检查取消回执、重载前已排队的旧检查显示均会污染新大脑的聊天记录。
+  修复为 shutdownBrain 推进代际，inspect 显示回调校验原代际；runner 身份相同
+  不能单独证明检查仍属于当前大脑。报告副本保留于
+  `build/lifecycle-red/AgentRunnerInspectionReloadTest.xml`。
+- **新增 24 项离线回归**：AgentRunnerLifecycleTest 19 项覆盖模型/普通工具/
+  流式早派发后受理/PARK/反问等待的重载与关闭、排队 ask 取消、历史与提示词重建、
+  旧模型成功/失败及旧工具/长活回调隔离、发送排队后重载、取消先于新工具发送、
+  accept_mode 重新生效、只读检查清理、配置禁用、关闭后重载拒绝和发包前连接丢失。
+  ClientSessionLifecycleTest 5 项覆盖实际 RunnerBackend 与本地 HTTP/SSE：
+  重载保持 session_id、旧任务唯一 cancelled 先于新任务事件；退出重进更换
+  runner/session_id、SSE id 从 1 重建、计数归零与新任务完成；排队旧 S2C/取消不作用于
+  新连接；即使 job_id 重用，旧 seq 也不能解锁新 PARK；重复 JOIN 安全替换；
+  旧桥投令/回答在客户端队列中跨重连时被拒绝，新问题只能使用新编号回答。
+- **绿证**：首轮修复后联合专项 35/35、BUILD SUCCESSFUL 15s；
+  第二轮修复及补齐用例后运行
+  `build --offline --rerun-tasks --console=plain --no-daemon`，
+  BUILD SUCCESSFUL **21s / 20 个任务全部执行**。12:30:42 实核 XML
+  **324/324**（agent-core 194 + 根工程 66 + clientTest 64），
+  failures/errors/skipped 全 0；生命周期专项 19/19 + 5/5。
+  仅既有过时 API 与 Gradle 10 兼容性警告，未引入新的 Minecraft API 签名。
+  随后仅调整测试工装的 SSE 超时关闭顺序，`clientTest --offline`
+  再跑 **14s / 64/64**；12:33:36 复核三个模块仍共 324 项且全部通过，生产 JAR 哈希不变。
+  本轮 16 个源码/文档文件的尾随空白、机器绝对路径与凭据模式检查零命中。
+- 本轮 `build/libs/mcbot-0.1.0.jar` SHA256：
+  `6e7981a45bd338015c26b0fe29d3b6ec82feaa7fdd0f72624d6b84ad0c1d256a`。
+  list-java 未发现 Java 进程；HTTP 仅使用临时回环端口及测试令牌，测试结束关闭。
+  未读取/写入玩家配置、真实桥令牌或存档，未安装包；当前副本无 Git 元数据，
+  未初始化 Git、提交或推送。专项原始 XML 位于 `build/test-results/clientTest/`，
+  红证副本均为本地构建产物。
+- **验收边界**：配置保存仍用内存替身，游戏网络发送用记录替身；
+  运行实际会话处理函数与桥 adapter/backend，但没有触发真实 Fabric 连接事件、
+  测试断网后的服务端身体停手、玩家配置落盘或外部连接器。
+  因此本离线卡完成，真实移动/挖掘、ACCEPT/PARK 取消、反问、
+  活动任务配置重载/断线重连与连接器联合验收仍待安排；F0 整体不关账。
+
+### F0 反问回答离线闭环（2026-10-10 12:17，Asia/Shanghai）
+
+- 本轮只推进反问回答专项，直接测试实际 AgentRunner、AgentLoop、BridgeEvents 与
+  BridgeService 接线。新增内部 ClientServices 边界，生产仍使用原模型、客户端线程、
+  玩家配置保存及取消发送；测试替换为可控 future、时钟、内存配置与聊天/取消记录，
+  不启动游戏，不读写玩家配置或调用模型端点。无新原子工具、协议字段或连接器实现。
+- **红证**：初次 `clientTest` 专项运行 12 项中 10 通过、2 失败（终端判读）：
+  `overdueAnswerIsRejectedEvenBeforeTheNextTick` 证明等待超过 120s 后、下一 tick 前，
+  回答仍被错误接收；`repeatedGameAnswerDoesNotBecomeANewTask` 证明重复
+  `answer east` 在问题已回答后被当作新指令启动。
+  原有取消、重载、关闭及任务配对用例通过；后续运行覆盖了首轮 XML，红证判读保留于本节。
+- **修复**：回答入口和 tick 共用期限判定与超时回执，过期回答移除等待项并返回 false；
+  游戏内“答/answer”无有效问题时只提示未提交，不再投递新任务。
+  question_id 必须与事件原编号一致，拒绝补零/加符号的别名；
+  先发布回答确认 state 再兑现 future，避免续跑工具回执先于回答确认；
+  close 重复调用不重复发送取消。
+- **13 项回归范围**：正常回答/回执配对/唯一任务终态；错误、空白、重复及改写编号拒绝；
+  排队任务不串答；取消清理与下一任务的合成回执配对；
+  tick 超时与回答入口超时各解锁一次；配置重载的新历史与旧问题作废；
+  关闭后拒绝旧回答；游戏内正常、重复及过期回答；
+  兼容 ask 等最终任务报告而非中间答案；REST 重答/过期为 404 NOT_FOUND、
+  MCP 重答为 isError=true/NOT_FOUND。使用实际桥内核，不开 HTTP 监听器。
+- **绿证**：修复后专项 15/15（新增问答 13 + 原同伴状态 2），BUILD SUCCESSFUL 13s。
+  随后 `build --offline --rerun-tasks --console=plain --no-daemon` 完整构建
+  **22s / 20 个任务全部执行**；12:17:06 实核 XML **300/300**
+  （agent-core 194 + 根工程 66 + clientTest 40），failures/errors/skipped 全 0。
+  仅既有过时 API 与 Gradle 10 兼容性警告，未新增 Minecraft API 签名。
+- 本轮 `build/libs/mcbot-0.1.0.jar` SHA256：
+  `360d80eae43618fcd8c5b57fe0a0c9fe8569b938dc5c6644d94776e3e12bc5e9`。
+  list-java 未发现 Java 进程；未安装包、修改玩家存档或启动宿主/连接器，
+  本副本无 Git 元数据，未提交或推送。原始问答报告位于
+  `build/test-results/clientTest/TEST-com.neko.mcbot.agent.AgentRunnerQuestionTest.xml`。
+- **验收边界**：这是本体反问回答的离线闭环；配置保存副作用用内存替身，
+  不能宣称实际玩家配置落盘、Minecraft DISCONNECT/JOIN、模型理解或连接器全链通过。
+  下一离线卡为活动任务配置重载与重连接线，F0 与真机/连接器待验项仍不关账。
+  BRIDGE、TOOLS、ARCHITECTURE、DEVELOPMENT、ROADMAP 与入口说明同步本轮行为及边界。
+
+### F0 离线继续：PARK 状态与取消/关闭回归（2026-10-10 11:54，Asia/Shanghai）
+
+- 维护者确认此前已做单人完整背包对照与整客户端重启恢复测试；现有可追溯记录仍为
+  第十三轮服务端受控恢复和第十五轮同进程状态级恢复，尚未找到上述完整单人测试的原始记录。
+  将本项归为“维护者确认已实测、原始证据待补”，不再笼统写成未测试，
+  也不将维护者陈述扩写为已独立核验全部槽位/耐久/副手/朝向的通过证据。
+- 维护者暂不安排游戏实际测试，本轮继续 F0 内核的离线验证与缺陷修复；
+  真实移动/挖掘、ACCEPT/PARK 长任务取消、反问回答、活动任务配置重载、
+  断线重连及连接器完整联合验收仍未测。F0 不关账，不扩展后续技能或调度抢占。
+- **红证**：新增 4 项确定性 AgentLoop 生命周期回归后，11:52 的专项运行
+  15 项中 14 通过、1 失败：两条受理长活中的后一条结束后仍 PARK，
+  对外等待计数保持 2 而非 1。回执继续保序、未额外请求模型；缺陷在状态通知。
+- **修复**：job 终态到达但整轮仍 PARK 时，按当前未完成长活数量更新 onParked；
+  重复/未知 job 事件不重复通知，只有全部补账后才解除 PARK 并请求下一轮。
+  同步修正 AgentRunner 迟到工具回执日志及 PendingJobs 注释：
+  已无等待项可能来自取消、会话清理、超时或重复包，late_results 不单独证明超时帽错误。
+- **新增回归边界**：部分完成时 PARK 数量/落账顺序；PARK 中关闭会话补齐所有调用，
+  旧事件不修改已关闭 loop 或新 loop；受理前取消后迟到 ack/result 不恢复旧任务；
+  工具失败或 TIMEOUT 解锁一次、保留失败回执，不被迟到成功覆盖或自动重发。
+  关闭/新建 loop 是重载与重连所依赖的内核验证，不冒充 Minecraft 生命周期实测。
+- **绿证**：`build --offline --rerun-tasks --console=plain --no-daemon` 于 11:53 完成，
+  BUILD SUCCESSFUL **25s / 20 个任务全部执行**。11:54:09 实核 XML
+  **287/287**（agent-core 194 + 根工程 66 + clientTest 27），failures/errors/skipped 全 0；
+  AgentLoopLifecycleTest 15/15。仅既有过时 API 与 Gradle 10 兼容性警告。
+- 本轮 `build/libs/mcbot-0.1.0.jar` SHA256：
+  `153eaee914c84cedabd715345bceebff5db02784f801ba724a84382b99adedd3`。
+  未启动游戏/服务端/连接器，未调用真实模型，未安装包或修改玩家配置/存档，
+  list-java 未发现 Java 进程。本源码副本无 Git 元数据，未提交或推送。
+  原始 XML 在三个模块既有 test-results 目录，均为本地构建产物，不入仓。
 
 ### 阶段收尾：文档同步、复核与发布（2026-10-10 02:16，Asia/Shanghai）
 
