@@ -32,11 +32,11 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
 | `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
-| `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、真战利品表（错工具真没掉落）、全客户端可见裂纹；掉落先背包后落地 |
-| `collect` | `x,y,z,r?` | 同步 | 吸指定点附近掉落物进背包 |
+| `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、战利品上下文带工具、可见裂纹；掉落先背包再余量落地，采收资格/耐久完整语义待 C2 |
+| `collect` | `x?,y?,z?,r?` | 同步 | 坐标全部省略则自己脚下，r=1-12 默认 3；按实际数量拾取，余量留地上；忙时拒绝 |
 | `place_block` | `x,y,z,item` | 同步 | 背包拿方块放（item 用注册路径如 `cobblestone`） |
 | `move_to` | `x,y,z,may_alter_terrain?` | 异步(≤3min) | **DigAStar（M8）**：节点=落脚点，会绕路/跳/落/挖穿/垫脚/搭桥；改动世界的路先回 `NEED_CONFIRM`+方块清单，点头（`may_alter_terrain=true` 重发）才执行；搜索预算 8000 节点/128 挖/放≤背包存量；执行期每 20 节点复核，世界变了自动重规划 |
-| `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 原版普通 `Container` 接口存取，堆叠合并（不开 GUI）；熔炉类须用 smelt |
+| `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text` | **本地**（不出客户端） | 方向性决策问主人：question 事件进桥 → `/v1/answer` 回复续跑；120s 无回答回失败回执，tick 与回答入口都检查期限，再由大脑决定后续 |
 
@@ -158,6 +158,39 @@ COOKING 表示当前具备推进条件，不证明本次已经产生新成品。
 不支持模组机器、GUI/成就/经验领取流程；实际机器行为仍需专项证明。
 操作预检/物品保全、参数与 runner 取消接线的 28 项离线测试见 DEVELOPMENT §3.4；
 离线夹具提供已返还桶，不模拟燃料生成桶或原版烧制，不替代真实服务端/连接器验收。
+
+### 2.4 物品守恒与部分搬运
+
+transfer 和 collect 可以部分完成。反馈的实际已搬/已捡数量和剩余数量是判断依据，
+`ok=false` 可能已经移动一部分，不能据此假定两边没变化。
+腾空间后仅处理留在来源的物品；取消或迟到回执不回滚已完成的同步移动，
+应先重新查看 inventory，不能自动重投整个操作。
+
+transfer 按来源逐槽搬运，先合并全部组件相同的堆栈再使用空槽。
+背包来源/目标只用 0-35，装备/副手和选中槽保留。
+拒收某项不阻断后续其他允许的物品；可选 item 按注册 ID 过滤，最多 128 字符。
+坐标须是数值整数，dir 为 in/out；省略 dir 为 out 保留旧调用兼容，
+模型 Schema 仍要求显式提供。非法方向、数字字符串、小数或越界整数均 DENIED。
+data 含 moved_items、moved_stacks（发生实际移动的来源组数）、remaining_items、
+partial 和 dir。没有匹配物品时 ok=true 但 moved_items=0，不证明目标已达成；
+有剩余匹配物品时 ok=false，partial 只在已移动且有剩余时为 true。
+
+普通容器须已加载、在当前世界边界和 6.5 格内、stillValid=true，锁定容器一律拒绝，
+不通过此工具使用钥匙。当前操作目标方块自己的 Container，不自动合并双箱。
+canPlaceItem/canTakeItem 和物品/容器堆叠上限参与移动；
+WorldlyContainer 另检查同伴眼睛相对容器中心方向的最近面、该面的槽集合与进出权限，
+不遍历其他面绕过拒绝。熔炉类仍须 smelt。
+仅适用于遵守上述 Container 接口约定的存储容器；菜单独有规则、副作用、
+任意模组 setter 行为和双箱/阻挡开启语义不在当前离线保证内。
+
+collect 的 x/y/z 须完整提供或全部省略；r 为 1-12 数值整数，默认 3。
+data 保留 collected，并加入 collected_count、remaining_count、partial；
+反馈明细每类最多 32 项、使用注册 ID/数量/耐久，不序列化自定义名称或原始组件。
+部分拾取时只将剩余完整堆栈写回实体，全部拾取才 discard。
+单格挖掘和开路掉落共用同一入包/剩余量逻辑，只将装不下的部分 popResource。
+此修复不等于挖掘采收/耐久语义已修正；collect 的身体局部范围与拾取延迟/目标规则
+留到调度与动作权限卡收口，不宣称原版 playerTouch 已接入。
+专项离线回归和真实行为待验范围见 DEVELOPMENT §3.5。
 
 ## 3. 回执词汇表（模型行为约定）
 

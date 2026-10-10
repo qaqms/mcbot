@@ -3,14 +3,17 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：冶炼实现/离线验证完成，真实机器待验；F0 剩余真机与连接器待验，上游历史错误根因未销账
+## 当前状态（2026-10-10）：物品守恒实现/离线完成，下一卡挖放语义；真实机器/动作、F0 与连接器待验
 
 当前优先级：连接器尚未提供，按维护者授权先完善 MC agent 本体，
-依次推进背包明细与工具切换、合成、冶炼、攻击，一次一个里程碑；不新增独立聊天功能。
+基础背包/切换、合成、冶炼实现后，维护者接受整体逻辑审查的整改顺序：
+**物品守恒 → 挖放语义 → 调度与权限 → 攻击 → 状态感知与流程组合**，
+一次一个里程碑；不新增独立聊天功能。
 F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留。
 完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
 当前以开发与离线测试为主，暂不启动游戏客户端或真实服务端做验收；
 冶炼本轮实现与离线回归完成，真实行为及连接器联合验收另行挂账。
+当前 C1 物品守恒完成实现与离线验证，未将此扩写为真实挖掘/放置语义已经正确。
 
 **模块职责与协作边界**：
 - **mcbot**：提供 MC agent 本体、游戏执行能力与任务级桥接接口，并维护接口契约及回归测试。
@@ -21,6 +24,62 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### C1 物品守恒：实现与离线阶段完成（2026-10-10 22:17，Asia/Shanghai）
+
+- **排期/范围**：维护者接受整体逻辑审查建议，先修物品守恒，再挖放、
+  调度/有限权限、攻击与状态感知/有界流程。本卡只处理物品移动与相关旧工具边界，
+  在现有冶炼分支基础创建独立 fix/item-conservation，基线 c946449。
+  不改宿主、只读参考或连接器，任务桥 v1.0 不变；不启动真实游戏/服务器或模型。
+- **修复**：统一 ItemTransfers 返回实际 moved 与完整组件 remainder。
+  transfer 双向移动同步写回源槽，不再以 Inventory.add 布尔或整组成功判断来源扣减；
+  半满目标 60 + 来源 10 现在得到目标 64、来源 6，总量仍 70，
+  重复调用不增量。容量为 1 的容器只搬 1、保留来源 9，不再清空来源导致丢物。
+  collect 部分拾取只回写剩余实体堆栈，全部装下才删除；单格挖掘与开路只落地余量，
+  反馈/日志按实际入包量计数。不改变真实采收门、工具耐久或破坏/放置路径。
+- **限制/组件**：先合并全部组件相同的堆栈再空槽，尊重物品/容器堆叠上限、
+  canPlaceItem/canTakeItem；WorldlyContainer 核对同伴眼睛相对容器中心的最近面、
+  该面可见槽及进出权限。普通容器锁/stillValid 与边界/已加载/6.5 格限制先检查，
+  熔炉类继续要求 smelt；背包只用 0-35，装备/副手/选中槽保留。
+  transfer/collect 同步和异步入口均检查当前 scheduler BUSY，避免长任务期间改背包；
+  不宣称统一服务端资源调度/授权或依赖终局等待已完成。
+- **回执/参数**：transfer 给 moved_items/moved_stacks/remaining_items/partial/dir，
+  collect 给 collected_count/remaining_count/partial 并保留 collected。
+  部分移动允许 ok=false，但 feedback 同时给已移和留下数量；不自动回滚或重发。
+  transfer 坐标/方向/item 严格解析，旧省略 dir=out 兼容保留；
+  collect 中心须完整或全部省略，r=1-12 整数，错误参数不读取世界。
+  拾取/掉落反馈只显示有界注册 ID/数量/耐久，不输出超长名称或原始组件。
+- **离线证据**：首轮 33 项物品/工具回归 BUILD SUCCESSFUL 15s，无失败，
+  日志 build/item-conservation-offline-20261010.log。
+  新增 ItemTransfersTest 13、TransferToolOperationsTest 12、
+  CollectToolOperationsTest 8、AgentRunnerItemTransferTest 3，共 **36/36**。
+  仅初始化注册表，运行真实 Inventory(null, EntityEquipment)/ItemStack/SimpleContainer
+  和无世界 ChestBlockEntity 锁检测；容量矩阵、双向半满/重复调用/满载、
+  槽/接触面拒绝、不同组件/耐久/装备保全、全装入计数、低容量拒丢物、
+  后续允许材料继续搬运、守卫/参数、模型回执/BUSY/取消迟到隔离均通过。
+  身体/世界/调度状态与实体余量写回使用可控依赖；两条实际挖掘调用点编译验证，
+  不把共享 receive 测试当作实际破坏/落地证明。
+- **全量验证**：22:17 实核 build --offline --rerun-tasks --console=plain --no-daemon
+  BUILD SUCCESSFUL **33s / 20 个任务全部执行**，XML **398/398**
+  （agent-core 194 + 根工程 66 + clientTest 138），failures/errors/skipped 全 0。
+  日志 build/item-conservation-full-20261010.log；JAR build/libs/mcbot-0.1.0.jar SHA256
+  `a153abb37f2df3f2a9b6153d0593789db2ba6cdab763974f08a32ad282ae4d13`。
+  只有既有过时 API/Gradle 10 兼容提示；产物不入仓/不安装到实例。
+- **文档/边界**：README、TOOLS、ARCHITECTURE、DEVELOPMENT、ROADMAP 与包说明同步。
+  下一卡 C2 挖放语义，后续 C3 才收口调度/有限授权；攻击尚未开始。
+  真实容器/拾取实体/挖掘落地、scheduler 停手、保存重进/普通动作回归暂缓；
+  任意模组菜单独有规则/setter、副作用、双箱整体/阻挡开启未验证。
+  collect 身体范围及拾取延迟/指定目标语义仍待动作权限卡，未宣称 playerTouch。
+  冶炼、F0/连接器、历史模型错误和 `[m9] A3` 均不销账。
+  提交/推送与远端核验另行记录，不以构建通过冒充已发布。
+- **发布核验（22:23，Asia/Shanghai）**：实现提交
+  `26a878e1cd761245119654c7749b0e701654ecd8` 已推送 fix/item-conservation，
+  新增 PR #6，OPEN/Draft，基线 wip/furnace-smelting（接 PR #4）。
+  GitHub headRefOid 与上述本地实现提交一致；未合并 PR/main、未强推或改动其他协作者分支。
+  首次 Git 直连失败，随后使用当前网络配置重试成功；凭据覆盖仅在命令进程临时去除并恢复，
+  未修改持久凭据/网络配置。提交前 17 文件暂存检查、机器绝对路径/凭据模式/运行产物扫描
+  零命中，diff --check 通过；停构建 daemon 后 list-java 无 Java 进程。
+  本条文档收尾随后单独提交/推送，不重跑或重算 398 项测试结果。
 
 ### B3 熔炉/高炉/烟熏炉：实现与离线阶段完成（2026-10-10 21:21，Asia/Shanghai）
 
@@ -2002,6 +2061,8 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 物品移动（C1，10-10 javap + 离线） | Container.canPlaceItem(int,ItemStack)/canTakeItem(Container,int,ItemStack)、getMaxStackSize(ItemStack)、stillValid(Player) 均公开；WorldlyContainer.getSlotsForFace(Direction)/canPlaceItemThroughFace/canTakeItemThroughFace 可用。BaseContainerBlockEntity.isLocked() 可直接拒锁，ChestBlockEntity.applyComponents 可在无世界夹具设置 DataComponents.LOCK，测试不等于实际开启/菜单行为 |
+| 背包部分插入/离线（C1） | Inventory.add(ItemStack) 字节码可先修改目标/传入余量后返回 false，不能用返回值推断零移动。Inventory(null,new EntityEquipment()) 的 getItem/setItem/setChanged/getContainerSize 不访问 Player，可在注册表初始化后用于离线存储/装备保全；不调用需要 player 的 add/世界行为。SimpleContainer.setItem 按 getMaxStackSize(stack) 裁量，先核对容量再写；DataComponents.MAX_STACK_SIZE 参与 ItemStack 堆叠上限 |
 | 冶炼读取/燃料（B3，10-10 javap + 编译；未运行 Mixin） | `AbstractFurnaceBlockEntity.dataAccess: ContainerData`，`quickCheck: RecipeManager.CachedCheck<SingleRecipeInput,? extends AbstractCookingRecipe>`；四个公开 DATA_* 常量对应 0-3。`getBurnDuration(FuelValues,ItemStack)` 在熔炉读 burnDuration，高炉/烟熏炉覆盖为父结果整数除 2。原版 `canBurn`/`burn` 比全部 components，已有产物每次 grow(1)，故工具拒绝多件结果；`setItem` 会 limitSize(getMaxStackSize(stack))，原料组件不同时在真实 ServerLevel 上重设 cookingTotalTime/清进度 |
 | 冶炼离线物品/配方（B3） | 三种普通烧制配方构造均为 `(String,CookingBookCategory,Ingredient,ItemStack,float,int)`，`assemble(SingleRecipeInput,HolderLookup.Provider)` 返回结果副本。`Container.getMaxStackSize(ItemStack)` 结合容器/物品上限；`SimpleContainer.setItem` 确实按该上限裁数量，不能用它存两件默认不可堆叠物品来制造溢出样本。`SharedConstants.tryDetectVersion()` + `Bootstrap.bootStrap()` 可在测试 worker 初始化注册表/ItemStack，不启动 MinecraftServer；不等于 Fabric/Mixin 已加载 |
 | 配方查询/合成（B2，10-10 javap + 真实服务端） | `ServerLevel.recipeAccess(): RecipeManager`，`getRecipes(): Collection<RecipeHolder<?>>`、`byKey(ResourceKey<Recipe<?>>)`；配方 ID 用 `holder.id().identifier()`，物品 ID 不等于配方 ID。`Recipe` 无旧版 getResultItem，普通 ShapedRecipe/ShapelessRecipe 的 assemble(EMPTY, registryAccess) 返回静态结果副本（javap 字节码核实），自定义/特殊类不能这样探测。`ShapedRecipe.getWidth/getHeight` 与 `PlacementInfo.ingredients/slotsToIngredientIndex/isImpossibleToPlace` 可用 |

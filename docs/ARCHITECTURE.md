@@ -54,6 +54,7 @@ src/main/            公共+服务端
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
                      PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
+                     ItemTransfers(实际移动量+组件完整的剩余堆栈、存储槽/容器/接触面约束)
                      ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(12 个服务端工具)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
@@ -231,6 +232,14 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   1.21.11 Inventory 有 36 个存储槽和 7 个装备映射槽（总 43），主手只选 0-8，
   equip 来源范围 0-35，不把装备槽当可选快捷栏。
 - 每同伴一个活跃任务槽（无队列）：忙时工具层直接回 `BUSY` 教学回执。
+- transfer/collect 及两条挖掘掉落路径共用 ItemTransfers，按实际移动数而非
+  Inventory.add 的布尔值记账。存取逐槽同步扣来源，拾取只写回余量，
+  挖掘仅将剩余掉落 popResource；先合并完整组件再用空槽，背包限 0-35。
+  transfer 检查普通容器锁/有效性、放入/取出槽与 WorldlyContainer 接触面权限，
+  遵守容器/物品堆叠上限；transfer/collect 在 scheduler 忙时拒绝。
+  部分搬运允许已产生副作用，ok=false 的反馈仍给实际移动/剩余量，不自动回滚或重发。
+  内部 Access 只隔离身体/世界观测，离线回归运行实际工具处理与真实 Inventory/ItemStack；
+  挖掘主流程的真实采收/耐久和拾取距离/延迟/目标权限仍待后续卡。
 - `craft` 是 SYNC：从当前服务器 RecipeManager 选普通 ShapedRecipe/ShapelessRecipe，
   不硬编码材料或产量。2×2 随身，3×3 要求 5.5 格内已加载的工作台。
   原版 StackedContents 以实际堆栈身份/Ingredient 谓词分配材料，真实 CraftingInput
@@ -251,7 +260,9 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 - 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 静默失效 →
   手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
   `ClientboundBlockDestructionPacket`（-1 清除，onAbort 兜底），完成走
-  `Block.getDrops`（错工具真没掉落）→ 背包吸附 → 装不下 `popResource`。
+  `Block.getDrops` → 背包吸附 → 仅将装不下的余量 `popResource`。
+  当前缺少单独的正确工具采收门与真实 mineBlock 耐久步骤，C2 负责修复，
+  不将“loot context 带工具”视为采收资格已经核验。
 - 移动（M8 起）：move_to = DigAStar 任务。节点=落脚点（脚格+头格可通行、下格有支撑），
   边统一建模为"清两格(挖)+补支撑(放)+移动"，派生 走/跳/落/下挖/向前挖/垫脚/搭桥。
   约束全在 LevelDigSampler：神圣集（容器/工作台/床/机关本体与其支撑+任意方块实体）、
