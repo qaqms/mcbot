@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-11）：C1–C3 实现/离线完成，下一卡攻击；真实机器/动作、F0 与连接器待验
+## 当前状态（2026-10-11）：C1–C4 实现/离线完成，下一卡状态感知；真实机器/动作、F0 与连接器待验
 
 当前优先级：连接器由协作者独立维护，本仓已收到首轮联调报告 PR #5，
 尚未接收连接器源码或补丁；按维护者授权先完善 MC agent 本体，
@@ -14,7 +14,7 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
 当前以开发与离线测试为主，暂不启动游戏客户端或真实服务端做验收；
 冶炼本轮实现与离线回归完成，真实行为及连接器联合验收另行挂账。
-当前 C1 物品守恒、C2 挖放语义、C3 调度与权限完成实现与离线验证；
+当前 C1 物品守恒、C2 挖放语义、C3 调度与权限、C4 有界近战完成实现与离线验证；
 原版实际挖放/耐久/掉落、多格/组件/碰撞与路径真实支撑仍另行待验。
 当前客户端与服务端须一起更新；外部任务桥 v1.0 不变。
 
@@ -27,6 +27,81 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### C4 有界近战：实现与离线阶段完成（2026-10-11 01:32，Asia/Shanghai）
+
+- **范围/基线**：维护者安排开发C4，并允许适当参考只读项目的战斗机制。
+  在C3 `adb209fb7ac45452cfd69cedb038903a03e5d5bb` 创建 fix/bounded-attack；
+  C2/C3仍为独立Draft，不合并main或更改协作者PR #5。只改本体，宿主/参考副本/连接器不动，
+  外部任务桥v1.0不变。参考的战斗接口/架构说明仅用于理解目标保持、冷却和终态汇报，
+  没有复制/翻译其代码或文档，具体实现独立按本仓调度与权限接口完成。
+  未启动runClient/runServer、真实世界/实体/身体/服务器/模型，不安装到玩家实例。
+- **近战语义**：新增第13个服务端工具attack，ACCEPT，400tick帽；默认1/最多10次原版攻击调用。
+  指定正整数entity_id必须带规范target_uuid；hostile_nearby一次选择最近可攻击未命名Enemy，
+  身体6.5格查询盒、最近候选最多64，按实际原版范围/视线/规则筛选，不把“未选到”写成没有生物。
+  后续冻结原实体引用/编号/UUID，不追击、不换目标、不打分裂的新实体、不收掉落。
+  每tick复核身体/维度、实体身份/保护/存活、原版isWithinAttackRange(AABB,0)及局部距离、
+  边界/已加载邻域/世界规则、视线、完整主手/选槽及资源，邻域检查≤4096格且不强制加载。
+  满冷却、目标invulnerableTime≤10且原版物品充能条件允许才调用Player.attack/swing；
+  不手算伤害、不直接hurt/setHealth或手工扣耐久，原版回调后接受本次主手耐久/破损结果。
+- **保护/许可**：拒绝玩家（含主人/同伴）、非Mob、同队、驯服动物/马及owner reference生物；
+  未命名Enemy普通任务可执行，中立/命名Mob须服务端清单确认。
+  沿用ask_owner/authorize的完整清单/明确批准/实际批准回执，许可绑定当前任务/身体/维度、
+  编号/UUID/类型/Enemy与命名标志/max_hits，180s/一次使用。
+  新目标/分类/挥击上限不能沿用旧许可，自动近身选择不能携带具体许可，只读不能升级。
+  剑的目标AABB.inflate(1,.25,1)内有第三活物则拒绝，即使可能不会横扫也保守停止；
+  穿刺/动能武器和重锤拒绝，不承诺数据包/模组附魔回调副作用隔离。
+- **调度/回执**：身体、目标实体UUID及移动后的具体邻域共用ResourceLocks，
+  UUID占用独立于位置，目标走开不允许另一同伴重复认领；区域扩展冲突停手。
+  TickTask新增默认不改变旧结果的interruptedResult，attack取消/超时/异常保留此前出手数，
+  清理异常仍完成唯一终态并释放锁。回调抛错标记最后一次观测未知，不自动重投。
+  feedback/data均含strikes/max_hits、前后生命/吸收减少、目标身份与最后记录的生命/死亡。
+  达到挥击预算允许成功但仍活着；无生命/吸收变化则ATTACK_FAILED停止。
+  死亡仅为观察，不做本次独占伤害/击杀归因；已完成副作用不回滚。
+  客户端主动取消仍立即补账并丢迟到结果，服务端部分结果不覆盖已结束的客户端取消。
+  scan_area兼容保留entities字符串，另给最多20项entity_targets；模型feedback也给同编号/UUID、
+  保护/确认标志，Enemy口径同时包含原Monster分类遗漏的类型。
+- **假身体缺口**：javap核对ServerPlayer.tick不调用Player.tick，doTick才经Player.tick更新
+  attackStrengthTicker/itemSwapTicker及LivingEntity装备属性；FakeConnection不进listener tick链。
+  为避免永久零充能/主手属性不生效，CompanionPlayer现有世界tick补MeleeClock与原生
+  detectEquipmentUpdates Invoker；只推进两项近战时钟与原版装备同步，
+  不运行完整doTick/物理/食物/自动触碰拾取，保留原身体无敌。
+  换物品类型重置计数，原版onAttack只清attackStrengthTicker后自然推进，
+  同类耐久/组件变化不清时钟；装备移除/新增modifier交给原版，不手写属性数值。
+- **离线专项**：新增37项（clientTest35+根工程2）：
+  EntityAttackTest15、AttackToolOperationsTest7、AttackSchedulerTest5、
+  AgentRunnerAttackTest6、MeleeClockTest2、ResourceLocks新增2，旧JobEnvelope策略/帽同步。
+  实际攻击状态机/Task/调度器/权限/锁/gate/runner/loop参与；真实Inventory/ItemStack/组件，
+  实体/世界/原版strike返回与主手损耗由Access控制；Bodies/网络/模型/时钟为可控边界。
+  最终相关回归BUILD SUCCESSFUL **27s**，build/attack-regression-20261011-final.log；
+  首轮实现编译33s与较早专项26s也通过，记录仅留build/attack-compile-20261011.log、
+  build/attack-regression-20261011.log，没有失败用例被跳过或削弱。
+- **最终全量实核**：01:32:36 核对 build --offline --rerun-tasks --console=plain --no-daemon，
+  BUILD SUCCESSFUL **34s / 20个任务全部执行**，XML **513/513**
+  （agent-core199 + 根工程82 + clientTest232），failures/errors/skipped均0。
+  日志 build/attack-full-20261011.log；build/libs/mcbot-0.1.0.jar SHA256
+  `9b4abff081e2a64ce7aefe42310249770849c99e155d487201383f385892c201`。
+  只有既有过时API/Gradle10兼容提示，list-java未发现Java进程；日志/JAR不入仓。
+  提交/推送与Draft PR发布以下方实核为准，不以构建通过冒充已发布。
+- **边界/后续**：真实Mixin加载/原生字段与装备属性、Player.attack/swing、
+  真实扫描/选择/保护实体/范围/视线、伤害/耐久/附魔/横扫/击退与物理停手尚未运行；
+  部分纯谓词/参数/清单决策直接测试，不能扩写成原版世界动作通过。
+  锁只协调本插件，原版/数据包/模组回调可能带额外效果，不是沙盒。
+  未实现受伤/死亡复活、自动防御/进食、追击/远程/自动换工具；既有无敌策略继续保留，
+  这些能力另排生存战斗卡，不把本卡称为完整战斗系统。
+  下一卡C5状态感知，本轮不写C5/C6；既有F0/冶炼/连接器/模型错误及[m9]A3不销账。
+  README/TOOLS/DEVELOPMENT/ARCHITECTURE/ROADMAP与包说明同步。
+- **发布核验（01:37，Asia/Shanghai）**：实现/回归/文档提交
+  `5e39136a00b461e0c9640b7a32183ea914053673` 已推送 fix/bounded-attack，
+  新增 PR #9，OPEN/Draft，基线 fix/scheduling-permissions（C3 PR #8）；
+  GitHub headRefOid、远端分支 SHA 与本地实现提交一致。
+  30文件暂存核对，禁止产物/凭据/机器绝对路径扫描零命中，diff --check通过；
+  字样扫描的task-bound注释误报已人工核对，不含凭据。
+  复核最终XML 513/513、失败/错误/跳过均0与JAR哈希一致，未重跑构建；
+  list-java未发现Java进程，产物/日志及本地PR正文不入仓。
+  未合并 #7/#8/#9/main、未强推或修改协作者PR #5，宿主与参考副本不动。
+  既有凭据覆盖仅在命令进程临时去除后恢复，系统代理仅本次Git命令使用，
+  未改持久网络/凭据配置。本条记录随后另行提交/推送。
 
 ### C3 调度与权限：实现与离线阶段完成（2026-10-11 00:14，Asia/Shanghai）
 
@@ -2257,6 +2332,8 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
 | 拾取目标/维度（C3，10-10 javap + 编译，未运行实体/Mixin） | ItemEntity 私有 `UUID target` 与 `int pickupDelay`；`getOwner()` 返回 thrower 对应 Entity，不能代替 target；playerTouch 的字节码检查 pickupDelay==0 且 target为空或等于玩家UUID，`hasPickUpDelay()` 则为 pickupDelay>0。本体 collect 使用 hasPickUpDelay 和只读 target accessor，不宣称 playerTouch 已运行。ResourceKey.identifier() 可取得维度 ID，身体实例与提交时 ServerLevel 引用另外绑定 |
+| 近战/身体时钟（C4，10-11 javap + 编译，未运行实体/Mixin） | Player.attack(Entity)返回void，经原版伤害/耐久/附魔/击退路径，onAttack只resetOnlyAttackStrengthTicker；满冷却用getAttackStrengthScale(0)，cannotAttackWithItem(ItemStack,int)另检查MINIMUM_ATTACK_CHARGE；isWithinAttackRange(AABB,double)委托AttackRange。ServerPlayer.tick不调用Player.tick；ServerPlayer.doTick才调用后者，假连接不驱动listener doTick。Player.tick推进protected attackStrengthTicker/itemSwapTicker，主手不同物品时两者归零，同类耐久/组件变化不归零 |
+| 装备/横扫/保护（C4，10-11 javap + 编译，未运行世界） | LivingEntity私有detectEquipmentUpdates先collectEquipmentChanges移除旧modifier再用实际ItemStack.forEachModifier/原版附魔效果加入新modifier，用Invoker复用。Player剑横扫查询目标AABB.inflate(1,.25,1)内LivingEntity，排自己/主目标/同队等再hurtServer；本体更保守地拒绝第三活物。OwnableEntity.getOwnerReference可不加载主人判定归属，TamableAnimal.isTame、animal.equine.AbstractHorse.isTamed；Enemy接口覆盖不属于Monster的敌对类型。PIERCING_WEAPON/KINETIC_WEAPON组件与MaceItem单独拒绝 |
 | 破坏/耐久（C2，10-10 javap + 编译；未运行世界动作） | BlockState.getDestroySpeed(BlockGetter,BlockPos) 是硬度，getDestroyProgress(Player,BlockGetter,BlockPos) 按真实身体速度/硬度/采收门计算；零硬度可正无穷。ServerPlayerGameMode.destroyBlock(BlockPos) 使用真实主手 canDestroyBlock、限制检查、playerWillDestroy/removeBlock/destroy，非创造模式执行主手 mineBlock，只有移除且可采收才 playerDestroy；返回 true 不保证 removeBlock 成功，失败也可能已损耗耐久 |
 | 放置上下文（C2，10-10 javap + 编译） | BlockPlaceContext(Player,InteractionHand,ItemStack,BlockHitResult) 可用，构造时按目标 canBeReplaced 算 replaceClicked，默认 getClickedPos 可能转到相邻格；本体覆写 getClickedPos/canPlace 固定精确目标。DirectionalPlaceContext 使用 null Player，不用于本体。BlockItem.place 调状态/支撑/碰撞、多格/组件/setPlacedBy 等原版钩子后 consume(1)，失败不得额外 shrink；ItemStack.useOn 可能有消费回退，直接 place 避免菜单/食用 |
 | 挖放守卫/材料（C2） | gameMode.isSurvival、Level.mayInteract(Entity,BlockPos)、player.blockActionRestricted/hasCorrectToolForDrops/mayUseItemAt、ItemStack.canDestroyBlock 均可编译；BedItem/DoubleHighBlockItem/StandingAndWallBlockItem 为 BlockItem 子类，特殊子类需要各自上下文。getComponentsPatch().isEmpty 可识别普通原堆栈，新增/移除组件均为非空。Bootstrap 冻结注册表后不能 new Item/BlockItem（intrusive holder），离线使用已注册物品 |

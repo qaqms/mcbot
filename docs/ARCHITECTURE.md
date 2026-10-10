@@ -57,9 +57,10 @@ src/main/            公共+服务端
                      ItemTransfers(实际移动量+组件完整的剩余堆栈、存储槽/容器/接触面约束)
                      BlockMining/BlockPlacement(单格与路径共用原版动作入口)
                      PathMaterials(规划/执行共用四种无附加组件垫料)
-                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(12 个服务端工具)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(13 个服务端工具)
+                     EntityAttack(单目标有界近战/实际出手与前后观测)
                      ActionPermissions(服务端任务身份/一次性具体路线授权)/ServerActionGate(统一动作入口)
-  task/              TickTask/CompanionScheduler/ResourceLocks(身体与有界世界区域)
+  task/              TickTask/CompanionScheduler/ResourceLocks(身体、有界世界区域与实体UUID)
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
 src/client/          客户端
@@ -307,6 +308,26 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   正常终态用 onFinish，异常/中止用 onAbort；清理钩子失败也释放资源并完成唯一 future。
   锁仅协调本插件，不排斥玩家/ticker/其他模组；未做服务器抢占/续跑/progress 生产。
 
+### 7.1 有界近战（C4）
+
+AttackTool 以实体编号+UUID或一次近身Enemy选择构造 EntityAttack，交给现有调度器，
+最多10次挥击/400tick；默认1次。每tick检查身份/保护/范围/视线/主手与资源，
+满冷却且目标恢复后调用原版 Player.attack/swing；不追击、换目标、自动换装备或拾取。
+玩家/同伴/宠物/同队拒绝，中立/命名目标沿用服务端具体确认。
+许可包括目标身份/类型/Enemy及命名标志、挥击预算，无法借旧批准扩大次数或改目标。
+身体/实体UUID/目标区域租约到终态释放；实体移动后仍占其UUID，再扩展新的区域。
+TickTask.interruptedResult 让取消/超时/异常保留已完成出手与未知效果标志，其他旧任务默认回原结果。
+主手变更需停手；本次原版攻击的耐久/破损由原版负责，可在回调后更新快照。
+回执区分已调用次数、前后生命/吸收观测与目标死亡，不做独占伤害/击杀归因。
+
+现有假连接没有 listener tick，ServerPlayer.tick 本身也不调用 Player.tick。
+因此 CompanionPlayer 的世界tick通过 MeleeClock 推进原生 attackStrengthTicker/itemSwapTicker，
+换物品类型重置；LivingEquipmentAccess 调原生 detectEquipmentUpdates 完成装备属性同步。
+不引入完整 ServerPlayer.doTick 的物理/食物/自动触碰拾取，保留身体无敌。
+新Mixin、实际身体时钟/装备属性/原版伤害/横扫/取消仅编译，离线使用可控观测及实际逻辑；
+不代表完整生存战斗、自动防御/进食、死亡复活、模组钩子隔离或连接器联合验收已完成。
+完整契约/边界见 TOOLS §2.7 / DEVELOPMENT §3.8 / STATUS。
+
 ## 8. 配置文件与运行目录
 
 | 文件 | 归属进程 | 说明 |
@@ -363,15 +384,16 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
-| 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
+| 任务帽 | 默认 60s；break 60s；move 3min；attack 400tick≈20s；wait n·20+100 tick |
 | 行动参数 | break 预检 5.5、执行 6.5；place 6.5 与 3×3×3 已加载/可交互邻域；滑步 ≤48 格、0.45 格/tick；挖掘用实时 getDestroyProgress，零硬度可立即完成、无效增量连续 10t 停手；新掉落范围目标 AABB 膨胀 0.5 |
 | 路径垫料(C2) | 存储 0-35；无 components patch 的圆石/深板岩圆石/泥土/下界岩；规划预算和执行选择同一谓词，装备/副手不算 |
 | 动作权限(C3) | 服务端 proposal TTL 180s，一次使用；最多256个独立改动，完整坐标/方块清单≤12000 UTF-8字节；每任务一个待确认方案；区域初始≤256，累计≤512，重规划重复区域去重；collect 中心/实体距身体≤6.5格且在请求球体内 |
+| 攻击(C4) | 原版isWithinAttackRange(AABB,0)且身体局部≤6.5；近身候选最近≤64；已加载邻域≤4096格；默认1/最多10次；完整冷却及目标invulnerableTime≤10；剑扫域AABB.inflate(1,.25,1)不能有第三活物；每租约实体UUID≤256 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |
 | 前缀(R2-S2) | FOLD_KEEP_TAIL=12；折叠只在 index<foldCheckpoint 冻结区；prefix reset 全库仅两事件（compaction / directive-boundary）；system 换发仅指令边界；压缩链尾 finishChain（叫停链不压） |
 | 流式(R2-A/F0) | SSE 逐行解析；闭合判定=顶层括号配平且 required 齐；客户端 CallbackChatEngine 送主线程；仅 index 0 早派发，后序延迟串行；记账按 index 原序；arguments 只累积一次 |
-| 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具仅 move_to(3600tick)/break_block(1200tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
+| 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具为 move_to(3600tick)/break_block(1200tick)/attack(400tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
 | 名册 | v1 每位玩家 1 同伴；名字 `[a-z0-9_]{2,16}` |

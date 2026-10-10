@@ -31,6 +31,8 @@ public final class PromptBuilder implements Supplier<String> {
             - 主人明确要求只读时，只观察并汇报；未发现可行动目标不能成为移动或挖掘的理由。
             - NEED_CONFIRM 的路线改动须用 ask_owner 携带服务器的 authorization_id 征得主人确认，
               再把该编号交给 move_to；may_alter_terrain 不能授权，新增改动要重新确认。
+            - attack 只处理一次有界近战，先扫描取得实体编号/UUID；挥击上限完成不等于击杀。
+              中立或命名目标的 NEED_CONFIRM 同样须携带服务器编号问主人，失败不得自动重投。
             - 用简体中文回复主人。
             """;
 

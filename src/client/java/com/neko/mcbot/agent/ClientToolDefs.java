@@ -20,7 +20,7 @@ public final class ClientToolDefs {
                     + "槽0-8直接选中；槽9-35与当前主手槽交换，原主手留在来源槽。"
                     + "只切换主手，不穿戴盔甲或切换副手；忙时先等任务结束或取消",
                     "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35}},\"required\":[\"slot\"]}"),
-            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块（容器/矿石/石材 rock/工作台/作物）的分层摘要；坐标均为绝对 @(x,y,z)",
+            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块（容器/矿石/石材 rock/工作台/作物）的分层摘要；坐标均为绝对 @(x,y,z)。实体附entity_id/target_uuid供精确attack，不可猜编号",
                     "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"}}}"),
             new ToolSpec("craft", "按服务器实际普通合成配方制作背包材料。item 是产物注册ID，"
                     + "count 是至少需要的成品数1-64（默认1），按整次配方可能多产。"
@@ -48,6 +48,19 @@ public final class ClientToolDefs {
                     + "按真实进度耗时，原版处理破坏/耐久，附近本次新掉落先入包，余量留地；失败须核对实际回执。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
+            new ToolSpec("attack", "原地普通近战，只攻击一个目标，不追击、不自动换工具、不拾取掉落。"
+                    + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby选一只可够到的未命名敌对生物。"
+                    + "max_hits为挥击上限1-10，默认1，最多20秒；等满冷却与目标受伤恢复后出手。"
+                    + "玩家/同伴/宠物/同队目标拒绝；中立或命名目标须ask_owner携带服务端authorization_id确认，"
+                    + "再用同一实体编号/UUID/max_hits和批准编号调用。剑横扫范围有其他活物时拒绝；"
+                    + "穿刺/动能武器和重锤不支持。ACCEPTED只是受理，等终态；挥击次数不等于伤害或击杀，"
+                    + "看实际生命/吸收减少及target_dead，失败不自动重投",
+                    "{\"type\":\"object\",\"properties\":{\"entity_id\":{\"oneOf\":[{\"type\":\"integer\",\"minimum\":1},"
+                            + "{\"type\":\"string\",\"enum\":[\"hostile_nearby\"]}]},"
+                            + "\"target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
+                            + "\"max_hits\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10},"
+                            + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},"
+                            + "\"required\":[\"entity_id\"],\"additionalProperties\":false}"),
             new ToolSpec("collect", "捡起指定点附近的地上掉落物进背包；坐标全部省略则以自己脚下为中心。"
                     + "r为1-12，默认3。忙时先等待或取消。空间不足会部分拾取，回执给已捡数量和仍在地上的数量，"
                     + "ok=false不代表完全没捡到；核对inventory后处理剩余物品",

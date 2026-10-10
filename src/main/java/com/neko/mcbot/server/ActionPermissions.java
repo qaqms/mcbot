@@ -91,7 +91,7 @@ public final class ActionPermissions {
     public static boolean allowed(Context context, String tool, JsonObject args) {
         return TaskPolicy.observation(tool, args) || context != null && !context.readOnly()
                 && java.util.Set.of("equip", "craft", "smelt", "move_to", "break_block", "place_block",
-                        "collect", "transfer", "wait").contains(tool);
+                        "collect", "transfer", "wait", "attack").contains(tool);
     }
 
     public String propose(Scope scope) {

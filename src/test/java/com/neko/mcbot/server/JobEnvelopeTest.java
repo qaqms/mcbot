@@ -78,6 +78,7 @@ class JobEnvelopeTest {
     void onlyLongRunningToolsAccept() {
         assertEquals(ServerTool.Acceptance.ACCEPT, new MoveToTool().acceptanceMode(), "move_to");
         assertEquals(ServerTool.Acceptance.ACCEPT, new BreakBlockTool().acceptanceMode(), "break_block");
+        assertEquals(ServerTool.Acceptance.ACCEPT, new com.neko.mcbot.server.tools.AttackTool().acceptanceMode(), "attack");
         assertEquals(ServerTool.Acceptance.SYNC, new ServerTool() {
             @Override
             public String name() {
@@ -94,6 +95,7 @@ class JobEnvelopeTest {
     void capTicksIsTheSingleSourceForBothSides() {
         assertEquals(3600, new MoveToTool().capTicks(new JsonObject()));
         assertEquals(1200, new BreakBlockTool().capTicks(new JsonObject()));
+        assertEquals(400, new com.neko.mcbot.server.tools.AttackTool().capTicks(new JsonObject()));
         // 客户端据此算的等待上限必须严格大于服务端帽（agent-core 的那条不变式）
         assertTrue(com.neko.mcbot.agentcore.loop.PendingJobs.jobTimeoutMs(3600) > 3600L * 50L);
     }
