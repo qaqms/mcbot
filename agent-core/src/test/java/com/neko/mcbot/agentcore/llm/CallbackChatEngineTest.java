@@ -15,6 +15,34 @@ class CallbackChatEngineTest {
     private static final AssistantTurn TEXT = new AssistantTurn("done", List.of(), 0, 0, -1, "stop");
 
     @Test
+    void cancellationReachesSourceAndSuppressesQueuedCallbacks() {
+        var queue = new ArrayDeque<Runnable>();
+        var source = new CompletableFuture<AssistantTurn>();
+        var sinks = new ArrayList<TurnSink>();
+        var observed = new ArrayList<String>();
+        ChatEngine delegate = new ChatEngine() {
+            @Override public CompletableFuture<AssistantTurn> chat(String s, List<Msg> h, List<ToolSpec> t) {
+                return source;
+            }
+            @Override public CompletableFuture<AssistantTurn> chat(String s, List<Msg> h, List<ToolSpec> t,
+                                                                     TurnSink sink, boolean accumulate) {
+                sinks.add(sink);
+                return source;
+            }
+        };
+        var result = new CallbackChatEngine(delegate, queue::add).chat("sys", List.of(), List.of(),
+                new TurnSink() {
+                    @Override public void onTextDelta(String delta) { observed.add(delta); }
+                }, true);
+        sinks.getFirst().onTextDelta("queued");
+        result.cancel(true);
+        sinks.getFirst().onTextDelta("late");
+        while (!queue.isEmpty()) queue.remove().run();
+        assertTrue(source.isCancelled());
+        assertTrue(observed.isEmpty());
+    }
+
+    @Test
     void responseAndFailureAreDeliveredOnlyOnTheProvidedQueue() {
         var queue = new ArrayDeque<Runnable>();
         var source = new CompletableFuture<AssistantTurn>();

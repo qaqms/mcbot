@@ -150,9 +150,9 @@ HTTP 401 表示当前凭据未通过鉴权，不意味着接口不支持自定�
 - **同伴仍无敌**（免死），战斗/死亡→复活链路未做。
 - **模型协议目前仅 Chat Completions 流式接口**，支持自定义模型名称，
   尚不支持 Responses 或 Anthropic Messages；一次空响应不能直接判定不兼容。
-- **工具共 16 个**：服务端15（`status` `inventory` `equip` `craft` `smelt` `scan_area` `find_resource`
-  `inspect_block` `break_block` `attack` `collect` `place_block` `move_to` `transfer` `wait`）+ 本地1（`ask_owner`）。
-  冶炼/攻击/状态资源感知实现与离线完成，真实行为仍待验。
+- **工具共 17 个**：服务端15（`status` `inventory` `equip` `craft` `smelt` `scan_area` `find_resource`
+  `inspect_block` `break_block` `attack` `collect` `place_block` `move_to` `transfer` `wait`）+ 本地2（`ask_owner` `workflow`）。
+  冶炼/攻击/状态资源感知/有界流程实现与离线完成，真实行为仍待验。
 - **寻路**：R1 已加入加权启发式、memo、时间/节点双帽和 PARTIAL 降级，真机复杂山体终验仍待做；
   不会自行换工具。区块票 `[m9] A3` 旧家卸载仍是已知未解项，见仓内 STATUS。
 - 服务端仍是单槽 BUSY；客户端 PARK 顶替是取消再投令，尚非抢占续跑。

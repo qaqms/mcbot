@@ -82,9 +82,15 @@ public final class AgentRunner implements ToolExecutor {
     private static final AtomicLong taskSeq = new AtomicLong();
     private volatile boolean closed;
 
-    private record ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future) {
+    private record ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future,
+                              boolean terminalOnly) {
+        ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future) {
+            this(taskId, owner, future, false);
+        }
         void complete(ToolOutcome outcome) { future.complete(outcome); }
     }
+    private BoundedWorkflow workflow;
+    private long workflowTask;
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
      * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
@@ -347,6 +353,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void clearTaskWaits(long taskId, String text) {
+        stop(taskId, text);
         ToolOutcome stopped = ToolOutcome.synthetic(text);
         var tickets = pending.drain(t -> t.taskId() == taskId);
         var questions = new ArrayList<QuestionRecord>();
@@ -374,7 +381,7 @@ public final class AgentRunner implements ToolExecutor {
                 var p = pending.takeTool(seq);
                 if (p != null) {
                     rememberAuthorization(env, p.ticket());
-                    p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback")));
+                    p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback"), resultData(env)));
                 } else {
                     // 超时、取消、会话清理或重复包都可能迟到；计数不能单独证明超时帽错误。
                     lateResults.incrementAndGet();
@@ -424,7 +431,7 @@ public final class AgentRunner implements ToolExecutor {
         }
         LOG.info("[brain] job {} 受理 {}（帽 {}tick ⇒ 本地等 {}s）",
                 jobId, j.tool(), capTicks, j.timeoutMs() / 1000);
-        j.ticket().complete(ToolOutcome.accepted(jobId, env.str("text")));
+        if (!j.ticket().terminalOnly()) j.ticket().complete(ToolOutcome.accepted(jobId, env.str("text")));
     }
 
     /** 长活的后续：progress 只播报；done/failed/cancelled/superseded 才解锁 PARK。 */
@@ -454,9 +461,17 @@ public final class AgentRunner implements ToolExecutor {
                 client.nowMs() - j.acceptedAtMs());
         rememberAuthorization(env, j.ticket());
         boolean ok = "done".equals(phase);
-        if (j.ticket().owner() == loop && loop != null) {
-            j.ticket().owner().onJobEvent(jobId, new ToolOutcome(ok, text));
+        ToolOutcome outcome = new ToolOutcome(ok, text, resultData(env));
+        if (j.ticket().terminalOnly()) {
+            j.ticket().complete(outcome);
+        } else if (j.ticket().owner() == loop && loop != null) {
+            j.ticket().owner().onJobEvent(jobId, outcome);
         }
+    }
+
+    private static JsonObject resultData(Envelope envelope) {
+        var data = envelope.body().get("data");
+        return data != null && data.isJsonObject() ? data.getAsJsonObject() : new JsonObject();
     }
 
     /** 面板召唤/遣散按钮：与 /mcbot 命令同权限（服务器按发送者校验 owner）。 */
@@ -503,6 +518,7 @@ public final class AgentRunner implements ToolExecutor {
     /** 主线程周期调用：工具/长活/问题超时兜底。 */
     public void tick() {
         if (closed) return;
+        if (workflow != null) workflow.tick();
         long now = client.nowMs();
         for (var t : pending.sweepTools(now)) {
             if (t.ticket().owner() != null) sendCancel();
@@ -516,10 +532,12 @@ public final class AgentRunner implements ToolExecutor {
             // （比收到一条 TIMEOUT 教学坏得多——模型连"我卡住了"都看不到）。
             LOG.warn("[brain] job {} 本地等满 {}s 仍未收到事件，按超时解锁 PARK",
                     j.jobId(), j.timeoutMs() / 1000);
-            if (j.ticket().owner() == loop && loop != null) {
-                j.ticket().owner().onJobEvent(j.jobId(), new ToolOutcome(false,
+            ToolOutcome timeout = new ToolOutcome(false,
                         "TIMEOUT:这件事等了 " + (j.timeoutMs() / 1000)
-                                + " 秒还没有结果（服务端可能已掉线）。别重复这个操作，先向主人说明情况。"));
+                                + " 秒还没有结果（服务端可能已掉线）。别重复这个操作，先向主人说明情况。");
+            if (j.ticket().terminalOnly()) j.ticket().complete(timeout);
+            else if (j.ticket().owner() == loop && loop != null) {
+                j.ticket().owner().onJobEvent(j.jobId(), timeout);
             }
         }
         sweepQuestionTimeouts();
@@ -746,11 +764,50 @@ public final class AgentRunner implements ToolExecutor {
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
         }
+        if ("workflow".equals(name)) return executeWorkflow(argsJson);
         return executeRemote(name, argsJson, currentTask, loop);
+    }
+
+    @Override
+    public void stop(long taskId, String reason) {
+        if (workflow != null && (taskId == 0 || workflowTask == taskId)) workflow.stop(reason);
+    }
+
+    private CompletableFuture<ToolOutcome> executeWorkflow(String argsJson) {
+        if (currentTask == 0 || loop == null) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "DENIED:流程须属于当前活动任务。"));
+        if (workflow != null && !workflow.done()) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "BUSY:已有流程等待终态，不要重发。"));
+        BoundedWorkflow.Plan plan;
+        try { plan = BoundedWorkflow.parse(argsJson); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:流程参数无效；须1-12步、时限1-300秒、请求数合计≤128，动作数量明确填写。"
+                            + "只支持近身采集/放置/制作/烧制/等待/换主手与只读查询，先核对整个清单。"));
+        }
+        long taskId = currentTask;
+        AgentLoop owner = loop;
+        if (taskPolicies.getOrDefault(taskId, true) && !plan.readOnly())
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:只读任务的流程包含动作，整份未执行。"));
+        workflowTask = taskId;
+        BoundedWorkflow run = new BoundedWorkflow(plan, client::nowMs,
+                (tool, args) -> executeRemote(tool, args, taskId, owner, true),
+                () -> {
+                    var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
+                    if (!tickets.isEmpty()) sendCancel();
+                    tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:流程停止，在途效果未知。")));
+                });
+        workflow = run;
+        return run.start();
     }
 
     private CompletableFuture<ToolOutcome> executeRemote(String name, String argsJson,
                                                         long taskId, AgentLoop owner) {
+        return executeRemote(name, argsJson, taskId, owner, false);
+    }
+
+    private CompletableFuture<ToolOutcome> executeRemote(String name, String argsJson,
+                                                        long taskId, AgentLoop owner, boolean terminalOnly) {
         if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
         if (!client.canSend()) {
             return CompletableFuture.completedFuture(
@@ -791,7 +848,7 @@ public final class AgentRunner implements ToolExecutor {
                             + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），服务器不会收。"
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
-        ToolTicket ticket = new ToolTicket(taskId, owner, f);
+        ToolTicket ticket = new ToolTicket(taskId, owner, f, terminalOnly);
         pending.registerTool(seq, name, client.nowMs(), toolTimeoutMs(name, argsJson), ticket);
         client.executeOnClient(() -> {
             if (closed || f.isDone()) return;

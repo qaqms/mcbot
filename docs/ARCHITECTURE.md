@@ -64,7 +64,7 @@ src/main/            公共+服务端
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
 src/client/          客户端
-  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(模型侧描述)
+  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(模型侧描述)/BoundedWorkflow(清单)
   bridge/            BridgeHttp(JDK HttpServer 适配)/BridgeEvents(生产者总线)
   cfg/               ClientConfig（client.json + MCBOT_* 环境变量覆盖）
   ui/                McbotPanelScreen / PanelLayout / PanelFields（G 面板、GUI 像素布局、完整输入/密钥掩码）
@@ -174,7 +174,22 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 同名工具旧回执出站前折叠成占位（存储全量）；摘要端点连败 2 次熔断至下个指令边界。
 `ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`
 （或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
-长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。`ask_owner` 是唯一本地工具（不出客户端，见 §6）。
+长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。本地工具为 `ask_owner` / `workflow`。
+
+C6流程不占服务端外层槽：BoundedWorkflow逐步调用原子工具，子票terminalOnly=true时，
+job_ack只搬PendingJobs、不兑现future；实际job_event兑现子票，不送入AgentLoop的普通job账本。
+最多12步/300秒/128件请求量，参数与只读模式整份预检，失败/空搜索/缺条件即停。
+取消先停止本地清单、清子票、补保留既有回执的workflow结果，再由loop完成历史配对；
+在途未知与已装料机器自主运行分开说明。无移动/攻击/批量存取/拾取或脚本循环，
+原版材料/产量/掉落不由请求量假定，完整契约见TOOLS §2.9。
+loop累计三次结构化空搜索停任务，不因换参数/状态重置，真实目标或物品进展可重置；
+第三次结果打开terminal gate前检查，阻止同轮尚未派发动作。
+ToolOutcome新增防御复制的data，2/4参构造器兼容，普通模型工具反馈不改写。
+
+取消/关闭先递增代际、取消当前模型future（含链尾摘要）、封闭旧反应器。
+CallbackChatEngine取消向delegate传播，排队旧信号丢弃；LlmClient每次chat独立取消控制，
+覆盖原HTTP future/SSE Flow.Subscription及既有一次/v1换道。
+取消后不换道或消费后续帧，已发出的游戏动作无法回滚；真实断线/身体停止仍待验。
 
 反问由 AgentRunner 绑定 task_id 与进程内递增的 question_id，回答必须使用原编号且只消费一次。
 tick 和回答入口都检查 120s 期限；过期回失败回执，重复/未知/已取消问题拒绝回答。
@@ -392,6 +407,7 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 | 位置 | 数值 |
 |---|---|
 | AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
+| 流程(C6) | 本地1-12步、默认180/最多300秒；请求量合计≤128（不等于材料/产量）；明确挖放≤12；参数≤16384B；累计反馈12000B停后续、结果全文展示预算24000B；任务空搜索3次停 |
 | 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |

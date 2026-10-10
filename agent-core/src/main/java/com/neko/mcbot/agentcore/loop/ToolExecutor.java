@@ -25,7 +25,22 @@ public interface ToolExecutor {
      *
      * <p>2 参构造器保持旧调用点零改动（{@code accepted=false, jobId=null}）。
      */
-    record ToolOutcome(boolean ok, String feedback, boolean accepted, String jobId) {
+    record ToolOutcome(boolean ok, String feedback, boolean accepted, String jobId,
+                       com.google.gson.JsonObject data) {
+
+        public ToolOutcome {
+            data = data == null ? new com.google.gson.JsonObject() : data.deepCopy();
+        }
+
+        @Override public com.google.gson.JsonObject data() { return data.deepCopy(); }
+
+        public ToolOutcome(boolean ok, String feedback, boolean accepted, String jobId) {
+            this(ok, feedback, accepted, jobId, null);
+        }
+
+        public ToolOutcome(boolean ok, String feedback, com.google.gson.JsonObject data) {
+            this(ok, feedback, false, null, data);
+        }
 
         /** 受理回执的文本前缀（**契约常量**，模型教学与桥播报都认它）。 */
         public static final String ACCEPTED_PREFIX = "ACCEPTED:";
@@ -47,6 +62,9 @@ public interface ToolExecutor {
     }
 
     CompletableFuture<ToolOutcome> execute(String name, String argsJson);
+
+    /** Stop local composition before the loop synthesizes unresolved tool receipts. */
+    default void stop(long taskId, String reason) { }
 
     /** Optional host observation, taken anew before each model turn, never stored as a tool call. */
     default CompletableFuture<ToolOutcome> observe(long taskId) {

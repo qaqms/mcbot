@@ -96,11 +96,42 @@ public final class LlmClient implements ChatEngine {
     @Override
     public CompletableFuture<AssistantTurn> chat(String systemPrompt, List<Msg> convo, List<ToolSpec> tools,
                                                 TurnSink sink, boolean accumulate) {
-        return chatOn(provider, true, systemPrompt, convo, tools, sink, accumulate,
-                new TurnTimings(clock)).whenComplete((turn, err) -> {
+        Cancellation control = new Cancellation();
+        var result = new CompletableFuture<AssistantTurn>();
+        result.whenComplete((v, t) -> {
+            if (result.isCancelled()) control.cancel();
+        });
+        chatOn(provider, true, systemPrompt, convo, tools, sink, accumulate,
+                new TurnTimings(clock), control).whenComplete((turn, err) -> {
+            if (control.cancelled) return;
             Throwable failure = unwrap(err);
             if (failure != null && sink != null) sink.onComplete(null, failure);
+            if (failure == null) result.complete(turn);
+            else result.completeExceptionally(failure);
         });
+        return result;
+    }
+
+    private static final class Cancellation {
+        volatile boolean cancelled;
+        private CompletableFuture<?> transport;
+        private SseBodySubscriber body;
+
+        synchronized CompletableFuture<HttpResponse<SseBodySubscriber>> send(
+                HttpClient http, HttpRequest request, HttpResponse.BodyHandler<SseBodySubscriber> handler,
+                SseBodySubscriber subscriber) {
+            if (cancelled) return CompletableFuture.failedFuture(new java.util.concurrent.CancellationException());
+            body = subscriber;
+            var future = http.sendAsync(request, handler);
+            transport = future;
+            return future;
+        }
+
+        synchronized void cancel() {
+            cancelled = true;
+            if (body != null) body.cancel();
+            if (transport != null) transport.cancel(true);
+        }
     }
 
     /**
@@ -117,7 +148,7 @@ public final class LlmClient implements ChatEngine {
     private CompletableFuture<AssistantTurn> chatOn(ChatProvider cp, boolean mayRetryV1,
                                                     String systemPrompt, List<Msg> convo,
                                                     List<ToolSpec> tools, TurnSink sink,
-                                                    boolean accumulate, TurnTimings timings) {
+                                                    boolean accumulate, TurnTimings timings, Cancellation control) {
         StreamingTurnReader reader = new StreamingTurnReader(tools, accumulate);
         SseBodySubscriber body = new SseBodySubscriber(cp, reader, sink, timings);
         JsonObject requestBody = cp.buildBody(systemPrompt, convo, tools);
@@ -141,13 +172,14 @@ public final class LlmClient implements ChatEngine {
                 .POST(HttpRequest.BodyPublishers.ofString(serialized, StandardCharsets.UTF_8))
                 .build();
 
-        return http.sendAsync(request, info -> {
+        return control.send(http, request, info -> {
                     timings.markResponse();
                     body.statusCode(info.statusCode());
                     body.contentType(info.headers().firstValue("Content-Type").orElse(""));
                     return body;
-                })
+                }, body)
                 .handle((resp, err) -> {
+                    if (control.cancelled) throw new java.util.concurrent.CancellationException();
                     var snapshot = timings.snapshot();
                     reportDiagnostics(body);
                     Throwable failure = unwrap(err);
@@ -160,7 +192,7 @@ public final class LlmClient implements ChatEngine {
                                     "/v1/chat/completions");
                             if (!alt.equals(cp.endpoint())) {
                                 return chatOn(cp.withBaseUrl(alt), false, systemPrompt, convo, tools,
-                                        sink, accumulate, new TurnTimings(clock));
+                                        sink, accumulate, new TurnTimings(clock), control);
                             }
                         }
                     }
@@ -186,7 +218,7 @@ public final class LlmClient implements ChatEngine {
                         throw new CompletionException(new LlmFailure(kind, code));
                     }
                     AssistantTurn turn = accumulate ? parsed : null;
-                    if (sink != null) {
+                    if (sink != null && !control.cancelled) {
                         sink.onComplete(turn, null);
                     }
                     return CompletableFuture.completedFuture(turn);
@@ -263,9 +295,10 @@ public final class LlmClient implements ChatEngine {
             String textDelta = reader.builder().textTail(before);
             if (!textDelta.isEmpty()) {
                 timings.onTextDelta(textDelta);
-                if (sink != null) sink.onTextDelta(textDelta);
+                if (sink != null && !body.cancelled) sink.onTextDelta(textDelta);
             }
             for (StreamingTurnReader.ReadyCall ready : reader.drainReady()) {
+                if (body.cancelled) return;
                 timings.onToolCallReady(ready.index(), ready.call());
                 if (sink != null) sink.onToolCallReady(ready.index(), ready.call());
             }
@@ -330,6 +363,8 @@ public final class LlmClient implements ChatEngine {
         private final ByteBuffer carry = ByteBuffer.allocate(8);
         private final List<String> errLines = new ArrayList<>();
         private final CompletableFuture<SseBodySubscriber> bodyDone = new CompletableFuture<>();
+        private volatile Flow.Subscription subscription;
+        private volatile boolean cancelled;
 
         private volatile int statusCode;
         private long requestId;
@@ -428,13 +463,24 @@ public final class LlmClient implements ChatEngine {
 
         @Override
         public void onSubscribe(Flow.Subscription subscription) {
-            subscription.request(Long.MAX_VALUE);
+            this.subscription = subscription;
+            if (cancelled) subscription.cancel();
+            else subscription.request(Long.MAX_VALUE);
+        }
+
+        void cancel() {
+            cancelled = true;
+            var current = subscription;
+            if (current != null) current.cancel();
+            bodyDone.cancel(true);
         }
 
         @Override
         public void onNext(List<ByteBuffer> buffers) {
+            if (cancelled) return;
             try {
                 for (ByteBuffer in : buffers) {
+                    if (cancelled) return;
                     bytes += in.remaining();
                     drain(in);
                 }
@@ -445,12 +491,14 @@ public final class LlmClient implements ChatEngine {
 
         @Override
         public void onError(Throwable t) {
+            if (cancelled) return;
             failure = t;
             bodyDone.complete(this);
         }
 
         @Override
         public void onComplete() {
+            if (cancelled) return;
             try {
                 drain(ByteBuffer.allocate(0));
                 if (lineBuf.length() > 0) {
@@ -499,7 +547,7 @@ public final class LlmClient implements ChatEngine {
                 cr.throwException();
             }
             chars.flip();
-            while (chars.hasRemaining()) {
+            while (chars.hasRemaining() && !cancelled) {
                 char c = chars.get();
                 if (c == '\n') {
                     emitLine();
@@ -513,6 +561,7 @@ public final class LlmClient implements ChatEngine {
         }
 
         private void emitLine() {
+            if (cancelled) return;
             int end = lineBuf.length();
             if (end > 0 && lineBuf.charAt(end - 1) == '\r') {
                 lineBuf.setLength(end - 1);

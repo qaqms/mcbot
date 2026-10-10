@@ -51,6 +51,7 @@ class AgentLoopLifecycleTest {
         engine.responses.getFirst().complete(text("A done"));
         assertEquals(2, engine.responses.size(), "second call is the history summary");
         loop.close();
+        assertTrue(engine.responses.get(1).isCancelled(), "compaction transport also belongs to this session");
         engine.responses.get(1).complete(text("summary"));
         assertEquals(2, engine.responses.size());
         assertEquals(List.of(11L), rec.started);
