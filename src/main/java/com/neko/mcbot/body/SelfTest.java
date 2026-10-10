@@ -31,6 +31,10 @@ public final class SelfTest {
         if (done) {
             return;
         }
+        if (CraftSelfTest.runIfRequested(server)) {
+            done = true;
+            return;
+        }
         if (InventorySelfTest.runIfRequested(server)) {
             done = true;
             return;

@@ -145,6 +145,32 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
 明细进入下一轮模型历史、BUSY 不被自动重发及实际工具 Schema。
 隔离服务端专项不验证玩家客户端/多人可见装备更新、模型理解或连接器联合验收。
 
+### 3.3 合成（独立工装）
+
+只允许未使用的 `level-name=mcbot-craft-<测试名>` 开发世界，回环监听与空闲端口。
+先将 `tools/fixtures/crafting-pack/` 整个复制到该世界的 `datapacks/crafting-pack/`，
+再创建 `run/mcbot/autotest-craft.flag` 并运行 `./gradlew runServer`。
+fixture 数据包不在 mod 资源内、不应安装到玩家世界；它提供不同于物品 ID 的配方 ID、
+重叠 planks 标签/精确 oak_planks 材料及 7 个金粒的产量，用实际加载配方验证，
+不依赖在代码里替换 RecipeManager。min/max_format 94.1 来自当前 MC JAR 的 version.json。
+flag 自删，专项结束 halt(false) 正常保存停服，不需要客户端、模型或控制台 stdin。
+工装拒绝旧 fixture 名册与普通/背包/恢复测试 flag 并存；超平坦仍须包含 layers/biome。
+
+判读 `[craft-test]` 每项 true，最终 PASS，且无 FAILED/ERROR。
+覆盖只读查询与数量取整、原木/木棍/石镐、制作并放置工作台的连续流程、
+工作台缺失/超距、分散材料/标签、数据包重叠候选与不可重复消费、可用替代配方、
+蛋糕空桶返还、满背包/组件合并/返还物溢出、后续批次失败整批不改背包、
+装备/选中槽保全、非法参数/错配及非合成配方拒绝、忙时执行拒绝/查询可读、取消后可合成。
+普通动作回归须另用新 `mcbot-action-*` 世界，不装 fixture 数据包。
+
+```bash
+./gradlew clientTest --tests com.neko.mcbot.server.tools.CraftToolArgumentsTest --tests com.neko.mcbot.agent.AgentRunnerCraftTest
+```
+
+离线测试运行实际 runner/loop，以可控模型和网络回执替身检查 Schema、query → craft →
+inventory 的参数/回执配对、材料信息可见及缺料不自动重发。真实服务端专项直接运行实际工具，
+不替代玩家模型驱动、GUI/统计/成就事件、真实多人或连接器联合验收。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，

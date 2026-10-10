@@ -1,0 +1,6 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": ["#minecraft:planks", "minecraft:oak_planks"],
+  "result": {"id": "minecraft:gold_nugget", "count": 7}
+}

@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：背包/主手切换自动化验证完成，下一卡合成；F0 剩余真机与连接器待验，上游历史错误根因未销账
+## 当前状态（2026-10-10）：背包/主手切换与普通合成自动化验证完成，下一卡冶炼；F0 剩余真机与连接器待验，上游历史错误根因未销账
 
 当前优先级：连接器尚未提供，按维护者授权先完善 MC agent 本体，
 依次推进背包明细与工具切换、合成、冶炼、攻击，一次一个里程碑；不新增独立聊天功能。
@@ -19,6 +19,69 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### B2 普通配方查询与合成（2026-10-10 14:03，Asia/Shanghai）
+
+- **范围**：沿维护者批准的本体开发顺序，本轮只推进合成，不改宿主/连接器或桥契约，
+  未开始冶炼、攻击或调度抢占。玩家游戏实测继续暂缓；不将隔离服务器验证扩写为 F0 全体验收。
+- 新增 SYNC 工具 `craft`，服务端白名单与模型 Schema 同步为 **11 服务端 + 1 本地**。
+  item 是产物 ID，recipe 可选且是配方 ID；读取当前服务器 RecipeManager，无硬编码材料/产量、
+  无旧数据包缓存。支持实际类型为原版 ShapedRecipe/ShapelessRecipe 的普通有序/无序配方，
+  包括数据包的同类配方与标签；自动按 ID 顺序选当前整批可完成的候选，或按显式 recipe 校验产物。
+  自动查询帽 4096 加载配方/32 匹配候选，超限须指定 recipe；参数 ID 展示/输入均有尺寸边界。
+- `count` 为至少所需成品数 1-64（默认 1），完整次数向上取整，不抵扣已有成品。
+  请求 5 根木棍，原版每次 4 根，共做 2 次产出 8 根，不丢弃多出部分。
+  `query=true` 只读，合法查询且有配方时 ok=true，但必须看 can_craft；crafted_count 为 0。
+  feedback 同时列配方、单次材料/匹配存量、次数/计划产量、工作台坐标及失败建议，
+  避免 AgentRunner 只转交 feedback 而模型看不到 data。材料候选最多展示 4 个并标截短；
+  共享候选存量不能相加，是否可执行以实际匹配为准。不输出原始组件或自定义名称。
+- 2×2 可随身合成，更大配方要求同维度 5.5 格内已加载的原版工作台；
+  自动找最近工作台，读方块前先 isLoaded，不强载区块或自动放置/挖掉工作台。
+  只使用背包 0-35，装备和选中槽保留；忙时同步/异步执行入口均 BUSY，查询仍可读。
+  在 ItemStack 副本中使用原版 StackedContents 分配实际 Ingredient 谓词，
+  真实 CraftingInput 再验 matches/assemble；逐次 getRemainingItems 处理返还，
+  完整组件合并、先已有堆栈再空槽。整批全部容纳后才提交，任何批次缺料/成品或返还物溢出
+  都不修改真实背包，绝不落地溢出或报告已制作。
+- **离线回归**：新增 CraftToolArgumentsTest 2 项，覆盖 1-64、默认/命名空间、
+  数值整数 13.0/1e1 及 malformed/小数/溢出/非布尔/过长 ID 拒绝；
+  AgentRunnerCraftTest 3 项运行实际 runner/loop，检查真实 Schema、
+  query → craft → inventory 参数/回执配对、材料/产量反馈进入下一轮历史、缺料不自动重发。
+  13:52 专项 BUILD SUCCESSFUL 13s，5/5，模型与网络回执均用替身，无真实模型调用。
+- **真实服务端专项**：CraftSelfTest 只接新 `mcbot-craft-*` 世界与 opt-in flag，
+  拒绝其他专项 flag/旧 fixture，正常停服。自建 fixture 数据包在 tools/fixtures，
+  只复制到独立开发世界，不包含在 mod 生产资源内。
+  13:53:50 首轮 24 个检查全 true；补工作台连续流程/超距、后批空间回退和装备材料隔离后，
+  13:55:48 第二轮 **28 个检查全 true，最终 `[craft-test] PASS`，无 ERROR/FAILED/异常**。
+  覆盖原木→木板→木棍、制作工作台并 place_block 放置→石镐、标签材料分散在不同槽、
+  自动选竹子木棍替代配方、测试数据包 planks 标签与 oak_planks 重叠而不重复消费、
+  原生 7 金粒产量、蛋糕三空桶返还、整批后续缺料/空间不足回退、
+  满背包材料耗尽后空槽可用、完整组件合并/不合并、返还物装不下、只读/忙时/取消后行为。
+  大自定义名称的未使用损耗工具与装备 components/计数保全，回执在尺寸帽内。
+- **完整构建**：13:57:44 `build --offline --rerun-tasks --console=plain --no-daemon`
+  BUILD SUCCESSFUL **23s / 20 个任务全部执行**。实核三个 XML 目录 **334/334**
+  （agent-core 194 + 根工程 66 + clientTest 74），failures/errors/skipped 全 0；
+  仅既有过时 API 与 Gradle 10 兼容警告。
+  JAR `build/libs/mcbot-0.1.0.jar` SHA256：
+  `5ef9c70a24c67ba16a9245567c22a44530b3a998453a4f3b91ac2261d94893c6`。
+- **既有动作回归**：不装 fixture 数据包的另一新开发世界，13:59:19–13:59:56
+  `[m5a]` 四尺寸断言、`[m3]` 闸/冒烟/正向回执、`[m4]` 真挖/移动/放箱/存入 3 圆石、
+  `[m4b]` BUSY/取消/空槽 false/2s wait、`[m8]` A 清单 2 格/B 到达并打通/C 箱子未动/
+  D 干净 NO_PATH、`[r2d]` 感知结构、`[r2c]` ACCEPT=2/SYNC=9 与文案、
+  `[f0-world]` 生命周期均符合预期。`[m9]` A1=true/A2=false、新家跟随=true，
+  **A3 旧家自清仍 false**，沿用历史红项，不宣称区块票全绿。
+  无 ERROR/异常，自动正常停服，runServer BUILD SUCCESSFUL 1m3s。
+- **证据**（本地 build 产物、不入仓）：`build/craft-offline-20261010.log`、
+  `build/craft-selftest-20261010a.log`（24 项）、`build/craft-selftest-20261010b.log`（28 项）、
+  `build/craft-final-build-20261010.log`、`build/craft-action-regression-20261010.log`
+  及三个既有 test-results 目录。14:02 检查无 Java 进程/残留专项 flag；
+  未安装到玩家实例、未改玩家世界/配置或读取真实密钥/桥令牌。
+  当前副本无 Git 元数据，未初始化 Git、提交或推送。
+  README、TOOLS、ARCHITECTURE、DEVELOPMENT、ROADMAP、测试包说明和 API 漂移表已同步。
+  16 个本轮源码/测试/fixture/其他文档的机器绝对路径、凭据模式与尾随空白扫描零命中；
+  STATUS 新增记录亦无新增命中，保留历史占位示例与旧行格式，未改写历史证据。
+- **验收边界**：本卡本体与自动化验证完成，真实模型驱动/多人/连接器仍待维护者安排。
+  不自动递归补料、不支持特殊动态配方/自定义 Recipe 子类、GUI/配方书解锁/制作统计/成就事件，
+  不把 collect 拾取等同完整采集链。下一卡冶炼，之后攻击；F0 与历史模型错误仍保留。
 
 ### B1 背包明细与主手工具切换（2026-10-10 12:54，Asia/Shanghai）
 
@@ -1816,6 +1879,9 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 配方查询/合成（B2，10-10 javap + 真实服务端） | `ServerLevel.recipeAccess(): RecipeManager`，`getRecipes(): Collection<RecipeHolder<?>>`、`byKey(ResourceKey<Recipe<?>>)`；配方 ID 用 `holder.id().identifier()`，物品 ID 不等于配方 ID。`Recipe` 无旧版 getResultItem，普通 ShapedRecipe/ShapelessRecipe 的 assemble(EMPTY, registryAccess) 返回静态结果副本（javap 字节码核实），自定义/特殊类不能这样探测。`ShapedRecipe.getWidth/getHeight` 与 `PlacementInfo.ingredients/slotsToIngredientIndex/isImpossibleToPlace` 可用 |
+| 材料分配/返还（B2） | `StackedContents<T>.account(T,int)/tryPick(List<IngredientInfo<T>>,int,Output<T>)` public；内部按引用计数，本体以实际 ItemStack 副本为 T、Ingredient.test 为谓词，保留 components 并处理重叠材料。`CraftingInput.of(width,height,List<ItemStack>)` 会压缩空边，matches/assemble/getRemainingItems 均接这个实际输入；原版 CraftingRecipe 默认返还逐项来自 Item.getCraftingRemainder。真实蛋糕三空桶、分散 planks 标签及数据包重叠标签/精确材料验证通过 |
+| 合成工装/数据包（B2） | 当前 Minecraft JAR 内 version.json 的 pack_version.data_major=94、data_minor=1；测试 pack.mcmeta 用 min_format/max_format [94,1]，实际成功加载。`ItemStack.copyWithCount/isItemEnabled/isSameItemSameComponents/split`、`Identifier.tryParse`、`ResourceKey.create(Registries.RECIPE,identifier)`、`BlockPos.betweenClosed/immutable` 可用；工作台读取先 isLoaded 再 getBlockState，避免查询强载区块 |
 | 背包/主手切换（B1，10-10 javap + 真实服务端） | `Inventory.INVENTORY_SIZE=36`、`getNonEquipmentItems()` 36 项；`getContainerSize()` 为 **43**（36 存储 + 7 装备映射），旧表 41 错误更正。`EQUIPMENT_SLOT_MAPPING` 公开：36 feet/37 legs/38 chest/39 head/40 offhand/41 body/42 saddle；getItem/setItem 路由这些映射。`getSelectedSlot/setSelectedSlot` 仅选快捷栏 0-8；`setChanged()` 可用。`pickSlot(int)` 会改为 suitable hotbar，不能用于“当前选中槽不变”的交换 |
 | 物品保全（B1） | `ItemStack.set(DataComponentType<T>,T)`、DataComponents.CUSTOM_NAME、Component.literal 可用；`copy` 和 `matches` 覆盖计数/全部组件。装备枚举 `getSerializedName` 可用；损耗物品 `isDamageableItem/getDamageValue/getMaxDamage` 可用。正文不序列化组件，但交换直接搬原 ItemStack，超长名称不影响回执尺寸 |
 | 世界路径与正常停服（F0 第二轮） | javap：MinecraftServer.getWorldPath(LevelResource)、LevelResource.ROOT/PLAYER_DATA_DIR、MinecraftServer.halt(boolean) 均存在；名册取当前世界 ROOT，开发验收 opt-in 标记走 halt(false) |
