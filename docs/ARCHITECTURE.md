@@ -54,7 +54,7 @@ src/main/            公共+服务端
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
                      PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
-                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(8 个服务端工具)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(10 个服务端工具)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
@@ -224,7 +224,12 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   完整背包对照和整客户端重启已由维护者确认实测，原始验收记录待补齐，
   不将此前局部日志扩写为完整通过证据。坐骑/在途末影珍珠不在本轮恢复验收范围。
 - `status` 只返回位置、生命/饥饿、36 格背包占用、手持物与着火状态，不枚举完整背包。
-  重进世界会重建大脑历史；没有此前拾取回执时，模型不能凭占用数还原其他物品清单。
+  `inventory` 额外枚举逐槽物品 ID/数量/耐久及装备映射槽，feedback 和 data 都带明细；
+  重进世界重建历史后可重新查看，不能凭占用数还原其他物品清单。
+- `equip` 仅切换主手：快捷栏选中或背包与当前选中槽交换原始堆栈；
+  保留组件和数量，满背包可交换；scheduler 忙时拒绝切换，inventory 仍可读。
+  1.21.11 Inventory 有 36 个存储槽和 7 个装备映射槽（总 43），主手只选 0-8，
+  equip 来源范围 0-35，不把装备槽当可选快捷栏。
 - 每同伴一个活跃任务槽（无队列）：忙时工具层直接回 `BUSY` 教学回执。
 - 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 静默失效 →
   手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
@@ -250,6 +255,7 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | `<gameDir>/mcbot/autotest-stop.flag` | 服务器 | 开发验收链结束后自删并正常停服；未设置则保持运行 |
 | `<gameDir>/mcbot/autotest-persistence-seed.flag` | 服务器 | 独立身体恢复验收第一进程：设置主世界/下界样本，正常停服；只允许 `mcbot-persistence-*` 开发世界 |
 | `<gameDir>/mcbot/autotest-persistence-verify.flag` | 服务器 | 独立第二进程：对照实际 UUID `.dat` 与在线身体，核验后测试遣散再召唤，正常停服 |
+| `<gameDir>/mcbot/autotest-inventory.flag` | 服务器 | 独立背包/主手交换专项；仅允许新 `mcbot-inventory-*` 开发世界，拒绝并存普通/恢复测试 flag，结束正常停服 |
 
 旧实例级名册仅在当前世界尚无名册时迁移：必须有同 UUID 的 `playerdata/*.dat` 才导入，
 迁移结果（包括空列表）写入当前世界，旧文件保留且不修改。匹配原版玩家数据证明它曾在此世界出现，

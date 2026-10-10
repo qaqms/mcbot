@@ -19,14 +19,16 @@ record Result(boolean ok, String feedback, JsonObject data)
 - **每同伴单活跃任务槽**：异步工具撞车直接回 `BUSY`（无队列——模型本就串行思考）。
 - 所有执行都发生在服务器主线程、作用于**发送者名下**的同伴（owner 校验在闸③）。
 
-## 2. 在册工具（8 服务端 + 1 本地）
+## 2. 在册工具（10 服务端 + 1 本地）
 
-> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 8 个），
-> 本表就是那 8 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
+> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 10 个），
+> 本表就是那 10 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
 | `status` | — | 同步 | 位置/生命/饥饿/背包占用/手持物 |
+| `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
+| `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
 | `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
 | `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、真战利品表（错工具真没掉落）、全客户端可见裂纹；掉落先背包后落地 |
 | `collect` | `x,y,z,r?` | 同步 | 吸指定点附近掉落物进背包 |
@@ -40,8 +42,35 @@ record Result(boolean ok, String feedback, JsonObject data)
 没有待答问题、问题已回答或已过期时提示回答未提交，不作为新任务执行；
 普通任务仍从任务页、桥或不带回答前缀的 `@bot <指令>` 投递。
 
-未上（DESIGN §5 规划中）：`inventory`、`equip`、`craft`、`smelt`、`inspect_block`、`attack`、
+未上（DESIGN §5 规划中）：`craft`、`smelt`、`inspect_block`、`attack`、
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。
+
+### 2.1 背包明细与主手切换
+
+模型需要材料或工具信息时调用 `inventory {}`，从回执选择实际槽号，再调用
+`equip {"slot":13}`。`status` 仍是轻量体感汇报，不承担完整背包枚举。
+`inventory` 的 feedback 列出所有非空背包槽、选中主手及全部装备映射槽，
+未列出的背包槽为空；当前 AgentRunner 仅将 feedback 写入模型历史，不能只依赖 data。
+
+data 包含 `selected_slot`、`storage_size=36`、`slots_used`、
+`slots`（36 项，含空槽）及 `equipment`（当前版本 7 项）。
+背包项含 `slot`、`item`（带命名空间的注册 ID，空槽为 `""`）与 `count`；
+可损耗物品额外含 `damage`、`max_damage`。装备项的 `slot` 是
+`feet/legs/chest/head/offhand/body/saddle`，`inventory_slot` 对应 36-42。
+这两个新增映射槽不等于玩家可穿戴身体盔甲或骑具，`equip` 不接受任何装备栏槽。
+主手由 `selected_slot` 对应的背包项确定。
+
+回执不输出自定义名称、附魔明细或原始组件/NBT；物品 ID 展示最多 128 UTF-8 字节，
+超长时 `item_id_truncated=true` 且 feedback 标明截短，可继续按槽位切换。
+交换使用完整原 ItemStack，保留数量、耐久、附魔及其他组件，不拆分、合并、消耗或生成物品，
+满背包也可交换。来源槽为空、参数类型/范围错误回 `DENIED:`；
+数值形式的整数如 `13.0` 可接受，数字字符串、布尔、小数、溢出等拒绝。
+
+`equip` 成功 data 含 `source_slot`、`selected_slot`、`swapped` 和 `held`；
+背包交换时额外给出 `source_after`。feedback 明确报告新主手和原主手的新槽位。
+工具切换后旧槽位可能已经变更，继续选择物品前应查看最新回执或重新调用 inventory。
+长任务占槽期间返回 `BUSY:`，不会影响当前挖掘或移动。
+专项离线与真实服务端物品工装见 DEVELOPMENT §3.2；玩家模型驱动与连接器联合验收仍待安排。
 
 ## 3. 回执词汇表（模型行为约定）
 

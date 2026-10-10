@@ -13,6 +13,13 @@ public final class ClientToolDefs {
     public static final List<ToolSpec> SPECS = List.of(
             new ToolSpec("status", "查看你自己的状态：位置/生命/饥饿/背包占用/手持物",
                     "{\"type\":\"object\",\"properties\":{}}"),
+            new ToolSpec("inventory", "查看完整背包逐槽物品ID/数量/耐久、主手选中槽及装备栏。"
+                    + "槽0-8是快捷栏，9-35是背包；切换工具或准备材料前先查看，未列出的背包槽为空",
+                    "{\"type\":\"object\",\"properties\":{}}"),
+            new ToolSpec("equip", "将 inventory 中指定槽的物品切换到主手。"
+                    + "槽0-8直接选中；槽9-35与当前主手槽交换，原主手留在来源槽。"
+                    + "只切换主手，不穿戴盔甲或切换副手；忙时先等任务结束或取消",
+                    "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35}},\"required\":[\"slot\"]}"),
             new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块（容器/矿石/石材 rock/工作台/作物）的分层摘要；坐标均为绝对 @(x,y,z)",
                     "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"}}}"),
             new ToolSpec("break_block", "挖掉一格方块（按真实硬度耗时，需要合适工具，掉落自动进背包）。"
