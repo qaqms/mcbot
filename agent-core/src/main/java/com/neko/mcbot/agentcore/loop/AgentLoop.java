@@ -324,6 +324,8 @@ public final class AgentLoop {
             parked = false;
             listener.onParked(false, 0);
             step();
+        } else if (parked) {
+            listener.onParked(true, ledger.outstanding().size());
         }
     }
 

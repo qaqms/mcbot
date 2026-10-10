@@ -54,7 +54,7 @@ src/main/            公共+服务端
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
                      PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
-                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(9 个)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(8 个服务端工具)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
@@ -120,6 +120,7 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 - **落账必须保序**：一步里"第 0 条在跑、第 1 条当场有结果"是常态，而 `tool` 消息必须与
   `assistant.tool_calls` 严格同序，所以第 1 条也不能先写。Ledger 只写"已到达的**前缀**"。
 - **PARK 不计步**：`steps` 只在 `step()` 里涨，所以等一条 3 分钟的移动不会吃掉 40 步帽。
+- 部分长活结束而整轮仍 PARK 时，onParked 更新剩余等待数；全部落账后才解除 PARK。
 - **PARK 的铁律**：解锁（叫停/新指令）之前，必须给**每一条** in-flight 的 `tool_call`
   补一条合成回执（`CANCELLED:`/`SUPERSEDED:`）。少一条，下一次请求里那个 tool_call 就有
   id 找不到配对的消息 → OpenAI 400，整段历史作废。取消/顶替的唯一补账实现是 `AgentLoop.stopActive`。
@@ -164,6 +165,22 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 （或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
 长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。`ask_owner` 是唯一本地工具（不出客户端，见 §6）。
 
+反问由 AgentRunner 绑定 task_id 与进程内递增的 question_id，回答必须使用原编号且只消费一次。
+tick 和回答入口都检查 120s 期限；过期回失败回执，重复/未知/已取消问题拒绝回答。
+回答确认先发布 state，再兑现工具 future 继续原任务；无有效问题的游戏内回答不创建新任务。
+重载/关闭先清理旧 loop 和问题，再建立新历史，关闭可重复调用。
+已关闭 runner 拒绝 reconfigure，不再保存配置或显示重启提示。
+只读检查显示另外绑定大脑代际，防止同一个 runner 重载后显示旧检查的回执。
+客户端服务通过内部 ClientServices 边界提供模型、提示词、时钟、聊天、取消、配置保存、
+客户端队列与 C2S 网络副作用；
+生产使用 MinecraftServices，离线回归替换这些边界并直接测试真实 AgentRunner，
+不启动 Minecraft、不写玩家配置、不调用模型端点。
+
+McbotClient 的 JOIN/DISCONNECT/S2C 交由 ClientSession 持有当前 runner：
+退出先关闭旧 runner、再关桥、最后移除 runner；加入建立新 runner、查询同伴后启动桥。
+重复加入先收尾旧会话；已排队 S2C 同时校验接收时捕获的 runner 身份。
+配置重载复用 runner 和桥，新进世界更换 runner 与桥。
+
 ## 6. 桥接（连接器入口）
 
 mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务适配、用户回答与事件展示。
@@ -178,6 +195,9 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   REST/MCP 严格参数类型，安全 error_code；body 超限为 413。SSE 补发与订阅在同一锁内排序，
   不把旧桥游标带进新世界；无持久任务查询/幂等提交，超时与连接丢失不能自动重发。
 - 生命周期：JOIN 起、DISCONNECT 关；桥只服务当前客户端的本地玩家。
+- RunnerBackend 的投令/回答/取消进入客户端队列后再检查当前 runner 身份，
+  防止排队命令跨重连作用于新会话；离线测试注入同一查询/队列边界，
+  使用实际 backend 与本地 HTTP/SSE，不替代真实连接事件与服务端停手证明。
 - 事件四类帧：progress（工具回执/护栏）、done（唯一任务终态，含 status）、question（反问，
   带 question_id）、state（queued/running/PARK/回答确认/公共生命周期）。仅匹配任务的 done
   结束窗口；task_id=0 为公共事件，不结束其他任务。状态与取消详见桥契约。
@@ -201,7 +221,8 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   遣散与停服均走 `PlayerList.remove`，该方法先保存玩家再移除，不另外维护第二份身体存档。
   主世界/下界的跨进程位置、朝向、非空背包及遣散再召唤已有专项 SelfTest 正证；
   单人同进程退出世界再进入已有位置、非空背包占用与手持物正证，
-  完整背包逐槽对照和整客户端重启仍待验。坐骑/在途末影珍珠不在本轮恢复验收范围。
+  完整背包对照和整客户端重启已由维护者确认实测，原始验收记录待补齐，
+  不将此前局部日志扩写为完整通过证据。坐骑/在途末影珍珠不在本轮恢复验收范围。
 - `status` 只返回位置、生命/饥饿、36 格背包占用、手持物与着火状态，不枚举完整背包。
   重进世界会重建大脑历史；没有此前拾取回执时，模型不能凭占用数还原其他物品清单。
 - 每同伴一个活跃任务槽（无队列）：忙时工具层直接回 `BUSY` 教学回执。

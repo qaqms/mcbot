@@ -34,9 +34,13 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `move_to` | `x,y,z,may_alter_terrain?` | 异步(≤3min) | **DigAStar（M8）**：节点=落脚点，会绕路/跳/落/挖穿/垫脚/搭桥；改动世界的路先回 `NEED_CONFIRM`+方块清单，点头（`may_alter_terrain=true` 重发）才执行；搜索预算 8000 节点/128 挖/放≤背包存量；执行期每 20 节点复核，世界变了自动重规划 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 原版 `Container` 接口存取，堆叠合并（不开 GUI） |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
-| `ask_owner` | `text` | **本地**（不出客户端） | 方向性决策问主人：question 事件进桥 → `/v1/answer` 回复续跑；120s 无回答回失败回执，再由大脑决定后续 |
+| `ask_owner` | `text` | **本地**（不出客户端） | 方向性决策问主人：question 事件进桥 → `/v1/answer` 回复续跑；120s 无回答回失败回执，tick 与回答入口都检查期限，再由大脑决定后续 |
 
-未上（DESIGN §5 规划中）：`craft`、`smelt`、`inspect_block`、`attack`、`equip`、
+游戏内 `@bot 答 <文本>` / `@bot answer <文本>` 只用于回答当前最新的有效问题。
+没有待答问题、问题已回答或已过期时提示回答未提交，不作为新任务执行；
+普通任务仍从任务页、桥或不带回答前缀的 `@bot <指令>` 投递。
+
+未上（DESIGN §5 规划中）：`inventory`、`equip`、`craft`、`smelt`、`inspect_block`、`attack`、
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。
 
 ## 3. 回执词汇表（模型行为约定）

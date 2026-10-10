@@ -185,9 +185,41 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
 `build/classes/java/client`、`agent-core/build/classes/java/main` 和构建依赖的 Gson JAR
 （平台路径分隔符 Windows 为 `;`，其他系统为 `:`）。
 参数是 `<实例目录>/mcbot/client.json` 与 `task` 或 `connection`，**不要把密钥写成命令行参数**。
-`task` 单请求使用真实提示词/技能/九个工具定义，只统计响应，不执行任何游戏工具；
+`task` 单请求使用真实提示词/技能/当前工具定义，只统计响应，不执行任何游戏工具；
 `connection` 最多两请求，只使用本地 connection_probe 回执。会产生实际 API 用量，
 不得加入 build/定时任务或自动循环。它读取磁盘配置，不模拟启动器的环境变量覆盖与游戏历史。
+
+### 4.2 反问回答离线回归
+
+```bash
+./gradlew clientTest --tests com.neko.mcbot.agent.AgentRunnerQuestionTest
+```
+
+该测试直接运行 AgentRunner 与 AgentLoop，以可控模型 future、时钟和客户端副作用替身
+验证问题事件、回答续跑、任务配对、取消/超时清理、配置重载和关闭。
+120s 超时通过推进测试时钟验证，不等待真实两分钟；配置只保存在测试内存，
+不读取或写入玩家配置，不调用模型 API，不启动游戏/服务器或 HTTP 监听器。
+REST/MCP 问答错误通过实际 BridgeService 与 AgentRunner 接线验证；
+BridgeEventCapture 只挂载实际 BridgeEvents 总线，测试结束移除。
+该结果不替代玩家回答、Minecraft DISCONNECT/JOIN 和外部连接器联合验收。
+
+### 4.3 活动任务重载与重连离线集成
+
+```bash
+./gradlew clientTest --tests com.neko.mcbot.agent.AgentRunnerLifecycleTest --tests com.neko.mcbot.agent.ClientSessionLifecycleTest
+```
+
+AgentRunnerLifecycleTest 运行实际 AgentRunner/AgentLoop/CallbackChatEngine，
+控制客户端回调队列与模型 future，覆盖重载/关闭期间各类等待项与迟到回调隔离，
+以及检查显示、配置禁用和取消/新工具发送顺序。
+ClientSessionLifecycleTest 运行 McbotClient 使用的实际 ClientSession 处理函数、
+RunnerBackend、BridgeHttp/BridgeService，通过临时回环端口与测试令牌验证 HTTP/SSE
+会话编号、事件重建、任务取消/续投与旧桥命令拒绝；监听器/客户端在测试结束关闭。
+
+配置保存仅记录到测试内存，C2S 发送仅记录信封，不读写玩家配置、令牌或世界，
+不调用模型端点。该结果不证明真实 Fabric JOIN/DISCONNECT 事件触发、
+断网后的服务器身体停手或连接器联调通过。失败复现报告可另存到本地 build 目录，
+不能仅以完整构建成功代替 XML 的 failures/errors/skipped 核对。
 
 ## 5. 施工纪律（红线）
 

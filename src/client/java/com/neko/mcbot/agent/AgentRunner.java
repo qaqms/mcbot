@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotClient;
 import com.neko.mcbot.agentcore.llm.LlmClient;
 import com.neko.mcbot.agentcore.llm.CallbackChatEngine;
+import com.neko.mcbot.agentcore.llm.ChatEngine;
 import com.neko.mcbot.agentcore.loop.AgentLoop;
 import com.neko.mcbot.agentcore.loop.PendingJobs;
 import com.neko.mcbot.agentcore.loop.TaskReplies;
@@ -99,9 +100,79 @@ public final class AgentRunner implements ToolExecutor {
     private volatile boolean parked;
     private volatile int parkedJobs;
     private volatile AgentLoop loop;
+    private long brainGeneration;
+    private final ClientServices client;
+
+    /** Client side effects stay at this boundary so the real runner can be exercised offline. */
+    interface ClientServices {
+        ChatEngine engine(ClientConfig cfg);
+        PromptBuilder prompt(ClientConfig cfg);
+        void showChat(String text);
+        void sendCancel(AgentRunner owner);
+        void saveConfig(ClientConfig cfg);
+        long nowMs();
+        boolean inGame();
+        void executeOnClient(Runnable action);
+        boolean canSend();
+        void send(Envelope envelope);
+        boolean isCurrentRunner(AgentRunner owner);
+    }
+
+    private static final class MinecraftServices implements ClientServices {
+        @Override
+        public ChatEngine engine(ClientConfig cfg) {
+            var provider = new com.neko.mcbot.agentcore.provider.OpenAiCompatProvider(
+                    "mcbot", cfg.baseUrl, cfg.apiKey, cfg.model);
+            return new CallbackChatEngine(new LlmClient(provider,
+                    java.time.Duration.ofSeconds(180),
+                    diagnostic -> LOG.info("[brain] llm request {}", diagnostic.summary()),
+                    diagnostic -> LOG.info("[brain] llm response {}", diagnostic.summary())),
+                    Minecraft.getInstance()::execute);
+        }
+
+        @Override
+        public PromptBuilder prompt(ClientConfig cfg) {
+            return new PromptBuilder(() -> PromptBuilder.build(cfg.persona, SkillLoader.load(
+                    FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"))));
+        }
+
+        @Override
+        public void showChat(String text) {
+            Minecraft mc = Minecraft.getInstance();
+            mc.execute(() -> {
+                if (mc.gui != null) mc.gui.getChat().addMessage(Component.literal(text));
+            });
+        }
+
+        @Override
+        public void sendCancel(AgentRunner owner) {
+            Minecraft.getInstance().execute(() -> {
+                if (McbotClient.runner() != owner) return;
+                if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
+                    ClientPlayNetworking.send(new McbotPayloads.C2s(
+                            new Envelope("cancel", new JsonObject()).encode()));
+                }
+            });
+        }
+
+        @Override public void saveConfig(ClientConfig cfg) { ClientConfig.save(cfg); }
+        @Override public long nowMs() { return System.currentTimeMillis(); }
+        @Override public boolean inGame() { return Minecraft.getInstance().level != null; }
+        @Override public void executeOnClient(Runnable action) { Minecraft.getInstance().execute(action); }
+        @Override public boolean canSend() { return ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE); }
+        @Override public void send(Envelope envelope) {
+            ClientPlayNetworking.send(new McbotPayloads.C2s(envelope.encode()));
+        }
+        @Override public boolean isCurrentRunner(AgentRunner owner) { return McbotClient.runner() == owner; }
+    }
 
     public AgentRunner(ClientConfig cfg) {
+        this(cfg, new MinecraftServices());
+    }
+
+    AgentRunner(ClientConfig cfg, ClientServices client) {
         this.cfg = cfg;
+        this.client = client;
     }
 
     /** 进世界后调用一次；重复调用安全。 */
@@ -109,25 +180,16 @@ public final class AgentRunner implements ToolExecutor {
         if (closed || !cfg.brainEnabled || loop != null) {
             return;
         }
-        com.neko.mcbot.agentcore.provider.OpenAiCompatProvider provider;
+        ChatEngine engine;
         try {
-            provider = new com.neko.mcbot.agentcore.provider.OpenAiCompatProvider(
-                    "mcbot", cfg.baseUrl, cfg.apiKey, cfg.model);
+            engine = client.engine(cfg);
         } catch (IllegalArgumentException invalid) {
             say("§c[mcbot] API 地址无效，请打开模型配置检查地址。§r");
             LOG.warn("[brain] invalid API address; brain not started");
             return;
         }
-        var engine = new CallbackChatEngine(new LlmClient(provider,
-                java.time.Duration.ofSeconds(180),
-                diagnostic -> LOG.info("[brain] llm request {}", diagnostic.summary()),
-                diagnostic ->
-                    LOG.info("[brain] llm response {}", diagnostic.summary())),
-                Minecraft.getInstance()::execute);
         // R2-B：prefix 缓存也接上了——启动读一次盘，指令边界才允许换发（链中不换=不裂前缀）。
-        ClientConfig sessionCfg = cfg;
-        PromptBuilder sessionPrompt = new PromptBuilder(() -> PromptBuilder.build(sessionCfg.persona, SkillLoader.load(
-                FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"))));
+        PromptBuilder sessionPrompt = client.prompt(cfg);
         loop = new AgentLoop(engine, ClientToolDefs.SPECS, this, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
@@ -229,7 +291,8 @@ public final class AgentRunner implements ToolExecutor {
 
     /** 面板"保存并应用"：落盘配置并重建大脑（对话历史清零属预期；悬着的问题就地终止）。 */
     public void reconfigure(ClientConfig newCfg) {
-        ClientConfig.save(newCfg);
+        if (closed) return;
+        client.saveConfig(newCfg);
         shutdownBrain();
         cfg = newCfg;
         start();
@@ -245,11 +308,13 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     public void close() {
+        if (closed) return;
         closed = true;
         shutdownBrain();
     }
 
     private void shutdownBrain() {
+        brainGeneration++;
         AgentLoop old = loop;
         if (old == null || old.currentTaskId() == 0) sendCancel();
         if (old != null) old.close();
@@ -290,11 +355,9 @@ public final class AgentRunner implements ToolExecutor {
                 if (p != null) {
                     p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback")));
                 } else {
-                    // 迟到的回执（本 seq 已被超时/叫停收走）：语义上只能丢弃，但**必须留痕**——
-                    // 这正是"客户端超时 < 服务端帽"那类缺陷唯一的直接证据。
-                    // 该计数持续 >0 就说明超时帽配错了，工具的活其实干完了、回执却被扔了。
+                    // 超时、取消、会话清理或重复包都可能迟到；计数不能单独证明超时帽错误。
                     lateResults.incrementAndGet();
-                    LOG.warn("[brain] 迟到回执 seq={} ok={}（已被超时收走，丢弃）feedback={}",
+                    LOG.warn("[brain] 迟到回执 seq={} ok={}（已无等待项，丢弃）feedback={}",
                             seq, env.bool("ok"), env.str("feedback"));
                 }
             }
@@ -332,7 +395,7 @@ public final class AgentRunner implements ToolExecutor {
         long seq = env.num("seq", -1);
         String jobId = env.str("job_id");
         int capTicks = env.num("cap_ticks", PendingJobs.FALLBACK_CAP_TICKS);
-        var j = pending.acceptAsJob(seq, jobId, capTicks, System.currentTimeMillis());
+        var j = pending.acceptAsJob(seq, jobId, capTicks, client.nowMs());
         if (j == null) {
             lateResults.incrementAndGet();
             LOG.warn("[brain] 迟到受理 seq={} job={}（该 seq 已被收走，丢弃）", seq, jobId);
@@ -367,7 +430,7 @@ public final class AgentRunner implements ToolExecutor {
             return;
         }
         LOG.info("[brain] job {} {} phase={} {}ms", jobId, j.tool(), phase,
-                System.currentTimeMillis() - j.acceptedAtMs());
+                client.nowMs() - j.acceptedAtMs());
         boolean ok = "done".equals(phase);
         if (j.ticket().owner() == loop && loop != null) {
             j.ticket().owner().onJobEvent(jobId, new ToolOutcome(ok, text));
@@ -376,7 +439,7 @@ public final class AgentRunner implements ToolExecutor {
 
     /** 面板召唤/遣散按钮：与 /mcbot 命令同权限（服务器按发送者校验 owner）。 */
     public void sendLifecycle(String kind, String name) {
-        if (closed || !ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
+        if (closed || !client.canSend()) {
             lifecycleResult = "未连接装有 mcbot 的服务器，操作未发送。";
             say("§c[mcbot] " + lifecycleResult + "§r");
             return;
@@ -390,7 +453,7 @@ public final class AgentRunner implements ToolExecutor {
         JsonObject body = new JsonObject();
         body.addProperty("name", name);
         lifecycleResult = "请求已发送，等待当前世界回执。";
-        ClientPlayNetworking.send(new McbotPayloads.C2s(new Envelope(kind, body).encode()));
+        client.send(new Envelope(kind, body));
     }
 
     public String companionName() {
@@ -407,16 +470,18 @@ public final class AgentRunner implements ToolExecutor {
             throw new IllegalArgumentException("Only read-only panel inspections are allowed");
         }
         record("§9我> §r" + ("status".equals(name) ? "查看状态" : "扫描附近"));
+        long generation = brainGeneration;
         executeRemote(name, "{}", 0, null).whenComplete((result, failure) ->
-                Minecraft.getInstance().execute(() -> {
-                    if (closed || McbotClient.runner() != this) return;
+                client.executeOnClient(() -> {
+                    // Reload keeps this runner, but queued inspection displays belong to the old brain.
+                    if (closed || generation != brainGeneration || !client.isCurrentRunner(this)) return;
                     say("§7[mcbot] " + (failure == null ? result.feedback() : "检查失败，请重试。") + "§r");
                 }));
     }
     /** 主线程周期调用：工具/长活/问题超时兜底。 */
     public void tick() {
         if (closed) return;
-        long now = System.currentTimeMillis();
+        long now = client.nowMs();
         for (var t : pending.sweepTools(now)) {
             if (t.ticket().owner() != null) sendCancel();
             t.ticket().complete(new ToolOutcome(false,
@@ -449,7 +514,7 @@ public final class AgentRunner implements ToolExecutor {
         QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f) {
             this.taskId = taskId;
             this.future = f;
-            this.at = System.currentTimeMillis();
+            this.at = client.nowMs();
         }
     }
 
@@ -545,8 +610,8 @@ public final class AgentRunner implements ToolExecutor {
                 record("§9我> §r" + text);
                 return;
             }
-            // 没有在等的问题：当普通指令走，但提醒一句免得主人以为回答了空气
-            say("§7[mcbot] 同伴现在没有在等回答的问题，这句当新指令处理了。§r");
+            say("§7[mcbot] 同伴现在没有可回答的问题，回答未提交。§r");
+            return;
         }
         submitTask(text);
     }
@@ -565,13 +630,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void sendCancel() {
-        Minecraft.getInstance().execute(() -> {
-            if (com.neko.mcbot.McbotClient.runner() != AgentRunner.this) return;
-            if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
-                ClientPlayNetworking.send(new McbotPayloads.C2s(
-                        new Envelope("cancel", new JsonObject()).encode()));
-            }
-        });
+        client.sendCancel(this);
     }
 
     /** 先登记编号再投令，同步完成也不会抢答其他任务。 */
@@ -590,6 +649,7 @@ public final class AgentRunner implements ToolExecutor {
         }
         try {
             long seq = Long.parseLong(qid.substring(1));
+            if (!qid.equals("q" + seq)) return false;
             QuestionRecord rec = questionRecords.remove(seq);
             if (rec == null) {
                 return false;
@@ -597,10 +657,14 @@ public final class AgentRunner implements ToolExecutor {
             if (latestQuestion != null && latestQuestion == seq) {
                 latestQuestion = null;
             }
-            rec.future.complete(new ToolOutcome(true, "主人说：" + text));
+            if (questionExpired(rec, client.nowMs())) {
+                timeoutQuestion(rec);
+                return false;
+            }
             JsonObject d = new JsonObject();
             d.addProperty("text", "主人已回答 " + qid);
             emit("state", rec.taskId, d);
+            rec.future.complete(new ToolOutcome(true, "主人说：" + text));
             return true;
         } catch (NumberFormatException e) {
             return false;
@@ -612,7 +676,7 @@ public final class AgentRunner implements ToolExecutor {
     /** 桥状态探针（GET /v1/status）。字段全部 volatile/并发安全，可跨线程读。 */
     public String statusJson() {
         JsonObject o = new JsonObject();
-        o.addProperty("in_game", Minecraft.getInstance().level != null);
+        o.addProperty("in_game", client.inGame());
         o.addProperty("brain_enabled", !closed && loop != null);
         o.addProperty("model", cfg == null ? "" : cfg.model);
         o.addProperty("companion", companionName);
@@ -645,7 +709,7 @@ public final class AgentRunner implements ToolExecutor {
     private CompletableFuture<ToolOutcome> executeRemote(String name, String argsJson,
                                                         long taskId, AgentLoop owner) {
         if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
-        if (!ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
+        if (!client.canSend()) {
             return CompletableFuture.completedFuture(
                     new ToolOutcome(false, "DENIED:尚未连上装有 mcbot 的服务器。"));
         }
@@ -677,12 +741,12 @@ public final class AgentRunner implements ToolExecutor {
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
         ToolTicket ticket = new ToolTicket(taskId, owner, f);
-        pending.registerTool(seq, name, System.currentTimeMillis(), toolTimeoutMs(name, argsJson), ticket);
-        Minecraft.getInstance().execute(() -> {
+        pending.registerTool(seq, name, client.nowMs(), toolTimeoutMs(name, argsJson), ticket);
+        client.executeOnClient(() -> {
             if (closed || f.isDone()) return;
             if (ticket.owner() != null && (ticket.owner() != loop || ticket.taskId() != currentTask)) return;
-            if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
-                ClientPlayNetworking.send(new McbotPayloads.C2s(json));
+            if (client.canSend()) {
+                client.send(new Envelope("tool_call", body));
             } else {
                 pending.takeTool(seq);
                 f.complete(new ToolOutcome(false, "DENIED:服务器连接已关闭。"));
@@ -717,10 +781,10 @@ public final class AgentRunner implements ToolExecutor {
 
     /** 问题超时巡检（客户端主线程 tick 里调）。 */
     private void sweepQuestionTimeouts() {
-        long now = System.currentTimeMillis();
+        long now = client.nowMs();
         var expired = new ArrayList<QuestionRecord>();
         questionRecords.entrySet().removeIf(e -> {
-            if (now - e.getValue().at > QUESTION_TIMEOUT_MS) {
+            if (questionExpired(e.getValue(), now)) {
                 if (latestQuestion != null && latestQuestion.equals(e.getKey())) {
                     latestQuestion = null; // 超时作废，别留悬指针
                 }
@@ -729,8 +793,16 @@ public final class AgentRunner implements ToolExecutor {
             }
             return false;
         });
-        expired.forEach(q -> q.future.complete(new ToolOutcome(false,
-                "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。")));
+        expired.forEach(this::timeoutQuestion);
+    }
+
+    private boolean questionExpired(QuestionRecord question, long now) {
+        return now - question.at > QUESTION_TIMEOUT_MS;
+    }
+
+    private void timeoutQuestion(QuestionRecord question) {
+        question.future.complete(new ToolOutcome(false,
+                "TIMEOUT:主人 2 分钟没回你的问题。按最稳妥的理解自行定夺，或向主人说明你在等什么。"));
     }
 
     private void emitState(String text) {
@@ -760,13 +832,7 @@ public final class AgentRunner implements ToolExecutor {
         record(text);
         // 模型偶尔把换行写成字面量 \n，聊天显示前归一化
         String clean = stripCodes(text).replace("\\r", "").replace("\\n", "\n");
-        // loop 回调运行在 HttpClient 线程上；GUI 一律弹回渲染线程（否则 Rendersystem 炸）
-        Minecraft mc = Minecraft.getInstance();
-        mc.execute(() -> {
-            if (mc.gui != null) {
-                mc.gui.getChat().addMessage(Component.literal(clean));
-            }
-        });
+        client.showChat(clean);
     }
 
     private void record(String text) {

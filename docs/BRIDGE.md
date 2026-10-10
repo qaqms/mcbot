@@ -169,8 +169,12 @@ job_id 是内部工作编号，不是 task_id。progress 不保证是实时百�
 连接器必须按 `task_id` 归组，以 `done` 为终态，不能根据 `state` 或文字猜测结束。
 `current_task=0` 表示无活动指令；任务编号在同一客户端进程内跨重连递增，不是跨进程持久 ID。
 question_id 在当前客户端进程内递增，但只在对应问题未超时/未回答且任务未结束时有效。
-反问等待 120s，由游戏 tick 巡检；超时后大脑得到失败回执并可继续，不等于整个任务自动失败。
+回答必须原样使用 question 事件提供的 question_id，不能添加符号或补零改写编号。
+反问等待 120s，由游戏 tick 巡检，回答入口也检查期限；即使下一次 tick 尚未巡检，
+超过期限的回答仍返回 NOT_FOUND，并给大脑一条超时失败回执。
+超时后大脑可继续，不等于整个任务自动失败。
 回答成功只表示已接收，后续是否完成仍看 done；重答、取消后答、重载后答返回 NOT_FOUND。
+回答确认 state 先于该回答触发的工具回执 progress 或后续任务终态。
 queued → running → done 是通常顺序，不是每次都有的强制状态机：
 大脑未上线可直接 done(failed)；排队项取消可直接 done(cancelled)。
 PARK 时新投令会顶替旧活动项及旧排队项，发 done(superseded)，不是服务端抢占/续跑。
@@ -284,6 +288,9 @@ S2C 新增两条 kind（与 `tool_result` 共用一条通道，`kind` 区分）�
 一整段历史当场作废。`AgentLoop.stopActive` 是取消/顶替时补账的唯一实现，别在别处补回执。
 
 客户端通过代际号丢弃旧模型/工具回调，并清理旧任务的 pending/question/ask。
+配置重载后排队的旧只读检查显示也被丢弃；关闭后的 runner 不再接受配置保存/重载。
+退出重进更换 runner，已排队的旧 S2C 回调和旧桥命令校验原 runner 身份后拒绝执行；
+这些属于内部会话隔离，不新增 v1.0 的协议字段或续跑能力。
 PARK 顶替会先发 C2S cancel 再开始新任务；服务端单槽仍保留 BUSY，**不是** scheduler 抢占或
 `remaining()` 续跑。progress 的服务端生产与限速也仍是后续卡，不应据此宣称已完成。
 
@@ -317,6 +324,10 @@ mcbot 桥接回归入口：
 `./gradlew clientTest --tests '*BridgeHttpContractTest'`。
 测试使用本地回环随机端口和替身 backend，不读取真实 token/client.json，不请求远端模型。
 这些是桥的契约/HTTP 回归，不替代真实 MC + N.E.K.O 联调。
+
+本体活动任务与重连接线另由 AgentRunnerLifecycleTest / ClientSessionLifecycleTest
+覆盖，入口见 `docs/DEVELOPMENT.md` §4.3。该专项使用实际 runner/session/backend
+与本地 HTTP/SSE，但模型、配置落盘和游戏发包采用替身，不作为下方真机清单的通过证据。
 
 **端到端联合验收清单（v1.0 包与连接器仍须逐项实测）**：
 
