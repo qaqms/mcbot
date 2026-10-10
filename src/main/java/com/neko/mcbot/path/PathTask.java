@@ -4,15 +4,14 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
-import com.neko.mcbot.server.ItemTransfers;
+import com.neko.mcbot.server.BlockMining;
+import com.neko.mcbot.server.BlockPlacement;
+import com.neko.mcbot.server.PathMaterials;
 import com.neko.mcbot.server.ServerTool.Result;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -101,12 +100,11 @@ public final class PathTask extends TickTask {
     private int tickWarmup;        // 进场让世界加载/防抖的缓冲拍
 
     // 挖掘子状态
-    private BlockState digTarget;
     private BlockPos digPos;
-    private float digProgress;
-    private int digLastStage = -1;
-    private int digStallTicks;
-    private ServerLevel digLevel;
+    private BlockMining mining;
+    private int actualDigs;
+    private int actualPlaces;
+    private int leftoverItems;
 
     // 行走插值子状态（同层 WALK 沿用滑步节奏，视觉与 M4 版一致）
     private double wx, wy, wz;
@@ -119,10 +117,30 @@ public final class PathTask extends TickTask {
 
     @Override
     public Progress tick(CompanionPlayer c) {
+        if (c.level() != level) {
+            onAbort();
+            return terminal(new Result(false, "TARGET_LOST:身体已换维度，原路线作废。", null));
+        }
         if (++tickWarmup < 2) {
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
-        return phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
+        Progress progress = phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
+        return progress instanceof Progress.Done done ? terminal(done.result()) : progress;
+    }
+
+    private Progress terminal(Result result) {
+        clearCrack();
+        if (!result.feedback().startsWith("NEED_CONFIRM:")) dropPlan();
+        JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+        data.addProperty("removed_blocks", actualDigs);
+        data.addProperty("placed_blocks", actualPlaces);
+        data.addProperty("remaining_items", leftoverItems);
+        String feedback = result.feedback();
+        if (!result.ok() && !feedback.startsWith("PARTIAL:") && actualDigs + actualPlaces > 0) {
+            feedback += "本趟实际挖 " + actualDigs + " 格、放 " + actualPlaces
+                    + " 格，" + leftoverItems + " 个掉落未入包；已完成的改动不回滚。";
+        }
+        return new Progress.Done(new Result(result.ok(), feedback, data));
     }
 
     // ---- SEARCH ----
@@ -501,18 +519,24 @@ public final class PathTask extends TickTask {
 
     private Progress arrived(CompanionPlayer c) {
         BlockPos at = c.blockPosition();
-        int need = planDigs + planPlaces;
+        int need = actualDigs + actualPlaces;
+        JsonObject data = new JsonObject();
+        data.addProperty("removed_blocks", actualDigs);
+        data.addProperty("placed_blocks", actualPlaces);
+        data.addProperty("remaining_items", leftoverItems);
         if (partialTail) {
             // §C 回执模板：撞帽从"失败"变"缩短射程"，行动指令写给模型（从本段落点重发）
             return new Progress.Done(new Result(false,
                     "PARTIAL:未能到 " + target.toShortString() + "。已走到能到的最近点 "
                             + at.toShortString() + "，离目标还差约 " + partialRemain + " 格。"
                             + "这一段已走完，请从该点重发 move_to（可分多段）"
-                            + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。"), null));
+                            + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。")
+                            + (leftoverItems > 0 ? "有 " + leftoverItems + " 个掉落未装入背包。" : ""), data));
         }
         String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
-                + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
-        return new Progress.Done(new Result(true, fb, null));
+                + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。")
+                + (leftoverItems > 0 ? "有 " + leftoverItems + " 个掉落未装入背包。" : "");
+        return new Progress.Done(new Result(true, fb, data));
     }
 
     /**
@@ -521,6 +545,7 @@ public final class PathTask extends TickTask {
      * 复核认定变了的格周围不入集（§D）——那恰好是不能再信的部分。
      */
     private void beginReplan(CompanionPlayer c) {
+        clearCrack();
         BlockPos from = c.blockPosition();
         sampler = new LevelDigSampler(level, c, from,
                 LevelDigSampler.countPlaceables(c.getInventory()));
@@ -588,113 +613,62 @@ public final class PathTask extends TickTask {
         return true;
     }
 
-    // ---- 挖掘子机（BreakBlockTool 同款公式与动画，独立小实现避免动已验收代码；
-    //      重复约 40 行，债务记录在 STATUS） ----
+    // ---- Shared actions; the path supplies its live sacred/hazard checks. ----
 
     /** 返回 null=还在挖/刚清完交回主流程；Done=终局（含失败教学）。 */
     private Progress mineOne(CompanionPlayer c, long cell) {
         int x = DigAStar.unpackX(cell), y = DigAStar.unpackY(cell), z = DigAStar.unpackZ(cell);
         BlockPos pos = new BlockPos(x, y, z);
-        BlockState st = level.getBlockState(pos);
-        if (st.isAir()) {
-            return null; // 已经清了（可能上拍刚挖完），交回主流程
-        }
+        if (!level.isLoaded(pos)) return miningFailure("TARGET_LOST:开路目标未加载，重新查看路线。");
+        if (mining == null && sampler.cleared(x, y, z)) return null;
         if (digPos == null || !digPos.equals(pos)) {
+            clearCrack();
             digPos = pos;
-            digTarget = st;
-            digProgress = 0;
-            digLastStage = -1;
-            digStallTicks = 0;
-            digLevel = level;
+            mining = BlockMining.forPlayer(c, pos);
         }
-        // 目标被人动过：假设作废
-        if (st != digTarget) {
-            clearCrack();
-            return new Progress.Done(new Result(false,
-                    "TARGET_LOST:路上那格 (" + pos.toShortString() + ") 被人动过了，"
-                            + "原地重发 move_to（会重新算路）。", null));
+        double seconds = sampler.digSeconds(x, y, z);
+        if (!DigSampler.feasibleDig(seconds)) {
+            return miningFailure("NO_PATH:开路目标现在不可安全挖掘，已停手；换工具或重新规划。");
         }
-        float speed = c.getDestroySpeed(st);
-        float hardness = st.getBlock().defaultDestroyTime();
-        if (speed <= 0 || hardness < 0) {
-            clearCrack();
-            return new Progress.Done(new Result(false,
-                    "WRONG_TOOL:开路要挖的 " + st.getBlock().getName().getString()
-                            + " 现在手持挖不动。换个工具或换条路。", null));
-        }
-        digProgress += speed / hardness / 30f;
-        if (digProgress * 20f < 1f && ++digStallTicks > 1200) {
-            clearCrack();
-            return new Progress.Done(new Result(false,
-                    "TIMEOUT:一格要挖得太久（" + st.getBlock().getName().getString()
-                            + "），先绕路或去做别的。", null));
-        }
-        int stage = Math.min(9, (int) (digProgress * 10f));
-        if (stage != digLastStage) {
-            digLastStage = stage;
-            level.getServer().getPlayerList()
-                    .broadcastAll(new ClientboundBlockDestructionPacket(0, pos, stage),
-                            level.dimension());
-        }
-        if (digProgress >= 1f) {
-            var be = level.getBlockEntity(pos);
-            List<net.minecraft.world.item.ItemStack> drops =
-                    Block.getDrops(st, level, pos, be, c, c.getInventory().getSelectedItem());
-            clearCrack();
-            level.destroyBlock(pos, false, c);
-            int got = 0;
-            for (var s : drops) {
-                if (s.isEmpty()) {
-                    continue;
-                }
-                var movement = ItemTransfers.receive(c.getInventory(), s, remainder -> {
-                    if (!remainder.isEmpty()) Block.popResource(level, pos, remainder);
-                });
-                got += movement.moved();
-            }
-            McbotMod.LOG.info("[path] 挖清 {} {} 掉落={} 收进={}", pos.toShortString(),
-                    st.getBlock().getName().getString(), drops.size(), got);
-            digPos = null;
-            return null; // 挖完了，交回主流程推进下一步
-        }
-        return running();
+        Result result = mining.tick();
+        if (result == null) return running();
+        mining = null;
+        digPos = null;
+        if (!result.data().get("removed").getAsBoolean()) return new Progress.Done(result);
+        actualDigs++;
+        leftoverItems += result.data().get("remaining_count").getAsInt();
+        McbotMod.LOG.info("[path] 开路 {} 收进={} 留地={}", pos.toShortString(),
+                result.data().get("collected_count").getAsInt(), result.data().get("remaining_count").getAsInt());
+        if (!result.data().get("reported_success").getAsBoolean()) return new Progress.Done(result);
+        return null;
     }
 
-    /** 放一格垫脚/搭桥：从背包挑一个能挡腿的方块消耗掉。返回 null=继续。 */
+    private Progress miningFailure(String feedback) {
+        clearCrack();
+        return new Progress.Done(new Result(false, feedback, null));
+    }
+
+    /** Support must be real; an occupied non-support cell cannot advance the route. */
     private Progress placeOne(CompanionPlayer c, long cell) {
         int x = DigAStar.unpackX(cell), y = DigAStar.unpackY(cell), z = DigAStar.unpackZ(cell);
         BlockPos pos = new BlockPos(x, y, z);
-        McbotMod.LOG.info("[path] 尝试放格 {} 当前方块={} 背包方块数={}", pos.toShortString(),
-                level.getBlockState(pos).getBlock().getName().getString(),
-                LevelDigSampler.countPlaceables(c.getInventory()));
-        if (!level.getBlockState(pos).isAir()) {
-            return null; // 规划后被填上：支撑现成，直接过
-        }
-        var inv = c.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            var stack = inv.getItem(i);
-            if (stack.isEmpty()) {
-                continue;
-            }
-            Block b = Block.byItem(stack.getItem());
-            if (b == null || b == Blocks.AIR || !b.defaultBlockState().blocksMotion()) {
-                continue;
-            }
-            level.setBlockAndUpdate(pos, b.defaultBlockState());
-            stack.shrink(1);
-            return null;
-        }
-        return new Progress.Done(new Result(false,
-                "NO_PATH:搭路要放方块但背包里没有可用的固体方块了。回去拿点材料再来。", null));
+        if (!level.isLoaded(pos)) return new Progress.Done(new Result(false, "TARGET_LOST:搭路目标未加载。", null));
+        if (sampler.support(x, y, z)) return null;
+        if (!sampler.placeable(x, y, z)) return new Progress.Done(new Result(false,
+                "NO_PATH:计划的搭路格现在不可安全放置；重新查看路线。", null));
+        Result result = BlockPlacement.place(BlockPlacement.forPlayer(c), pos,
+                PathMaterials.find(c.getInventory()), Direction.UP);
+        if (!result.ok()) return new Progress.Done(result);
+        actualPlaces++;
+        if (!sampler.support(x, y, z)) return new Progress.Done(new Result(false,
+                "PLACE_FAILED:材料已放置但未形成可站立支撑，已停止移动；查看现场。", result.data()));
+        return null;
     }
 
     private void clearCrack() {
-        if (digLastStage >= 0 && digLevel != null && digPos != null) {
-            digLevel.getServer().getPlayerList()
-                    .broadcastAll(new ClientboundBlockDestructionPacket(0, digPos, -1),
-                            digLevel.dimension());
-            digLastStage = -1;
-        }
+        if (mining != null) mining.abort();
+        mining = null;
+        digPos = null;
     }
 
     @Override

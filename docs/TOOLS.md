@@ -32,9 +32,9 @@ record Result(boolean ok, String feedback, JsonObject data)
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
 | `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
-| `break_block` | `x,y,z` | 异步(≤60s) | 手工计时挖掘：真速度、战利品上下文带工具、可见裂纹；掉落先背包再余量落地，采收资格/耐久完整语义待 C2 |
+| `break_block` | `x,y,z` | 异步(≤60s) | 实时原版挖掘进度、采收门、裂纹；完成调用玩家破坏入口处理耐久/掉落，回执核对实际移除与入包/留地量；真实动作待验 |
 | `collect` | `x?,y?,z?,r?` | 同步 | 坐标全部省略则自己脚下，r=1-12 默认 3；按实际数量拾取，余量留地上；忙时拒绝 |
-| `place_block` | `x,y,z,item` | 同步 | 背包拿方块放（item 用注册路径如 `cobblestone`） |
+| `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；原版玩家放置上下文，face 默认 up，实际目标变化/消耗核验，忙时拒绝 |
 | `move_to` | `x,y,z,may_alter_terrain?` | 异步(≤3min) | **DigAStar（M8）**：节点=落脚点，会绕路/跳/落/挖穿/垫脚/搭桥；改动世界的路先回 `NEED_CONFIRM`+方块清单，点头（`may_alter_terrain=true` 重发）才执行；搜索预算 8000 节点/128 挖/放≤背包存量；执行期每 20 节点复核，世界变了自动重规划 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
@@ -187,10 +187,55 @@ collect 的 x/y/z 须完整提供或全部省略；r 为 1-12 数值整数，默
 data 保留 collected，并加入 collected_count、remaining_count、partial；
 反馈明细每类最多 32 项、使用注册 ID/数量/耐久，不序列化自定义名称或原始组件。
 部分拾取时只将剩余完整堆栈写回实体，全部拾取才 discard。
-单格挖掘和开路掉落共用同一入包/剩余量逻辑，只将装不下的部分 popResource。
-此修复不等于挖掘采收/耐久语义已修正；collect 的身体局部范围与拾取延迟/目标规则
+单格挖掘和开路掉落共用同一入包/剩余量逻辑；C2 已改为接收原版产生的本次附近新实体，
+余量写回原实体，不重复求战利品或生成掉落。collect 的身体局部范围与拾取延迟/目标规则
 留到调度与动作权限卡收口，不宣称原版 playerTouch 已接入。
 专项离线回归和真实行为待验范围见 DEVELOPMENT §3.5。
+
+### 2.5 挖放语义（C2 实现/离线完成，真实动作待验）
+
+break_block 与 move_to 开路共用 BlockMining：预检 5.5 格、执行期 6.5 格，
+要求当前生存模式、世界交互规则允许、目标及 3×3×3 邻域已加载，拒绝空气、
+液体/含水方块、不可破坏目标及不具采收资格的主手。
+与原版允许错误工具慢挖但无产物不同，本工具直接 WRONG_TOOL 且不破坏目标。
+背包明细后先 equip 正确工具；规划同样将无采收资格的方块视为不可挖。
+冻结目标状态、主手选中槽及完整堆栈，每 tick 检查变化并使用
+BlockState.getDestroyProgress 的实时增量；零硬度的正无穷进度可立即完成，
+无效进度连续 10 tick 停手。失败、完成、取消和路径重规划清理当前裂纹。
+
+最终只调用一次 ServerPlayerGameMode.destroyBlock，让原版执行采收/耐久/方块钩子。
+其返回 true 不保证实际移除，因此还要核对目标原方块是否仍在。
+移除失败不自行求战利品、不吸取新实体；原版仍可能已消耗耐久，勿自动重试。
+成功移除后只处理目标 AABB 向外扩 0.5 格内、本次动作前不存在的物品实体；
+旧实体不动，完整入包才删除新实体，部分入包只回写完整组件余量。
+这是有界的附近新实体观测，不是所有掉落的精确归因：邻格钩子产生的物品可能在内，
+远处/延迟生成的模组掉落不在内，经验球不自动收取，不宣称 playerTouch。
+data 含 removed、reported_success（已观察移除时）、collected_count、remaining_count、
+collected/leftover（各最多 32 组）；feedback 同时给实际数量和注册 ID/数量/耐久明细。
+溢出允许 ok=false 且 removed=true，留在地上的物品不能再次按原目标整次重挖。
+
+place_block 的 item 是物品注册 ID，不是方块 ID；背包来源只用 0-35，
+不交换主手或借用装备/副手。face 可选 up/down/north/south/east/west，省略为 up；
+坐标须数值整数，数字字符串、小数或整数溢出拒绝，move_to 的共享坐标解析同样收紧。
+以实际同伴、完整来源堆栈、指定面及当前朝向构造 BlockPlaceContext，
+固定目标格，不把被占据且不可替换的目标自动转到邻格。
+直接调用 BlockItem.place，原版负责朝向、支撑/碰撞、半砖合并、多格钩子、
+方块实体组件和消费；不手工写默认状态或额外 shrink。
+暂支持实际类为 BlockItem、BedItem、DoubleHighBlockItem、StandingAndWallBlockItem；
+脚手架、告示牌及其他特殊子类拒绝，以免上下文重定向或专用交互越出当前边界。
+邻域须在世界范围/边界内、已加载且允许交互，另核对 mayBuild/mayUseItemAt。
+只有原版报告动作成功、目标状态已变且非空气、来源实际消耗恰好一件才 ok=true；
+失败 data 给 changed/consumed_count，不假定零副作用或回滚；成功另给 placed 与坐标。
+真实水中/替换格/半砖合并、多格、碰撞、朝向和组件落地仍需真实动作验证。
+
+路径规划与执行共用 PathMaterials，只有无组件补丁的圆石、深板岩圆石、泥土、下界岩
+计入 0-35 垫料预算；不自动使用重力方块、木材、工作台、贵重块或命名物品。
+成功放置后还需确认真实支撑，否则停止移动；不因目标已占据就认定能站立。
+开路溢出可继续路线并记录留地量；原版报告失败则停手，即使目标已观察移除。
+路径终态给 removed_blocks/placed_blocks/remaining_items，按本趟实际执行计数，
+途中失败也保留已完成改动，不把计划清单当作执行成果。
+有限授权、缓存/重规划新增改动批准及统一资源互斥仍归 C3，任务桥 v1.0 不变。
+离线证据与范围见 DEVELOPMENT §3.6。
 
 ## 3. 回执词汇表（模型行为约定）
 
@@ -200,7 +245,9 @@ data 保留 collected，并加入 collected_count、remaining_count、partial；
 | `BUSY:` | 同伴正忙上一件事 | 等待、或叫停再派新活 |
 | `TARGET_LOST:` | 目标不在加载区/已被动过/已是空气 | 先靠近/重扫再下结论 |
 | `OUT_OF_REACH:` | 超出臂长（≈5.5 格） | `move_to` 靠近后重试 |
-| `WRONG_TOOL:` | 当前手持挖不动 | 去做/去找合适工具（回执会指方向） |
+| `WRONG_TOOL:` | 当前主手无采收资格、已改变或进度无效 | inventory/equip 换合适工具，目标未按本工具继续破坏 |
+| `BREAK_FAILED:` | 未确认原版破坏成功，可能已有耐久或世界副作用 | 核对实际目标、背包和工具，勿自动重试 |
+| `PLACE_FAILED:` | 未确认目标格成功放置或不能形成路径支撑 | 核对回执的目标变化/实际消耗，勿自动重试 |
 | `NO_RECIPE:` | 没有匹配的普通合成/烧制配方 | 核对物品/配方 ID 或机器类型，特殊制作换对应工具 |
 | `MISSING_MATERIALS:` | 来源材料数量不足 | 对照回执与 inventory，取得材料后再调用 |
 | `MISSING_FUEL:` | 新原料没有可用燃料或现存燃烧余量 | 用 load 同时供给燃料或先备燃料；本次未移动 |

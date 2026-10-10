@@ -1,5 +1,6 @@
 package com.neko.mcbot.path;
 
+import com.neko.mcbot.server.PathMaterials;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
@@ -91,16 +92,15 @@ public final class LevelDigSampler implements DigSampler {
         if (lavaAdjacent(p)) {
             return INFEASIBLE; // HAZARD：旁边是岩浆，不送
         }
-        float hardness = st.getBlock().defaultDestroyTime();
+        float hardness = st.getDestroySpeed(level, p);
         if (hardness < 0) {
             return INFEASIBLE; // UNBREAKABLE（基岩/末地石核心等生存不可破）
         }
-        float speed = companion.getDestroySpeed(st);
-        if (speed <= 0) {
-            return INFEASIBLE; // 当前手持挖不动——宁可绕路
-        }
-        // BreakBlockTool 同款进度公式反推：进度/tick=speed/hardness/30 → 秒 = hardness*30/(speed*20)
-        double sec = hardness * 30.0 / (speed * 20.0);
+        if (!companion.hasCorrectToolForDrops(st)
+                || !companion.getMainHandItem().canDestroyBlock(st, level, p, companion)) return INFEASIBLE;
+        float gain = st.getDestroyProgress(companion, level, p);
+        if (Float.isNaN(gain) || gain <= 0) return INFEASIBLE;
+        double sec = 1.0 / (gain * 20.0);
         return sec > MAX_DIG_SECONDS ? INFEASIBLE : sec;
     }
 
@@ -167,27 +167,19 @@ public final class LevelDigSampler implements DigSampler {
 
     /** 这格现在的方块名（回执可读性）。 */
     public String blockName(int x, int y, int z) {
-        var st = level.getBlockState(new BlockPos(x, y, z));
+        BlockPos pos = new BlockPos(x, y, z);
+        if (!level.isInWorldBounds(pos) || !level.isLoaded(pos)) return "unloaded";
+        var st = level.getBlockState(pos);
         return st.isAir() ? "air" : st.getBlock().getName().getString();
     }
 
     /** 背包里能当"垫脚石"的方块存量（place 动作的弹药计数）。 */
     public static int countPlaceables(net.minecraft.world.entity.player.Inventory inv) {
-        int n = 0;
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            var stack = inv.getItem(i);
-            if (stack.isEmpty()) {
-                continue;
-            }
-            Block b = Block.byItem(stack.getItem());
-            if (b != null && b != Blocks.AIR && b.defaultBlockState().blocksMotion()) {
-                n += stack.getCount();
-            }
-        }
-        return n;
+        return PathMaterials.count(inv);
     }
 
     private boolean sacredAbove(BlockPos p) {
+        if (!level.isInWorldBounds(p.above()) || !level.isLoaded(p.above())) return true;
         var up = level.getBlockState(p.above());
         if (up.isAir()) {
             return false;
@@ -215,7 +207,7 @@ public final class LevelDigSampler implements DigSampler {
                     i == 0 ? 1 : i == 1 ? -1 : 0,
                     i == 2 ? 1 : i == 3 ? -1 : 0,
                     i == 4 ? 1 : i == 5 ? -1 : 0);
-            if (level.getBlockState(q).is(Blocks.LAVA)) {
+            if (!level.isInWorldBounds(q) || !level.isLoaded(q) || level.getBlockState(q).is(Blocks.LAVA)) {
                 return true;
             }
         }

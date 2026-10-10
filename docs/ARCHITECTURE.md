@@ -55,6 +55,8 @@ src/main/            公共+服务端
                      PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
                      ItemTransfers(实际移动量+组件完整的剩余堆栈、存储槽/容器/接触面约束)
+                     BlockMining/BlockPlacement(单格与路径共用原版动作入口)
+                     PathMaterials(规划/执行共用四种无附加组件垫料)
                      ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(12 个服务端工具)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
@@ -234,12 +236,14 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 - 每同伴一个活跃任务槽（无队列）：忙时工具层直接回 `BUSY` 教学回执。
 - transfer/collect 及两条挖掘掉落路径共用 ItemTransfers，按实际移动数而非
   Inventory.add 的布尔值记账。存取逐槽同步扣来源，拾取只写回余量，
-  挖掘仅将剩余掉落 popResource；先合并完整组件再用空槽，背包限 0-35。
+  挖掘接收原版产生的本次附近新实体，余量写回原实体，不重复生成掉落；
+  先合并完整组件再用空槽，背包限 0-35。
   transfer 检查普通容器锁/有效性、放入/取出槽与 WorldlyContainer 接触面权限，
   遵守容器/物品堆叠上限；transfer/collect 在 scheduler 忙时拒绝。
   部分搬运允许已产生副作用，ok=false 的反馈仍给实际移动/剩余量，不自动回滚或重发。
   内部 Access 只隔离身体/世界观测，离线回归运行实际工具处理与真实 Inventory/ItemStack；
-  挖掘主流程的真实采收/耐久和拾取距离/延迟/目标权限仍待后续卡。
+  挖掘采收/耐久已接入 C2 共享动作入口，真实运行另待验；
+  拾取距离/延迟/目标权限仍待 C3。
 - `craft` 是 SYNC：从当前服务器 RecipeManager 选普通 ShapedRecipe/ShapelessRecipe，
   不硬编码材料或产量。2×2 随身，3×3 要求 5.5 格内已加载的工作台。
   原版 StackedContents 以实际堆栈身份/Ingredient 谓词分配材料，真实 CraftingInput
@@ -257,12 +261,21 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   离线替身运行同一 load/take/report 和真实 ItemStack/配方 assemble，20 项操作回归通过。
   另有参数 3 项、实际 runner 5 项（含取消）通过，实现/离线阶段完成；
   不模拟原版 ticker，真实烧制/燃料返还/Mixin 加载/保存重进与联合验收仍待验。
-- 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 静默失效 →
-  手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
-  `ClientboundBlockDestructionPacket`（-1 清除，onAbort 兜底），完成走
-  `Block.getDrops` → 背包吸附 → 仅将装不下的余量 `popResource`。
-  当前缺少单独的正确工具采收门与真实 mineBlock 耐久步骤，C2 负责修复，
-  不将“loot context 带工具”视为采收资格已经核验。
+- 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 的计时推进不可依赖。
+  单格与路径共用 BlockMining，由 scheduler tick 按 `state.getDestroyProgress` 的
+  原版实时增量计时，采收资格与 canDestroyBlock 先检查，目标/完整主手变化即停。
+  裂纹以同伴 entity id 广播，完成/失败/取消/路径重规划清除。
+  最终只调用一次 `player.gameMode.destroyBlock`，原版负责方块钩子、采收及实际耐久；
+  返回 true 仍须核对目标原方块实际消失。仅吸取目标近邻内本次新产生的物品实体，
+  原实体保留组件余量，旧掉落不动；不自行求战利品或 popResource，不自动收经验。
+  真实原版动作/耐久/掉落尚未运行；局部新实体观测不保证任意模组掉落的精确归因。
+- 放置：单格与搭路共用 BlockPlacement，直接用真实同伴及完整来源堆栈的
+  BlockPlaceContext 调 `BlockItem.place`；固定目标格、面默认 UP、保留当前朝向，
+  原版执行支撑/碰撞/多格/组件钩子及消费。不再 setBlock(defaultState)+手工 shrink。
+  暂限四类已知物品上下文，脚手架/告示牌等特殊子类拒绝；
+  成功需目标状态变化且非空气、原版 consumesAction、来源恰好消费一件。
+  busy、范围/已加载邻域、原版交互/mayUseItemAt 先检查；失败报告实际副作用。
+  离线 Access 观测夹具不创建世界/身体，不宣称原版放置行为已实测。
 - 移动（M8 起）：move_to = DigAStar 任务。节点=落脚点（脚格+头格可通行、下格有支撑），
   边统一建模为"清两格(挖)+补支撑(放)+移动"，派生 走/跳/落/下挖/向前挖/垫脚/搭桥。
   约束全在 LevelDigSampler：神圣集（容器/工作台/床/机关本体与其支撑+任意方块实体）、
@@ -270,6 +283,11 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   要改世界的路先回 NEED_CONFIRM+清单，模型带 may_alter_terrain=true 重发才执行；
   执行期每 20 节点复核未来 5 节点，变了就地重规划（≤2 次）；同层走路保持 0.45 格/tick
   滑步节奏（M4 行为视觉回归）。搜索分帧：每 tick 最多展开 300 节点，主线程永不卡崩。
+  C2 的 PathMaterials 统一规划预算与执行选料，只用存储槽四种无组件补丁垫料；
+  放置确认后必须复核支撑，路径终态按实际挖/放/留地量汇报，失败/重规划清旧裂纹。
+  DigSampler.feasibleDig 在搜索/memo/执行共用，拒绝 Double.MAX_VALUE 哨兵及无效代价；
+  邻接岩浆/神圣支撑查询先检查加载，未知邻格保守否决。
+  may_alter_terrain 仍是旧布尔确认，服务端有限授权与重规划新增改动检查归 C3。
 
 ## 8. 配置文件与运行目录
 
@@ -328,7 +346,8 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
 | 任务帽 | 默认 60s；break 60s；move 3min；wait n·20+100 tick |
-| 行动参数 | 臂长 5.5（任务中 6.5 容忍）；滑步 ≤48 格、0.45 格/tick；挖掘进度公式 ÷30 |
+| 行动参数 | break 预检 5.5、执行 6.5；place 6.5 与 3×3×3 已加载/可交互邻域；滑步 ≤48 格、0.45 格/tick；挖掘用实时 getDestroyProgress，零硬度可立即完成、无效增量连续 10t 停手；新掉落范围目标 AABB 膨胀 0.5 |
+| 路径垫料(C2) | 存储 0-35；无 components patch 的圆石/深板岩圆石/泥土/下界岩；规划预算和执行选择同一谓词，装备/副手不算 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |

@@ -1,80 +1,80 @@
 package com.neko.mcbot.server.tools;
 
 import com.google.gson.JsonObject;
+import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.common.ResourceLocationHelper;
+import com.neko.mcbot.server.BlockPlacement;
 import com.neko.mcbot.server.ServerTool;
+import com.neko.mcbot.task.CompanionScheduler;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Holder;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.BlockItem;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.entity.player.Inventory;
 
-/** place_block：把背包里的方块放到目标格（只允许替换空气/可.replaceable 面）。 */
+import java.util.concurrent.CompletableFuture;
+
+/** Place the requested item at the exact target, preserving vanilla state and component hooks. */
 public final class PlaceBlockTool implements ServerTool {
-
-    @Override
-    public String name() {
-        return "place_block";
+    record Arguments(BlockPos pos, BlockItem item, Direction face) {
     }
 
-    @Override
-    public Result run(CompanionPlayer c, JsonObject args) {
+    @Override public String name() { return "place_block"; }
+    @Override public Result run(CompanionPlayer c, JsonObject args) {
+        return place(BlockPlacement.forPlayer(c), args, McbotMod.scheduler().busy(c.getUUID()));
+    }
+    @Override public CompletableFuture<Result> runAsync(CompanionPlayer c, JsonObject args,
+                                                        CompanionScheduler scheduler) {
+        return CompletableFuture.completedFuture(place(BlockPlacement.forPlayer(c), args, scheduler.busy(c.getUUID())));
+    }
+
+    static Arguments arguments(JsonObject args) {
         BlockPos pos = BreakBlockTool.readPos(args);
-        if (pos == null || !args.has("item")) {
-            return new Result(false, "DENIED:需要整数坐标 x/y/z 和 item（如 \"cobblestone\"）。", null);
+        if (pos == null) return null;
+        try {
+            var value = args.get("item");
+            if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) return null;
+            String name = value.getAsString();
+            if (name.isBlank() || name.length() > 128) return null;
+            var holder = BuiltInRegistries.ITEM.<Item>get(ResourceLocationHelper.of(name));
+            if (holder.isEmpty() || !(holder.get().value() instanceof BlockItem item)) return null;
+            Direction face = Direction.UP;
+            if (args.has("face")) {
+                var faceValue = args.get("face");
+                if (!faceValue.isJsonPrimitive() || !faceValue.getAsJsonPrimitive().isString()) return null;
+                face = switch (faceValue.getAsString()) {
+                    case "up" -> Direction.UP;
+                    case "down" -> Direction.DOWN;
+                    case "north" -> Direction.NORTH;
+                    case "south" -> Direction.SOUTH;
+                    case "east" -> Direction.EAST;
+                    case "west" -> Direction.WEST;
+                    default -> null;
+                };
+                if (face == null) return null;
+            }
+            return new Arguments(pos, item, face);
+        } catch (RuntimeException invalid) {
+            return null;
         }
-        var holder = BuiltInRegistries.BLOCK.<Block>get(
-                com.neko.mcbot.common.ResourceLocationHelper.of(args.get("item").getAsString()));
-        Block block = holder.isEmpty() ? Blocks.AIR : holder.get().value();
-        if (block == Blocks.AIR) {
-            return new Result(false, "DENIED:\"item\" 不是有效方块名（用注册表路径，如 cobblestone）。", null);
-        }
-        if (!(block.asItem() instanceof BlockItem bi)) {
-            return new Result(false, "DENIED:" + args.get("item").getAsString() + " 不是可放置物。", null);
-        }
-        ItemStack stack = find(c, bi);
-        if (stack == null) {
-            return new Result(false, "NO_ITEM:背包里没有 " + block.getName().getString()
-                    + "。先挖一点或去箱子里拿。", null);
-        }
-        var level = c.level();
-        if (!level.isLoaded(pos)) {
-            return new Result(false, "TARGET_LOST:目标不在已加载区域。", null);
-        }
-        BlockState target = level.getBlockState(pos);
-        if (!target.isAir() && !target.getBlock().getClass().getSimpleName().contains("Liquid")) {
-            return new Result(false, "TARGET_LOST:(" + pos.toShortString() + ") 已被占据，换一格。", null);
-        }
-        if (c.blockPosition().equals(pos) || c.blockPosition().above().equals(pos)) {
-            return new Result(false, "DENIED:那会把我自己封进方块里，换个位置。", null);
-        }
-        if (c.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) > 6.5 * 6.5) {
-            return new Result(false, "OUT_OF_REACH:太远了，先 move_to 过去再放。", null);
-        }
-        BlockState placed = block.defaultBlockState();
-        if (!placed.canSurvive(level, pos)) {
-            return new Result(false, "DENIED:那个位置不能安放 " + block.getName().getString()
-                    + "（悬空或贴不牢）。", null);
-        }
-        level.setBlockAndUpdate(pos, placed);
-        stack.shrink(1);
-        JsonObject data = new JsonObject();
-        data.addProperty("placed", args.get("item").getAsString());
-        return new Result(true, "在 (" + pos.toShortString() + ") 放下了 1 个 "
-                + block.getName().getString() + "。", data);
     }
 
-    private static ItemStack find(CompanionPlayer c, BlockItem bi) {
-        var inv = c.getInventory();
-        for (int i = 0; i < 36; i++) {
-            ItemStack s = inv.getItem(i);
-            if (!s.isEmpty() && s.is(bi)) {
-                return s;
+    static Result place(BlockPlacement.Access access, JsonObject args, boolean busy) {
+        Arguments input = arguments(args);
+        if (input == null) return new Result(false,
+                "DENIED:需要整数 x/y/z 和方块物品 ID；face 可选 up/down/north/south/east/west。", null);
+        if (busy) return new Result(false, "BUSY:身体正忙，任务结束或取消后再放置。", null);
+        int slot = -1;
+        var inventory = access.inventory();
+        for (int i = 0; i < Math.min(Inventory.INVENTORY_SIZE, inventory.getContainerSize()); i++) {
+            var stack = inventory.getItem(i);
+            if (!stack.isEmpty() && stack.is(input.item())) {
+                slot = i;
+                break;
             }
         }
-        return null;
+        return BlockPlacement.place(access, input.pos(), slot, input.face());
     }
 }

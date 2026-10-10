@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：物品守恒实现/离线完成，下一卡挖放语义；真实机器/动作、F0 与连接器待验
+## 当前状态（2026-10-10）：C1/C2 实现/离线完成，下一卡调度与权限；真实机器/动作、F0 与连接器待验
 
 当前优先级：连接器由协作者独立维护，本仓已收到首轮联调报告 PR #5，
 尚未接收连接器源码或补丁；按维护者授权先完善 MC agent 本体，
@@ -14,7 +14,8 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
 当前以开发与离线测试为主，暂不启动游戏客户端或真实服务端做验收；
 冶炼本轮实现与离线回归完成，真实行为及连接器联合验收另行挂账。
-当前 C1 物品守恒完成实现与离线验证，未将此扩写为真实挖掘/放置语义已经正确。
+当前 C1 物品守恒、C2 挖放语义完成实现与离线验证；
+原版实际挖放/耐久/掉落、多格/组件/碰撞与路径真实支撑仍另行待验。
 
 **模块职责与协作边界**：
 - **mcbot**：提供 MC agent 本体、游戏执行能力与任务级桥接接口，并维护接口契约及回归测试。
@@ -25,6 +26,78 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### C2 挖放语义：实现与离线阶段完成（2026-10-10 23:19，Asia/Shanghai）
+
+- **范围/基线**：维护者安排进入 C2，在合并后 main `fb85bace49d8d1b3536814dc5dbdc6c714fe7f7e`
+  创建 fix/block-action-semantics。仅改本体，不改宿主/参考副本/协作者连接器，
+  不处理 PR #5 的 P-* 项或合并报告；任务桥 v1.0 不变。
+  没有启动 runClient/runServer、世界/真实身体/服务器/模型，不安装产物到玩家实例。
+- **共享挖掘**：break_block 与开路改用同一 BlockMining，先检查采收资格、
+  玩家/物品破坏规则、目标/已加载邻域、完整主手及选中槽，目标或主手变更即停。
+  保留 scheduler 计时，用 BlockState.getDestroyProgress 反映实时身体/工具增量，
+  零硬度正无穷立即完成，无效增量连续 10t 停手；裂纹按同伴 entity id，
+  完成/失败/取消/路径重规划清理。最终只调用一次 ServerPlayerGameMode.destroyBlock，
+  原版负责方块钩子、采收与真实主手耐久，不自行重算战利品或手工扣耐久。
+  错误工具直接 WRONG_TOOL 且不破坏，刻意收紧原版允许慢挖但不产物的语义。
+- **实际副作用**：原版 destroyBlock 返回 true 不保证 removeBlock 成功，
+  还要观察目标原方块是否已消失；失败可能已有耐久损耗，明确不自动重试。
+  已观察移除后只收目标 AABB 膨胀 0.5 内、动作前没有的新物品实体；
+  旧实体不动，完整入包才删除，部分入包回写完整组件余量，不二次生成掉落。
+  data 给 removed/reported_success 与实际收取/留地量，feedback 同时列有界掉落 ID/数量/耐久。
+  这是附近新实体观测，不能精确区分邻格钩子掉落，不覆盖远处/延迟模组掉落；
+  不自动收经验、不等于 playerTouch。单格溢出可 ok=false 且 removed=true；
+  路径记录余量后可继续，原版明确报告失败则停手并保留已完成改动。
+- **共享放置**：单格与搭路用 BlockPlacement，以真实同伴、完整来源物品、
+  指定 face（默认 UP）和当前朝向构造 BlockPlaceContext，固定目标位置后直接调
+  BlockItem.place，不再写默认状态/手工 shrink，也不触发使用方块菜单或食用回退。
+  原版负责方向、碰撞/支撑、多格、方块实体组件与一件消费；
+  工具只在 consumesAction、目标状态已变且非空气、实际消费恰好一件时报告成功。
+  失败报告 changed/consumed_count，不假定没有副作用或回滚。
+  暂限 BlockItem/BedItem/DoubleHighBlockItem/StandingAndWallBlockItem 的实际类，
+  脚手架/告示牌等特殊子类拒绝；来源只用存储 0-35，主手选择/装备不交换。
+  BUSY、3×3×3 邻域加载/边界/交互及 mayBuild/mayUseItemAt 先核对。
+  item 使用物品注册表，可选面同步 Schema；挖/放以及 move_to 的共享坐标解析
+  拒绝数字字符串、小数及整数溢出，保留数值整数如 2.0 的兼容。
+- **路径一致性**：PathMaterials 对规划预算与执行选择共用四种普通材料谓词，
+  仅无组件补丁的圆石、深板岩圆石、泥土、下界岩，装备/副手、命名/增删组件物品、
+  重力块/木材/工作台/贵重块不自动消耗。放置后真实支撑必须成立才推进节点。
+  实际挖/放/留地数贯穿重规划与终态，途中失败也保留，不以计划量冒充成果。
+  DigSampler.feasibleDig 统一搜索/memo/执行，修正 Double.MAX_VALUE 哨兵仍为有限数的误判，
+  无效代价不能成为可穿过的边；邻格神圣/岩浆与方块名查询先检查加载。
+  现存布尔授权/缓存复用/重规划新增改动检查、资源互斥及异常清理仍归 C3。
+- **离线专项**：新增 **39/39**：DigCostSafetyTest 2、BlockMiningTest 15、
+  BlockPlacementTest 8、PathMaterialsTest 4、BlockToolOperationsTest 6、
+  AgentRunnerBlockActionsTest 4。使用真实注册表/Inventory/ItemStack/BlockState 与组件，
+  世界/权限/速度/动作返回及目标变化/实体余量写回由可控 Access 提供；
+  Task 直接 tick 验时序/取消，runner 实际运行 AgentRunner/AgentLoop。
+  覆盖前置拒绝、主手/目标变化、实时速度/有界停滞、零硬度、裂纹清理、
+  只破坏一次、假成功/实际副作用、新旧掉落与部分组件守恒、有界明细、
+  完整来源堆栈/面/目标、实际消费/假成功/替换结果、特殊上下文及装备保全、
+  四种材料与增删组件拒绝、纯算法不可行代价、ACCEPT 等终态、
+  WRONG_TOOL/BUSY/部分放置无自动重投及受理前/等待期间取消的迟到隔离。
+  原版动作回调、耐久损耗、替换/半砖结果由夹具提供，不能记为原版世界动作已运行；
+  两条 PathTask 生产调用点编译，未做世界遍历或实际支撑测试。
+- **修正过程/证据**：初次产品编译发现跨包有界物品描述方法不可见，已公开共用；
+  初次测试编译修正夹具同名方法误解析；第一次可执行专项 39 项中 1 项失败，
+  因注册表冻结后不能构造新物品，改用已有告示牌/脚手架子类测试明确拒绝边界，
+  不是产品放置失败证据。最终专项 BUILD SUCCESSFUL 21s，
+  日志 build/block-actions-offline-20261010c.log；
+  早期编译/失败记录在 build/block-actions-compile-20261010*.log、
+  build/block-actions-offline-20261010.log 与 ...20261010b.log，仅留本地。
+- **全量验证**：23:19:41 实核 build --offline --rerun-tasks --console=plain --no-daemon
+  BUILD SUCCESSFUL **33s / 20 个任务全部执行**，XML **437/437**
+  （agent-core 194 + 根工程 68 + clientTest 175），failures/errors/skipped 全 0。
+  日志 build/block-actions-full-20261010.log；build/libs/mcbot-0.1.0.jar SHA256
+  `92ba392f40ee4b9d16a135f7f6ba24b8cc98a772160d101cb3177f7c523e9f71`。
+  仅既有过时 API/Gradle 10 兼容提示；list-java 未发现 Java 进程，产物/日志不入仓。
+- **文档/后续**：README、TOOLS、ARCHITECTURE、DEVELOPMENT、ROADMAP 与包说明同步。
+  下一卡 C3 调度与有限动作权限，先防 PR #5 M-1 只读任务越界，再做攻击/感知/流程组合；
+  本轮不写 C3 或攻击代码。真实原版耐久/附魔掉落/经验/裂纹、
+  放置朝向/多格/碰撞/水中/半砖/组件、路径世界支撑/消耗与保存重进另待验，
+  3×3×3 加载检查不保证任意模组钩子不会读更远区域。
+  冶炼/F0/连接器/历史模型错误与 `[m9] A3` 不销账。
+  提交/推送与 Draft PR 实际核验以下方发布记录为准，不以构建通过冒充已发布。
 
 ### 本体 PR 合并与桥接报告单独审查（2026-10-10 22:38，Asia/Shanghai）
 
@@ -2098,6 +2171,9 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 破坏/耐久（C2，10-10 javap + 编译；未运行世界动作） | BlockState.getDestroySpeed(BlockGetter,BlockPos) 是硬度，getDestroyProgress(Player,BlockGetter,BlockPos) 按真实身体速度/硬度/采收门计算；零硬度可正无穷。ServerPlayerGameMode.destroyBlock(BlockPos) 使用真实主手 canDestroyBlock、限制检查、playerWillDestroy/removeBlock/destroy，非创造模式执行主手 mineBlock，只有移除且可采收才 playerDestroy；返回 true 不保证 removeBlock 成功，失败也可能已损耗耐久 |
+| 放置上下文（C2，10-10 javap + 编译） | BlockPlaceContext(Player,InteractionHand,ItemStack,BlockHitResult) 可用，构造时按目标 canBeReplaced 算 replaceClicked，默认 getClickedPos 可能转到相邻格；本体覆写 getClickedPos/canPlace 固定精确目标。DirectionalPlaceContext 使用 null Player，不用于本体。BlockItem.place 调状态/支撑/碰撞、多格/组件/setPlacedBy 等原版钩子后 consume(1)，失败不得额外 shrink；ItemStack.useOn 可能有消费回退，直接 place 避免菜单/食用 |
+| 挖放守卫/材料（C2） | gameMode.isSurvival、Level.mayInteract(Entity,BlockPos)、player.blockActionRestricted/hasCorrectToolForDrops/mayUseItemAt、ItemStack.canDestroyBlock 均可编译；BedItem/DoubleHighBlockItem/StandingAndWallBlockItem 为 BlockItem 子类，特殊子类需要各自上下文。getComponentsPatch().isEmpty 可识别普通原堆栈，新增/移除组件均为非空。Bootstrap 冻结注册表后不能 new Item/BlockItem（intrusive holder），离线使用已注册物品 |
 | 物品移动（C1，10-10 javap + 离线） | Container.canPlaceItem(int,ItemStack)/canTakeItem(Container,int,ItemStack)、getMaxStackSize(ItemStack)、stillValid(Player) 均公开；WorldlyContainer.getSlotsForFace(Direction)/canPlaceItemThroughFace/canTakeItemThroughFace 可用。BaseContainerBlockEntity.isLocked() 可直接拒锁，ChestBlockEntity.applyComponents 可在无世界夹具设置 DataComponents.LOCK，测试不等于实际开启/菜单行为 |
 | 背包部分插入/离线（C1） | Inventory.add(ItemStack) 字节码可先修改目标/传入余量后返回 false，不能用返回值推断零移动。Inventory(null,new EntityEquipment()) 的 getItem/setItem/setChanged/getContainerSize 不访问 Player，可在注册表初始化后用于离线存储/装备保全；不调用需要 player 的 add/世界行为。SimpleContainer.setItem 按 getMaxStackSize(stack) 裁量，先核对容量再写；DataComponents.MAX_STACK_SIZE 参与 ItemStack 堆叠上限 |
 | 冶炼读取/燃料（B3，10-10 javap + 编译；未运行 Mixin） | `AbstractFurnaceBlockEntity.dataAccess: ContainerData`，`quickCheck: RecipeManager.CachedCheck<SingleRecipeInput,? extends AbstractCookingRecipe>`；四个公开 DATA_* 常量对应 0-3。`getBurnDuration(FuelValues,ItemStack)` 在熔炉读 burnDuration，高炉/烟熏炉覆盖为父结果整数除 2。原版 `canBurn`/`burn` 比全部 components，已有产物每次 grow(1)，故工具拒绝多件结果；`setItem` 会 limitSize(getMaxStackSize(stack))，原料组件不同时在真实 ServerLevel 上重设 cookingTotalTime/清进度 |

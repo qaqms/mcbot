@@ -10,6 +10,11 @@ public interface DigSampler {
     /** 挖掘不可行的哨兵代价（不可破坏/神圣方块/岩浆邻接等）。 */
     double INFEASIBLE = Double.MAX_VALUE;
 
+    /** Shared by planning, memoization and execution; the finite sentinel is not a usable cost. */
+    static boolean feasibleDig(double seconds) {
+        return Double.isFinite(seconds) && seconds >= 0 && seconds < INFEASIBLE;
+    }
+
     /** 该格当前是否可通行（空气等价：不挡腿、非流体、在界内）。 */
     boolean passable(int x, int y, int z);
 

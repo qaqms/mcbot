@@ -44,7 +44,8 @@ public final class ClientToolDefs {
                             + "\"fuel_count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},"
                             + "\"slot\":{\"type\":\"string\",\"enum\":[\"input\",\"fuel\",\"output\"]},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
-            new ToolSpec("break_block", "挖掉一格方块（按真实硬度耗时，需要合适工具，掉落自动进背包）。"
+            new ToolSpec("break_block", "挖一格干燥方块，需主手有采收资格；先inventory/equip选工具。"
+                    + "按真实进度耗时，原版处理破坏/耐久，附近本次新掉落先入包，余量留地；失败须核对实际回执。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("collect", "捡起指定点附近的地上掉落物进背包；坐标全部省略则以自己脚下为中心。"
@@ -52,10 +53,15 @@ public final class ClientToolDefs {
                     + "ok=false不代表完全没捡到；核对inventory后处理剩余物品",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
                             + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12}}}"),
-            new ToolSpec("place_block", "把背包里的方块放到目标格（item 用注册表路径如 cobblestone）",
-                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"item\":{\"type\":\"string\"}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
+            new ToolSpec("place_block", "将背包0-35里的方块物品放到准确目标格，item用物品ID如cobblestone。"
+                    + "原版处理朝向/多格/组件，默认点击上面，可用face选择接触面；水中/可替换格和同种半砖合并由原版判断。"
+                    + "暂不支持脚手架/告示牌等特殊物品；忙时先等待或取消。失败查看实际消耗和目标变化，勿自动重试",
+                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
+                            + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"face\":{\"type\":\"string\","
+                            + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。"
                     + "若路需要改动世界，先回 NEED_CONFIRM 附方块清单——确认没问题就带 may_alter_terrain=true 重发。"
+                    + "搭路仅使用无额外组件的圆石/深板岩圆石/泥土/下界岩，缺料先准备；开路需合适主手工具。"
                     + "回执以 ACCEPTED: 开头表示已受理、人还在走——别重发（会被 BUSY 挡），做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"允许这条路挖/放方块改动世界；首次被 NEED_CONFIRM 后确认再带\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("transfer", "与6.5格内未锁定普通容器存取物品：dir=out取出/in存入，item可选过滤；熔炉类机器改用smelt。"
