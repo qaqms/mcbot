@@ -50,6 +50,15 @@ public final class WaitTool implements ServerTool {
         }
 
         @Override
+        public JsonObject observation() {
+            var data = new JsonObject();
+            data.addProperty("action", "wait");
+            data.addProperty("waited_ticks", Math.min(age, targetTicks));
+            data.addProperty("target_ticks", targetTicks);
+            return data;
+        }
+
+        @Override
         public Progress tick(CompanionPlayer c) {
             if (age >= targetTicks) {
                 return new Progress.Done(new Result(true,

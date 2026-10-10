@@ -57,7 +57,7 @@ src/main/            公共+服务端
                      ItemTransfers(实际移动量+组件完整的剩余堆栈、存储槽/容器/接触面约束)
                      BlockMining/BlockPlacement(单格与路径共用原版动作入口)
                      PathMaterials(规划/执行共用四种无附加组件垫料)
-                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(13 个服务端工具)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(15 个服务端工具)
                      EntityAttack(单目标有界近战/实际出手与前后观测)
                      ActionPermissions(服务端任务身份/一次性具体路线授权)/ServerActionGate(统一动作入口)
   task/              TickTask/CompanionScheduler/ResourceLocks(身体、有界世界区域与实体UUID)
@@ -234,7 +234,9 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   单人同进程退出世界再进入已有位置、非空背包占用与手持物正证，
   完整背包对照和整客户端重启已由维护者确认实测，原始验收记录待补齐，
   不将此前局部日志扩写为完整通过证据。坐骑/在途末影珍珠不在本轮恢复验收范围。
-- `status` 只返回位置、生命/饥饿、36 格背包占用、手持物与着火状态，不枚举完整背包。
+- `status` 返回位置、生命/饥饿、36 格背包占用、手持物、着火状态、游戏刻与实际任务计数；
+  details=true增加完整背包/装备明细，每次模型请求前通过ToolExecutor.observe读取，
+  作为本轮临时尾部消息，不写入历史；观测失败停止任务，取消/代际校验隔离迟到快照。
   `inventory` 额外枚举逐槽物品 ID/数量/耐久及装备映射槽，feedback 和 data 都带明细；
   重进世界重建历史后可重新查看，不能凭占用数还原其他物品清单。
 - `equip` 仅切换主手：快捷栏选中或背包与当前选中槽交换原始堆栈；
@@ -328,6 +330,15 @@ TickTask.interruptedResult 让取消/超时/异常保留已完成出手与未知
 不代表完整生存战斗、自动防御/进食、死亡复活、模组钩子隔离或连接器联合验收已完成。
 完整契约/边界见 TOOLS §2.7 / DEVELOPMENT §3.8 / STATUS。
 
+### 7.2 任务资源感知（C5）
+
+FindResourceTool对显式方块ID/标签做最近优先有界采样，报告已读/未知/撞帽及绝对候选坐标；
+InspectBlockTool对近身完整加载方块的本体容器做24槽分页只读报告，拒锁/未展开战利品，
+不生成区块、不展开战利品或开启菜单。它们经过相同owner闸、被TaskPolicy列为只读。
+CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age/cap换算完成率；
+路径/挖掘/攻击/wait提供各自已有真实计数。无实时progress网络生产者仍单独挂账，
+本轮不增加外部桥字段或改变completed含义，真实身体/世界感知另待验。
+
 ## 8. 配置文件与运行目录
 
 | 文件 | 归属进程 | 说明 |
@@ -389,6 +400,7 @@ TickTask.interruptedResult 让取消/超时/异常保留已完成出手与未知
 | 路径垫料(C2) | 存储 0-35；无 components patch 的圆石/深板岩圆石/泥土/下界岩；规划预算和执行选择同一谓词，装备/副手不算 |
 | 动作权限(C3) | 服务端 proposal TTL 180s，一次使用；最多256个独立改动，完整坐标/方块清单≤12000 UTF-8字节；每任务一个待确认方案；区域初始≤256，累计≤512，重规划重复区域去重；collect 中心/实体距身体≤6.5格且在请求球体内 |
 | 攻击(C4) | 原版isWithinAttackRange(AABB,0)且身体局部≤6.5；近身候选最近≤64；已加载邻域≤4096格；默认1/最多10次；完整冷却及目标invulnerableTime≤10；剑扫域AABB.inflate(1,.25,1)不能有第三活物；每租约实体UUID≤256 |
+| 感知(C5) | 每轮快照≤16384 UTF-8字节、沿用status90s超时；find_resource目标1-8、r1-16默认8、最多4096格/16候选；inspect_block6.5格、每页24槽/容器≤1024槽 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |

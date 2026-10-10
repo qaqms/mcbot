@@ -11,8 +11,19 @@ public final class ClientToolDefs {
     }
 
     public static final List<ToolSpec> SPECS = List.of(
-            new ToolSpec("status", "查看你自己的状态：位置/生命/饥饿/背包占用/手持物",
-                    "{\"type\":\"object\",\"properties\":{}}"),
+            new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度；details=true含背包与装备逐槽明细。耗时不等于完成率",
+                    "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
+            new ToolSpec("find_resource", "只读定向查找材料方块：targets为方块ID或#方块标签，如#minecraft:logs、oak_log、iron_ore。"
+                    + "r默认8、最多16；最近优先采样4096格、最多16候选，返回绝对坐标及未加载/撞帽信息。"
+                    + "不强制加载、不证明可达/可挖/实际掉落；空结果不等于没有资源，勿改变参数连续空转或挖掘探查",
+                    "{\"type\":\"object\",\"properties\":{\"targets\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,"
+                            + "\"items\":{\"type\":\"string\",\"maxLength\":128}},\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16}},"
+                            + "\"required\":[\"targets\"],\"additionalProperties\":false}"),
+            new ToolSpec("inspect_block", "只读查看6.5格内已加载方块及本体容器逐槽ID/数量/耐久。"
+                    + "offset默认0，每页24槽，next_offset=-1表示末页；拒绝锁定/未展开战利品容器。"
+                    + "不打开GUI、不搬物品、不合并双箱；机器计时用smelt query",
+                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
+                            + "\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1023}},\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false}"),
             new ToolSpec("inventory", "查看完整背包逐槽物品ID/数量/耐久、主手选中槽及装备栏。"
                     + "槽0-8是快捷栏，9-35是背包；切换工具或准备材料前先查看，未列出的背包槽为空",
                     "{\"type\":\"object\",\"properties\":{}}"),

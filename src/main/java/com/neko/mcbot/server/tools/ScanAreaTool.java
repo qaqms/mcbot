@@ -115,6 +115,7 @@ public final class ScanAreaTool implements ServerTool {
         data.addProperty("samples_planned", plan.cells().size());
         data.addProperty("truncated", plan.truncated());
         data.addProperty("unloaded", unloaded);
+        data.addProperty("no_targets", summary.total() == 0 && entities.isEmpty());
 
         StringBuilder fb = new StringBuilder();
         // 首行：模型每轮都要知道"我在哪、朝哪"，否则绝对坐标和它的意图对不上（R2-D）
@@ -134,7 +135,8 @@ public final class ScanAreaTool implements ServerTool {
         }
         fb.append('\n');
         if (ring.isEmpty()) {
-            fb.append("这一圈里没有可行动的东西（土/沙/木头一类不算目标）。");
+            fb.append("此次分类采样未发现目标；木材等未纳入分类，用find_resource指定方块或#标签查找。"
+                    + "未找到不等于周边没有资源，不能据此挖掘探查。");
         } else {
             fb.append(ScanSummary.join(ring));
         }

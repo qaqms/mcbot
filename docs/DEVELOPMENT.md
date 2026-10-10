@@ -312,6 +312,25 @@ Invoker对应的原版装备属性应用、Player.attack/swing、实时范围/�
 不以此宣称生存战斗、自动进食/防御、死亡复活、追击/远程、模组副作用隔离或连接器联调完成。
 全量强制构建/XML/哈希及真实待验边界写入 STATUS。
 
+### 3.9 状态与资源感知离线回归
+
+```bash
+./gradlew :agent-core:test --offline --tests com.neko.mcbot.agentcore.loop.AgentLoopObservationTest
+./gradlew clientTest --offline --tests com.neko.mcbot.server.tools.AwarenessToolTest --tests com.neko.mcbot.agent.AgentRunnerObservationTest --tests com.neko.mcbot.task.CompanionSchedulerTest
+```
+
+C5新增21项：核心观测5、工具11、runner4、调度槽观测1。实际loop异步等待本轮快照，
+历史不积累快照/不改工具回执、失败/超长/异常停任务、取消及跨任务迟到隔离；
+runner通过实际内部status信封和可控S2C验证每轮刷新、当前task绑定、失败/超时停止。
+旧runner测试在ClientServices观测边界提供空成功夹具，新4项启用真实请求/等待接线，
+不把前者写成服务端快照已经运行。
+工具仅初始化注册表，实际Inventory/ItemStack/BlockState/SimpleContainer参与；
+世界/区块/位置/锁/有效性/未展开战利品由Access给定。木材/多变体/最近坐标、采样与结果帽、
+未知不读、参数/未知标签拒绝、新扫描不继承旧目标、分页和耐久/组件保全得到验证。
+状态报告测试逐槽材料变动/选槽、旧字段兼容与任务计数；调度测试实际年龄/终态清除。
+运行时标签加载/区块缓存、真实身体/世界/容器/菜单和单人模型/连接器联合验收仍待验，
+没有启动MinecraftServer/实体/玩家/真实模型，未增加progress网络生产者。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，

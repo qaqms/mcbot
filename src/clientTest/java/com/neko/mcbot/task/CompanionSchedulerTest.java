@@ -75,6 +75,23 @@ class CompanionSchedulerTest {
         assertEquals(1, task.ticks);
     }
 
+    @Test void observationShowsActualAgeAndClearsAtTerminalWithoutGuessingPercent() {
+        var task = new Task();
+        assertFalse(scheduler.observation(body).get("busy").getAsBoolean());
+        var result = start(task, 20);
+        scheduler.tick(present);
+        var observation = scheduler.observation(body);
+        assertTrue(observation.get("busy").getAsBoolean());
+        assertEquals(1, observation.get("elapsed_ticks").getAsInt());
+        assertEquals(20, observation.get("cap_ticks").getAsInt());
+        assertFalse(observation.has("percent"));
+        task.done = true;
+        scheduler.tick(present);
+        assertTrue(result.join().ok());
+        assertFalse(scheduler.observation(body).get("busy").getAsBoolean());
+        assertFalse(scheduler.observation(body).has("progress"));
+    }
+
     @Test void exceptionCleansEvenIfCleanupAlsoThrows() {
         var task = new Task();
         task.throwsTick = task.throwsCleanup = true;

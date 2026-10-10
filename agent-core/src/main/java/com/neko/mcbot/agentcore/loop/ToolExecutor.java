@@ -47,4 +47,9 @@ public interface ToolExecutor {
     }
 
     CompletableFuture<ToolOutcome> execute(String name, String argsJson);
+
+    /** Optional host observation, taken anew before each model turn, never stored as a tool call. */
+    default CompletableFuture<ToolOutcome> observe(long taskId) {
+        return CompletableFuture.completedFuture(new ToolOutcome(true, ""));
+    }
 }

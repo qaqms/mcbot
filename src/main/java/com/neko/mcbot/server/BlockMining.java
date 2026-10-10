@@ -53,6 +53,15 @@ public final class BlockMining {
         this.access = access;
     }
 
+    public JsonObject observation() {
+        var data = new JsonObject();
+        data.addProperty("action", "break_block");
+        data.addProperty("mining_progress", Float.isFinite(progress) ? Math.min(1, progress) : 1);
+        data.addProperty("stalled_ticks", stalled);
+        if (terminal != null && terminal.data() != null) data.add("result", terminal.data().deepCopy());
+        return data;
+    }
+
     public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos) {
         return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable()));
     }

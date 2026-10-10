@@ -20,7 +20,10 @@ public final class InventoryTool implements ServerTool {
 
     @Override
     public Result run(CompanionPlayer companion, JsonObject args) {
-        Inventory inventory = companion.getInventory();
+        return report(companion.getInventory());
+    }
+
+    public static Result report(Inventory inventory) {
         int selected = inventory.getSelectedSlot();
         JsonObject data = new JsonObject();
         data.addProperty("selected_slot", selected);

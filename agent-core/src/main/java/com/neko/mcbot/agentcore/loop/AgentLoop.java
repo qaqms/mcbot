@@ -425,10 +425,34 @@ public final class AgentLoop {
         long stepGeneration = generation;
         StepReactor reactor = new StepReactor(stepGeneration);
         activeReactor = reactor;
+        CompletableFuture<ToolOutcome> observation;
+        try {
+            observation = java.util.Objects.requireNonNull(executor.observe(activeDirective.id()));
+        } catch (RuntimeException failure) {
+            observation = CompletableFuture.failedFuture(failure);
+        }
+        observation.whenComplete((state, failure) -> {
+            synchronized (AgentLoop.this) {
+                if (!isCurrent(stepGeneration) || activeReactor != reactor) return;
+                if (failure != null || state == null || !state.ok() || state.accepted()
+                        || state.feedback() == null || state.feedback().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 16384) {
+                    finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:没有取得有效的最新身体状态，任务已停止；不能猜测完成。");
+                    return;
+                }
+                var history = new ArrayList<>(convo.outboundHistory());
+                if (!state.feedback().isBlank()) history.add(new Msg.Nudge(
+                        "[本轮服务端身体观测 task_id=" + activeDirective.id() + " step=" + steps
+                                + "，仅对本次请求有效]\n" + state.feedback()));
+                requestTurn(stepGeneration, reactor, List.copyOf(history));
+            }
+        });
+    }
+
+    private void requestTurn(long stepGeneration, StepReactor reactor, List<Msg> history) {
         CompletableFuture<AssistantTurn> response;
         try {
             response = java.util.Objects.requireNonNull(
-                    engine.chat(systemPrompt.get(), convo.outboundHistory(), tools, reactor, true));
+                    engine.chat(systemPrompt.get(), history, tools, reactor, true));
         } catch (RuntimeException t) {
             response = CompletableFuture.failedFuture(t);
         }

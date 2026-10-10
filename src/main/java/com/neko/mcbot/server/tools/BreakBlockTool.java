@@ -57,6 +57,7 @@ public final class BreakBlockTool implements ServerTool {
         }
 
         @Override public void onAbort() { mining.abort(); }
+        @Override public JsonObject observation() { return mining.observation(); }
     }
 
     static BlockPos readPos(JsonObject args) {

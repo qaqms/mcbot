@@ -64,6 +64,7 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     Supplier<AgentRunner> current;
     long now = 1_700_000_000_000L;
     boolean connected = true;
+    boolean liveObservation;
 
     AgentRunner create() {
         var runner = new AgentRunner(CONFIG, this);
@@ -103,4 +104,9 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     @Override public boolean canSend() { return connected; }
     @Override public void send(Envelope envelope) { sent.add(envelope); }
     @Override public boolean isCurrentRunner(AgentRunner owner) { return current.get() == owner; }
+    @Override public CompletableFuture<com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome> observe(
+            AgentRunner owner, long taskId) {
+        return liveObservation ? owner.requestObservation(taskId) : CompletableFuture.completedFuture(
+                new com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome(true, ""));
+    }
 }

@@ -121,6 +121,7 @@ public final class AgentRunner implements ToolExecutor {
         boolean canSend();
         void send(Envelope envelope);
         boolean isCurrentRunner(AgentRunner owner);
+        CompletableFuture<ToolOutcome> observe(AgentRunner owner, long taskId);
     }
 
     private static final class MinecraftServices implements ClientServices {
@@ -169,6 +170,9 @@ public final class AgentRunner implements ToolExecutor {
             ClientPlayNetworking.send(new McbotPayloads.C2s(envelope.encode()));
         }
         @Override public boolean isCurrentRunner(AgentRunner owner) { return McbotClient.runner() == owner; }
+        @Override public CompletableFuture<ToolOutcome> observe(AgentRunner owner, long taskId) {
+            return owner.requestObservation(taskId);
+        }
     }
 
     public AgentRunner(ClientConfig cfg) {
@@ -723,6 +727,17 @@ public final class AgentRunner implements ToolExecutor {
         // 取消/超时后的迟到回执可见，但不再参与新任务。
         o.addProperty("late_results", lateResults.get());
         return o.toString();
+    }
+
+    @Override
+    public CompletableFuture<ToolOutcome> observe(long taskId) {
+        if (closed || taskId != currentTask) return CompletableFuture.completedFuture(
+                ToolOutcome.synthetic("CANCELLED:观测所属任务已结束。"));
+        return client.observe(this, taskId);
+    }
+
+    CompletableFuture<ToolOutcome> requestObservation(long taskId) {
+        return executeRemote("status", "{\"details\":true}", taskId, loop);
     }
 
     @Override
