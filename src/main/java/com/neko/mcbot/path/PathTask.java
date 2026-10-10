@@ -127,6 +127,19 @@ public final class PathTask extends TickTask {
     }
 
     @Override
+    public JsonObject observation() {
+        var data = new JsonObject();
+        data.addProperty("action", "move_to");
+        data.addProperty("phase", phase.name());
+        data.addProperty("committed_nodes", executed);
+        data.addProperty("removed_blocks", actualDigs);
+        data.addProperty("placed_blocks", actualPlaces);
+        data.addProperty("remaining_items", leftoverItems);
+        data.addProperty("replans", replans);
+        return data;
+    }
+
+    @Override
     public Progress tick(CompanionPlayer c) {
         if (c.level() != level) {
             onAbort();

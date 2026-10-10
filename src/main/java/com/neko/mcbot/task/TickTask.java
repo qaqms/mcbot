@@ -28,6 +28,11 @@ public abstract class TickTask {
 
     public abstract Progress tick(CompanionPlayer companion);
 
+    /** Actual counters only; elapsed ticks do not establish a completion percentage. */
+    public com.google.gson.JsonObject observation() {
+        return new com.google.gson.JsonObject();
+    }
+
     public static Progress running() {
         return RUNNING;
     }

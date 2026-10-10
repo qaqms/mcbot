@@ -19,14 +19,16 @@ record Result(boolean ok, String feedback, JsonObject data)
 - **每同伴单活跃任务槽**：同步/异步动作统一占身体资源，目标区域冲突回 `BUSY`；只读查询不占锁。
 - 所有执行都发生在服务器主线程、作用于**发送者名下**的同伴（owner 校验在闸③）。
 
-## 2. 在册工具（13 服务端 + 1 本地，冶炼/攻击实现与离线验证，真实行为待验）
+## 2. 在册工具（15 服务端 + 1 本地，真实行为仍待验）
 
-> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 13 个），
-> 本表就是那 13 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
+> 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 15 个），
+> 本表就是那 15 个 + 客户端本地的 `ask_owner`。别拿本表数字反推代码。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
-| `status` | — | 同步 | 位置/生命/饥饿/背包占用/手持物 |
+| `status` | `details?` | 同步 | 最新位置/生命/饥饿/背包占用/主手及实际任务计数；details=true包含背包/装备逐槽明细 |
+| `find_resource` | `targets,r?` | 同步 | 方块ID/#标签定向搜索；r默认8/最多16，最近优先4096格采样，最多16候选，明确未知/撞帽 |
+| `inspect_block` | `x,y,z,offset?` | 同步 | 6.5格内完整加载方块/本体容器明细，每页24槽；拒锁/未展开战利品，不打开GUI |
 | `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
 | `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
@@ -51,7 +53,7 @@ record Result(boolean ok, String feedback, JsonObject data)
 ### 2.1 背包明细与主手切换
 
 模型需要材料或工具信息时调用 `inventory {}`，从回执选择实际槽号，再调用
-`equip {"slot":13}`。`status` 仍是轻量体感汇报，不承担完整背包枚举。
+`equip {"slot":13}`。`status` 默认轻量体感汇报，details=true增加完整背包/装备明细。
 `inventory` 的 feedback 列出所有非空背包槽、选中主手及全部装备映射槽，
 未列出的背包槽为空；当前 AgentRunner 仅将 feedback 写入模型历史，不能只依赖 data。
 
@@ -323,6 +325,28 @@ LivingEquipmentAccess 调原版 detectEquipmentUpdates 同步装备属性，不�
 Mixin实际加载、真实属性/冷却/伤害/附魔/耐久/横扫、玩家/模组并发与真实停手待安排，
 原版/数据包/模组回调可能产生其他副作用，租约不是沙盒。离线范围见 DEVELOPMENT §3.8。
 
+### 2.8 状态与任务资源感知（C5）
+
+每轮模型请求前，宿主调用status details=true取得服务端同一线程中的身体、背包/装备、
+游戏刻和调度槽观测；未知/失败/超时观测停止该任务，不复用旧快照继续猜测。
+运行期快照只附在本轮请求尾部，不写入会话历史或改写真实工具回执，不改变system前缀。
+status的旧位置/生命/饥饿/占用/手持/着火字段保留；新增game_tick/task及可选inventory。
+task包含busy；忙时另给elapsed_ticks/cap_ticks/progress。路径报已提交节点与实际挖放，
+攻击报已出手数，挖掘报原版实时累计进度，wait报已等刻数；耗时不是完成率。
+
+find_resource的targets须1-8个实际方块ID或已加载非空#方块标签，如oak_log/#minecraft:logs，
+不是物品ID或自然语言。r为1-16整数，默认8；查询以身体为中心，最近优先采样最多4096格，
+最多返回16个绝对坐标。仅getChunkNow取得的完整区块可读，未知/界外不读，不加载或生成。
+data同时给samples_planned/samples_examined/cells_read/unknown/truncated/results_truncated/no_targets。
+候选只证明采样格中存在方块，不证明露出、可达、采收资格或实际掉落；空结果不证明不存在。
+scan_area同样给no_targets并明确分类遗漏木材，不鼓励挖掘探查或改变半径持续空转。
+
+inspect_block只读6.5格内已完整加载的方块和其自己的Container，offset默认0、范围0-1023，
+每页24槽；data给slot_count/slots/next_offset（-1末页）。锁定、失效、未展开战利品容器拒绝。
+物品显示注册ID/数量/耐久，原始组件与自定义名称不出站；不搬物品/开GUI/展开战利品，
+不合并双箱或读取整个存储网络。熔炉原料/燃料/产物的实时进度仍用smelt query。
+纯MC物品/状态与生产工具回归通过；实际区块缓存/身体/容器世界行为仍待验。
+
 ## 3. 回执词汇表（模型行为约定）
 
 | 前缀 | 语义 | 期望的模型行为 |
@@ -358,6 +382,7 @@ Mixin实际加载、真实属性/冷却/伤害/附魔/耐久/横扫、玩家/模
 | `SUPERSEDED:` | 被新指令顶掉（R2-S4，**本地合成**，不是服务端发的） | 别自作主张续上；要做就重新发一次 |
 | `TIMEOUT:` | 服务器/主人超时未回执 | 别重复该操作，向主人说明 |
 | `INTERNAL:` | 服务端异常/参数非 JSON | 报障，别重试 |
+| `STATE_UNAVAILABLE:` | 本轮身体观测无有效结果 | 任务停止，说明无法取得状态，不能猜测完成 |
 
 > `CANCELLED:`/`SUPERSEDED:`/`TIMEOUT:` 三种都会作为 `job_event` 的 `phase`
 > （依次 `cancelled`/`superseded`/`failed`）出现，**相位与文本前缀分开**是有意的：

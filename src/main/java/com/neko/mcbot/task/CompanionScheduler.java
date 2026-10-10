@@ -92,6 +92,18 @@ public final class CompanionScheduler {
         return active.containsKey(companionId);
     }
 
+    public com.google.gson.JsonObject observation(UUID companionId) {
+        Slot slot = active.get(companionId);
+        var data = new com.google.gson.JsonObject();
+        data.addProperty("busy", slot != null);
+        if (slot != null) {
+            data.addProperty("elapsed_ticks", slot.task().age);
+            data.addProperty("cap_ticks", slot.capTicks());
+            data.add("progress", slot.task().observation());
+        }
+        return data;
+    }
+
     public void cancelAll(String reason) {
         var ids = new java.util.HashSet<>(active.keySet());
         ids.addAll(calls.keySet());

@@ -107,6 +107,15 @@ public final class EntityAttack {
         return terminal;
     }
 
+    public com.google.gson.JsonObject observation() {
+        var data = new com.google.gson.JsonObject();
+        data.addProperty("action", "attack");
+        data.addProperty("strikes", strikes);
+        data.addProperty("max_hits", maxHits);
+        data.addProperty("observation_known", observationKnown);
+        return data;
+    }
+
     private ServerTool.Result finish(boolean ok, String feedback, com.google.gson.JsonObject extra) {
         var data = extra == null ? new com.google.gson.JsonObject() : extra.deepCopy();
         data.addProperty("strikes", strikes);

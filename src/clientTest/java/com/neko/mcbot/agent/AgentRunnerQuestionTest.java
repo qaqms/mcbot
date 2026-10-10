@@ -1,5 +1,7 @@
 package com.neko.mcbot.agent;
 
+import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
+
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neko.mcbot.agentcore.llm.AssistantTurn;
@@ -74,6 +76,9 @@ class AgentRunnerQuestionTest {
             fail("question tests must not send game packets");
         }
         @Override public boolean isCurrentRunner(AgentRunner owner) { return true; }
+        @Override public CompletableFuture<ToolOutcome> observe(AgentRunner owner, long taskId) {
+            return CompletableFuture.completedFuture(new ToolOutcome(true, ""));
+        }
     }
 
     private final Services services = new Services();

@@ -136,6 +136,7 @@ public final class AttackTool implements ServerTool {
             return result == null ? running() : new Progress.Done(result);
         }
         @Override public Result interruptedResult(Result reason) { return attack.interrupt(reason.feedback()); }
+        @Override public JsonObject observation() { return attack.observation(); }
         @Override public void onAbort() { attack.interrupt("CANCELLED:攻击已中止，等待新指令。"); }
     }
 

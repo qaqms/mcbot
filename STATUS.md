@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-11）：C1–C4 实现/离线完成，下一卡状态感知；真实机器/动作、F0 与连接器待验
+## 当前状态（2026-10-11）：C1–C5 实现/离线完成，下一卡有界流程；真实机器/动作、F0 与连接器待验
 
 当前优先级：连接器由协作者独立维护，本仓已收到首轮联调报告 PR #5，
 尚未接收连接器源码或补丁；按维护者授权先完善 MC agent 本体，
@@ -14,7 +14,7 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
 当前以开发与离线测试为主，暂不启动游戏客户端或真实服务端做验收；
 冶炼本轮实现与离线回归完成，真实行为及连接器联合验收另行挂账。
-当前 C1 物品守恒、C2 挖放语义、C3 调度与权限、C4 有界近战完成实现与离线验证；
+当前 C1 物品守恒、C2 挖放语义、C3 调度与权限、C4 有界近战、C5状态感知完成实现与离线验证；
 原版实际挖放/耐久/掉落、多格/组件/碰撞与路径真实支撑仍另行待验。
 当前客户端与服务端须一起更新；外部任务桥 v1.0 不变。
 
@@ -27,6 +27,38 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### C5 状态与资源感知：实现与离线阶段完成（2026-10-11 01:56，Asia/Shanghai）
+
+- **基线/范围**：在C4 `29bb355af5fa99d5807780aa3d1df0d8c011c64e` 创建feat/state-resource-awareness，
+  C4 PR #9仍为Draft；维护者授权进入状态感知与流程组合，按顺序先验C5再写C6。
+  参考只读副本的本轮运行状态、目标查询/未知区与任务记录机制，仅借鉴设计，不复制代码/文档。
+  宿主/参考副本/连接器不改，桥v1.0不变；没有启动游戏、世界/实体/服务器/模型或安装产物。
+- **最新观测**：AgentLoop每次模型请求前等待ToolExecutor.observe；
+  生产runner通过所属任务status details=true读取服务端最新身体/背包/装备、游戏刻和实际任务计数。
+  快照只附在本轮尾部，不写入历史/压缩或改真实工具回执/system；失败/异常/超长/超时停止任务。
+  取消/关闭/任务代际隔离迟到快照，不复用旧身体观测。
+  status旧字段保留，增加game_tick/task，可选inventory；自定义物品文本不出站。
+  调度槽报busy/真实age/cap和动作计数；路径已提交节点/挖放、攻击出手、挖掘实时累计进度、wait刻数，
+  不把耗时换算完成率；未增加实时progress网络生产者。
+- **任务资源**：新增第14/15个服务端只读工具find_resource/inspect_block。
+  前者接受1-8个方块ID或非空方块#标签，默认r8/最大16，最近优先最多4096格/16候选；
+  仅getChunkNow的完整区块可读，明确采样/未知/结果帽，不强制加载或把空结果写成不存在。
+  坐标只证明采样格的方块，不证明露出/可达/采收或掉落；scan_area无分类目标指向显式资源查询，
+  不鼓励挖掘探查。后者近身6.5格、24槽分页/最多1024槽，只读本体容器，拒锁/失效/未展开战利品，
+  不开GUI/搬物品/合并双箱/查询整个网络；机器进度仍用smelt query。三道闸/只读权限保持。
+- **离线验证**：新增21项（核心5、工具11、runner4、scheduler1），实际loop/runner/调度器及工具执行，
+  真Inventory/ItemStack/BlockState/SimpleContainer，仅注册表初始化；世界/区块/身体观测为受控边界。
+  旧runner测试在ClientServices观测边界给空成功，新4项验证真实内部status发送/回执接线。
+  首次编译漏导入测试类型，补齐；专项19s成功，build/state-focused-20261011.log。
+  01:56:08实核强制完整build --offline --rerun-tasks --console=plain --no-daemon，
+  **28s / 20任务全部执行 / 534/534**（204+82+248），failures/errors/skipped全0；
+  build/state-full-20261011.log；JAR SHA256
+  `eb3c464bb59f74ee770d2f494ca7df2aaaa8ae62a37fcdb17976b4b2f185b9cb`。
+  list-java无Java残留；只留本地日志/产物，不发布或安装。
+- **待验**：真实身体/区块缓存/运行时标签/容器/任务进度和连接器联合验收另行安排；
+  不以离线替身销账，F0/冶炼/攻击/[m9]A3等历史边界保留。
+  下一卡C6有界流程，发布核验另记；不合并既有PR/main或修改PR #5。
 
 ### C4 有界近战：实现与离线阶段完成（2026-10-11 01:32，Asia/Shanghai）
 
@@ -2331,6 +2363,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 资源/容器读取（C5，10-11 javap + 编译，未运行世界） | ServerChunkCache.getChunkNow(int,int)返回LevelChunk，缓存缺失返回null；LevelChunk.getBlockState(BlockPos)可用。Registry.getOptional(Identifier)、getTagOrEmpty(TagKey)与BlockState.is(TagKey)可用；未知/空标签拒绝。RandomizableContainerBlockEntity.getLootTable()可先识别未展开战利品，不调用getItem触发展开；世界/标签运行时仍待验 |
 | 拾取目标/维度（C3，10-10 javap + 编译，未运行实体/Mixin） | ItemEntity 私有 `UUID target` 与 `int pickupDelay`；`getOwner()` 返回 thrower 对应 Entity，不能代替 target；playerTouch 的字节码检查 pickupDelay==0 且 target为空或等于玩家UUID，`hasPickUpDelay()` 则为 pickupDelay>0。本体 collect 使用 hasPickUpDelay 和只读 target accessor，不宣称 playerTouch 已运行。ResourceKey.identifier() 可取得维度 ID，身体实例与提交时 ServerLevel 引用另外绑定 |
 | 近战/身体时钟（C4，10-11 javap + 编译，未运行实体/Mixin） | Player.attack(Entity)返回void，经原版伤害/耐久/附魔/击退路径，onAttack只resetOnlyAttackStrengthTicker；满冷却用getAttackStrengthScale(0)，cannotAttackWithItem(ItemStack,int)另检查MINIMUM_ATTACK_CHARGE；isWithinAttackRange(AABB,double)委托AttackRange。ServerPlayer.tick不调用Player.tick；ServerPlayer.doTick才调用后者，假连接不驱动listener doTick。Player.tick推进protected attackStrengthTicker/itemSwapTicker，主手不同物品时两者归零，同类耐久/组件变化不归零 |
 | 装备/横扫/保护（C4，10-11 javap + 编译，未运行世界） | LivingEntity私有detectEquipmentUpdates先collectEquipmentChanges移除旧modifier再用实际ItemStack.forEachModifier/原版附魔效果加入新modifier，用Invoker复用。Player剑横扫查询目标AABB.inflate(1,.25,1)内LivingEntity，排自己/主目标/同队等再hurtServer；本体更保守地拒绝第三活物。OwnableEntity.getOwnerReference可不加载主人判定归属，TamableAnimal.isTame、animal.equine.AbstractHorse.isTamed；Enemy接口覆盖不属于Monster的敌对类型。PIERCING_WEAPON/KINETIC_WEAPON组件与MaceItem单独拒绝 |
