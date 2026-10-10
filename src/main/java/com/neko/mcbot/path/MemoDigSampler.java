@@ -136,7 +136,7 @@ public final class MemoDigSampler implements DigSampler {
         double r = base.digSeconds(x, y, z);
         misses++;
         if (memoCap()) {
-            dig.put(k, r == INFEASIBLE ? -1 : (int) Math.ceil(r * 4));
+            dig.put(k, !DigSampler.feasibleDig(r) ? -1 : (int) Math.ceil(r * 4));
         }
         afterProbe();
         return r;

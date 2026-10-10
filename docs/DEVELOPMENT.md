@@ -223,6 +223,39 @@ runner 使用实际 AgentRunner/AgentLoop 和可控模型/C2S 回执，验证部
 任意模组菜单/setter、双箱整体与阻挡开启、真实容器/实体/掉落、身体停手、
 保存重进及普通游戏动作回归仍待安排；历史 F0/冶炼/区块票待验项保留。
 
+### 3.6 挖放语义离线回归
+
+```bash
+./gradlew :test --offline --tests com.neko.mcbot.path.DigCostSafetyTest
+./gradlew clientTest --offline --tests com.neko.mcbot.server.BlockMiningTest --tests com.neko.mcbot.server.BlockPlacementTest --tests com.neko.mcbot.server.PathMaterialsTest --tests com.neko.mcbot.server.tools.BlockToolOperationsTest --tests com.neko.mcbot.agent.AgentRunnerBlockActionsTest
+```
+
+C2 新增 39 项：路径代价 2、共享挖掘 15、放置 8、垫料 4、工具参数/计时任务 6、
+实际 runner 4。仅初始化注册表，真实 Inventory(null, EntityEquipment)、ItemStack、
+BlockState 与完整组件参与处理；世界/权限/挖掘速度/原版动作返回与目标变化、
+掉落实体余量写回均通过受控 Access。没有世界、服务器、身体或真实物品实体。
+破坏回调损耗原堆栈的样本只证明动作边界与次数，不是原版耐久已经实测。
+水/可替换格/半砖样本提供观察结果，只证明工具不预先限制为空气且正确记账，
+不证明原版实际放置、朝向、组件落地或多格钩子已经运行。
+
+覆盖无采收资格先拒绝、目标/选槽/数量/耐久/组件变化停手、实时速度、零硬度/
+有界停滞、裂纹清理/取消、原版返回成功但目标未移除、失败且已移除的实际副作用、
+旧掉落不动、新实体只处理一次、部分余量组件保全、不再求战利品或二次生成。
+放置检查完整来源堆栈/面/准确目标透传、恰好一件消费、误报成功拒绝、
+失败副作用、装备/选中槽保全、特殊类拒绝及忙时不动世界。
+垫料预算与执行选择一致，命名/新增或移除组件不消耗；纯算法测试实际运行
+DigAStar 与 MemoDigSampler，不可行哨兵/NaN/无穷/负值不能穿过唯一障碍。
+坐标严格性同样覆盖 move_to 使用的共享解析器。
+runner 实际运行 AgentRunner/AgentLoop，ACCEPT 等终态后再给模型掉落反馈、
+WRONG_TOOL/BUSY/部分放置不自动重投，受理前/挖掘等待期间取消忽略迟到成功并补齐历史。
+服务端 Task 的延迟终态和取消通过直接 tick 验证，不将 runner 取消写成真实身体停手证明。
+
+两条路径调用点及原版 API 编译/字节码核验，当前未运行真实 PathTask 世界遍历。
+真实采收/附魔/耐久、裂纹显示、掉落/经验、朝向/碰撞/水中/替换/多格/组件放置、
+路径真实支撑与材料消耗、保存重进及普通动作回归均待维护者安排。
+3×3×3 已加载邻域不是任意模组钩子的沙盒，远处/延迟掉落和任意模组副作用不在保证内。
+统一授权/资源互斥/异常停手属于 C3，桥 v1.0、F0、冶炼及 `[m9] A3` 待验继续保留。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，

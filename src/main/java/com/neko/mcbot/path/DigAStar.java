@@ -311,7 +311,7 @@ public final class DigAStar {
                 continue;
             }
             double sec = s.digSeconds(bx, cy, bz);
-            if (sec == DigSampler.INFEASIBLE) {
+            if (!DigSampler.feasibleDig(sec)) {
                 return;
             }
             newDigs++;
@@ -397,7 +397,7 @@ public final class DigAStar {
         for (int cy = y; cy <= y + 1; cy++) {
             if (!s.passable(x, cy, z)) {
                 double sec = s.digSeconds(x, cy, z);
-                if (sec == DigSampler.INFEASIBLE) {
+                if (!DigSampler.feasibleDig(sec)) {
                     return -1;
                 }
                 c += sec + DIG_OVERHEAD;

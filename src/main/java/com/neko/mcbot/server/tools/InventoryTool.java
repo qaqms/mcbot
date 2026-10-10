@@ -73,7 +73,7 @@ public final class InventoryTool implements ServerTool {
         return data;
     }
 
-    static String describe(ItemStack stack) {
+    public static String describe(ItemStack stack) {
         if (stack.isEmpty()) return "空";
         String text = itemId(stack) + (idTruncated(stack) ? "...[ID已截短]" : "")
                 + " × " + stack.getCount();
