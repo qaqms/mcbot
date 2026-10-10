@@ -36,6 +36,11 @@ public abstract class TickTask {
     public void onAbort() {
     }
 
+    /** Preserve completed effects when cancellation, timeout or an exception interrupts a task. */
+    public ServerTool.Result interruptedResult(ServerTool.Result reason) {
+        return reason;
+    }
+
     /** Release transient action state after an ordinary terminal outcome. */
     public void onFinish() {
         onAbort();

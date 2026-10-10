@@ -15,6 +15,7 @@ import java.util.UUID;
 public final class CompanionPlayer extends ServerPlayer {
 
     private final UUID ownerUuid;
+    private final MeleeClock meleeClock = new MeleeClock();
 
     public CompanionPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
                            ClientInformation clientInformation, UUID ownerUuid) {
@@ -24,5 +25,16 @@ public final class CompanionPlayer extends ServerPlayer {
 
     public UUID ownerUuid() {
         return ownerUuid;
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        // FakeConnection has no listener tick, so Player.tick cannot supply these updates.
+        ((com.neko.mcbot.mixin.LivingEquipmentAccess) (net.minecraft.world.entity.LivingEntity) this)
+                .mcbot$detectEquipmentUpdates();
+        var state = meleeClock.tick(getMainHandItem(), attackStrengthTicker, itemSwapTicker);
+        attackStrengthTicker = state.attackTicks();
+        itemSwapTicker = state.swapTicks();
     }
 }

@@ -79,6 +79,11 @@ public final class CompanionScheduler {
         return lease != null && lease.extend(regions);
     }
 
+    public boolean reserveTarget(UUID companion, ResourceLocks.Target target) {
+        ResourceLocks.Lease lease = leases.get(companion);
+        return lease != null && lease.claim(target);
+    }
+
     private static CompletableFuture<ServerTool.Result> completed(String feedback) {
         return CompletableFuture.completedFuture(new ServerTool.Result(false, feedback, null));
     }
@@ -175,8 +180,14 @@ public final class CompanionScheduler {
         if (active.get(slot.id()) != slot) return;
         active.remove(slot.id());
         try {
-            if (aborted) slot.task().onAbort();
-            else slot.task().onFinish();
+            if (aborted) {
+                try {
+                    ServerTool.Result partial = slot.task().interruptedResult(result);
+                    if (partial != null) result = partial;
+                } finally {
+                    slot.task().onAbort();
+                }
+            } else slot.task().onFinish();
         } catch (Throwable failure) {
             McbotMod.LOG.error("任务收尾异常", failure);
         } finally {

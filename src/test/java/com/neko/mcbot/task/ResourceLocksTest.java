@@ -47,4 +47,30 @@ class ResourceLocksTest {
         assertNull(locks.acquire(one, java.util.Collections.nCopies(257, area)));
         assertEquals(0, locks.size());
     }
+
+    @Test void sameEntityRemainsExclusiveEvenWhenItMovesOutOfTheOriginalRegion() {
+        var first = locks.acquire(one, List.of(area));
+        var second = locks.acquire(two, List.of());
+        var target = new ResourceLocks.Target("overworld", UUID.randomUUID());
+        assertTrue(first.claim(target));
+        assertTrue(first.claim(target));
+        assertFalse(second.claim(target));
+        assertTrue(first.extend(List.of(new ResourceLocks.Region("overworld", 20, 80, 0, 22, 82, 2))));
+        assertFalse(second.claim(target));
+        first.close();
+        assertTrue(second.claim(target));
+        assertFalse(first.claim(target));
+    }
+
+    @Test void entityClaimsRespectDimensionAndCountLimit() {
+        var first = locks.acquire(one, List.of());
+        var second = locks.acquire(two, List.of());
+        UUID entity = UUID.randomUUID();
+        assertTrue(first.claim(new ResourceLocks.Target("overworld", entity)));
+        assertTrue(second.claim(new ResourceLocks.Target("nether", entity)));
+        for (int i = 1; i < 256; i++) assertTrue(first.claim(new ResourceLocks.Target("overworld", UUID.randomUUID())));
+        assertFalse(first.claim(new ResourceLocks.Target("overworld", UUID.randomUUID())));
+        first.close();
+        assertTrue(second.claim(new ResourceLocks.Target("overworld", entity)));
+    }
 }

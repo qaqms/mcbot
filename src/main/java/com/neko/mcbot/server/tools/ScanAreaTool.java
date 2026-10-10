@@ -10,11 +10,13 @@ import com.neko.mcbot.common.ScanFormat;
 import com.neko.mcbot.common.ScanPlan;
 import com.neko.mcbot.common.ScanSummary;
 import com.neko.mcbot.server.ServerTool;
+import com.neko.mcbot.server.EntityAttack;
+import com.neko.mcbot.common.WireSize;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Monster;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -60,7 +62,8 @@ public final class ScanAreaTool implements ServerTool {
         var look = companion.getLookAngle();
         ScanSummary summary = new ScanSummary(center.getX(), center.getY(), center.getZ(), r);
 
-        List<String> entities = scanEntities(companion, center, r, summary);
+        JsonArray entityTargets = new JsonArray();
+        List<String> entities = scanEntities(companion, center, r, summary, entityTargets);
 
         ScanPlan.Plan plan = ScanPlan.build(r);
         int cells = 0;
@@ -96,6 +99,7 @@ public final class ScanAreaTool implements ServerTool {
         JsonArray ents = new JsonArray();
         entities.forEach(ents::add);
         data.add("entities", ents);
+        data.add("entity_targets", entityTargets);
         List<String> ring = summary.lines();   // 只装配一次：下面 data 与 feedback 用同一份
         JsonArray lines = new JsonArray();
         ring.forEach(lines::add);
@@ -165,16 +169,16 @@ public final class ScanAreaTool implements ServerTool {
     }
 
     private static List<String> scanEntities(CompanionPlayer companion, BlockPos center, int r,
-                                            ScanSummary summary) {
+                                            ScanSummary summary, JsonArray targets) {
         var level = companion.level();
         List<String> out = new ArrayList<>();
         for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class,
                 companion.getBoundingBox().inflate(r))) {
-            if (e == companion) {
+            if (e == companion || !e.isAlive() || !level.isLoaded(e.blockPosition())) {
                 continue;
             }
             BlockPos ep = e.blockPosition();
-            boolean hostile = e instanceof Monster;
+            boolean hostile = e instanceof Enemy;
             if (hostile) {
                 // 敌对生物也走同一套分类词表：让"远处有几个僵尸"和"远处有几格矿"一样可统计
                 summary.add(ScanCategory.HOSTILE,
@@ -185,15 +189,34 @@ public final class ScanAreaTool implements ServerTool {
                 out.add("……(还有更多，此处截断)");
                 break;
             }
-            out.add(String.format("%s%s @(%d,%d,%d) %s hp=%.0f%s",
-                    e.getName().getString(),
+            var target = AttackTool.describe(companion, e);
+            targets.add(targetData(target));
+            out.add(String.format("%s%s @(%d,%d,%d) %s hp=%.0f%s %s",
+                    WireSize.truncateToBytes(e.getName().getString(), 80),
                     hostile ? "[敌对]" : "",
                     ep.getX(), ep.getY(), ep.getZ(),
                     ScanFormat.dist(distance(center, ep)),
                     e.getHealth(),
-                    e.isOnFire() ? " [着火]" : ""));
+                    e.isOnFire() ? " [着火]" : "", targetLine(target)));
         }
         return out;
+    }
+
+    static JsonObject targetData(EntityAttack.Target target) {
+        var data = new JsonObject();
+        data.addProperty("entity_id", target.id());
+        data.addProperty("target_uuid", target.uuid().toString());
+        data.addProperty("type", WireSize.truncateToBytes(target.type(), 128));
+        data.addProperty("type_truncated", WireSize.utf8Bytes(target.type()) > 128);
+        data.addProperty("hostile", target.hostile());
+        data.addProperty("protected", target.protectedTarget());
+        data.addProperty("requires_confirmation", !target.hostile() || target.named());
+        return data;
+    }
+
+    static String targetLine(EntityAttack.Target target) {
+        return "entity_id=" + target.id() + " target_uuid=" + target.uuid()
+                + (target.protectedTarget() ? " [攻击受保护]" : !target.hostile() || target.named() ? " [攻击需确认]" : "");
     }
 
     private static double distance(BlockPos a, BlockPos b) {

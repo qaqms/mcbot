@@ -15,7 +15,10 @@ public final class ResourceLocks {
         }
     }
 
-    private record Held(UUID body, List<Region> regions) {
+    public record Target(String dimension, UUID entity) {
+    }
+
+    private record Held(UUID body, List<Region> regions, List<Target> targets) {
     }
 
     public final class Lease implements AutoCloseable {
@@ -29,7 +32,19 @@ public final class ResourceLocks {
             var all = new ArrayList<>(current.regions());
             for (Region region : regions) if (!all.contains(region)) all.add(region);
             if (all.size() > 512) return false;
-            held.put(id, new Held(current.body(), List.copyOf(all)));
+            held.put(id, new Held(current.body(), List.copyOf(all), current.targets()));
+            return true;
+        }
+
+        public boolean claim(Target target) {
+            if (closed) return false;
+            Held current = held.get(id);
+            if (current.targets().contains(target)) return true;
+            if (current.targets().size() >= 256 || held.entrySet().stream().anyMatch(entry ->
+                    !entry.getKey().equals(id) && entry.getValue().targets().contains(target))) return false;
+            var targets = new ArrayList<>(current.targets());
+            targets.add(target);
+            held.put(id, new Held(current.body(), current.regions(), List.copyOf(targets)));
             return true;
         }
 
@@ -46,7 +61,7 @@ public final class ResourceLocks {
     public Lease acquire(UUID body, List<Region> regions) {
         if (regions.size() > 256 || conflicts(null, body, regions)) return null;
         UUID id = UUID.randomUUID();
-        held.put(id, new Held(body, List.copyOf(regions)));
+        held.put(id, new Held(body, List.copyOf(regions), List.of()));
         return new Lease(id);
     }
 

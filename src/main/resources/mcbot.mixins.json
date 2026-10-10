@@ -2,6 +2,6 @@
   "required": true,
   "package": "com.neko.mcbot.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["FurnaceAccess", "ItemTargetAccess"],
+  "mixins": ["FurnaceAccess", "ItemTargetAccess", "LivingEquipmentAccess"],
   "injectors": {"defaultRequire": 1}
 }

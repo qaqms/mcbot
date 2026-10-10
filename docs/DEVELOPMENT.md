@@ -286,6 +286,32 @@ PathTask 的生产调用点、逐格检查、下一落脚格变化重规划与�
 没有运行真实世界遍历、清单确认网络链路、原版多人/机器 ticker 或第三方模组并发。
 完整强制构建和实核 XML 证据见 STATUS；真实行为待维护者安排，不以离线通过销账。
 
+### 3.8 有界攻击离线回归
+
+```bash
+./gradlew :test --offline --tests com.neko.mcbot.task.ResourceLocksTest --tests com.neko.mcbot.server.JobEnvelopeTest
+./gradlew clientTest --offline --tests com.neko.mcbot.server.EntityAttackTest --tests com.neko.mcbot.server.tools.AttackToolOperationsTest --tests com.neko.mcbot.task.AttackSchedulerTest --tests com.neko.mcbot.agent.AgentRunnerAttackTest --tests com.neko.mcbot.body.MeleeClockTest --tests com.neko.mcbot.task.CompanionSchedulerTest --tests com.neko.mcbot.server.ServerActionGateTest
+```
+
+C4新增37项：EntityAttack15、AttackToolOperations7、AttackScheduler5、AgentRunnerAttack6、
+MeleeClock2、ResourceLocks新增2；原受理策略用例增加 attack 的实际工具/帽断言。
+仅初始化注册表，真实 Inventory/ItemStack/组件参与主手/损耗/装备保全；
+Access提供实体身份/生命/吸收/保护/距离/视线/横扫等观测及原版攻击回调，不创建实体/世界/服务器。
+实际 EntityAttack/AttackTool.Task/CompanionScheduler/ActionPermissions/ResourceLocks、
+ServerActionGate、runner/loop执行，Bodies/模型/网络/时钟仍为可控边界。
+验证冷却/无敌帧、同目标身份/主手变化停手、预算、观测死亡/未伤害/吸收、
+具体确认与预算不可扩大、命名标志变化/超长清单拒绝、回调异常未知效果、
+取消/超时/身体替换/换维度后不再出手，计数保留与资源释放、迟到结果/历史配对。
+实体UUID租约与移动区域独立，实体移动不能绕开占用；真实 scan 组装 helper验证编号/UUID一致性。
+
+MeleeClock以真实物品测试换类型重置、原版onAttack的计数输入后恢复、耐久/组件/破损处理；
+CompanionPlayer.tick到原生字段与LivingEquipmentAccess的接线仅编译/字节码核验。
+Invoker对应的原版装备属性应用、Player.attack/swing、实时范围/视线/保护实体判定、
+附近候选选择与扫描、实际冷却/伤害/附魔/耐久/击退/横扫和物理停止均未跑真实世界。
+保留原身体无敌，不开启完整Player.doTick/自动触碰拾取；
+不以此宣称生存战斗、自动进食/防御、死亡复活、追击/远程、模组副作用隔离或连接器联调完成。
+全量强制构建/XML/哈希及真实待验边界写入 STATUS。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，

@@ -638,7 +638,7 @@ public final class SelfTest {
         for (String n : names) {
             var t = registry.get(n);
             boolean isAccept = t.acceptanceMode() == com.neko.mcbot.server.ServerTool.Acceptance.ACCEPT;
-            boolean shouldAccept = "move_to".equals(n) || "break_block".equals(n);
+            boolean shouldAccept = "move_to".equals(n) || "break_block".equals(n) || "attack".equals(n);
             policyOk &= isAccept == shouldAccept;
             if (isAccept) {
                 accept++;
