@@ -8,8 +8,11 @@ import com.neko.mcbot.mixin.FurnaceAccess;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.task.CompanionScheduler;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.Container;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.flag.FeatureFlagSet;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.AbstractCookingRecipe;
 import net.minecraft.world.item.crafting.BlastingRecipe;
@@ -33,6 +36,66 @@ public final class SmeltTool implements ServerTool {
                      Integer fuelSlot, int fuelCount, int takeSlot, int count) {
     }
 
+    // Replace world observations in offline tests, keeping stack planning and commit on the real path.
+    interface Access {
+        boolean busy();
+        boolean inBounds(BlockPos pos);
+        double distanceSquared(BlockPos pos);
+        boolean loaded(BlockPos pos);
+        Machine machine(BlockPos pos);
+        Container inventory();
+    }
+
+    interface Machine {
+        Container slots();
+        BlockPos pos();
+        String id();
+        boolean locked();
+        boolean ticking();
+        int counter(int index);
+        int burnTicks(ItemStack fuel);
+        Cooking recipe(ItemStack input);
+    }
+
+    record Cooking(String id, ItemStack output, int ticks) {
+    }
+
+    private record PlayerAccess(CompanionPlayer companion, CompanionScheduler scheduler) implements Access {
+        @Override public boolean busy() { return scheduler.busy(companion.getUUID()); }
+        @Override public boolean inBounds(BlockPos pos) { return companion.level().isInWorldBounds(pos); }
+        @Override public double distanceSquared(BlockPos pos) {
+            return companion.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        }
+        @Override public boolean loaded(BlockPos pos) { return companion.level().isLoaded(pos); }
+        @Override public Container inventory() { return companion.getInventory(); }
+        @Override public Machine machine(BlockPos pos) {
+            var entity = companion.level().getBlockEntity(pos);
+            return entity instanceof AbstractFurnaceBlockEntity furnace && supported(furnace)
+                    ? new LiveMachine(companion, furnace) : null;
+        }
+    }
+
+    private record LiveMachine(CompanionPlayer companion, AbstractFurnaceBlockEntity furnace) implements Machine {
+        @Override public Container slots() { return furnace; }
+        @Override public BlockPos pos() { return furnace.getBlockPos(); }
+        @Override public String id() {
+            return BuiltInRegistries.BLOCK.getKey(furnace.getBlockState().getBlock()).toString();
+        }
+        @Override public boolean locked() { return furnace.isLocked(); }
+        @Override public boolean ticking() { return companion.level().shouldTickBlocksAt(pos()); }
+        @Override public int counter(int index) { return ((FurnaceAccess) furnace).mcbot$data().get(index); }
+        @Override public int burnTicks(ItemStack fuel) {
+            int ticks = companion.level().fuelValues().burnDuration(fuel);
+            return furnace.getClass() == FurnaceBlockEntity.class ? ticks : ticks / 2;
+        }
+        @Override public Cooking recipe(ItemStack input) {
+            if (input.isEmpty()) return null;
+            var holder = ((FurnaceAccess) furnace).mcbot$recipeCheck()
+                    .getRecipeFor(new SingleRecipeInput(input), companion.level()).orElse(null);
+            return cooking(holder, input, companion.level().registryAccess(), companion.level().enabledFeatures());
+        }
+    }
+
     @Override
     public String name() {
         return "smelt";
@@ -40,13 +103,13 @@ public final class SmeltTool implements ServerTool {
 
     @Override
     public Result run(CompanionPlayer companion, JsonObject args) {
-        return execute(companion, args, McbotMod.scheduler());
+        return execute(args, new PlayerAccess(companion, McbotMod.scheduler()));
     }
 
     @Override
     public CompletableFuture<Result> runAsync(CompanionPlayer companion, JsonObject args,
                                                CompanionScheduler scheduler) {
-        return CompletableFuture.completedFuture(execute(companion, args, scheduler));
+        return CompletableFuture.completedFuture(execute(args, new PlayerAccess(companion, scheduler)));
     }
 
     static Arguments arguments(JsonObject args) {
@@ -97,40 +160,39 @@ public final class SmeltTool implements ServerTool {
                 ? value.getAsString() : null;
     }
 
-    private static Result execute(CompanionPlayer companion, JsonObject json, CompanionScheduler scheduler) {
+    static Result execute(JsonObject json, Access access) {
         Arguments args = arguments(json);
         if (args == null) return failure("DENIED:需要整数 x/y/z；action=query/load/take。load 至少指定"
                 + " input_slot 或 fuel_slot（背包 0-35），对应数量 1-64，默认 1；"
                 + "take 的 slot=input/fuel/output，count 为最多取出数量 1-64，默认 64。");
-        if (!args.action().equals("query") && scheduler.busy(companion.getUUID())) {
+        if (!args.action().equals("query") && access.busy()) {
             return failure("BUSY:我正忙着上一件事，等它结束或取消后再装料/取出；query 仍可查看。");
         }
-        var level = companion.level();
-        if (!level.isInWorldBounds(args.pos())) return failure("DENIED:机器坐标超出当前世界边界。");
-        if (companion.distanceToSqr(args.pos().getX() + 0.5, args.pos().getY() + 0.5,
-                args.pos().getZ() + 0.5) > 5.5 * 5.5) {
+        if (!access.inBounds(args.pos())) return failure("DENIED:机器坐标超出当前世界边界。");
+        if (access.distanceSquared(args.pos()) > 5.5 * 5.5) {
             return failure("OUT_OF_REACH:机器不在 5.5 格内，先 move_to 靠近。");
         }
-        if (!level.isLoaded(args.pos())) return failure("TARGET_LOST:机器所在区块未加载，先靠近后查询。");
-        var entity = level.getBlockEntity(args.pos());
-        if (!(entity instanceof AbstractFurnaceBlockEntity furnace) || !supported(furnace)) {
+        if (!access.loaded(args.pos())) return failure("TARGET_LOST:机器所在区块未加载，先靠近后查询。");
+        Machine machine = access.machine(args.pos());
+        if (machine == null) {
             return failure("TARGET_LOST:目标不是原版熔炉/高炉/烟熏炉；先 scan_area 找到机器。");
         }
-        if (furnace.isLocked()) return failure("DENIED:机器已锁定，不能通过工具绕过容器锁。");
-        if (args.action().equals("load")) return load(companion, furnace, args);
-        if (args.action().equals("take")) return take(companion, furnace, args);
-        return report(companion, furnace, args.action(), "仅查询，未移动物品。", 0, 0, 0);
+        if (machine.locked()) return failure("DENIED:机器已锁定，不能通过工具绕过容器锁。");
+        if (args.action().equals("load")) return load(access.inventory(), machine, args);
+        if (args.action().equals("take")) return take(access.inventory(), machine, args);
+        return report(machine, args.action(), "仅查询，未移动物品。", 0, 0, 0);
     }
 
-    private static boolean supported(AbstractFurnaceBlockEntity furnace) {
+    static boolean supported(AbstractFurnaceBlockEntity furnace) {
         var block = furnace.getBlockState();
         return (furnace.getClass() == FurnaceBlockEntity.class && block.is(Blocks.FURNACE))
                 || (furnace.getClass() == BlastFurnaceBlockEntity.class && block.is(Blocks.BLAST_FURNACE))
                 || (furnace.getClass() == SmokerBlockEntity.class && block.is(Blocks.SMOKER));
     }
 
-    private static Result load(CompanionPlayer companion, AbstractFurnaceBlockEntity furnace, Arguments args) {
-        List<ItemStack> storage = storage(companion.getInventory());
+    private static Result load(Container inventory, Machine machine, Arguments args) {
+        Container furnace = machine.slots();
+        List<ItemStack> storage = storage(inventory);
         ItemStack input = furnace.getItem(0).copy();
         ItemStack fuel = furnace.getItem(1).copy();
         if (args.inputSlot() != null) {
@@ -142,11 +204,11 @@ public final class SmeltTool implements ServerTool {
             input = combine(input, source, args.inputCount());
             source.shrink(args.inputCount());
         }
-        var recipe = recipe(companion, furnace, input);
-        if (recipe == null) return failure("NO_RECIPE:该机器没有当前原料的普通烧制配方；"
+        // Staging fuel in an empty machine is safe; do not ignite unsupported input already in it.
+        Cooking recipe = machine.recipe(input);
+        if (!input.isEmpty() && recipe == null) return failure("NO_RECIPE:该机器没有当前原料的普通烧制配方；"
                 + "熔炉/高炉/烟熏炉的配方不同。本次未移动物品。");
-        ItemStack output = recipe.value().assemble(new SingleRecipeInput(input), companion.level().registryAccess());
-        if (!outputFits(furnace, output)) {
+        if (args.inputSlot() != null && !outputFits(furnace, recipe.output())) {
             return failure("OUTPUT_BLOCKED:产物槽组件不兼容或已满；先 smelt take 取出原有成品。本次未移动物品。");
         }
         if (args.fuelSlot() != null) {
@@ -156,69 +218,67 @@ public final class SmeltTool implements ServerTool {
                 return failure("MISSING_MATERIALS:指定燃料槽数量不足（与原料共槽时不能重复计数）；"
                         + "用 inventory 核对。本次未移动物品。");
             }
-            if (burnTicks(companion, furnace, source) <= 0 || !furnace.canPlaceItem(1, source)) {
+            if (machine.burnTicks(source) <= 0 || !furnace.canPlaceItem(1, source)) {
                 return failure("INVALID_FUEL:该物品不是机器当前可用燃料；空桶是返还物，不能点火。本次未移动物品。");
             }
             if (!room(furnace, 1, fuel, source, args.fuelCount())) return slotFull("燃料");
             fuel = combine(fuel, source, args.fuelCount());
             source.shrink(args.fuelCount());
         }
-        if (counter(furnace, AbstractFurnaceBlockEntity.DATA_LIT_TIME) <= 0
-                && burnTicks(companion, furnace, fuel) <= 0) {
+        if (args.inputSlot() != null && machine.counter(AbstractFurnaceBlockEntity.DATA_LIT_TIME) <= 0
+                && machine.burnTicks(fuel) <= 0) {
             return failure("MISSING_FUEL:机器未燃烧且没有可用燃料；load 同时指定 fuel_slot，"
                     + "或先备燃料。本次未移动物品。");
         }
         // Every check precedes commit. No inventory.add(), GUI clicks or overflow drops.
-        commit(companion.getInventory(), storage);
+        commit(inventory, storage);
         if (!ItemStack.matches(input, furnace.getItem(0))) furnace.setItem(0, input);
         if (!ItemStack.matches(fuel, furnace.getItem(1))) furnace.setItem(1, fuel);
         furnace.setChanged();
-        return report(companion, furnace, args.action(), "装料完成，尚未烧出本次成品；"
+        return report(machine, args.action(), "装料完成，尚未烧出本次成品；"
                         + "机器按原版 tick 自动烧制。", args.inputSlot() == null ? 0 : args.inputCount(),
                 args.fuelSlot() == null ? 0 : args.fuelCount(), 0);
     }
 
-    private static Result take(CompanionPlayer companion, AbstractFurnaceBlockEntity furnace, Arguments args) {
+    private static Result take(Container inventory, Machine machine, Arguments args) {
+        Container furnace = machine.slots();
         ItemStack source = furnace.getItem(args.takeSlot());
         if (source.isEmpty()) {
-            Result status = report(companion, furnace, args.action(), "", 0, 0, 0);
+            Result status = report(machine, args.action(), "", 0, 0, 0);
             return new Result(false, (args.takeSlot() == 2 ? "NOT_READY:产物槽为空；" : "EMPTY_SLOT:指定机器槽为空；")
                     + status.feedback(), status.data());
         }
         int amount = Math.min(args.count(), source.getCount());
         ItemStack moving = source.copyWithCount(amount);
         String description = InventoryTool.describe(moving);
-        List<ItemStack> storage = storage(companion.getInventory());
-        if (!insert(storage, moving)) return failure("INVENTORY_FULL:背包装不下本次取出数量；"
+        List<ItemStack> storage = storage(inventory);
+        if (!insert(inventory, storage, moving)) return failure("INVENTORY_FULL:背包装不下本次取出数量；"
                 + "先 transfer 存箱腾空间，或减小 count。本次未移动物品。");
         ItemStack remaining = source.copy();
         remaining.shrink(amount);
-        commit(companion.getInventory(), storage);
+        commit(inventory, storage);
         furnace.setItem(args.takeSlot(), remaining);
         furnace.setChanged();
-        return report(companion, furnace, args.action(), "已从机器"
+        return report(machine, args.action(), "已从机器"
                 + (args.takeSlot() == 0 ? "原料" : args.takeSlot() == 1 ? "燃料" : "产物")
                 + "槽取出 " + description + " 到背包。", 0, 0, amount);
     }
 
-    private static RecipeHolder<? extends AbstractCookingRecipe> recipe(CompanionPlayer companion,
-                                                                        AbstractFurnaceBlockEntity furnace,
-                                                                        ItemStack input) {
-        if (input.isEmpty()) return null;
-        var holder = ((FurnaceAccess) furnace).mcbot$recipeCheck()
-                .getRecipeFor(new SingleRecipeInput(input), companion.level()).orElse(null);
-        if (holder == null) return null;
+    static Cooking cooking(RecipeHolder<? extends AbstractCookingRecipe> holder, ItemStack input,
+                           HolderLookup.Provider registries, FeatureFlagSet enabledFeatures) {
+        if (holder == null || input.isEmpty()) return null;
         var value = holder.value();
         if (value.getClass() != SmeltingRecipe.class && value.getClass() != BlastingRecipe.class
                 && value.getClass() != SmokingRecipe.class) return null;
-        ItemStack output = value.assemble(new SingleRecipeInput(input), companion.level().registryAccess());
+        ItemStack output = value.assemble(new SingleRecipeInput(input), registries);
         // Vanilla only grows existing results by one, even for a multi-count datapack result.
         // Reject those recipes rather than promise a yield the real machine cannot conserve.
         return output.isEmpty() || output.getCount() != 1 || value.cookingTime() < 1
-                || !output.isItemEnabled(companion.level().enabledFeatures()) ? null : holder;
+                || !output.isItemEnabled(enabledFeatures) ? null
+                : new Cooking(holder.id().identifier().toString(), output, value.cookingTime());
     }
 
-    private static boolean room(AbstractFurnaceBlockEntity furnace, int slot, ItemStack at,
+    private static boolean room(Container furnace, int slot, ItemStack at,
                                 ItemStack source, int count) {
         return furnace.canPlaceItem(slot, source)
                 && (at.isEmpty() || ItemStack.isSameItemSameComponents(at, source))
@@ -231,47 +291,43 @@ public final class SmeltTool implements ServerTool {
         return at;
     }
 
-    private static boolean outputFits(AbstractFurnaceBlockEntity furnace, ItemStack output) {
+    private static boolean outputFits(Container furnace, ItemStack output) {
         ItemStack at = furnace.getItem(2);
         return !output.isEmpty() && (at.isEmpty() || ItemStack.isSameItemSameComponents(at, output))
                 && (long) at.getCount() + output.getCount() <= furnace.getMaxStackSize(output);
     }
 
-    private static int counter(AbstractFurnaceBlockEntity furnace, int index) {
-        return ((FurnaceAccess) furnace).mcbot$data().get(index);
-    }
-
-    private static int burnTicks(CompanionPlayer companion, AbstractFurnaceBlockEntity furnace, ItemStack fuel) {
-        int ticks = companion.level().fuelValues().burnDuration(fuel);
-        return furnace.getClass() == FurnaceBlockEntity.class ? ticks : ticks / 2;
-    }
-
-    private static Result report(CompanionPlayer companion, AbstractFurnaceBlockEntity furnace,
+    private static Result report(Machine machine,
                                  String action, String prefix, int loadedInput, int loadedFuel, int taken) {
+        Container furnace = machine.slots();
         ItemStack input = furnace.getItem(0);
         ItemStack fuel = furnace.getItem(1);
         ItemStack output = furnace.getItem(2);
-        int burn = counter(furnace, AbstractFurnaceBlockEntity.DATA_LIT_TIME);
-        int totalBurn = counter(furnace, AbstractFurnaceBlockEntity.DATA_LIT_DURATION);
-        int progress = counter(furnace, AbstractFurnaceBlockEntity.DATA_COOKING_PROGRESS);
-        int total = counter(furnace, AbstractFurnaceBlockEntity.DATA_COOKING_TOTAL_TIME);
-        var holder = recipe(companion, furnace, input);
-        ItemStack planned = holder == null ? ItemStack.EMPTY
-                : holder.value().assemble(new SingleRecipeInput(input), companion.level().registryAccess());
-        boolean ticking = companion.level().shouldTickBlocksAt(furnace.getBlockPos());
-        String state = input.isEmpty() ? "EMPTY_INPUT" : holder == null ? "NO_RECIPE"
+        int burn = machine.counter(AbstractFurnaceBlockEntity.DATA_LIT_TIME);
+        int totalBurn = machine.counter(AbstractFurnaceBlockEntity.DATA_LIT_DURATION);
+        int progress = machine.counter(AbstractFurnaceBlockEntity.DATA_COOKING_PROGRESS);
+        int total = machine.counter(AbstractFurnaceBlockEntity.DATA_COOKING_TOTAL_TIME);
+        Cooking recipe = machine.recipe(input);
+        ItemStack planned = recipe == null ? ItemStack.EMPTY : recipe.output();
+        boolean ticking = machine.ticking();
+        int fuelTicks = machine.burnTicks(fuel);
+        long availableFuel = (long) burn + (long) fuelTicks * fuel.getCount();
+        String state = input.isEmpty() ? "EMPTY_INPUT" : recipe == null ? "NO_RECIPE"
                 : !outputFits(furnace, planned) ? "OUTPUT_BLOCKED"
-                : burn <= 0 && burnTicks(companion, furnace, fuel) <= 0 ? "MISSING_FUEL"
+                : burn <= 0 && fuelTicks <= 0 ? "MISSING_FUEL"
                 : !ticking ? "NOT_TICKING" : "COOKING";
-        int wait = holder == null ? 0 : (int) Math.min(60, Math.max(1,
-                ((long) holder.value().cookingTime() * input.getCount() - progress + 19) / 20));
+        // The first item's live total can differ from a reloaded recipe's time.
+        long neededTicks = recipe == null ? 0 : Math.max(0, (long) (total > 0 ? total : recipe.ticks()) - progress)
+                + (long) recipe.ticks() * (input.getCount() - 1);
+        int wait = recipe == null ? 0 : (int) Math.min(60, Math.max(1, (neededTicks + 19) / 20));
+        boolean enoughFuel = recipe != null && availableFuel >= neededTicks;
         JsonObject data = new JsonObject();
         data.addProperty("action", action);
-        var pos = furnace.getBlockPos();
+        var pos = machine.pos();
         data.addProperty("x", pos.getX());
         data.addProperty("y", pos.getY());
         data.addProperty("z", pos.getZ());
-        data.addProperty("machine", BuiltInRegistries.BLOCK.getKey(furnace.getBlockState().getBlock()).toString());
+        data.addProperty("machine", machine.id());
         data.add("input", InventoryTool.stackData(input));
         data.add("fuel", InventoryTool.stackData(fuel));
         data.add("output", InventoryTool.stackData(output));
@@ -279,8 +335,10 @@ public final class SmeltTool implements ServerTool {
         data.addProperty("burn_total_ticks", totalBurn);
         data.addProperty("cook_progress_ticks", progress);
         data.addProperty("cook_total_ticks", total);
-        data.addProperty("fuel_ticks_per_item", burnTicks(companion, furnace, fuel));
-        data.addProperty("available_fuel_ticks", (long) burn + (long) burnTicks(companion, furnace, fuel) * fuel.getCount());
+        data.addProperty("fuel_ticks_per_item", fuelTicks);
+        data.addProperty("available_fuel_ticks", availableFuel);
+        data.addProperty("needed_cook_ticks", neededTicks);
+        data.addProperty("fuel_sufficient_for_input", enoughFuel);
         data.addProperty("ticking", ticking);
         data.addProperty("state", state);
         data.addProperty("suggested_wait_seconds", state.equals("COOKING") ? wait : 0);
@@ -288,16 +346,19 @@ public final class SmeltTool implements ServerTool {
         data.addProperty("loaded_fuel_count", loadedFuel);
         data.addProperty("taken_count", taken);
         String recipeText = "";
-        if (holder != null) {
-            String id = WireSize.truncateToBytes(holder.id().identifier().toString(), 128);
+        if (recipe != null) {
+            String id = WireSize.truncateToBytes(recipe.id(), 128);
             data.addProperty("recipe", id);
+            data.addProperty("recipe_id_truncated", !id.equals(recipe.id()));
             data.add("result_per_input", InventoryTool.stackData(planned));
-            data.addProperty("recipe_cook_ticks", holder.value().cookingTime());
+            data.addProperty("recipe_cook_ticks", recipe.ticks());
             recipeText = "配方 " + id + "，每个原料产出 " + InventoryTool.describe(planned)
-                    + "，需 " + holder.value().cookingTime() + " tick。";
+                    + "，需 " + recipe.ticks() + " tick。当前原料预计还需 " + neededTicks
+                    + " tick，可用燃烧 " + availableFuel + " tick"
+                    + (enoughFuel ? "（燃料预计够用）。" : "（燃料不足以完成整批，需补充）。");
         }
         String next = switch (state) {
-            case "COOKING" -> "建议 wait " + wait + " 秒后 query/take；时间按 20 TPS 估算，燃料可能不足，"
+            case "COOKING" -> "建议 wait " + wait + " 秒后 query/take；时间按 20 TPS 估算，"
                     + "不能将等待结束当作烧制成功。";
             case "MISSING_FUEL" -> "MISSING_FUEL:用 load 的 fuel_slot 补充燃料。";
             case "OUTPUT_BLOCKED" -> "OUTPUT_BLOCKED:先 take 产物，再继续烧制。";
@@ -312,29 +373,29 @@ public final class SmeltTool implements ServerTool {
                 + "取消 wait/任务不会熄灭机器；需停止后续烧制时显式 take 原料，燃烧余量仍按原版消耗。", data);
     }
 
-    private static List<ItemStack> storage(Inventory inv) {
+    private static List<ItemStack> storage(Container inv) {
         List<ItemStack> result = new ArrayList<>();
         for (int slot = 0; slot < Inventory.INVENTORY_SIZE; slot++) result.add(inv.getItem(slot).copy());
         return result;
     }
 
-    private static void commit(Inventory inv, List<ItemStack> storage) {
+    private static void commit(Container inv, List<ItemStack> storage) {
         for (int slot = 0; slot < storage.size(); slot++) {
             if (!ItemStack.matches(inv.getItem(slot), storage.get(slot))) inv.setItem(slot, storage.get(slot));
         }
         inv.setChanged();
     }
 
-    private static boolean insert(List<ItemStack> storage, ItemStack need) {
+    private static boolean insert(Container inventory, List<ItemStack> storage, ItemStack need) {
         for (ItemStack at : storage) {
             if (need.isEmpty()) return true;
             if (at.isEmpty() || !ItemStack.isSameItemSameComponents(at, need)) continue;
-            int amount = Math.min(Math.max(0, at.getMaxStackSize() - at.getCount()), need.getCount());
+            int amount = Math.min(Math.max(0, inventory.getMaxStackSize(at) - at.getCount()), need.getCount());
             at.grow(amount);
             need.shrink(amount);
         }
         for (int slot = 0; slot < storage.size() && !need.isEmpty(); slot++) {
-            if (storage.get(slot).isEmpty()) storage.set(slot, need.split(need.getMaxStackSize()));
+            if (storage.get(slot).isEmpty()) storage.set(slot, need.split(inventory.getMaxStackSize(need)));
         }
         return need.isEmpty();
     }

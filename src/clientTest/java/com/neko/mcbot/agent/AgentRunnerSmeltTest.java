@@ -95,4 +95,68 @@ class AgentRunnerSmeltTest {
         client.drain();
         assertEquals(2, client.toolCount());
     }
+
+    @Test
+    void cancellingWaitDoesNotTakeOutputOrResubmitCommittedLoad() {
+        runner.start();
+        long task = runner.submitTask("smelt iron then take");
+        call(0, "load", "smelt", "{\"x\":2,\"y\":90,\"z\":0,\"action\":\"load\","
+                + "\"input_slot\":0,\"fuel_slot\":1}");
+        receipt("load", true, "loaded; machine autonomous; cancelling does not extinguish it", 1);
+        call(1, "wait", "wait", "{\"seconds\":10}");
+        long waitSeq = client.lastTool().num("seq", -1);
+        assertTrue(runner.cancelTask(task));
+        client.drain();
+        assertEquals(1, client.cancelCount());
+        assertEquals(2, client.toolCount());
+        assertEquals(2, client.engine().responses.size());
+
+        JsonObject late = new JsonObject();
+        late.addProperty("seq", waitSeq);
+        late.addProperty("ok", true);
+        late.addProperty("feedback", "late wait completed");
+        runner.handleS2c(new Envelope("tool_result", late));
+        client.now += 100_000;
+        runner.tick();
+        client.drain();
+        assertEquals(2, client.toolCount());
+        assertEquals(2, client.engine().responses.size());
+        assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject()
+                .get("pending_tools").getAsInt());
+
+        runner.submitTask("query the existing furnace");
+        call(2, "query", "smelt", "{\"x\":2,\"y\":90,\"z\":0}");
+        var history = client.engine().histories.get(2);
+        assertTrue(history.stream().anyMatch(message -> message instanceof Msg.Tool tool
+                && tool.callId().equals("load") && tool.content().startsWith("loaded;")));
+        assertTrue(history.stream().anyMatch(message -> message instanceof Msg.Tool tool
+                && tool.callId().equals("wait") && tool.content().startsWith("CANCELLED:")));
+        assertFalse(history.stream().anyMatch(message -> message instanceof Msg.Tool tool
+                && tool.content().equals("late wait completed")));
+        assertEquals(3, client.toolCount());
+    }
+
+    @Test
+    void cancelledInflightLoadIsUncertainAndItsLateReceiptCannotContinueTheTask() {
+        runner.start();
+        long task = runner.submitTask("load then take");
+        call(0, "load", "smelt", "{\"x\":2,\"y\":90,\"z\":0,\"action\":\"load\",\"fuel_slot\":1}");
+        long seq = client.lastTool().num("seq", -1);
+        assertTrue(runner.cancelTask(task));
+        client.drain();
+        JsonObject late = new JsonObject();
+        late.addProperty("seq", seq);
+        late.addProperty("ok", true);
+        late.addProperty("feedback", "fuel already loaded");
+        runner.handleS2c(new Envelope("tool_result", late));
+        client.drain();
+        assertEquals(1, client.toolCount());
+        assertEquals(1, client.engine().responses.size());
+        assertEquals(1, client.cancelCount());
+        runner.submitTask("check before taking further action");
+        call(1, "check", "smelt", "{\"x\":2,\"y\":90,\"z\":0}");
+        assertEquals(2, client.toolCount());
+        assertTrue(client.engine().histories.get(1).stream().anyMatch(message -> message instanceof Msg.Tool tool
+                && tool.callId().equals("load") && tool.content().startsWith("CANCELLED:")));
+    }
 }

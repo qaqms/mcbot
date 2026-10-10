@@ -3,12 +3,14 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：背包/主手切换与普通合成自动化验证完成，冶炼草稿待服务端验收；F0 剩余真机与连接器待验，上游历史错误根因未销账
+## 当前状态（2026-10-10）：冶炼实现/离线验证完成，真实机器待验；F0 剩余真机与连接器待验，上游历史错误根因未销账
 
 当前优先级：连接器尚未提供，按维护者授权先完善 MC agent 本体，
 依次推进背包明细与工具切换、合成、冶炼、攻击，一次一个里程碑；不新增独立聊天功能。
 F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留。
 完整背包/整客户端重启已有维护者实测确认，原始证据仍待补，不因本轮新增工具重开该测试。
+当前以开发与离线测试为主，暂不启动游戏客户端或真实服务端做验收；
+冶炼本轮实现与离线回归完成，真实行为及连接器联合验收另行挂账。
 
 **模块职责与协作边界**：
 - **mcbot**：提供 MC agent 本体、游戏执行能力与任务级桥接接口，并维护接口契约及回归测试。
@@ -19,6 +21,68 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### B3 熔炉/高炉/烟熏炉：实现与离线阶段完成（2026-10-10 21:21，Asia/Shanghai）
+
+- **范围**：维护者要求继续完成熔炉类操作，沿当前安排只在 mcbot 开发和离线验证；
+  不改宿主/参考项目/连接器或任务桥 v1.0，不启动 runClient/runServer、真实模型或游戏专项。
+  保留此前五份未提交的离线优先安排文档，本卡完成指实现与离线阶段，真实行为待验独立保留。
+- **行为收口**：query/load/take 覆盖三类原版机器；修复空炉只补燃料仍被 NO_RECIPE 拒绝的问题。
+  只补燃料可在空炉或有效配方的产物槽堵塞时备料；已有原料仍校验支持的普通配方，
+  防止补燃料间接点燃多产物/自定义配方。加入原料继续要求可用燃料/现存余火和下一件成品空间。
+  两边完整堆栈先复制预检，任何校验或空间失败都不改实际槽；同源槽先预留原料再核对燃料，
+  不重复消费。take 只用存储槽 0-35，按全部组件合并，尊重容器与物品堆叠上限；
+  fuel 槽可回收已存在的返还桶，但空桶不能点火，不改燃烧计数/装备或选中槽。
+- **可观测性**：feedback 与 data 都报告整批预计剩余烧制 tick、可用燃烧 tick 和燃料是否够用；
+  首件使用机器当前 cook_total_ticks，后续使用当前配方时间，修正重载配方后混用计时的估算。
+  wait 建议限 1-60s 且仅在 COOKING 给出，仍须查询真实成品；配方 ID 有 128 UTF-8 字节帽和截短标记，
+  不序列化名称/原始组件。取消不清机器；已派发装料的迟到回执不续跑、不自动重投或假定回滚。
+- **离线依赖边界**：SmeltTool 内部 Access/Machine 分隔世界观测，生产 adapter 仍读实际身体/机器，
+  测试执行同一参数、守卫、load/take 预检/提交和 report。只初始化 MC 注册表，
+  使用真实 ItemStack/SimpleContainer 和原版三类配方的 assemble/产量检查；
+  世界范围/距离/加载、槽权限、配方选择、燃料时长及计时由受控夹具提供。
+  不创建 MinecraftServer/世界/身体，不运行 ticker 或 Mixin；BUSY 的释放是受控观测，
+  不当作真实 scheduler 取消证明。桶由夹具准备，不把回收通过写成原版燃料返还通过。
+- **测试**：新增 20 项操作回归，覆盖三机器、锁/范围/未加载守卫顺序、组件/耐久/装备保全、
+  同槽消费、缺料/缺燃料/非法燃料/满槽/满背包完整回退、空槽/产物不提前生成、
+  空炉备燃料/不支持配方不能间接点火、桶回收、堆叠上限、配方重载/长整数估算与回执尺寸。
+  runner 新增 2 项取消回归，直接运行 AgentRunner/AgentLoop：等待期间取消与装料回执未到时取消，
+  迟到回执不触发取货/重发，后续显式查询有完整 CANCELLED 配对。
+  加原有参数 3 项/runner 3 项，熔炼专项共 **28/28**。
+- **首轮夹具纠正**：首轮 26 项有 3 失败，分别为非法 block/state 在构造时被原版拒绝、
+  SimpleContainer 将两把不可堆叠工具/两桶岩浆裁为一件导致断言不成立；不是产品丢物证据。
+  改用原版可构造样本，补受控容器上限回归；第二轮专项 28/28、BUILD SUCCESSFUL 20s。
+  之后复核补燃料不间接启动不支持配方的边界，再全量构建。
+- **最终证据**：21:21:56 实核 `build --offline --rerun-tasks --console=plain --no-daemon`
+  BUILD SUCCESSFUL **28s / 20 个任务全部执行**，XML **362/362**
+  （agent-core 194 + 根工程 66 + clientTest 102），failures/errors/skipped 全 0。
+  JAR `build/libs/mcbot-0.1.0.jar` SHA256
+  `aa70273bb7a9c0321055b181b2f06d04fa4baa933d948fd8a4852692dcd8bf73`。
+  本地证据 `build/smelt-offline-20261010.log`（夹具首轮）、`build/smelt-offline-20261010b.log`、
+  `build/smelt-final-build-20261010b.log` 与三个 test-results 目录；产物/日志不入仓。
+  仅既有过时 API/Gradle 10 兼容提示；收尾 list-java 无 Java 进程，未安装到玩家实例。
+- **文档/待验**：README、TOOLS、ARCHITECTURE、DEVELOPMENT、ROADMAP 与测试包说明同步；
+  新增/复核 API 见下表。真实烧制/燃料容器返还、Mixin 加载、实际机器物品保全、
+  scheduler 停手、机器保存重进、普通动作回归及玩家/多人/连接器仍待维护者安排。
+  PR #4 保留 Draft；后续开发卡可为攻击，本轮未写攻击代码，F0/历史模型错误/`[m9] A3` 不销账。
+  提交前检查暂存 12 个文件，凭据模式、机器绝对路径、禁止运行产物均零命中，
+  `git diff --cached --check` 通过；构建产物和报告仅留本地。
+  提交/推送及 PR 更新结果以下方实际核验为准，不以构建通过冒充远端已更新。
+
+### 本地同步与当前验证安排（2026-10-10 20:49，Asia/Shanghai）
+
+- 维护者明确当前不进行真实游戏内测试，先开发，以离线测试为主。
+  当前不安排 runClient/runServer 或隔离真实服务端专项，保留原工装供后续使用。
+  通过单元测试、实际 runner/桥与可控模型/网络/时钟替身、本地 HTTP/SSE 回归验证；
+  实现与离线阶段可继续推进，真实烧制/Mixin 加载/身体动作/保存重进及联合验收仍待验。
+  本轮同步 AGENTS、README、DEVELOPMENT 与 ROADMAP，不新增功能或修改既有验收证据。
+- 此前已从远端同步四层依赖 PR，并逐层核对提交与祖先关系；当前本地分支
+  wip/furnace-smelting，HEAD f8ff2b19e48e91643387ebeec52889c8d4265617，
+  包含生命周期、背包/主手、合成与冶炼草稿。main 保留 cf859de，未合并远端 PR。
+- 本机同步后的离线强制全量构建耗时 46s，20 个任务全部执行，20:45 实核 XML
+  340/340（agent-core 194 + 根工程 66 + clientTest 80），failures/errors/skipped 全 0。
+  日志为 build/local-pr-sync-20261010.log；未启动游戏、服务端或真实模型。
+  本次仅文档调整，不重跑或重算上述测试结果，冶炼仍保持真实行为待验的草稿状态。
 
 ### PR 拆分准备与冶炼草稿核对（2026-10-10，Asia/Shanghai）
 
@@ -1931,6 +1995,8 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 冶炼读取/燃料（B3，10-10 javap + 编译；未运行 Mixin） | `AbstractFurnaceBlockEntity.dataAccess: ContainerData`，`quickCheck: RecipeManager.CachedCheck<SingleRecipeInput,? extends AbstractCookingRecipe>`；四个公开 DATA_* 常量对应 0-3。`getBurnDuration(FuelValues,ItemStack)` 在熔炉读 burnDuration，高炉/烟熏炉覆盖为父结果整数除 2。原版 `canBurn`/`burn` 比全部 components，已有产物每次 grow(1)，故工具拒绝多件结果；`setItem` 会 limitSize(getMaxStackSize(stack))，原料组件不同时在真实 ServerLevel 上重设 cookingTotalTime/清进度 |
+| 冶炼离线物品/配方（B3） | 三种普通烧制配方构造均为 `(String,CookingBookCategory,Ingredient,ItemStack,float,int)`，`assemble(SingleRecipeInput,HolderLookup.Provider)` 返回结果副本。`Container.getMaxStackSize(ItemStack)` 结合容器/物品上限；`SimpleContainer.setItem` 确实按该上限裁数量，不能用它存两件默认不可堆叠物品来制造溢出样本。`SharedConstants.tryDetectVersion()` + `Bootstrap.bootStrap()` 可在测试 worker 初始化注册表/ItemStack，不启动 MinecraftServer；不等于 Fabric/Mixin 已加载 |
 | 配方查询/合成（B2，10-10 javap + 真实服务端） | `ServerLevel.recipeAccess(): RecipeManager`，`getRecipes(): Collection<RecipeHolder<?>>`、`byKey(ResourceKey<Recipe<?>>)`；配方 ID 用 `holder.id().identifier()`，物品 ID 不等于配方 ID。`Recipe` 无旧版 getResultItem，普通 ShapedRecipe/ShapelessRecipe 的 assemble(EMPTY, registryAccess) 返回静态结果副本（javap 字节码核实），自定义/特殊类不能这样探测。`ShapedRecipe.getWidth/getHeight` 与 `PlacementInfo.ingredients/slotsToIngredientIndex/isImpossibleToPlace` 可用 |
 | 材料分配/返还（B2） | `StackedContents<T>.account(T,int)/tryPick(List<IngredientInfo<T>>,int,Output<T>)` public；内部按引用计数，本体以实际 ItemStack 副本为 T、Ingredient.test 为谓词，保留 components 并处理重叠材料。`CraftingInput.of(width,height,List<ItemStack>)` 会压缩空边，matches/assemble/getRemainingItems 均接这个实际输入；原版 CraftingRecipe 默认返还逐项来自 Item.getCraftingRemainder。真实蛋糕三空桶、分散 planks 标签及数据包重叠标签/精确材料验证通过 |
 | 合成工装/数据包（B2） | 当前 Minecraft JAR 内 version.json 的 pack_version.data_major=94、data_minor=1；测试 pack.mcmeta 用 min_format/max_format [94,1]，实际成功加载。`ItemStack.copyWithCount/isItemEnabled/isSameItemSameComponents/split`、`Identifier.tryParse`、`ResourceKey.create(Registries.RECIPE,identifier)`、`BlockPos.betweenClosed/immutable` 可用；工作台读取先 isLoaded 再 getBlockState，避免查询强载区块 |

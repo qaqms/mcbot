@@ -31,8 +31,8 @@ public final class ClientToolDefs {
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},"
                             + "\"query\":{\"type\":\"boolean\"},\"recipe\":{\"type\":\"string\",\"maxLength\":128}},\"required\":[\"item\"]}"),
             new ToolSpec("smelt", "操作5.5格内原版熔炉/高炉/烟熏炉。action默认query只读，返回机器三槽、"
-                    + "真实tick进度/剩余燃烧/配方/等待建议。load从inventory的input_slot/fuel_slot装入"
-                    + "对应数量（各1-64，默认1）；可只补原料或燃料。装料不是烧制完成，机器自主运行，"
+                    + "真实tick进度/剩余燃烧/配方/整批燃料是否够用/等待建议。load从inventory的input_slot/fuel_slot装入"
+                    + "对应数量（各1-64，默认1）；可只补原料或燃料，也可给空炉先备燃料。装料不是烧制完成，机器自主运行，"
                     + "用wait等待后query/take。take的slot默认output，也可input/fuel回收，count为最多取出量"
                     + "1-64（默认64）；失败不移动物品。忙时仅query可用，取消任务不熄炉；"
                     + "停止后续烧制需显式take原料。只支持普通单件产物配方；机器不能用transfer",

@@ -54,7 +54,7 @@ src/main/            公共+服务端
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
                      PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
-                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(12 个服务端工具，含冶炼草稿)
+                     ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(12 个服务端工具)
   task/              TickTask/CompanionScheduler
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
@@ -238,10 +238,16 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   只用 36 个存储槽，选中槽/装备不变，任一批失败全部不改背包；
   query 只读且忙时可用，feedback 同时给配方/材料/次数/工作台/失败建议。
   不递归制作缺料、不支持特殊动态配方或 GUI/制作统计/成就事件；细则见 TOOLS §2.2。
-- 冶炼草稿 `smelt`：SYNC query/load/take 操作附近原版机器三槽，整次物品移动先复制预检。
+- `smelt`：SYNC query/load/take 操作附近原版熔炉/高炉/烟熏炉三槽，整次物品移动先复制预检。
   原版 tick 负责燃料/时间/成品，取消任务不熄炉；FurnaceAccess mixin 读取真实计数与配方选择。
+  新原料须有可用配方/燃料/下一件成品空间，只补燃料可给空炉备料；返还桶从 fuel 槽回收。
+  仅用背包 0-35，完整组件合并与容器/物品堆叠上限，预检失败不修改任何实际槽。
+  当前机器计时与当前配方时间分别报告，反馈/数据都给整批剩余 tick 与燃料是否够用。
   transfer 拒绝熔炉类，避免用普通容器语义操作机器槽。
-  编译与离线接线已通过，真实服务端/Mixin 加载与物品保全专项未完成，不作为验收通过能力。
+  内部 Access/Machine 仅隔离世界观测；生产 PlayerAccess/LiveMachine 读实际同伴/机器，
+  离线替身运行同一 load/take/report 和真实 ItemStack/配方 assemble，20 项操作回归通过。
+  另有参数 3 项、实际 runner 5 项（含取消）通过，实现/离线阶段完成；
+  不模拟原版 ticker，真实烧制/燃料返还/Mixin 加载/保存重进与联合验收仍待验。
 - 挖掘：假玩家没有 connection tick，原版 `handleBlockBreakAction` 静默失效 →
   手工计时引擎：`progress += getDestroySpeed/hardness/30` 每 tick，广播
   `ClientboundBlockDestructionPacket`（-1 清除，onAbort 兜底），完成走

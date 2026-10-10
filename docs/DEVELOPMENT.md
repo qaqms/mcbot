@@ -2,6 +2,14 @@
 
 > 面向项目维护者、贡献者与自动化开发工具。环境配置见本文，当前进度见 `STATUS.md`，开发约定见 §5。
 
+## 当前验证安排（2026-10-10）
+
+维护者确认当前只推进开发，以离线测试为主：使用单元测试、可控模型/网络/时钟替身、
+实际 runner/桥接线与临时回环 HTTP/SSE 验证，不调用真实模型。
+暂不通过 `runClient` / `runServer` 启动真实游戏验收；本文保留的服务端工装与真机流程
+供后续维护者安排时使用。构建及离线通过只证明对应实现范围，真实烧制、Mixin 实际加载、
+身体动作、保存重进和连接器联合验收仍单独挂账，不以未安排实测阻断当前实现与离线验证。
+
 ## 1. 工具链（版本钉死，勿凭记忆改动）
 
 | 项 | 值 | 备注 |
@@ -171,19 +179,29 @@ flag 自删，专项结束 halt(false) 正常保存停服，不需要客户端�
 inventory 的参数/回执配对、材料信息可见及缺料不自动重发。真实服务端专项直接运行实际工具，
 不替代玩家模型驱动、GUI/统计/成就事件、真实多人或连接器联合验收。
 
-### 3.4 冶炼草稿的离线回归
+### 3.4 熔炉/高炉/烟熏炉的离线回归
 
 ```bash
-./gradlew clientTest --tests com.neko.mcbot.server.tools.SmeltToolArgumentsTest --tests com.neko.mcbot.agent.AgentRunnerSmeltTest
+./gradlew clientTest --offline --tests com.neko.mcbot.server.tools.SmeltToolOperationsTest --tests com.neko.mcbot.server.tools.SmeltToolArgumentsTest --tests com.neko.mcbot.agent.AgentRunnerSmeltTest
 ```
 
 3 项参数测试覆盖 query/load/take、槽与数量边界、错模式字段拒绝；
-3 项实际 runner 测试覆盖模型 Schema、load → wait → query → take → inventory
-的调用/回执配对及 NOT_READY/BUSY 不自动重发。模型和游戏回执使用替身，
-不验证真实机器、Mixin 实际加载或原版烧制。
+5 项实际 runner 测试覆盖模型 Schema、load → wait → query → take → inventory
+的调用/回执配对、NOT_READY/BUSY 不自动重发、等待/装料回执未到时取消与迟到结果隔离。
+20 项操作测试只初始化 MC 注册表，不创建 MinecraftServer/世界/假玩家或运行 tick；
+执行生产工具的同一套参数、守卫、load/take 预检/提交及反馈逻辑。
+使用真实 ItemStack/SimpleContainer 和原版三类配方的 assemble/产量检查，
+世界范围/距离/加载、机器槽权限、配方选择、燃料时长和当前计时由可控依赖提供。
+覆盖三类机器、锁与未加载拒绝、同槽原料/燃料不可重复消费、
+缺料/非法燃料/满槽/满背包失败保全、组件/耐久/装备保全、空炉备燃料、
+整次取出回退、返还桶回收、容器堆叠上限、重载配方时间估算及回执尺寸。
+BUSY 由可控观测驱动，runner 取消使用真实 AgentRunner/AgentLoop；
+不把夹具释放 busy 写成真实 scheduler/服务器停手证明。
+桶样本由测试直接准备，只证明回收/拒作燃料，不证明原版已经产生返还桶。
 tools/fixtures/smelting-pack 是独立开发数据包，当前尚无对应 SelfTest 专项入口，
 不安装到玩家世界，不加入生产资源。真实烧制、燃料桶返还、组件保全、失败原子性、
-机器保存重进和普通动作回归补齐前，冶炼卡保持草稿。
+Mixin 实际加载、机器保存重进和普通动作回归暂缓，分别挂账；
+本卡实现/离线阶段完成，PR 保留 Draft 等待上述真实行为证据，不因此停止后续开发。
 
 ## 4. 真实端到端（客户端侧）
 
