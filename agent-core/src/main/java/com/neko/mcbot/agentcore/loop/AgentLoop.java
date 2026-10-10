@@ -347,6 +347,15 @@ public final class AgentLoop {
         }
         if (activeDirective != null) executor.stop(activeDirective.id(), text);
         if (activeReactor != null) {
+            if (ledger == null) {
+                // A cancelled stream has no complete assistant tool group to pair with.
+                for (var future : activeReactor.startedSnapshot().values()) {
+                    if (!future.isDone() || future.isCompletedExceptionally() || future.isCancelled()) continue;
+                    ToolOutcome receipt = future.getNow(null);
+                    if (receipt != null && !receipt.accepted())
+                        convo.add(new Msg.Nudge("[提前派发操作已停止，完整模型轮次未形成；真实回执]\n" + receipt.feedback()));
+                }
+            }
             activeReactor.seal();
             activeReactor = null;
         }
@@ -791,6 +800,14 @@ public final class AgentLoop {
         var data = r.data();
         boolean search = Set.of("scan_area", "find_resource", "workflow").contains(name);
         var noTargets = data.get("no_targets");
+        if (!Set.of("status", "inventory", "inspect_block", "equip", "wait", "scan_area", "find_resource").contains(name)) {
+            for (String count : List.of("crafted_count", "consumed_count", "collected_count",
+                    "loaded_input_count", "loaded_fuel_count", "taken_count")) {
+                var value = data.get(count);
+                if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()
+                        && value.getAsDouble() > 0) { emptySearches = 0; break; }
+            }
+        }
         if (search && noTargets != null && noTargets.isJsonPrimitive()
                 && noTargets.getAsJsonPrimitive().isBoolean()) {
             if (noTargets.getAsBoolean()) {
@@ -800,13 +817,6 @@ public final class AgentLoop {
                     listener.onNotice("NO_TARGETS:累计三次无目标查询，停止；改变参数或穿插状态查询不会重置。");
                 }
             } else emptySearches = 0;
-        } else if (r.ok() && !Set.of("status", "inventory", "inspect_block", "equip", "wait").contains(name)) {
-            for (String count : List.of("crafted_count", "consumed_count", "collected_count",
-                    "loaded_input_count", "loaded_fuel_count", "taken_count")) {
-                var value = data.get(count);
-                if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber()
-                        && value.getAsDouble() > 0) { emptySearches = 0; break; }
-            }
         }
     }
 

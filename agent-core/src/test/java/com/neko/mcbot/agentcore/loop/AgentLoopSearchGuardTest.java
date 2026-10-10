@@ -85,6 +85,14 @@ class AgentLoopSearchGuardTest {
         call("craft", "{}");
         next = new ToolOutcome(true, "empty", empty);
         call("scan_area", "{}");
+        call("find_resource", "{\"r\":9}");
+        var partial = new JsonObject();
+        partial.addProperty("crafted_count", 4);
+        partial.addProperty("no_targets", true);
+        next = new ToolOutcome(false, "crafted then stopped on an empty search", partial);
+        call("workflow", "{}");
+        next = new ToolOutcome(true, "empty", empty);
+        call("scan_area", "{\"r\":10}");
         assertEquals(1, loop.currentTaskId());
         assertTrue(statuses.isEmpty());
     }

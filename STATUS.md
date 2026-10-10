@@ -67,6 +67,21 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
   模型理解/网络取消后的身体停手及连接器联合验收仍待安排；无回滚或硬消费隔离承诺。
   C1-C6开发与离线整改顺序已完成，不自动开启下一卡；既有F0/冶炼/攻击/[m9]A3等债务保留。
   发布核验另记，不合并既有PR/main，不修改协作者PR #5。
+- **收尾复核（02:29，Asia/Shanghai）**：新增第29项（runner第19项）：
+  流式早派发尚未形成完整工具轮次时取消，真实停止回执用Nudge保留部分完成结果，
+  不伪造assistant/tool配对；完整轮次仍用原账本。组合步骤已有物品进展后空搜索重置为第一次，
+  失败结果里的实际部分进展同样计入，新增既有护栏用例断言。
+  相关生命周期/早派发/流程回归19s、护栏11s通过，分别
+  build/workflow-early-regression-20261011.log、build/workflow-progress-regression-20261011.log。
+  最终强制全量build **29s/20任务全部执行/563/563**（214+82+267），
+  XML failures/errors/skipped全0，build/workflow-full-final-20261011.log；
+  最终JAR SHA256 `9d1260f975bc7f4005f63561c598fa5cd9f52c562fe869d2bbf0f8d916935b38`，
+  无Java残留。此项替代上方较早产物与测试总数，未新增真实游戏验收或安装产物。
+- **首轮发布实核**：实现提交`29cc0c3185ee209995855f7916f17b5a2e64a1ef`
+  已推送feat/bounded-workflows，PR #11 OPEN/Draft、base feat/state-resource-awareness（#10），
+  首轮远端/GitHub head与本地一致，20文件暂存禁止产物/凭据/机器路径零命中；
+  路径扫描最初将回环http URL误判盘符，补边界后零命中。
+  收尾修正随后提交并更新同一PR，不强推、不合并、不修改持久网络/凭据设置。
 
 ### C5 状态与资源感知：实现与离线阶段完成（2026-10-11 01:56，Asia/Shanghai）
 

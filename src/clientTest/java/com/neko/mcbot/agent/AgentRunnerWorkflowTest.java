@@ -276,4 +276,27 @@ class AgentRunnerWorkflowTest {
         assertTrue(result().content().contains("loaded three"));
         assertEquals(1, client.toolCount());
     }
+
+    @Test void cancelDuringEarlyStreamingRetainsCommittedReceiptsWithoutInventingToolGroup() {
+        runner.start();
+        task = runner.submitTask("smelt");
+        client.engine().early(0, new ToolCall("flow", "workflow", plan(LOAD, WAIT, TAKE)));
+        client.drain();
+        JsonObject body = new JsonObject();
+        body.addProperty("seq", client.lastTool().num("seq", -1));
+        body.addProperty("ok", true);
+        body.addProperty("feedback", "early committed load");
+        runner.handleS2c(new Envelope("tool_result", body));
+        client.drain();
+        assertEquals("wait", client.lastTool().str("tool"));
+        assertTrue(runner.cancelTask(task));
+        client.drain();
+        assertTrue(client.engine().responses.getFirst().isCancelled());
+        runner.submitTask("check before doing more");
+        var history = client.engine().histories.getLast();
+        assertTrue(history.stream().anyMatch(message -> message instanceof Msg.Nudge n
+                && n.text().contains("early committed load") && n.text().contains("CANCELLED:")));
+        assertTrue(history.stream().noneMatch(Msg.Tool.class::isInstance));
+        assertEquals(2, client.toolCount());
+    }
 }

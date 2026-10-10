@@ -190,6 +190,8 @@ ToolOutcome新增防御复制的data，2/4参构造器兼容，普通模型工�
 CallbackChatEngine取消向delegate传播，排队旧信号丢弃；LlmClient每次chat独立取消控制，
 覆盖原HTTP future/SSE Flow.Subscription及既有一次/v1换道。
 取消后不换道或消费后续帧，已发出的游戏动作无法回滚；真实断线/身体停止仍待验。
+早派发取消且尚无完整assistant工具轮次时，以Nudge保留已经取得的停止回执，
+不伪造assistant/tool配对；完整轮次已形成时仍用原账本工具回执。
 
 反问由 AgentRunner 绑定 task_id 与进程内递增的 question_id，回答必须使用原编号且只消费一次。
 tick 和回答入口都检查 120s 期限；过期回失败回执，重复/未知/已取消问题拒绝回答。
