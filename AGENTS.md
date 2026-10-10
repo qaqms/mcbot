@@ -8,11 +8,13 @@
 4. `docs/ARCHITECTURE.md`（as-built 结构）；动手范围相关的
    `docs/TOOLS.md` / `docs/BRIDGE.md` / `docs/ROADMAP.md` 再看
 
-## 当前阶段（2026-10-10，维护者确认）
+## 当前阶段（2026-10-11，维护者确认）
 
 - 先开发 MC agent 本体，以离线单元测试、替身集成测试和本地 HTTP/SSE 契约回归为主。
-- 暂不启动 `runClient` / `runServer` 做真实游戏验收；真实烧制、Mixin 加载、
-  身体动作、保存重进与连接器联合验收保留待验，后续按维护者安排执行。
+- C1–C6 已合入 main，PR #5 暂不合并。维护者安排外部测试员进行真实游戏测试；
+  步骤/填写版见 `docs/REAL-GAME-TESTING.md` / `dist/game-testing.html`。
+  AI 开发端本轮仍不启动 `runClient` / `runServer` 或真实模型、不自动安装包；
+  真实烧制、Mixin 加载、身体动作、保存重进与连接器联合验收保留待验，收到实际反馈后补证据。
 - 当前卡先完成实现与离线验证；离线通过和真实行为验收分别记账，不因暂缓实测停止开发，
   也不把替身测试写成真实游戏通过。下方 SelfTest 流程供恢复游戏验收时使用。
 
