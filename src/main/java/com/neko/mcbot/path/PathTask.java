@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.server.ItemTransfers;
 import com.neko.mcbot.server.ServerTool.Result;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
@@ -646,11 +647,10 @@ public final class PathTask extends TickTask {
                 if (s.isEmpty()) {
                     continue;
                 }
-                if (!c.getInventory().add(s.copy())) {
-                    Block.popResource(level, pos, s);
-                } else {
-                    got += s.getCount();
-                }
+                var movement = ItemTransfers.receive(c.getInventory(), s, remainder -> {
+                    if (!remainder.isEmpty()) Block.popResource(level, pos, remainder);
+                });
+                got += movement.moved();
             }
             McbotMod.LOG.info("[path] 挖清 {} {} 掉落={} 收进={}", pos.toShortString(),
                     st.getBlock().getName().getString(), drops.size(), got);

@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.server.ItemTransfers;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.task.CompanionScheduler;
 import com.neko.mcbot.task.TickTask;
@@ -22,8 +23,9 @@ import java.util.concurrent.CompletableFuture;
  * break_block：手工计时的原版语义挖掘——
  * 进度/刻 = getDestroySpeed(含工具与饥饿修正) / defaultDestroyTime / 30，
  * 全程广播 ClientboundBlockDestructionPacket（所有客户端可见裂纹动画，-1 清除），
- * 完成后走 Block.getDrops(..., player, tool) 战利品表（拿错工具真的没掉落）→ 直接吸附进背包，
- * 装不下的按原版 popResource 落地。level.destroyBlock 负责实际移除。
+ * 完成后走 Block.getDrops(..., player, tool) 战利品表→ 直接吸附进背包，
+ * 装不下的余量按原版 popResource 落地。level.destroyBlock 负责实际移除。
+ * 正确工具采收门与真实主手耐久尚待挖掘语义卡收口。
  * （不用 handleBlockBreakAction：假玩家没有 connection tick 驱动它的内部进度。）
  */
 public final class BreakBlockTool implements ServerTool {
@@ -159,12 +161,13 @@ public final class BreakBlockTool implements ServerTool {
                     if (s.isEmpty()) {
                         continue;
                     }
-                    if (c.getInventory().add(s.copy())) {
-                        collected.add(s.getCount() + "×" + s.getItemName().getString());
-                    } else {
-                        Block.popResource(level, pos, s);
-                        leftover.add(s.getCount() + "×" + s.getItemName().getString());
+                    var movement = ItemTransfers.receive(c.getInventory(), s, remainder -> {
+                        if (!remainder.isEmpty()) Block.popResource(level, pos, remainder);
+                    });
+                    if (movement.moved() > 0) {
+                        collected.add(InventoryTool.describe(s.copyWithCount(movement.moved())));
                     }
+                    if (!movement.remainder().isEmpty()) leftover.add(InventoryTool.describe(movement.remainder()));
                 }
                 finished = true;
                 collectTicks = 0;
@@ -183,7 +186,8 @@ public final class BreakBlockTool implements ServerTool {
             collected.forEach(got::add);
             data.add("collected", got);
             String fb = "挖掉了 " + before.getBlock().getName().getString()
-                    + (collected.isEmpty() ? "（没有掉落）" : "，收到背包: " + String.join("、", collected))
+                    + (collected.isEmpty() && leftover.isEmpty() ? "（没有掉落）"
+                            : "，收到背包: " + (collected.isEmpty() ? "0 个" : String.join("、", collected)))
                     + (leftover.isEmpty() ? "" : "；背包满了落地: " + String.join("、", leftover));
             return new Progress.Done(new Result(leftover.isEmpty(), fb, data));
         }

@@ -203,6 +203,26 @@ tools/fixtures/smelting-pack 是独立开发数据包，当前尚无对应 SelfT
 Mixin 实际加载、机器保存重进和普通动作回归暂缓，分别挂账；
 本卡实现/离线阶段完成，PR 保留 Draft 等待上述真实行为证据，不因此停止后续开发。
 
+### 3.5 物品守恒离线回归
+
+```bash
+./gradlew clientTest --offline --tests com.neko.mcbot.server.ItemTransfersTest --tests com.neko.mcbot.server.tools.TransferToolOperationsTest --tests com.neko.mcbot.server.tools.CollectToolOperationsTest --tests com.neko.mcbot.agent.AgentRunnerItemTransferTest
+```
+
+仅初始化 MC 注册表；真实 Inventory(null, EntityEquipment)、ItemStack、SimpleContainer
+及无世界的 ChestBlockEntity 参与测试，不创建玩家/掉落实体、世界或服务器。
+执行生产 ItemTransfers、transfer/collect 参数、守卫、物品移动及反馈；
+身体位置、加载、锁/有效性和 scheduler.busy 使用可控观测，拾取实体写回/删除使用替身。
+覆盖双向半满/满载/重复调用守恒、低容量/组件堆叠限制、槽及接触面拒绝、
+按组件合并/损耗工具保全、选择/装备不变、不能借装备槽、后续允许物品继续搬运、
+参数拒绝、锁/未加载守卫顺序、实际数量进入 feedback 与实体余量。
+共享 receive 以真实背包验证部分掉落只回传余量；两条挖掘生产调用点编译验证，
+不将此写成已运行真实破坏或落地。
+runner 使用实际 AgentRunner/AgentLoop 和可控模型/C2S 回执，验证部分完成反馈、
+无自动重发、BUSY 与取消/迟到结果隔离，不调用模型端点。
+任意模组菜单/setter、双箱整体与阻挡开启、真实容器/实体/掉落、身体停手、
+保存重进及普通游戏动作回归仍待安排；历史 F0/冶炼/区块票待验项保留。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，
