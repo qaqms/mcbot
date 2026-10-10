@@ -3,7 +3,7 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-10）：问答与活动任务生命周期离线验证完成，下一卡背包/主手切换；F0 剩余真机与连接器待验，上游历史错误根因未销账
+## 当前状态（2026-10-10）：背包/主手切换自动化验证完成，下一卡合成；F0 剩余真机与连接器待验，上游历史错误根因未销账
 
 当前优先级：连接器尚未提供，按维护者授权先完善 MC agent 本体，
 依次推进背包明细与工具切换、合成、冶炼、攻击，一次一个里程碑；不新增独立聊天功能。
@@ -19,6 +19,65 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
+
+### B1 背包明细与主手工具切换（2026-10-10 12:54，Asia/Shanghai）
+
+- **排期调整**：连接器目前未提供，维护者暂不安排玩家游戏实测，并明确批准
+  “背包明细与工具切换 → 合成 → 冶炼 → 攻击”的本体开发顺序。
+  此授权覆盖旧 F0 卡“验收前不扩展技能”的排序限制，不销除 F0 真机/联合验收；
+  本轮仅推进首个能力卡，未开始合成、冶炼、攻击或 scheduler 抢占。
+- 新增只读 `inventory {}`：反馈枚举所有非空背包槽、当前主手、完整装备映射栏；
+  data 保留 36 个存储槽（含空槽）及 7 个装备映射槽，给出实际槽号、命名空间物品 ID、
+  数量与损耗物品的 damage/max_damage。status 保持轻量；
+  AgentRunner 仅把 feedback 写入模型历史，因此明细同时写入 feedback，避免只给 data 却不可见。
+  不输出自定义名称、附魔明细或原始组件/NBT；单个 ID 展示帽 128 UTF-8 字节，
+  超长 ID 显式标记截短，仍可按槽选择。
+- 新增 `equip {"slot":13}`：仅主手。0-8 直接选中；9-35 与当前选中快捷栏槽交换
+  完整原 ItemStack，选中槽不变，原主手留在来源槽。
+  不拆分/合并/消耗/生成物品，保留计数、耐久及全部组件，满背包可交换。
+  空槽或非数值整数/越界/溢出回 DENIED，数值整数如 13.0 可接受；
+  scheduler 正忙时回 BUSY，读取 inventory 不受影响。
+  服务端白名单与模型 Schema 同步（10 服务端 + 1 本地），沿用三道闸和 SYNC 回执，
+  无任务桥协议、宿主或连接器改动。
+- **新增 5 项客户端离线回归**：EquipToolArgumentsTest 2 项覆盖所有合法存储槽、
+  整数数值表示，以及字符串/布尔/对象/数组/null/缺失/小数/装备槽/整数溢出拒绝；
+  AgentRunnerInventoryTest 3 项运行实际 runner/loop，验证实际模型 Schema、完整
+  inventory → equip → 最终汇报的调用配对和槽号出站、明细进入下一轮历史、
+  BUSY 回执不自动重发。模型和游戏网络仍用替身，无真实模型请求。
+- **隔离真实服务端物品验证**：新 InventorySelfTest 由 SelfTest opt-in flag 驱动，
+  只允许新 `mcbot-inventory-*` 开发世界，拒绝并存普通/恢复测试 flag，结束正常停服。
+  首轮 12:48:54 因工装测试名 17 字符超过项目 16 字符上限，报 Summon failed；
+  工具断言未执行，不当作产品功能红证。该次空超平坦 generator-settings 亦报缺少 layers；
+  改测试名为 inv_fixture 并补独立开发世界生成配置。
+  12:51:37 第二轮 **17 个检查全 true，最终 `[inventory-test] PASS`，无 ERROR/FAILED**：
+  注册/SYNC、空背包、43 槽映射、逐槽 ID/数量/耐久及只读、超长自定义名称下回执仍在尺寸帽内、
+  快捷栏/同槽幂等、损耗工具与自定义组件的整个堆栈交换/交换回、空槽和非法参数无修改、
+  满背包及空主手交换、忙时同步/异步入口拒绝、忙时可读取、取消后可切换。
+  每次保全比对覆盖全部 43 槽的计数与 components，不只比主手名称。
+- **现有身体动作回归**：另一个新 `mcbot-action-*` 超平坦开发世界，
+  12:52:49–12:53:26 `[m5a]` 四尺寸断言、`[m3]` 闸/冒烟/正向回执、
+  `[m4]` 真挖/移动/放箱/存入 3 圆石、`[m4b]` BUSY/取消命中/空槽 false/2s wait、
+  `[m8]` A 确认清单 2 格/B 到达并打通/C 箱子未动/D 干净 NO_PATH，
+  `[r2c]` ACCEPT=2/SYNC=8 策略与文案五断言及 `[f0-world]` 生命周期均符合预期。
+  `[m9]` A1=true/A2=false，新家跟随=true，但 **A3 旧家自清=false**，沿用已知历史红项；
+  未因此宣称区块票专项全绿。无 ERROR/异常，自动正常停服，runServer BUILD SUCCESSFUL 59s。
+- **最终构建**：`build --offline --rerun-tasks --console=plain --no-daemon`
+  BUILD SUCCESSFUL **21s / 20 个任务全执行**。12:54 实核 XML **329/329**
+  （agent-core 194 + 根工程 66 + clientTest 69），failures/errors/skipped 全 0。
+  仅既有过时 API 与 Gradle 10 兼容性警告。最终 JAR `build/libs/mcbot-0.1.0.jar` SHA256：
+  `615eb3d83101ef4fd16d54f277ea86ced4f038ee39d290b68cd50b8a3014e627`。
+  list-java 未发现 Java 进程，所有测试 flag 自删；未安装到玩家实例，未改玩家存档/配置，
+  未读取真实模型密钥或桥令牌。当前副本无 Git 元数据，未初始化 Git、提交或推送。
+  本轮 16 个源码/测试/文档文件的机器绝对路径、凭据模式和尾随空白检查均零命中。
+- **证据位置**（本地 build 产物、不入仓）：`build/inventory-selftest-20261010.log`
+  保留工装准备失败；`build/inventory-selftest-20261010b.log` 是专项正证；
+  `build/action-regression-20261010.log` 为动作回归；
+  `build/inventory-final-build-20261010.log` 与三个既有 test-results 目录为完整构建/JUnit 证据。
+  README、TOOLS、ARCHITECTURE、DEVELOPMENT、ROADMAP 与测试包说明同步能力及边界。
+- **验收边界**：本卡本体与自动化验证完成；玩家模型驱动、客户端/多人可见装备更新、
+  外部连接器联合验收仍待安排，未宣称 F0 整体完成。
+  当前不提供副手切换/盔甲穿戴或自动判断最佳工具；模型从 inventory 槽位显式调用 equip。
+  现有 collect 是拾取掉落物，不是完整自动采集链。下一卡合成，随后冶炼和攻击。
 
 ### F0 活动任务配置重载与断线重连离线集成（2026-10-10 12:30，Asia/Shanghai）
 
@@ -1757,6 +1816,8 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 背包/主手切换（B1，10-10 javap + 真实服务端） | `Inventory.INVENTORY_SIZE=36`、`getNonEquipmentItems()` 36 项；`getContainerSize()` 为 **43**（36 存储 + 7 装备映射），旧表 41 错误更正。`EQUIPMENT_SLOT_MAPPING` 公开：36 feet/37 legs/38 chest/39 head/40 offhand/41 body/42 saddle；getItem/setItem 路由这些映射。`getSelectedSlot/setSelectedSlot` 仅选快捷栏 0-8；`setChanged()` 可用。`pickSlot(int)` 会改为 suitable hotbar，不能用于“当前选中槽不变”的交换 |
+| 物品保全（B1） | `ItemStack.set(DataComponentType<T>,T)`、DataComponents.CUSTOM_NAME、Component.literal 可用；`copy` 和 `matches` 覆盖计数/全部组件。装备枚举 `getSerializedName` 可用；损耗物品 `isDamageableItem/getDamageValue/getMaxDamage` 可用。正文不序列化组件，但交换直接搬原 ItemStack，超长名称不影响回执尺寸 |
 | 世界路径与正常停服（F0 第二轮） | javap：MinecraftServer.getWorldPath(LevelResource)、LevelResource.ROOT/PLAYER_DATA_DIR、MinecraftServer.halt(boolean) 均存在；名册取当前世界 ROOT，开发验收 opt-in 标记走 halt(false) |
 | 全局 receiver 生命周期（F0 第二轮） | Fabric networking 5.1.6 源 JAR：registerGlobalReceiver 已注册则返回 false 且不替换，覆盖当前及未来连接；handler 在服务器线程调用，Context.server() 可取实际服务器。因此只能初始化注册一次并动态选当前 dispatcher |
 | EditBox 初始值与隐私（F0 真机修复） | 构造器 maxLength 默认 32；setValue 先按该值截断，因此必须先 setMaxLength 再 setValue。存在 addFormatter(EditBox.TextFormatter)，format(String,int) 返回 FormattedCharSequence；可覆写 createNarrationMessage 屏蔽读屏原值，无需 setShouldMaskInput |
@@ -1784,7 +1845,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 | 连接发包 | `Connection.send(Packet<?>) / (Packet<?>, ChannelFutureListener) / (Packet<?>, ChannelFutureListener, boolean)` —— PacketSendListener 已不存在，**三个重载都要覆盖**才能全丢 |
 | 连接断连 | `Connection.disconnect(DisconnectionDetails)` ✓ 可覆盖吞掉 |
 | 命令权限 | `Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)` 做 `requires`；取玩家用 `source.getPlayer()`（可 null；getEntity() 返回 Entity） |
-| 寻路可用 API（M8 javap） | `DimensionType.minY()/height()` 取维度高度范围（Level 无 buildheight 方法）；`Block.byItem(Item)` 可 null；`Level.setBlockAndUpdate(pos,state)`；`Inventory` 实现 `Container.getItem/setItem/getContainerSize(41)`；`ItemStack.isSameItemSameComponents/shrink/grow`；`BlockPos.east()/above(n)` 链式可用 |
+| 寻路可用 API（M8 javap） | `DimensionType.minY()/height()` 取维度高度范围（Level 无 buildheight 方法）；`Block.byItem(Item)` 可 null；`Level.setBlockAndUpdate(pos,state)`；`Inventory` 实现 `Container.getItem/setItem/getContainerSize`（总数旧记 41，B1 实测更正为 43）；`ItemStack.isSameItemSameComponents/shrink/grow`；`BlockPos.east()/above(n)` 链式可用 |
 | **STRING_UTF8 的真实上限** | `ByteBufCodecs.STRING_UTF8 = stringUtf8(32767)`（clinit 里 `sipush 32767`），限的是**字符数**；`Utf8String.read` 用 `ByteBufUtil.utf8MaxBytes(32767)` = **98301 字节**卡 VarInt 声明长度，再解出来校 `s.length() ≤ 32767`。三处 `throw DecoderException`（声明>utf8MaxBytes / <0 / >readableBytes）——所以“32767 看着像 32KB”其实能放到 ~96KB 中文包。**闸① 因此自己读前缀、自己卡字节，不靠它** |
 | **解码报错 = 断线** | `Connection.exceptionCaught` **只宽容** `SkipPacketException`（debug 一行就 return）；其余一律置 `handlingFault` 并走关 channel 的路。结论：自定义 codec 里报错不是“丢包”，是“踢线” |
 | **监听器根本没有 tick()** | 1.21.11 的 `ServerCommonPacketListenerImpl` **无** `tick()` 方法；`keepConnectionAlive()` 在 `ServerGamePacketListenerImpl.tick()` 里被调（且先过 `isSingleplayerOwner()` 与 `now-keepAliveTime>=15000` 两道门，`keepAlivePending=true` 的**置位在 else 分支内、先过 `checkIfClosed`**，不是“无条件先置位再 send”） |

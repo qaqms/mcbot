@@ -31,6 +31,10 @@ public final class SelfTest {
         if (done) {
             return;
         }
+        if (InventorySelfTest.runIfRequested(server)) {
+            done = true;
+            return;
+        }
         if (PersistenceSelfTest.runIfRequested(server)) {
             done = true;
             return;

@@ -118,6 +118,33 @@ Windows 控制台输出是 **GBK**：管道里用 `iconv -f GBK -t UTF-8` 转，
 该验收不替代单人客户端保存重进、同进程换世界，也不覆盖坐骑或在途末影珍珠恢复。
 没有 phase flag 时，不生成 seed 标记、不修改身体或地形。
 
+### 3.2 背包明细与主手切换（独立工装）
+
+仅使用未用过的 `level-name=mcbot-inventory-<测试名>` 开发世界、
+回环 `server-ip=127.0.0.1` 与空闲端口。创建 `run/mcbot/autotest-inventory.flag` 后运行
+`./gradlew runServer`，SelfTest 自动进入专项，flag 自删，结束后 `halt(false)` 正常保存停服。
+工装拒绝普通世界、已有同名 fixture 及同时存在的普通/身体恢复测试 flag。
+此专项会写测试物品，不能在玩家世界执行，也不需要客户端、模型或控制台 stdin。
+超平坦开发世界需同时提供包含 layers/biome 的 generator-settings，不能只改 level-type。
+
+判读 `[inventory-test]` 各场景均为 true 且最终 PASS，无 FAILED。
+使用真实 CompanionPlayer/Inventory/ItemStack 验证空背包和 43 槽映射、逐槽反馈、
+只读性与超长自定义名称下的回执尺寸、快捷栏选择、完整堆栈往返交换、
+满背包/空主手、非法参数/空槽拒绝、忙时不可切换但可读取、取消后可切换。
+每次交换对照全部槽位的计数与 components，不以“主手名字相同”替代保全检查。
+普通 `[m4*]` 回归需另用新开发世界与 `autotest.flag` / `autotest-stop.flag`，
+不能混跑污染专项；既有 `[m9] A3` 红项仍按 §3 历史边界判读。
+
+客户端离线接线与参数回归可单独运行：
+
+```bash
+./gradlew clientTest --tests com.neko.mcbot.agent.AgentRunnerInventoryTest --tests com.neko.mcbot.server.tools.EquipToolArgumentsTest
+```
+
+离线接线使用可控模型和游戏回执替身，验证 inventory → equip → 最终汇报的调用配对、
+明细进入下一轮模型历史、BUSY 不被自动重发及实际工具 Schema。
+隔离服务端专项不验证玩家客户端/多人可见装备更新、模型理解或连接器联合验收。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，
