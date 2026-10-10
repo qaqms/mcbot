@@ -8,6 +8,14 @@
 4. `docs/ARCHITECTURE.md`（as-built 结构）；动手范围相关的
    `docs/TOOLS.md` / `docs/BRIDGE.md` / `docs/ROADMAP.md` 再看
 
+## 当前阶段（2026-10-10，维护者确认）
+
+- 先开发 MC agent 本体，以离线单元测试、替身集成测试和本地 HTTP/SSE 契约回归为主。
+- 暂不启动 `runClient` / `runServer` 做真实游戏验收；真实烧制、Mixin 加载、
+  身体动作、保存重进与连接器联合验收保留待验，后续按维护者安排执行。
+- 当前卡先完成实现与离线验证；离线通过和真实行为验收分别记账，不因暂缓实测停止开发，
+  也不把替身测试写成真实游戏通过。下方 SelfTest 流程供恢复游戏验收时使用。
+
 ## 硬红线（违反任何一条 = 停）
 
 - **Clean-room**：可从他仓读机制动机，禁止复制/翻译任何代码、注释文本、README 句子、
@@ -28,8 +36,9 @@
 
 ## 工作节奏
 
-- 改动 → `./gradlew build`（含 agent-core 单测）→ 需要则起服跑 `[m4*]` 级 SelfTest →
+- 改动 → 相应离线回归 → `./gradlew build`（含 agent-core 单测）→
   更新 STATUS（证据+偏差）→ 有远端则按 docs/DEVELOPMENT.md §5-5 扫密后提交推送。
+- 当前阶段按上方安排暂缓真实游戏验收；恢复后，服务端改动补 `[m4*]` 级 SelfTest。
 - 加原子工具看 `docs/TOOLS.md` §4；动桥看 `docs/BRIDGE.md`；排期争议以
   `docs/ROADMAP.md` 当前卡为准，改排期须在 STATUS 记录理由。
 - 与用户对话用简体中文；代码注释解释"为什么"，不复述"是什么"。

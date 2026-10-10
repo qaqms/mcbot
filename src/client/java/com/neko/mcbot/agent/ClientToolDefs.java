@@ -30,6 +30,20 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"maxLength\":128},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},"
                             + "\"query\":{\"type\":\"boolean\"},\"recipe\":{\"type\":\"string\",\"maxLength\":128}},\"required\":[\"item\"]}"),
+            new ToolSpec("smelt", "操作5.5格内原版熔炉/高炉/烟熏炉。action默认query只读，返回机器三槽、"
+                    + "真实tick进度/剩余燃烧/配方/整批燃料是否够用/等待建议。load从inventory的input_slot/fuel_slot装入"
+                    + "对应数量（各1-64，默认1）；可只补原料或燃料，也可给空炉先备燃料。装料不是烧制完成，机器自主运行，"
+                    + "用wait等待后query/take。take的slot默认output，也可input/fuel回收，count为最多取出量"
+                    + "1-64（默认64）；失败不移动物品。忙时仅query可用，取消任务不熄炉；"
+                    + "停止后续烧制需显式take原料。只支持普通单件产物配方；机器不能用transfer",
+                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},"
+                            + "\"z\":{\"type\":\"integer\"},\"action\":{\"type\":\"string\",\"enum\":[\"query\",\"load\",\"take\"]},"
+                            + "\"input_slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35},"
+                            + "\"input_count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},"
+                            + "\"fuel_slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35},"
+                            + "\"fuel_count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},"
+                            + "\"slot\":{\"type\":\"string\",\"enum\":[\"input\",\"fuel\",\"output\"]},"
+                            + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("break_block", "挖掉一格方块（按真实硬度耗时，需要合适工具，掉落自动进背包）。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
@@ -41,7 +55,7 @@ public final class ClientToolDefs {
                     + "若路需要改动世界，先回 NEED_CONFIRM 附方块清单——确认没问题就带 may_alter_terrain=true 重发。"
                     + "回执以 ACCEPTED: 开头表示已受理、人还在走——别重发（会被 BUSY 挡），做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"允许这条路挖/放方块改动世界；首次被 NEED_CONFIRM 后确认再带\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
-            new ToolSpec("transfer", "与容器存取物品：dir=out取出/in存入，item可选过滤",
+            new ToolSpec("transfer", "与普通容器存取物品：dir=out取出/in存入，item可选过滤；熔炉类机器改用smelt",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"dir\":{\"type\":\"string\",\"enum\":[\"in\",\"out\"]},\"item\":{\"type\":\"string\"}},\"required\":[\"x\",\"y\",\"z\",\"dir\"]}"),
             new ToolSpec("wait", "原地等待 seconds 秒（1-60），用于等熔炉出货、等作物长熟这类节奏，别用反复查看代替等待",
                     "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\"}},\"required\":[\"seconds\"]}"),
