@@ -19,7 +19,8 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 当前 C1物品守恒、C2挖放语义、C3调度与权限、C4有界近战、C5状态感知、C6有界流程完成实现与离线验证；
 原版实际挖放/耐久/掉落、多格/组件/碰撞与路径真实支撑仍另行待验。
 当前客户端与服务端须一起更新；外部任务桥 v1.0 不变。
-0.1.0发行说明/下载与安装见 `docs/releases/0.1.0.md`；18项本体必测和B01顺序不扩大。
+0.1.0测试版已于2026-10-12发布，发行说明/下载与安装见 `docs/releases/0.1.0.md`；
+18项本体必测和B01顺序不扩大。
 PR #5当前CLOSED、未合并，其旧联调待验项继续保留；下方历史OPEN记录按当时时点阅读。
 
 **模块职责与协作边界**：
@@ -49,7 +50,7 @@ PR #5当前CLOSED、未合并，其旧联调待验项继续保留；下方历史
   本机已有未跟踪的`dist/测试.zip`保持不动、不提交、不作为待发布包；
   新包只在ignored build目录按明确清单组装。
 - Release采用v0.1.0标签和Pre-release标记，模组版本保持0.1.0；
-  发布完成后补标签目标、附件和远端校验记录。宿主/参考/连接器代码不改，
+  发行实核见下方。宿主/参考/连接器代码不改，
   不启动游戏/服务端、不调用真实模型、不安装包。
 - **发布准备实核（21:54）**：`build --offline --console=plain --no-daemon`
   25s成功、20任务全部up-to-date，本地`build/release-docs-20261012.log`；
@@ -60,6 +61,17 @@ PR #5当前CLOSED、未合并，其旧联调待验项继续保留；下方历史
   待上传ZIP SHA256 `7caf484a6db45edb85698ee7dc5dab087360fd900e6557e94fb17ae915e37c48`；
   HTML SHA256 `b10f9f78732c6c4ef2f486501e2315a4a809eab313804b9a971a967ab4bf3bbc`。
   附件仅JAR/测试ZIP/HTML/SHA256SUMS.txt，不使用本机未知ZIP或包含运行配置。
+- **发布完成（21:57:38 +08:00）**：7文件文档提交
+  `80b556a1d54cba1aee29d1bd978cf6b9cf5f645d`推送main后，以该精确提交创建Release草稿，
+  上传4附件，核对GitHub的uploaded状态/digest，再逐个下载到ignored build重新核对SHA256；
+  四项均与本地一致，随后发布，isDraft=false、isPrerelease=true。
+  发布页 `https://github.com/qaqms/mcbot/releases/tag/v0.1.0`；
+  实际v0.1.0标签为commit，指向`80b556a1d54cba1aee29d1bd978cf6b9cf5f645d`。
+  源码从此前基线到标签仅有文档变化，JAR仍是已核验的合并后产物，不重打未测试包。
+  附件名`mcbot-0.1.0.jar` / `mcbot-0.1.0-test-kit.zip` /
+  `game-testing.html` / `SHA256SUMS.txt`，未打包Fabric API或连接器。
+  首轮7文件暂存扫描禁止二进制/凭据/机器绝对路径均零命中、diff --check通过；
+  本条发行完成记录另行提交，不移动已发布标签或覆盖附件。
 
 ### 合并 main 与外部实机测试准备（2026-10-11，Asia/Shanghai）
 

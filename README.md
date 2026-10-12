@@ -26,7 +26,7 @@ mcbot 提供 MC agent 本体与任务桥；N.E.K.O 等宿主的适配连接器�
 
 ## 下载与测试
 
-**0.1.0 测试版**的下载与安装说明见
+**0.1.0 测试版已于2026-10-12发布**，下载与安装说明见
 [`发行说明`](docs/releases/0.1.0.md)，附件在
 [`GitHub Release`](https://github.com/qaqms/mcbot/releases/tag/v0.1.0)。
 首次测试推荐下载 `mcbot-0.1.0-test-kit.zip`，解压后看 `START-HERE.txt`，
