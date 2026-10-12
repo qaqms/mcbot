@@ -304,6 +304,11 @@ C3 在内部 C2S 增加 task_begin/task_end/authorize 与 tool_call.task_id，
 
 ## 6. 连接器接入与验收
 
+维护者提供的 N.E.K.O 连接器由协作者在
+[独立仓库](https://github.com/wangjunyu200708/n.e.k.o_plugin_mcbot_bridge) 维护。
+2026-10-12 固定提交的接线审查与整改清单见
+[连接器源码审查](connector-code-review-2026-10-12.md)，不代表联合验收已通过。
+
 连接器推荐顺序：
 
 1. 用 header token 查询 status，确认契约版本、记录 session_id；提示用户先配置大脑与召唤伙伴。
