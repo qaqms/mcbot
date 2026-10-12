@@ -24,9 +24,18 @@ mcbot 提供 MC agent 本体与任务桥；N.E.K.O 等宿主的适配连接器�
 内部实现可以独立迭代，破坏性接口变更需发布新版本并协调接入迁移。
 接口自动化通过不等同端到端联合验收完成，当前进度与待验项见 [`STATUS.md`](STATUS.md)。
 
-## 当前检查点（2026-10-11）
+## 下载与测试
 
-PR #7–#11 已按维护者授权合入 main，PR #5 保持开放、单独处理；冶炼及 C1–C6
+**0.1.0 测试版**的下载与安装说明见
+[`发行说明`](docs/releases/0.1.0.md)，附件在
+[`GitHub Release`](https://github.com/qaqms/mcbot/releases/tag/v0.1.0)。
+首次测试推荐下载 `mcbot-0.1.0-test-kit.zip`，解压后看 `START-HERE.txt`，
+打开 `dist/game-testing.html` 按18项本体必测填写；连接器准备好后再做B01。
+Fabric API需另行安装，测试包不包含外部连接器。离线验证通过，实机反馈仍待接收。
+
+## 当前检查点（2026-10-12）
+
+PR #7–#11 已按维护者授权合入 main，PR #5 已关闭但未合并、仍单独处理；冶炼及 C1–C6
 实现与离线回归完成，合并后强制全量构建 563 项测试通过。
 维护者安排测试员进行实机验收，步骤与可填写反馈见
 [`实机测试手册`](docs/REAL-GAME-TESTING.md) 和可直接打开的
@@ -108,6 +117,7 @@ PR #7–#11 已按维护者授权合入 main，PR #5 保持开放、单独处理
 | 进度事实源 + 1.21.11 API 防漂移笔记 | [`STATUS.md`](STATUS.md) |
 | 施工前完整蓝图（拓扑/护栏/寻路/里程碑） | [`mcbot-DESIGN.md`](mcbot-DESIGN.md) |
 | 测试包怎么装 | [`dist/README-DIST.md`](dist/README-DIST.md) |
+| 0.1.0下载附件和发行范围 | [`发行说明`](docs/releases/0.1.0.md) |
 | 新手按顺序实机测试并填写反馈 | [`手册`](docs/REAL-GAME-TESTING.md)、[`浏览器填写版`](dist/game-testing.html)、[`文字反馈模板`](docs/templates/GAME-TEST-FEEDBACK.md) |
 | AI/新人接手第一页 | [`AGENTS.md`](AGENTS.md) |
 

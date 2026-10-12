@@ -1,15 +1,21 @@
 # mcbot 0.1.0 测试包说明
 
-运行需要两个 jar（Fabric API 需另行准备，当前 dist 不保证附带依赖包）：
-- 本次构建的 `build/libs/mcbot-0.1.0.jar` —— 本体（客户端+服务端同包，`environment:*`）
+运行需要两个 jar（Fabric API 需另行准备，测试压缩包不包含此依赖）：
+- GitHub Release 的 `mcbot-0.1.0.jar`，或本地构建 `build/libs/mcbot-0.1.0.jar` —— 本体（客户端+服务端同包，`environment:*`）
 - `fabric-api-0.141.6+1.21.11.jar` —— 依赖（Fabric API）
 
 源码仓的 `dist/` 只保留部署说明，不提交 JAR。若本地目录中另有历史测试包，
 需先与 STATUS 的最新构建哈希核对，不能仅凭相同 `0.1.0` 版本号判断是新包。
 
-## 当前交付与新手测试（2026-10-11）
+## 下载与安装（2026-10-12）
 
-PR #7–#11 已合入 main，#5 保持开放。合并后的强制离线构建 **563/563**，
+从 [0.1.0 发布页](https://github.com/qaqms/mcbot/releases/tag/v0.1.0)
+下载 `mcbot-0.1.0-test-kit.zip`。解压后按 `START-HERE.txt` 操作；
+里面 `mods/mcbot-0.1.0.jar` 复制到游戏实例的 `mods`，另装对应 Fabric API。
+只更新模组可单独下载同页 JAR，不要把整个测试压缩包放进 `mods`。
+发布页 `SHA256SUMS.txt` 可核对三个下载文件；本体和发行范围见 `../docs/releases/0.1.0.md`。
+
+PR #7–#11 已合入 main，#5 已关闭但未合并。合并后的强制离线构建 **563/563**，
 失败/错误/跳过均为0；本轮没有安装包、启动真实游戏或调用真实模型。
 交给测试员的本体包为 `build/libs/mcbot-0.1.0.jar`，SHA256：
 `9d1260f975bc7f4005f63561c598fa5cd9f52c562fe869d2bbf0f8d916935b38`。
