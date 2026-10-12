@@ -2,16 +2,19 @@
 
 > 面向项目维护者、贡献者与自动化开发工具。环境配置见本文，当前进度见 `STATUS.md`，开发约定见 §5。
 
-## 当前验证安排（2026-10-12）
+## 当前验证安排（2026-10-13）
 
 开发端以离线测试为主：使用单元测试、可控模型/网络/时钟替身、
 实际 runner/桥接线与临时回环 HTTP/SSE 验证，不调用真实模型。
 暂不通过 `runClient` / `runServer` 启动真实游戏验收；本文保留的服务端工装与真机流程
-供维护者安排时使用。C1–C6 已合入 main，PR #5 已关闭但未合并；维护者将安排外部测试员实机验证，
-顺序/反馈入口见 `REAL-GAME-TESTING.md`、`../dist/game-testing.html` 和
-`templates/GAME-TEST-FEEDBACK.md`。本轮开发端不启动游戏/模型或安装包。
-构建及离线通过只证明对应实现范围，真实烧制、Mixin 实际加载、
-身体动作、保存重进和连接器联合验收仍单独挂账，不以未安排实测阻断当前实现与离线验证。
+供维护者安排时使用。C1–C6 已合入 main，PR #5 已关闭但未合并；
+首轮外部反馈已核对，RG1攻击参数诊断实现/离线完成，当前卡为RG2服务端只读验证。
+维护者选择相关开发完成后集中实机补测，筹备见 `REAL-GAME-RETESTING.md`；
+旧顺序/反馈入口 `REAL-GAME-TESTING.md`、`../dist/game-testing.html` 和
+`templates/GAME-TEST-FEEDBACK.md` 保留原revision。本轮开发端不启动游戏/模型或安装包。
+构建及离线通过只证明对应实现范围；首轮基本烧制/动作/保存重进已有正证，
+复杂边界、T11/T12/T14剩余项和连接器联合问答仍单独挂账，
+不以未安排实测阻断当前实现与离线验证。
 
 浏览器测试手册与文字反馈模板由 `tools/build-game-testing-docs.mjs` 从
 `docs/REAL-GAME-TESTING.md` 生成，仓根执行 `node tools/build-game-testing-docs.mjs`；
@@ -33,7 +36,7 @@ JAR/测试ZIP/校验清单通过GitHub Release交付，不提交源码仓。
 | 映射 | `loom.officialMojangMappings()` | 注意：`Identifier` 不叫 ResourceLocation 等命名坑见 STATUS 防漂移表 |
 | JDK | Temurin 21 | **仓内不写路径**；本机路径放用户级 `gradle.properties`（见 §1.1） |
 | Gradle | 9.5.1 | wrapper 走**官方源**；到不了 services.gradle.org 的机器按 wrapper 注释临时改 `file:`（别提交） |
-| 代理 | `gradle.properties` 内 systemProp 127.0.0.1:7897 | **本机网络相关**；换环境删该段即回退直连 |
+| 代理 | 仓内仍有历史回环代理默认值 | **本机网络相关**；新设备按 §1.1 在用户级配置覆盖，不假定该端口可用 |
 
 `run/` 是开发运行目录（gitignore）：`eula.txt` 预置 true；`run/mcbot/` 放名册/配置/flag。
 
@@ -52,7 +55,14 @@ JAR/测试ZIP/校验清单通过GitHub Release交付，不提交源码仓。
    只有网络到不了 `services.gradle.org` 时，才手动下 zip 并**临时**把
    `gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指过去——**改完别提交**。
    （Gradle 用 URL 的 MD5 当缓存目录名：换了 URL 就等于换了缓存，所以要重新下。）
-3. **代理**：仓内 `gradle.properties` 的 `systemProp.*Proxy*` 段按你的网络删改。
+3. **代理**：仓内仍保留历史 `systemProp.*Proxy*` 默认值，不能假定新设备也有同一代理。
+   优先在用户级 `gradle.properties` 覆盖 `systemProp.http.proxyHost/proxyPort`、
+   `systemProp.https.proxyHost/proxyPort`，端口按本机填写；直连时将两项proxyHost设为空值。
+   用户级配置优先于项目配置。本机网络调整不提交；本轮交接不改变既有构建配置。
+
+换设备接手的代码检查点、材料边界和下一张卡见 `HANDOFF.md`。
+`STATUS.md` 同时承担开发日志，不另建与其竞争的进度事实源；
+换机后的新测试要另记时间与结果，不能把本机历史缓存证据写成新设备已经运行。
 
 文档里引用本仓一律用**相对路径**（`docs/...`、仓根写成 `<仓库根>`）；引用参考项目/桌面 AI
 一律写成"开发环境中的只读副本（路径不入仓）"。写文档时检查：`git ls-files` 里不该出现

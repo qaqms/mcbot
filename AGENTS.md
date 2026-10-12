@@ -5,16 +5,19 @@
 1. 本文件（纪律）
 2. `docs/DEVELOPMENT.md`（环境、验收 harness、红线）
 3. `STATUS.md`（唯一进度事实源；含 **1.21.11 API 实测防漂移表**）
+   换设备接手时接着读 `docs/HANDOFF.md`（接手步骤、当前卡与本机材料边界）。
 4. `docs/ARCHITECTURE.md`（as-built 结构）；动手范围相关的
    `docs/TOOLS.md` / `docs/BRIDGE.md` / `docs/ROADMAP.md` 再看
 
-## 当前阶段（2026-10-12，维护者确认）
+## 当前阶段（2026-10-13，维护者确认）
 
 - 先开发 MC agent 本体，以离线单元测试、替身集成测试和本地 HTTP/SSE 契约回归为主。
-- C1–C6 已合入 main，PR #5 已关闭但未合并，继续不合并。维护者安排外部测试员进行真实游戏测试；
-  步骤/填写版见 `docs/REAL-GAME-TESTING.md` / `dist/game-testing.html`。
+- C1–C6 已合入 main，PR #5 已关闭但未合并，继续不合并。首轮外部实机反馈已核对；
+  15项认可、T12部分认可、T11/T14/B01阻塞。RG1已完成实现与离线验证，当前卡为RG2。
+  维护者愿意承担补测，选择相关开发完成后集中测试；筹备清单见 `docs/REAL-GAME-RETESTING.md`。
+  旧步骤/填写版 `docs/REAL-GAME-TESTING.md` / `dist/game-testing.html` 保留原revision。
   AI 开发端本轮仍不启动 `runClient` / `runServer` 或真实模型、不自动安装包；
-  真实烧制、Mixin 加载、身体动作、保存重进与连接器联合验收保留待验，收到实际反馈后补证据。
+  首轮基本烧制/动作/保存重进已有正证；复杂边界、T11/T12/T14剩余项和连接器联合问答继续待验。
 - 0.1.0测试发行范围与附件说明见 `docs/releases/0.1.0.md`；发布不替代实机证据，
   不将JAR/ZIP或运行数据加入源码提交，不覆盖既有版本资产。
 - 当前卡先完成实现与离线验证；离线通过和真实行为验收分别记账，不因暂缓实测停止开发，
