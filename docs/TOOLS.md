@@ -288,6 +288,25 @@ collect 的中心需在身体6.5格内；实际候选同时在请求球体和身
 max_hits 是**调用原版攻击的上限**，默认1、范围1-10；整个任务400tick（20秒，低TPS会更久）。
 ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发或轮询。
 
+参数拒绝保留 `DENIED:` 前缀，反馈现在包含固定原因码、字段及修正建议；
+可选data附 `argument_error: {code, field, expected}`，三项均由本地固定定义生成。
+不回显未知字段名、原始编号/UUID/授权值或完整参数，不新增自动重试。
+按固定顺序报告第一个问题：未知字段 → entity_id → 对应target_uuid → max_hits → authorization_id；
+修正一个问题后仍须通过后续校验，不因参数合法而跳过保护/距离/授权。
+
+| 原因码 | 字段/含义 |
+|---|---|
+| `ARGUMENTS_REQUIRED` / `UNKNOWN_FIELD` | args为空对象引用或含未知字段；线上非JSON对象仍由派发层先拒绝。 |
+| `ENTITY_ID_REQUIRED` / `ENTITY_ID_TYPE` / `ENTITY_ID_VALUE` | 缺编号、类型/字符串选择器错误、数字不为正整数或超出32位范围；数字字符串不自动转换。 |
+| `TARGET_UUID_REQUIRED` / `TARGET_UUID_TYPE` / `TARGET_UUID_FORMAT` | 显式编号缺UUID、UUID非字符串、不是标准小写36字符UUID；仍必须与扫描所得实体身份匹配。 |
+| `NEARBY_TARGET_UUID` / `NEARBY_AUTHORIZATION` | hostile_nearby与显式UUID或具体目标授权不兼容。 |
+| `MAX_HITS_TYPE` / `MAX_HITS_VALUE` | 挥击上限非数字、不是1-10的整数。 |
+| `AUTHORIZATION_ID_TYPE` / `AUTHORIZATION_ID_VALUE` | 授权编号非字符串、空白或长度超过64；通过格式校验不等于已获许可。 |
+
+例如数字字符串编号会返回 `[ENTITY_ID_TYPE]`，提示显式编号不能加引号；
+缺UUID会返回 `[TARGET_UUID_REQUIRED]`，提示重新扫描并携带同一目标身份。
+这项诊断不能反推旧T14现场的具体错误；新包实机回执另行采集。
+
 每tick复核当前身体/维度、实体引用/身份、存活、保护规则、原版攻击范围及局部6.5格限制、
 世界边界/已加载邻域/交互规则、视线、完整主手/选中槽及资源租约。
 加载检查最多4096格，拒绝过大实体邻域，不为了视线强制加载区块。

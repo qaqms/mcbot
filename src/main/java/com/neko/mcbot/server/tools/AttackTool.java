@@ -41,6 +41,61 @@ public final class AttackTool implements ServerTool {
         public boolean nearby() { return entityId == null; }
     }
 
+    private enum ArgumentError {
+        ARGUMENTS_REQUIRED("args", "JSON 对象", "传入 attack 参数对象。"),
+        UNKNOWN_FIELD("args", "仅 entity_id、target_uuid、max_hits、authorization_id",
+                "移除其他字段，不用模型字段代替任务权限。"),
+        ENTITY_ID_REQUIRED("entity_id", "扫描所得正整数编号，或字符串 hostile_nearby",
+                "先 scan_area 取得目标身份；不要猜编号。"),
+        ENTITY_ID_TYPE("entity_id", "JSON 数字形式的正整数，或字符串 hostile_nearby",
+                "显式编号不能加引号；hostile_nearby 是唯一合法字符串选择器。"),
+        ENTITY_ID_VALUE("entity_id", "1-2147483647 的整数",
+                "使用 scan_area 返回的正整数编号，不用小数或溢出数值。"),
+        TARGET_UUID_REQUIRED("target_uuid", "显式编号对应的扫描所得 UUID",
+                "重新 scan_area，携带同一目标的编号和 UUID。"),
+        TARGET_UUID_TYPE("target_uuid", "UUID 字符串",
+                "使用 scan_area 返回的 target_uuid 字符串，不转换类型。"),
+        TARGET_UUID_FORMAT("target_uuid", "36 字符的标准小写 UUID",
+                "原样使用 scan_area 返回的 target_uuid，不缩写、不改大小写或加空格。"),
+        NEARBY_TARGET_UUID("target_uuid", "hostile_nearby 模式不得携带此字段",
+                "移除此字段；如要指定目标，改用该目标的数字编号和 UUID。"),
+        MAX_HITS_TYPE("max_hits", "JSON 数字形式的整数",
+                "用数字填写挥击上限，不加引号；省略时默认 1。"),
+        MAX_HITS_VALUE("max_hits", "1-10 的整数",
+                "将挥击上限设为 1-10，不用小数或溢出数值。"),
+        AUTHORIZATION_ID_TYPE("authorization_id", "服务端授权编号字符串",
+                "原样携带服务端清单经 ask_owner 确认的编号，不转换类型或伪造。"),
+        AUTHORIZATION_ID_VALUE("authorization_id", "非空且不超过 64 字符的字符串",
+                "先取得本任务具体目标清单并经 ask_owner 确认；不要提交空白或截断编号。"),
+        NEARBY_AUTHORIZATION("authorization_id", "hostile_nearby 模式不得携带授权编号",
+                "授权只绑定具体目标；改用清单中的数字编号、UUID、max_hits 和授权编号。");
+
+        private final String field;
+        private final String expected;
+        private final String hint;
+
+        ArgumentError(String field, String expected, String hint) {
+            this.field = field;
+            this.expected = expected;
+            this.hint = hint;
+        }
+
+        Result result() {
+            var error = new JsonObject();
+            error.addProperty("code", name());
+            error.addProperty("field", field);
+            error.addProperty("expected", expected);
+            var data = new JsonObject();
+            data.add("argument_error", error);
+            return new Result(false, "DENIED:attack 参数无效 [" + name() + "]："
+                    + field + " 需要 " + expected + "。" + hint, data);
+        }
+    }
+
+    private record ParsedArguments(Input input, ArgumentError error) {
+        static ParsedArguments invalid(ArgumentError error) { return new ParsedArguments(null, error); }
+    }
+
     @Override public String name() { return "attack"; }
     @Override public Acceptance acceptanceMode() { return Acceptance.ACCEPT; }
     @Override public int capTicks(JsonObject args) { return CAP_TICKS; }
@@ -50,45 +105,75 @@ public final class AttackTool implements ServerTool {
     }
 
     public static Input arguments(JsonObject args) {
-        try {
-            for (String key : args.keySet()) {
-                if (!List.of("entity_id", "target_uuid", "max_hits", "authorization_id").contains(key)) return null;
-            }
-            var entity = args.get("entity_id");
-            if (entity == null || !entity.isJsonPrimitive()) return null;
-            Integer id = null;
-            UUID uuid = null;
-            if (entity.getAsJsonPrimitive().isNumber()) {
-                id = entity.getAsBigDecimal().intValueExact();
-                if (id <= 0) return null;
-                String raw = string(args, "target_uuid", 36);
-                uuid = UUID.fromString(raw);
-                if (!uuid.toString().equals(raw)) return null;
-            } else if (!entity.getAsJsonPrimitive().isString()
-                    || !"hostile_nearby".equals(entity.getAsString()) || args.has("target_uuid")) return null;
-            int hits = 1;
-            if (args.has("max_hits")) {
-                var value = args.get("max_hits");
-                if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return null;
-                hits = value.getAsBigDecimal().intValueExact();
-            }
-            if (hits < 1 || hits > 10) return null;
-            String authorization = args.has("authorization_id") ? string(args, "authorization_id", 64) : null;
-            // An approval is for one concrete identity, never another nearby selection.
-            if (id == null && authorization != null) return null;
-            return new Input(id, uuid, hits, authorization);
-        } catch (RuntimeException invalid) {
-            return null;
-        }
+        return parseArguments(args).input();
     }
 
-    private static String string(JsonObject args, String key, int maxLength) {
-        var value = args.get(key);
-        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
-                || value.getAsString().isBlank() || value.getAsString().length() > maxLength) {
-            throw new IllegalArgumentException(key);
+    private static ParsedArguments parseArguments(JsonObject args) {
+        if (args == null) return ParsedArguments.invalid(ArgumentError.ARGUMENTS_REQUIRED);
+        // Only fixed schema fields enter diagnostics; an unknown key may itself contain private text.
+        for (String key : args.keySet()) {
+            if (!List.of("entity_id", "target_uuid", "max_hits", "authorization_id").contains(key)) {
+                return ParsedArguments.invalid(ArgumentError.UNKNOWN_FIELD);
+            }
         }
-        return value.getAsString();
+        var entity = args.get("entity_id");
+        if (entity == null) return ParsedArguments.invalid(ArgumentError.ENTITY_ID_REQUIRED);
+        if (!entity.isJsonPrimitive()) return ParsedArguments.invalid(ArgumentError.ENTITY_ID_TYPE);
+        Integer id = null;
+        UUID uuid = null;
+        if (entity.getAsJsonPrimitive().isNumber()) {
+            try {
+                id = entity.getAsBigDecimal().intValueExact();
+            } catch (RuntimeException invalid) {
+                return ParsedArguments.invalid(ArgumentError.ENTITY_ID_VALUE);
+            }
+            if (id <= 0) return ParsedArguments.invalid(ArgumentError.ENTITY_ID_VALUE);
+            var target = args.get("target_uuid");
+            if (target == null) return ParsedArguments.invalid(ArgumentError.TARGET_UUID_REQUIRED);
+            if (!target.isJsonPrimitive() || !target.getAsJsonPrimitive().isString()) {
+                return ParsedArguments.invalid(ArgumentError.TARGET_UUID_TYPE);
+            }
+            String raw = target.getAsString();
+            if (raw.length() != 36) return ParsedArguments.invalid(ArgumentError.TARGET_UUID_FORMAT);
+            try {
+                uuid = UUID.fromString(raw);
+            } catch (IllegalArgumentException invalid) {
+                return ParsedArguments.invalid(ArgumentError.TARGET_UUID_FORMAT);
+            }
+            if (!uuid.toString().equals(raw)) return ParsedArguments.invalid(ArgumentError.TARGET_UUID_FORMAT);
+        } else {
+            if (!entity.getAsJsonPrimitive().isString() || !"hostile_nearby".equals(entity.getAsString())) {
+                return ParsedArguments.invalid(ArgumentError.ENTITY_ID_TYPE);
+            }
+            if (args.has("target_uuid")) return ParsedArguments.invalid(ArgumentError.NEARBY_TARGET_UUID);
+        }
+        int hits = 1;
+        if (args.has("max_hits")) {
+            var value = args.get("max_hits");
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+                return ParsedArguments.invalid(ArgumentError.MAX_HITS_TYPE);
+            }
+            try {
+                hits = value.getAsBigDecimal().intValueExact();
+            } catch (RuntimeException invalid) {
+                return ParsedArguments.invalid(ArgumentError.MAX_HITS_VALUE);
+            }
+        }
+        if (hits < 1 || hits > 10) return ParsedArguments.invalid(ArgumentError.MAX_HITS_VALUE);
+        String authorization = null;
+        if (args.has("authorization_id")) {
+            var value = args.get("authorization_id");
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+                return ParsedArguments.invalid(ArgumentError.AUTHORIZATION_ID_TYPE);
+            }
+            authorization = value.getAsString();
+            if (authorization.isBlank() || authorization.length() > 64) {
+                return ParsedArguments.invalid(ArgumentError.AUTHORIZATION_ID_VALUE);
+            }
+        }
+        // An approval is for one concrete identity, never another nearby selection.
+        if (id == null && authorization != null) return ParsedArguments.invalid(ArgumentError.NEARBY_AUTHORIZATION);
+        return new ParsedArguments(new Input(id, uuid, hits, authorization), null);
     }
 
     @Override public CompletableFuture<Result> runAsync(CompanionPlayer player, JsonObject args,
@@ -98,8 +183,9 @@ public final class AttackTool implements ServerTool {
 
     @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer player, JsonObject args,
             CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {
-        Input input = arguments(args);
-        if (input == null) return completed("DENIED:需要正整数 entity_id 与扫描所得 target_uuid，或 hostile_nearby；max_hits 为1-10，默认1。");
+        var parsed = parseArguments(args);
+        if (parsed.error() != null) return CompletableFuture.completedFuture(parsed.error().result());
+        Input input = parsed.input();
         if (scheduler.busy(player.getUUID())) return completed("BUSY:身体正忙，先等终态或取消。");
         LivingEntity entity;
         if (input.nearby()) {

@@ -115,6 +115,27 @@ class AgentRunnerAttackTest {
                 .content().startsWith("ATTACK_FAILED:"));
     }
 
+    @Test void actualServerArgumentDiagnosticReachesModelWithoutRewritingOrReplayingCall() {
+        runner.start();
+        runner.submitTask("attack the scanned target once");
+        String malformed = "{\"entity_id\":\"47\",\"target_uuid\":\"00000000-0000-0000-0000-000000000047\"}";
+        call(0, "attack", malformed);
+        var sent = client.lastTool();
+        assertEquals(JsonParser.parseString(malformed), sent.obj("args"));
+        var result = new com.neko.mcbot.server.tools.AttackTool()
+                .runAuthorized(null, sent.obj("args"), null, null, null).join();
+        assertFalse(result.ok());
+        assertEquals("ENTITY_ID_TYPE", result.data().getAsJsonObject("argument_error").get("code").getAsString());
+        receipt(sent.num("seq", -1), result.ok(), result.feedback(), result.data());
+        var feedback = assertInstanceOf(Msg.Tool.class, client.engine().histories.get(1).getLast());
+        assertEquals(result.feedback(), feedback.content());
+        assertTrue(feedback.content().contains("不能加引号"));
+        assertEquals(1, client.toolCount());
+        client.engine().reply(1, "the call was rejected before any attack");
+        client.drain();
+        assertEquals(1, client.toolCount());
+    }
+
     @Test void neutralTargetUsesServerConfirmationAndWaitsForAuthorizationReceipt() {
         try (var events = new BridgeEventCapture()) {
             runner.start();

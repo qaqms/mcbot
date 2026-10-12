@@ -306,6 +306,20 @@ PathTask 的生产调用点、逐格检查、下一落脚格变化重规划与�
 ./gradlew clientTest --offline --tests com.neko.mcbot.server.EntityAttackTest --tests com.neko.mcbot.server.tools.AttackToolOperationsTest --tests com.neko.mcbot.task.AttackSchedulerTest --tests com.neko.mcbot.agent.AgentRunnerAttackTest --tests com.neko.mcbot.body.MeleeClockTest --tests com.neko.mcbot.task.CompanionSchedulerTest --tests com.neko.mcbot.server.ServerActionGateTest
 ```
 
+RG1参数诊断的针对性回归：
+
+```bash
+./gradlew clientTest --offline --tests com.neko.mcbot.server.tools.AttackArgumentDiagnosticsTest --tests com.neko.mcbot.server.tools.AttackToolOperationsTest --tests com.neko.mcbot.agent.AgentRunnerAttackTest --tests com.neko.mcbot.server.EntityAttackTest --tests com.neko.mcbot.task.AttackSchedulerTest
+```
+
+新增8项：参数诊断7、实际runner收到生产工具拒绝1。诊断测试直接调用AttackTool，
+非法参数必须在访问身体/世界/scheduler前同步完成；检查原因/字段、边界与隐私，
+不创建实体或世界。runner使用实际工具产生的拒绝和受控S2C，验证模型历史收到修正提示、
+发送参数不被重写、没有自动重发。保留原有效选择器、编号+UUID、保护及具体授权回归。
+不调用真实模型，也不将本项离线通过写成T14玩家/牛保护已经实机触达。
+维护者选择各本体卡离线完成后一起实机补测，汇总见 `REAL-GAME-RETESTING.md`；
+旧 `REAL-GAME-TESTING.md` / HTML 与反馈revision保持原样。
+
 C4新增37项：EntityAttack15、AttackToolOperations7、AttackScheduler5、AgentRunnerAttack6、
 MeleeClock2、ResourceLocks新增2；原受理策略用例增加 attack 的实际工具/帽断言。
 仅初始化注册表，真实 Inventory/ItemStack/组件参与主手/损耗/装备保全；

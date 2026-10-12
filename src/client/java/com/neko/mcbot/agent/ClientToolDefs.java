@@ -78,7 +78,8 @@ public final class ClientToolDefs {
                     + "玩家/同伴/宠物/同队目标拒绝；中立或命名目标须ask_owner携带服务端authorization_id确认，"
                     + "再用同一实体编号/UUID/max_hits和批准编号调用。剑横扫范围有其他活物时拒绝；"
                     + "穿刺/动能武器和重锤不支持。ACCEPTED只是受理，等终态；挥击次数不等于伤害或击杀，"
-                    + "看实际生命/吸收减少及target_dead，失败不自动重投",
+                    + "看实际生命/吸收减少及target_dead，失败不自动重投。"
+                    + "参数拒绝会给原因码和字段；按回执核对扫描身份/类型/上限，不猜目标或授权",
                     "{\"type\":\"object\",\"properties\":{\"entity_id\":{\"oneOf\":[{\"type\":\"integer\",\"minimum\":1},"
                             + "{\"type\":\"string\",\"enum\":[\"hostile_nearby\"]}]},"
                             + "\"target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
