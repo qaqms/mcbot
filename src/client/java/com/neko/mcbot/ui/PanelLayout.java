@@ -1,10 +1,10 @@
 package com.neko.mcbot.ui;
 
 /** Coordinates are Minecraft GUI pixels, not physical window pixels. */
-record PanelLayout(Rect header, Rect tabs, Rect body, Rect actions, Rect input, Rect status) {
+record PanelLayout(Rect frame, Rect rail, Rect header, Rect tabs, Rect body, Rect actions, Rect input, Rect status) {
     static final int GAP = 6;
     static final int CONTROL_HEIGHT = 20;
-    static final int FIELD_ROW = 40;
+    static final int FIELD_ROW = 42;
 
     record Rect(int x, int y, int width, int height) {
         int right() { return x + width; }
@@ -23,21 +23,39 @@ record PanelLayout(Rect header, Rect tabs, Rect body, Rect actions, Rect input, 
         }
     }
 
+    boolean sidebar() { return rail.width() > 0; }
+
+    static Rect windowBounds(int width, int height, int maximumWidth, int maximumHeight) {
+        int w = Math.min(maximumWidth, Math.min(width - 16, Math.max(216, width * 4 / 5)));
+        int h = Math.min(maximumHeight, Math.min(height - 16, Math.max(164, height * 5 / 6)));
+        return new Rect((width - w) / 2, (height - h) / 2, w, h);
+    }
+
     static PanelLayout at(int width, int height) {
-        int contentWidth = Math.min(900, Math.max(1, width - 16));
-        int x = (width - contentWidth) / 2;
-        return new PanelLayout(
-                new Rect(x, 8, contentWidth, 12),
-                new Rect(x, 28, contentWidth, CONTROL_HEIGHT),
-                new Rect(x, 56, contentWidth, Math.max(1, height - 132)),
-                new Rect(x, height - 70, contentWidth, CONTROL_HEIGHT),
-                new Rect(x, height - 44, contentWidth, CONTROL_HEIGHT),
-                new Rect(x, height - 16, contentWidth, 10));
+        var frame = windowBounds(width, height, 760, 460);
+        int rail = frame.width() >= 480 ? 112 : frame.width() >= 360 ? 88 : 0;
+        int padding = frame.width() >= 640 ? 24 : 10;
+        int contentWidth = Math.max(1, frame.width() - rail - padding * 2);
+        int x = frame.x() + rail + (frame.width() - rail - contentWidth) / 2;
+        int top = frame.y() + (rail == 0 ? (frame.height() < 200 ? 62 : 66) : 46);
+        return new PanelLayout(frame, new Rect(frame.x(), frame.y(), rail, frame.height()),
+                new Rect(frame.x() + rail + 10, frame.y() + 8, Math.max(1, frame.width() - rail - 20), 28),
+                rail == 0 ? new Rect(x, frame.y() + 40, contentWidth, CONTROL_HEIGHT)
+                        : new Rect(frame.x() + 8, frame.y() + 80, rail - 16, 72),
+                new Rect(x, top, contentWidth, Math.max(1, frame.bottom() - top - 82)),
+                new Rect(x, frame.bottom() - 76, contentWidth, CONTROL_HEIGHT),
+                new Rect(x, frame.bottom() - 50, contentWidth, 34),
+                new Rect(x, frame.bottom() - 12, contentWidth, 10));
+    }
+
+    Rect nav(int index) {
+        return sidebar() ? new Rect(tabs.x(), tabs.y() + index * 24, tabs.width(), CONTROL_HEIGHT)
+                : tabs.column(index, 3);
     }
 
     Rect formField(int row, int scroll) {
-        int fieldWidth = Math.min(560, body.width - 12);
-        return new Rect(body.x + 4, body.y + row * FIELD_ROW + 12 - scroll,
+        int fieldWidth = Math.min(400, body.width - 8);
+        return new Rect(body.x + 4, body.y + row * FIELD_ROW + 16 - scroll,
                 fieldWidth, CONTROL_HEIGHT);
     }
 

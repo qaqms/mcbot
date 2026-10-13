@@ -8,7 +8,6 @@ import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.task.CompanionScheduler;
 import com.neko.mcbot.task.ResourceLocks;
 import com.neko.mcbot.task.TickTask;
-import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -315,7 +314,7 @@ public final class AttackTool implements ServerTool {
                     && scheduler.reserve(player.getUUID(), List.of(region));
         }
         @Override public void strike() {
-            player.lookAt(EntityAnchorArgument.Anchor.EYES, entity.getEyePosition());
+            player.facePoint(entity.getEyePosition());
             player.attack(entity);
             player.swing(InteractionHand.MAIN_HAND);
         }

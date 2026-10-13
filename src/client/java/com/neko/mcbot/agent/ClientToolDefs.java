@@ -11,6 +11,33 @@ public final class ClientToolDefs {
     }
 
     public static final List<ToolSpec> SPECS = List.of(
+            new ToolSpec("gather", "优先用于连续采集数量型物品：一轮调用本地扫描、选工作站位、移动、挖掘、走近拾取并核对背包，"
+                    + "无需模型逐格列坐标/每12格重新规划。item是期望入包物品，targets是来源方块ID/#标签（泥土含grass_block/dirt），"
+                    + "count和mode沿用主人原目标，additional是任务开始背包净新增、total是总量，自动登记不可降低的完成条件。"
+                    + "应先据最新背包装备合适工具；r默认8、最大16，限定本段起点附近目标，不挖勘探洞。"
+                    + "本地复用真实终态/权限，路线需确认、缺工具/空间、无进展或未知状态即交回模型决策。"
+                    + "timeout_seconds默认600、最大900，max_blocks默认128、最大256，子调用最多1024。"
+                    + "掉落必须走近拾取；矿格数不是成果。返回实际物品进度及阻塞，不保证自然世界已找到钻石",
+                    "{\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"maxLength\":128},"
+                            + "\"targets\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"string\",\"maxLength\":128}},"
+                            + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4096},"
+                            + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]},"
+                            + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
+                            + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
+                            + "\"required\":[\"item\",\"targets\",\"count\"],\"additionalProperties\":false}"),
+            new ToolSpec("set_goal", "数量型物品任务开始时登记本任务完成条件，原始主人的数量/口径不可改写。"
+                    + "item是物品ID，count是目标件数；mode=additional指相对任务开始背包净新增，total指背包总量。"
+                    + "首次登记后不能换目标或降低数量。完成回复会重新查询实际背包核对，挖掘格数/地上掉落不算入包。"
+                    + "交付、建筑等目标不由此验证；无法继续用report_blocked，不能声称已完成",
+                    "{\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"maxLength\":128},"
+                            + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4096},"
+                            + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]}},"
+                            + "\"required\":[\"item\",\"count\"],\"additionalProperties\":false}"),
+            new ToolSpec("report_blocked", "确实无法继续时停止当前任务并报告实际障碍，保留已完成动作与物品。"
+                    + "不用于临时思考或让主人逐步操作；取消后不会续跑。目标未满足按失败/受阻结束，不能写成完成",
+                    "{\"type\":\"object\",\"properties\":{\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512}},"
+                            + "\"required\":[\"reason\"],\"additionalProperties\":false}"),
             new ToolSpec("workflow", "将已确认的近身采集/放置/制作/烧制组合成1-12个明确步骤，一轮执行，逐步等待真实终态。"
                     + "steps每项为tool与args，支持status/inventory/equip/scan_area/find_resource/inspect_block/"
                     + "break_block/place_block/craft/smelt/wait；不支持移动/攻击/存取/拾取/反问/嵌套。"
@@ -30,7 +57,8 @@ public final class ClientToolDefs {
                     + "r默认8、最多16；最近优先采样4096格、最多16候选，返回绝对坐标及未加载/撞帽信息。"
                     + "不强制加载、不证明可达/可挖/实际掉落；空结果不等于没有资源，勿改变参数连续空转或挖掘探查",
                     "{\"type\":\"object\",\"properties\":{\"targets\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,"
-                            + "\"items\":{\"type\":\"string\",\"maxLength\":128}},\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16}},"
+                            + "\"items\":{\"type\":\"string\",\"maxLength\":128}},\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
+                            + "\"work\":{\"type\":\"boolean\",\"description\":\"附当前能否看见/够到及附近安全站位候选，路径可达性仍需move_to\"}},"
                             + "\"required\":[\"targets\"],\"additionalProperties\":false}"),
             new ToolSpec("inspect_block", "只读查看6.5格内已加载方块及本体容器逐槽ID/数量/耐久。"
                     + "offset默认0，每页24槽，next_offset=-1表示末页；拒绝锁定/未展开战利品容器。"
@@ -44,8 +72,10 @@ public final class ClientToolDefs {
                     + "槽0-8直接选中；槽9-35与当前主手槽交换，原主手留在来源槽。"
                     + "只切换主手，不穿戴盔甲或切换副手；忙时先等任务结束或取消",
                     "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35}},\"required\":[\"slot\"]}"),
-            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块（容器/矿石/石材 rock/工作台/作物）的分层摘要；坐标均为绝对 @(x,y,z)。实体附entity_id/target_uuid供精确attack，不可猜编号",
-                    "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"}}}"),
+            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块分层摘要，绝对坐标；entity_id/target_uuid供attack，不可猜编号。"
+                    + "另含地上item_targets数量/延迟/站位；item可过滤掉落物品，items_only=true只查掉落，不扫方块，实际拾取仍需走近",
+                    "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"},"
+                            + "\"items_only\":{\"type\":\"boolean\"},\"item\":{\"type\":\"string\",\"maxLength\":128}}}"),
             new ToolSpec("craft", "按服务器实际普通合成配方制作背包材料。item 是产物注册ID，"
                     + "count 是至少需要的成品数1-64（默认1），按整次配方可能多产。"
                     + "query=true仅查询配方/材料/整批能否完成，recipe可指定配方ID；不自动递归制作缺料。"
@@ -69,7 +99,8 @@ public final class ClientToolDefs {
                             + "\"slot\":{\"type\":\"string\",\"enum\":[\"input\",\"fuel\",\"output\"]},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("break_block", "挖一格干燥方块，需主手有采收资格；先inventory/equip选工具。"
-                    + "按真实进度耗时，原版处理破坏/耐久，附近本次新掉落先入包，余量留地；失败须核对实际回执。"
+                    + "按真实进度耗时，原版处理破坏/耐久，掉落留在地上，返回掉落实体位置；不会直接入包。"
+                    + "需要物品须走近后collect并核对最新背包，挖掉矿块不等于获得物品；失败须核对实际回执。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("attack", "原地普通近战，只攻击一个目标，不追击、不自动换工具、不拾取掉落。"
@@ -86,11 +117,12 @@ public final class ClientToolDefs {
                             + "\"max_hits\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10},"
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},"
                             + "\"required\":[\"entity_id\"],\"additionalProperties\":false}"),
-            new ToolSpec("collect", "捡起指定点附近的地上掉落物进背包；坐标全部省略则以自己脚下为中心。"
-                    + "r为1-12，默认3。忙时先等待或取消。空间不足会部分拾取，回执给已捡数量和仍在地上的数量，"
+            new ToolSpec("collect", "原版拾取当前身体触碰范围内地上物品；先move_to走近，r只限查询范围，不能隔空吸取。"
+                    + "坐标全部省略则以自己脚下为中心，item可过滤物品ID。r为1-12，默认3，遵守拾取延迟和归属。"
+                    + "忙时先等待或取消。空间不足会部分拾取，回执给已捡数量和仍在地上的数量，"
                     + "ok=false不代表完全没捡到；核对inventory后处理剩余物品",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
-                            + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12}}}"),
+                            + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12},\"item\":{\"type\":\"string\",\"maxLength\":128}}}"),
             new ToolSpec("place_block", "将背包0-35里的方块物品放到准确目标格，item用物品ID如cobblestone。"
                     + "原版处理朝向/多格/组件，默认点击上面，可用face选择接触面；水中/可替换格和同种半砖合并由原版判断。"
                     + "暂不支持脚手架/告示牌等特殊物品；忙时先等待或取消。失败查看实际消耗和目标变化，勿自动重试",

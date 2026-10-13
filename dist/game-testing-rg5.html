@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mcbot RG5 测试补充说明与反馈</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font:16px/1.7 "Microsoft YaHei","Noto Sans CJK SC",sans-serif;letter-spacing:0}
+main{max-width:1060px;margin:auto;padding:28px 30px 72px}h1{font-size:28px;line-height:1.35;margin:20px 0}h2{font-size:22px;margin:38px 0 16px}
+p{margin:12px 0}li{margin:8px 0}a{color:#176451}button,.import-label{font:inherit;cursor:pointer;padding:7px 12px;border:1px solid #b8c2bd;border-radius:4px;background:#f5f8f6;color:#163f33}
+button:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid #176451;outline-offset:3px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}.toolbar .import-label{margin:0;display:flex;align-items:center}
+.toolbar button.primary{background:#176451;color:#fff}#message{color:#515b56;font-size:14px;min-height:24px}
+.environment{padding:12px 0 22px;border-bottom:1px solid #ddd}.environment>summary{cursor:pointer;font-size:18px;font-weight:600}.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px}
+label{display:block;font-size:14px;margin:10px 0}input,select,textarea{display:block;width:100%;font:inherit;line-height:1.5;padding:9px;margin-top:5px;border:1px solid #aeb9b2;border-radius:4px;background:#fff;color:#202124}
+textarea{resize:vertical}input{min-width:0}code{overflow-wrap:anywhere;font:14px/1.6 Consolas,"Microsoft YaHei",monospace}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f5f5;border-left:3px solid #c6ceca;padding:14px 16px;margin:14px 0}
+.test{border-bottom:1px solid #d9d9d9}.test summary{cursor:pointer;padding:16px 0;line-height:1.55;font-weight:600}
+.case-id{color:#176451}.badge{font-size:13px;font-weight:400;float:right;margin:3px 0 3px 16px;color:#606963}
+.badge[data-result="失败"]{color:#ac2727}.badge[data-result="通过"]{color:#176451}.badge[data-result="阻塞"]{color:#755100}
+.case-body{padding:0 4px 22px}.feedback{border:0;border-top:1px dashed #aeb9b2;padding:14px 0 0;margin:20px 0 0}legend{font-weight:600;padding:0 8px 0 0}
+nav{display:flex;flex-wrap:wrap;gap:8px 14px;margin:18px 0}#counts{font-weight:600;margin:10px 0}.print-only{display:none}
+@media(max-width:640px){main{padding:18px 16px 48px}h1{font-size:24px}h2{font-size:20px}.fields{grid-template-columns:minmax(0,1fr)}.badge{float:none;display:inline-block;margin-left:8px}summary{overflow-wrap:anywhere}}
+@media print{body{font-size:11pt}main{max-width:none;padding:0}.toolbar,nav,#message{display:none}pre{background:none}details.test{break-inside:auto}summary{break-after:avoid}.feedback{break-inside:avoid}textarea{min-height:55px}h2{break-after:avoid}input,textarea{border-color:#aaa}.print-only{display:block}}
+</style></head><body><main>
+<h1>mcbot RG5 测试补充说明与反馈</h1>
+<div class="toolbar" aria-label="反馈操作">
+<button id="json" class="primary">导出反馈 JSON</button><button id="markdown">导出文字报告</button>
+<label class="import-label">导入反馈<input id="import" type="file" accept=".json,application/json" style="display:none"></label>
+<button id="expand">展开全部</button><button id="collapse">收起全部</button><button id="print">打印手册</button>
+</div>
+<p id="message" role="status">填写保存在本机浏览器。每次结束请导出反馈文件交回维护者。</p>
+<details class="environment"><summary>本轮环境填写</summary><p>预填版本是要求值，请改为你实际安装的版本；不要填写密钥或令牌。</p>
+<div class="fields"><label>测试者<input id="env-tester" value=""></label>
+<label>本轮日期<input id="env-date" value=""></label>
+<label>时区<input id="env-timezone" value="+08:00"></label>
+<label>测试包 SHA256<input id="env-jar" value=""></label>
+<label>Minecraft<input id="env-minecraft" value="1.21.11"></label>
+<label>Fabric Loader<input id="env-loader" value="0.19.5"></label>
+<label>Fabric API<input id="env-api" value="0.141.6+1.21.11"></label>
+<label>实际 Java 版本<input id="env-java" value=""></label>
+<label>模型名 不填密钥<input id="env-model" value=""></label>
+<label>单人或联机<input id="env-mode" value=""></label>
+<label>其他模组 数据包<input id="env-mods" value=""></label>
+<label>连接器版本 未装填未装<input id="env-connector" value=""></label></div></details>
+<div id="counts" role="status"></div>
+<nav aria-label="测试项目"><a href="#T02">T02</a> <a href="#T08">T08</a> <a href="#T09">T09</a> <a href="#T10">T10</a> <a href="#T11">T11</a> <a href="#T15">T15</a> <a href="#T16">T16</a></nav>
+<p>手册revision：<code>2026-10-13-rg5-clarifications-v1</code>。日期：2026-10-13。 本文补充T02、三类炉子、T11、T15和T16的操作与判读，不替换2026-10-11首轮手册。 这些章节是关联说明，未要求重跑已认可项目；没有新增实机结果。 15项认可、T12部分认可、T11/T14/B01阻塞仍以STATUS为准。</p>
+<h2>使用与版本</h2>
+<p>集中补测步骤以 <code>docs/REAL-GAME-RETESTING.md</code> 为准； T12使用RG3分项表，B01使用RG4分项表，本补充页不替代它们。 涉及本页项目的新复测可填 <code>dist/game-testing-rg5.html</code>， 或 <code>docs/templates/RG5-GAME-TEST-FEEDBACK.md</code>；结果初始未测，保留原失败再追加。 新JSON使用本页revision及独立本机保存记录，旧JSON继续用原 <code>dist/game-testing.html</code> 打开。 不同revision不能互相导入，不能把首轮已认可结果自动移入本页。</p>
+<p>运行包由维护者统一提供，记录实际安装的JAR SHA256、源码检查点和环境版本。 本页不预填安装包哈希；只凭0.1.0文件名不能认定包一致。 无Git元数据的本地源码快照不猜提交号。客户端与服务端须使用同一份当前JAR。 现在不用进游戏；维护者安排集中补测时才执行相应项目。</p>
+<h2>先区分记录中的三种事情</h2>
+<p>主人投令、模型实际调用和身体实际效果分别记录。 “已受理”只表示开始，模型口头说完成、桥completed均不能替代现场和工具结果。 没有调用指定工具时记阻塞；只有DENIED前缀时先记原文和关联编号，不猜拒绝层。 模型页测试连接与状态/扫描按钮不替代一次真实模型任务。</p>
+<h2>权限与物品</h2>
+<details class="test" id="T02"><summary><span class="case-id">T02</span> 只拾取与只读权限 <span class="badge" data-badge="T02">未测</span></summary><div class="case-body">
+<p>首轮箱子往返、换主手及拾取已有认可，不因本文再跑整项。 collect改变地面物品和同伴背包，属于修改动作；即使同伴不走路，也不是只读查询。 当前任务包含“只读”“不要移动”或“禁止移动”等已识别短语，会整项归为只读， 因此collect、transfer和equip都可能在客户端派发前被拒绝。</p>
+<p>单独的collect只处理当前身体局部范围内的掉落，不执行move_to或寻路； 超距返回OUT_OF_REACH，不会在这个工具内部先走过去。 但是普通任务仍允许模型选择其他工具，不能把“不移动”等未识别措辞当作可靠权限边界。 当前没有“允许拾取、禁止移动及其他修改”的独立权限模式。 需要这个硬性保证时记录功能限制，另行评估，不通过删标记、改说法或伪造参数绕过只读。</p>
+<p>若维护者安排普通拾取复测，保留实际任务原句、实际工具列表、同伴前后位置、 背包/地面数量及拒绝原文。没有目标、背包空间不足和只读拒绝分别记录； ok=false也可能已拾取一部分，以实际collected_count/remaining_count及现场为准。 首轮“不移动”原句和后来的“不要移动”改句不能混为同一任务对照。</p>
+<fieldset class="feedback" data-id="T02">
+<legend>T02 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<h2>三类炉子的判读</h2>
+<details class="test" id="T08"><summary><span class="case-id">T08</span> 熔炉空槽与燃烧余量 <span class="badge" data-badge="T08">未测</span></summary><div class="case-body">
+<p>三槽为空只表示原料、燃料物品和产物槽都空，不表示剩余燃烧时间为零。 已经消耗的燃料可能仍提供燃烧余量；火焰、界面进度和smelt query的实际计数分别记录。 原料取空或任务取消不会由mcbot强制熄炉，原版机器仍按世界tick运行。 先前基本烧制已认可，本说明不强制再烧一批。</p>
+<p>如复测，保留load、query、take回执、三个槽和背包前后数量， 另记burn_remaining_ticks、cook_progress_ticks及cook_total_ticks。 等待40秒不是出货证明；查询成功也不保证已有产物或仍在烧制。 没有真实计数时写未记录，不能凭空槽或模型叙述填“已熄炉”。</p>
+<fieldset class="feedback" data-id="T08">
+<legend>T08 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<details class="test" id="T09"><summary><span class="case-id">T09</span> 高炉使用自身真实计数 <span class="badge" data-badge="T09">未测</span></summary><div class="case-body">
+<p>高炉也适用“空槽不等于熄炉”的说明。 保留高炉自己的槽位、燃烧/烧制计数、产物与背包对照， 不能用熔炉的数据替代高炉，也不把等待25秒当作固定完成承诺。 首轮高炉基本烧制已认可，没有新异常时不重跑。</p>
+<fieldset class="feedback" data-id="T09">
+<legend>T09 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<details class="test" id="T10"><summary><span class="case-id">T10</span> 烟熏炉使用自身真实计数 <span class="badge" data-badge="T10">未测</span></summary><div class="case-body">
+<p>烟熏炉也适用“空槽不等于熄炉”的说明。 记录这台烟熏炉实际生牛肉减少、熟牛肉增加及燃烧余量， 不把燃料槽为空说成机器已停止燃烧。首轮基本烧制已认可，没有新异常时不重跑。 取消停止后续工具步骤，不回滚装料/取出，也不会替原版停止机器。</p>
+<fieldset class="feedback" data-id="T10">
+<legend>T10 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<h2>权限拒绝与流程</h2>
+<details class="test" id="T11"><summary><span class="case-id">T11</span> 客户端与服务端拒绝分开记账 <span class="badge" data-badge="T11">未测</span></summary><div class="case-body">
+<p>客户端预派发只读拒绝的原文为：</p>
+<pre tabindex="0"><code>DENIED:主人要求只读，此任务不能移动或改动世界/物品。</code></pre>
+<p>这种拒绝没有发送对应动作tool_call，不能证明服务端权限门被实际触达。 服务端动作门的通用文案为：</p>
+<pre tabindex="0"><code>DENIED:当前任务权限不允许此动作；只读任务只能观察，不能移动、换装或改动世界/物品。</code></pre>
+<p>服务端这一文案还用于失效任务、身份/维度不匹配等拒绝， 所以必须看permission_denial.gate=server_action及reason=READ_ONLY， 并核对seq/task/tool/维度，不能仅看句子就记服务端只读通过。 限流、白名单、owner、参数或距离拒绝也不等于只读门拒绝。</p>
+<p>T11的确定性补测仍使用 <code>docs/REAL-GAME-RETESTING.md</code> 中的 <code>/mcbot verify_readonly</code>；无同伴/已有任务等前置阻塞先整理现场。 模型未调用、客户端拦截和服务端READ_ONLY三种证据单独记录，不互相代替。</p>
+<fieldset class="feedback" data-id="T11">
+<legend>T11 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<details class="test" id="T15"><summary><span class="case-id">T15</span> workflow由客户端编排 <span class="badge" data-badge="T15">未测</span></summary><div class="case-body">
+<p>workflow是客户端本地工具，整份清单由AgentRunner/BoundedWorkflow校验、逐步推进； 它不是发给服务器的一个外层workflow任务，也没有一次性提交清单后让服务器独立跑完。 每个实际子工具仍带同一task_id经过正常服务端派发、权限和资源检查， 前一步取得真实终态后才推进下一步。</p>
+<p>整份清单参数或只读预检拒绝发生在客户端，可见“流程参数无效”或 “只读任务的流程包含动作，整份未执行”；此时不能写服务端执行了第一步。 子工具在服务器因BUSY、参数、范围、权限等拒绝时， 记录该步工具、seq、反馈及已有步骤效果；不能把所有workflow失败都归为客户端问题。</p>
+<p>成功数表示已有步骤的实际终态，不表示主人最终目标一定实现， 也不把请求数量当原版消耗或产量。取消保留已执行效果和在途未知， 停止后续步骤，不能回滚已放方块、已搬物品或让炉子熄灭。 原T15三个场景已有认可，本文仅澄清责任层，不扩大清单或重复已认可场景。</p>
+<fieldset class="feedback" data-id="T15">
+<legend>T15 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<h2>待答后重载</h2>
+<details class="test" id="T16"><summary><span class="case-id">T16</span> 两分钟内保存，隔离TIMEOUT <span class="badge" data-badge="T16">未测</span></summary><div class="case-body">
+<p>首轮T16已有认可；后续需要复测时仍分两趟，不同时换模型。 第一趟原任务为：</p>
+<pre tabindex="0"><code>@bot 用ask_owner问我“下一步查看背包还是扫描附近”，等回答后只执行选择的一项。</code></pre>
+<p>实际问题出现后答 <code>@bot 答 查看背包</code>，核对只续跑一次； 结束后重复同一答案，不能创建新任务或再次执行inventory。 G任务框发任务时删去@bot前缀，聊天回答保留 <code>@bot 答</code>。</p>
+<p>第二趟重新发同样任务，不回答，按以下顺序操作：</p>
+<ol>
+<li>先确认实际ask_owner/question已生成且仍在等待，记录question_id和生成时间。</li>
+<li>从问题生成时刻起，在120秒内完成G → 模型 → 保持配置不变 → 保存并应用。</li>
+</ol>
+<p>   建议看到问题后立即操作并在60秒内保存，给操作和时钟差留余量；    时限不是从发原任务或打开面板时开始算。</p>
+<ol>
+<li>保留重载造成的旧任务CANCELLED及旧问题清理证据，再答 <code>@bot 答 查看背包</code>，</li>
+</ol>
+<p>   旧回答应拒绝且不新建任务。</p>
+<ol>
+<li>在同一世界直接发新的 <code>[只读]只查看自己的状态。</code>，</li>
+</ol>
+<p>   核对新任务真实status回执与正常终态，不用状态按钮代替。</p>
+<p>如保存前已经出现TIMEOUT，重载因果子项记阻塞，本轮不能证明保存清除了待答问题； 保留其他有效证据，整理后另开一趟并记录新的问题编号。 不要为了“延长等待”暂停单人世界、切后台或换配置； 超时使用客户端时间，世界暂停不能可靠保留问题。 记录问题生成、保存、CANCELLED或TIMEOUT、旧回答拒绝和新任务的各自时间及日志定位。 回答等待期限不由本说明改变，也不要求专门等两分钟遍历所有过期组合。</p>
+<fieldset class="feedback" data-id="T16">
+<legend>T16 反馈</legend>
+<div class="fields">
+<label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
+<label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
+<label>本地时间和时区<input data-field="time" placeholder="2026-10-13 20:15 +08:00"></label>
+<label>问题编号<input data-field="issue" placeholder="问题01"></label>
+</div>
+<label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
+<label>原样指令 错误提示 附件名<textarea data-field="evidence" rows="3" placeholder="日志/截图/录像文件名；这里不会上传附件"></textarea></label>
+<label>维护者回复 处理版本和复测<textarea data-field="retest" rows="2" placeholder="保留原失败，追加新包哈希、复测时间和结果"></textarea></label>
+</fieldset></div></details>
+<h2>交回与旧记录</h2>
+<p>本页新增复测与旧反馈分别保存，不能用一个总通过覆盖未做子项。 旧JSON继续由原手册打开；T12与B01另填对应分项表，维护者按实际证据更新STATUS。 日志、截图和反馈不包含密钥、桥令牌、玩家配置或含凭据的界面。</p>
+
+</main><script>
+const cases = [{"id":"T02","title":"只拾取与只读权限"},{"id":"T08","title":"熔炉空槽与燃烧余量"},{"id":"T09","title":"高炉使用自身真实计数"},{"id":"T10","title":"烟熏炉使用自身真实计数"},{"id":"T11","title":"客户端与服务端拒绝分开记账"},{"id":"T15","title":"workflow由客户端编排"},{"id":"T16","title":"两分钟内保存，隔离TIMEOUT"}];
+const revision = "2026-10-13-rg5-clarifications-v1";
+const storageKey = "mcbot-testing-" + revision;
+const envNames = ["tester","date","timezone","jar","minecraft","loader","api","java","model","mode","mods","connector"];
+const fieldNames = ["result","execution","time","issue","actual","evidence","retest"];
+const message = document.getElementById("message");
+let saveTimer;
+function report() {
+  const env = Object.fromEntries(envNames.map(name => [name, document.getElementById("env-" + name).value]));
+  const rows = cases.map(c => {
+    const fieldset = document.querySelector('[data-id="' + c.id + '"]');
+    return { ...c, ...Object.fromEntries(fieldNames.map(name => [name, fieldset.querySelector('[data-field="' + name + '"]').value])) };
+  });
+  return { schema: 1, revision, savedAt: new Date().toISOString(), env, cases: rows };
+}
+function update() {
+  const data = report();
+  const count = {"未测":0,"通过":0,"失败":0,"阻塞":0};
+  data.cases.forEach(c => {
+    count[c.result]++;
+    const badge = document.querySelector('[data-badge="' + c.id + '"]');
+    badge.textContent = c.result;
+    badge.dataset.result = c.result;
+  });
+  document.getElementById("counts").textContent = Object.entries(count).map(([k,v]) => k + " " + v).join(" · ");
+}
+function restore(data) {
+  if (data.schema !== 1 || data.revision !== revision || !Array.isArray(data.cases)) throw new Error("反馈格式或手册版本不同，请使用对应手册打开。");
+  envNames.forEach(name => {
+    if (typeof data.env?.[name] === "string") document.getElementById("env-" + name).value = data.env[name];
+  });
+  data.cases.forEach(c => {
+    if (!cases.some(known => known.id === c.id)) return;
+    const fieldset = document.querySelector('[data-id="' + c.id + '"]');
+    fieldNames.forEach(name => {
+      if (typeof c[name] !== "string") return;
+      const field = fieldset.querySelector('[data-field="' + name + '"]');
+      if (field.tagName === "SELECT" && !Array.from(field.options).some(o => o.value === c[name])) return;
+      field.value = c[name];
+    });
+  });
+  update();
+}
+function save() {
+  try { localStorage.setItem(storageKey, JSON.stringify(report())); message.textContent = "已在本机浏览器保存。结束时请导出反馈文件。"; }
+  catch { message.textContent = "浏览器没有允许本机保存，请用导出反馈保留填写内容。"; }
+  update();
+}
+function download(text, filename, type) {
+  const url = URL.createObjectURL(new Blob([text], {type}));
+  const anchor = document.createElement("a");
+  anchor.href = url; anchor.download = filename; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+document.getElementById("json").addEventListener("click", () => {
+  save(); download(JSON.stringify(report(), null, 2), "mcbot-rg5-feedback-" + new Date().toISOString().slice(0,10) + ".json", "application/json");
+});
+document.getElementById("markdown").addEventListener("click", () => {
+  const data = report();
+  const text = ["# mcbot RG5 补充反馈", "", "手册版本：" + revision, "导出时间：" + data.savedAt, "",
+    ...envNames.map(n => n + "：" + data.env[n]), "", ...data.cases.flatMap(c => [
+      "## " + c.id + " " + c.title,
+      "结果：" + c.result + "；指定工具：" + c.execution, "时间：" + c.time + "；问题编号：" + c.issue,
+      "实际现象和数量：\n" + c.actual, "指令错误及附件：\n" + c.evidence, "回复与复测：\n" + c.retest, ""
+    ])].join("\n");
+  download("\uFEFF" + text, "mcbot-rg5-feedback.md", "text/markdown;charset=utf-8"); save();
+});
+document.getElementById("import").addEventListener("change", async event => {
+  const file = event.target.files[0]; if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { message.textContent = "文件超过2MB，请选择导出的反馈JSON。"; return; }
+  try {
+    const data = JSON.parse(await file.text());
+    if (!confirm("导入会替换对应项的当前填写内容，是否继续？")) return;
+    restore(data); save(); message.textContent = "已导入反馈。";
+  } catch (error) { message.textContent = "导入失败：" + error.message; }
+  event.target.value = "";
+});
+document.getElementById("expand").addEventListener("click", () => document.querySelectorAll("details.test").forEach(d => d.open = true));
+document.getElementById("collapse").addEventListener("click", () => document.querySelectorAll("details.test").forEach(d => d.open = false));
+document.getElementById("print").addEventListener("click", () => { document.querySelectorAll("details").forEach(d => d.open = true); window.print(); });
+document.querySelectorAll("nav a").forEach(link => link.addEventListener("click", () => {
+  const item = document.getElementById(link.hash.slice(1)); if (item) item.open = true;
+}));
+document.querySelectorAll("input:not([type=file]),textarea,select").forEach(field => field.addEventListener("input", () => {
+  clearTimeout(saveTimer); update(); saveTimer = setTimeout(save, 250);
+}));
+try { const saved = localStorage.getItem(storageKey); if (saved) restore(JSON.parse(saved)); }
+catch { message.textContent = "本机记录无法恢复。可以导入之前保存的反馈JSON。"; }
+update();
+</script></body></html>

@@ -25,6 +25,7 @@ public final class StatusTool implements ServerTool {
 
     @Override public java.util.concurrent.CompletableFuture<Result> runAsync(
             CompanionPlayer companion, JsonObject args, CompanionScheduler scheduler) {
+        companion.observeHealth(com.neko.mcbot.body.HealthObservation.Phase.STATUS);
         return java.util.concurrent.CompletableFuture.completedFuture(report(args,
                 new Body(companion.getX(), companion.getY(), companion.getZ(),
                         companion.level().dimension().identifier().toString(), companion.getHealth(),

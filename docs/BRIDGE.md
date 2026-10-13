@@ -57,7 +57,7 @@ MCP 返回工具错误。过期问题的 MCP 回答改为 isError=true；保留�
 - 生命周期：**客户端进世界起、退世界关**；桥只服务当前客户端的本地玩家（一台机开多个
   1.21.11 客户端会撞端口——v1 已知边界）。
 - 鉴权：`Authorization: Bearer <token>`；token = `<gameDir>/mcbot/bridge.token`
-  文件内容（首次随机生成、跨重启稳定；G 面板模型页可复制令牌，底部仅显示端点，不展示 token）。
+  文件内容（首次随机生成、跨重启稳定；G 面板通用设置可复制令牌，只显示端点，不展示 token）。
   校验用常量时间比较；不合法一律 401。SSE 允许 `?token=`（EventSource 发不了 header）。
 - JSON 请求/响应使用 UTF-8；建议请求头 `Content-Type: application/json`。
 - 请求体上限 **65536 字节**，超限 413。401/413 时不会提交任务。
@@ -97,6 +97,10 @@ companion="" 表示尚未确认当前伙伴。其他字段为诊断字段，关�
 缺失表示“不可用”，不要擅自解释为 0。current_task=0 是没有活动任务；
 queued_tasks 是未启动任务数，pending_* 是等待项数，parked/outstanding 不是完成标识。
 本版没有按 task_id 查询历史终态或任务列表的接口，status 不能找回丢失的 done。
+
+同一session内召唤/遣散或收到当前世界同伴同步时，companion仍可改变，
+连接器不能仅在session变更时刷新名称。session是桥实例标识，不是存档或同伴UUID；
+RG6只读名称核对与回归见 `RG6-HEALTH-WORLD-OBSERVATIONS.md`，没有新增协议字段。
 
 **task 窗口语义**：投令前取事件游标，投令后观察最长 wait_s 秒；
 **仅见到与请求编号严格匹配的 done 事件**才 done:true 提前返回。
@@ -308,6 +312,10 @@ C3 在内部 C2S 增加 task_begin/task_end/authorize 与 tool_call.task_id，
 [独立仓库](https://github.com/wangjunyu200708/n.e.k.o_plugin_mcbot_bridge) 维护。
 2026-10-12 固定提交的接线审查与整改清单见
 [连接器源码审查](connector-code-review-2026-10-12.md)，不代表联合验收已通过。
+2026-10-13 RG4本体离线与协作准备见
+[RG4交接](RG4-CONNECTOR-HANDOFF.md)，B01分项反馈见
+[RG4反馈模板](templates/RG4-B01-FEEDBACK.md)；
+协作者修复/真实问题闭环仍待交付，本文v1.0字段与语义保持不变。
 
 连接器推荐顺序：
 
@@ -341,6 +349,9 @@ mcbot 桥接回归入口：
 本体活动任务与重连接线另由 AgentRunnerLifecycleTest / ClientSessionLifecycleTest
 覆盖，入口见 `docs/DEVELOPMENT.md` §4.3。该专项使用实际 runner/session/backend
 与本地 HTTP/SSE，但模型、配置落盘和游戏发包采用替身，不作为下方真机清单的通过证据。
+RG4另由AgentRunnerBridgeQuestionTest覆盖实际runner的HTTP任务原文、
+SSE问题归属/长授权全文、一次回答和过期隔离，入口见DEVELOPMENT §3.13。
+它不运行连接器或宿主，不以构造的授权信封冒充真实服务端路线。
 
 **端到端联合验收清单（v1.0 包与连接器仍须逐项实测）**：
 

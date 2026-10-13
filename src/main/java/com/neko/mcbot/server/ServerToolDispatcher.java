@@ -3,16 +3,18 @@ package com.neko.mcbot.server;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
-import com.neko.mcbot.body.CompanionRoster;
 import com.neko.mcbot.body.SummonService;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
 import com.neko.mcbot.common.WireSize;
+import com.neko.mcbot.task.CompanionScheduler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.player.Player;
 
+import java.util.ArrayList;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /**
  * C2S 信封处理：三道闸 → 工具执行 → S2C 回执。
@@ -23,17 +25,123 @@ public final class ServerToolDispatcher {
     private final MinecraftServer server;
     private final SummonService summon;
     private final ToolRegistry registry;
-    private final RateGuard rate = new RateGuard(20, 60);
+    private final RateGuard rate;
     private final ActionPermissions permissions = new ActionPermissions();
+    private final CompanionScheduler scheduler;
+    private final ToolAccess access;
+
+    record Body(UUID id, String dimension, Object identity, int x, int y, int z, String name) {
+    }
+
+    record Sender(UUID owner, ServerPlayer player, Consumer<String> output) {
+    }
+
+    // Only Minecraft lookup, tool effects and packet delivery are replaced in offline tests.
+    interface ToolAccess {
+        Body companion(UUID owner);
+        CompletableFuture<ServerTool.Result> run(ServerTool tool, Body body, JsonObject args,
+                ActionPermissions permissions, ActionPermissions.Context context);
+    }
 
     public ServerToolDispatcher(MinecraftServer server, SummonService summon, ToolRegistry registry) {
         this.server = server;
         this.summon = summon;
         this.registry = registry;
+        this.rate = new RateGuard(20, 60);
+        this.scheduler = McbotMod.scheduler();
+        this.access = new ToolAccess() {
+            @Override public Body companion(UUID owner) {
+                ServerPlayer player = summon.companionOf(owner);
+                if (!(player instanceof CompanionPlayer cp)) return null;
+                return new Body(cp.getUUID(), cp.level().dimension().identifier().toString(), cp,
+                        cp.blockPosition().getX(), cp.blockPosition().getY(), cp.blockPosition().getZ(),
+                        cp.getGameProfile().name());
+            }
+            @Override public CompletableFuture<ServerTool.Result> run(ServerTool tool, Body body,
+                    JsonObject args, ActionPermissions permissions, ActionPermissions.Context context) {
+                return tool.runAuthorized((CompanionPlayer) body.identity(), args, scheduler, permissions, context);
+            }
+        };
+    }
+
+    ServerToolDispatcher(ToolRegistry registry, CompanionScheduler scheduler, RateGuard rate, ToolAccess access) {
+        this.server = null;
+        this.summon = null;
+        this.registry = registry;
+        this.scheduler = scheduler;
+        this.rate = rate;
+        this.access = access;
     }
 
     public boolean belongsTo(MinecraftServer candidate) {
         return server == candidate;
+    }
+
+    public record ReadOnlyVerification(String status, long taskId, String tool, String feedback) {
+    }
+
+    public ReadOnlyVerification verifyReadOnly(ServerPlayer owner) {
+        return verifyReadOnly(new Sender(owner.getUUID(), owner, ignored -> { }));
+    }
+
+    ReadOnlyVerification verifyReadOnly(Sender owner) {
+        // An explicit check must never replace the owner's existing task or another body.
+        final long id = Long.MAX_VALUE;
+        final int seq = -3;
+        Body body = companionOfSender(owner);
+        if (body == null) return new ReadOnlyVerification("BLOCKED", id, "wait", "先召唤自己名下的同伴。");
+        if (permissions.body(owner.owner()) != null || scheduler.busy(body.id()))
+            return new ReadOnlyVerification("BLOCKED", id, "wait", "先结束当前任务；验证不会替换正在执行的任务。");
+
+        var receipts = new ArrayList<Envelope>();
+        Sender probe = new Sender(owner.owner(), owner.player(), json -> {
+            Envelope receipt = Envelope.decode(json);
+            if (receipt != null) receipts.add(receipt);
+        });
+        var scope = new JsonObject();
+        scope.addProperty("task_id", id);
+        scope.addProperty("read_only", true);
+        scope.addProperty("seq", -2);
+        try {
+            handle(probe, new Envelope("task_begin", scope));
+            ActionPermissions.Context context = permissions.current(owner.owner(), body.id(),
+                    body.dimension(), id, body.identity());
+            if (context == null || !context.readOnly())
+                return new ReadOnlyVerification("BLOCKED", id, "wait", "只读任务未建立，稍后再试；不能记作权限门通过。");
+            var request = new JsonObject();
+            request.addProperty("task_id", id);
+            request.addProperty("seq", seq);
+            request.addProperty("tool", "wait");
+            var args = new JsonObject();
+            args.addProperty("seconds", 1);
+            request.add("args", args);
+            handle(probe, new Envelope("tool_call", request));
+        } finally {
+            var end = new JsonObject();
+            end.addProperty("task_id", id);
+            end.addProperty("seq", -4);
+            try {
+                handle(probe, new Envelope("task_end", end));
+            } finally {
+                // Rate limiting may reject task_end; revoke only this check's own context.
+                if (permissions.end(owner.owner(), id)) scheduler.cancel(body.id(), "只读验证已结束。");
+            }
+        }
+        for (Envelope receipt : receipts) {
+            if (!"tool_result".equals(receipt.kind()) || receipt.num("seq", 0) != seq) continue;
+            var denial = receipt.obj("data").get("permission_denial");
+            if (!receipt.bool("ok") && denial != null && denial.isJsonObject()) {
+                JsonObject detail = denial.getAsJsonObject();
+                if ("server_action".equals(detail.get("gate").getAsString())
+                        && "READ_ONLY".equals(detail.get("reason").getAsString())
+                        && detail.get("task_id").getAsLong() == id
+                        && "wait".equals(detail.get("tool").getAsString())
+                        && body.dimension().equals(detail.get("dimension").getAsString()))
+                    return new ReadOnlyVerification("PASS", id, "wait", receipt.str("feedback"));
+            }
+            return new ReadOnlyVerification("FAIL", id, "wait", receipt.str("feedback"));
+        }
+        return new ReadOnlyVerification("FAIL", id, "wait", "未取得可定位的服务端只读拒绝，不能记作通过。");
     }
 
     /**
@@ -41,9 +149,13 @@ public final class ServerToolDispatcher {
      * 超限包根本进不到这个方法。
      */
     public void handle(ServerPlayer sender, Envelope env) {
-        var profile = sender.getGameProfile();
+        handle(new Sender(sender.getUUID(), sender, json ->
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(sender,
+                        new McbotPayloads.S2c(json))), env);
+    }
 
-        if (!rate.tryAcquire(profile.id())) {
+    void handle(Sender sender, Envelope env) {
+        if (!rate.tryAcquire(sender.owner())) {
             replyTool(sender, env.num("seq", -1), false, "DENIED:消息过于频繁，稍后再试。", null);
             return;
         }
@@ -51,45 +163,44 @@ public final class ServerToolDispatcher {
         switch (env.kind()) {
             case "summon" -> {
                 revokeTask(sender);
-                String result = summon.summon(sender, env.str("name"));
+                String result = summon.summon(sender.player(), env.str("name"));
                 broadcast(sender, "summon_result", result);
             }
             case "dismiss" -> {
                 revokeTask(sender);
-                String result = summon.dismiss(sender, env.str("name"));
+                String result = summon.dismiss(sender.player(), env.str("name"));
                 broadcast(sender, "dismiss_result", result);
             }
             case "companion_status" -> {
-                ServerPlayer companion = summon.companionOf(sender.getUUID());
+                Body companion = companionOfSender(sender);
                 broadcast(sender, "companion_state", companion == null
-                        ? "当前世界尚未召唤伙伴。" : "当前世界伙伴：" + companion.getGameProfile().name());
+                        ? "当前世界尚未召唤伙伴。" : "当前世界伙伴：" + companion.name());
             }
             case "tool_call" -> handleToolCall(sender, env);
             case "task_begin" -> {
-                CompanionPlayer cp = companionOfSender(sender);
+                Body cp = companionOfSender(sender);
                 Long taskId = taskId(env);
                 var mode = env.body().get("read_only");
                 if (cp == null || taskId == null || taskId <= 0 || mode == null
                         || !mode.isJsonPrimitive() || !mode.getAsJsonPrimitive().isBoolean()) return;
-                McbotMod.scheduler().cancel(cp.getUUID(), "新任务替换原任务。");
-                permissions.begin(new ActionPermissions.Context(sender.getUUID(), cp.getUUID(),
-                        cp.level().dimension().identifier().toString(), taskId, mode.getAsBoolean()), cp);
+                scheduler.cancel(cp.id(), "新任务替换原任务。");
+                permissions.begin(new ActionPermissions.Context(sender.owner(), cp.id(),
+                        cp.dimension(), taskId, mode.getAsBoolean()), cp.identity());
             }
             case "task_end" -> {
                 Long taskId = taskId(env);
                 if (taskId == null) return;
-                CompanionPlayer cp = companionOfSender(sender);
-                Object original = permissions.body(sender.getUUID());
-                if (permissions.end(sender.getUUID(), taskId)) {
-                    if (cp != null && cp == original) McbotMod.scheduler().cancel(cp.getUUID(), "所属任务已结束。");
+                Body cp = companionOfSender(sender);
+                Object original = permissions.body(sender.owner());
+                if (permissions.end(sender.owner(), taskId)) {
+                    if (cp != null && cp.identity() == original) scheduler.cancel(cp.id(), "所属任务已结束。");
                 }
             }
             case "authorize" -> {
-                CompanionPlayer cp = companionOfSender(sender);
+                Body cp = companionOfSender(sender);
                 Long taskId = taskId(env);
                 ActionPermissions.Context context = cp == null || taskId == null ? null
-                        : permissions.current(sender.getUUID(), cp.getUUID(),
-                                cp.level().dimension().identifier().toString(), taskId, cp);
+                        : permissions.current(sender.owner(), cp.id(), cp.dimension(), taskId, cp.identity());
                 var tokenValue = env.body().get("authorization_id");
                 String token = tokenValue != null && tokenValue.isJsonPrimitive()
                         && tokenValue.getAsJsonPrimitive().isString() && tokenValue.getAsString().length() <= 64
@@ -100,24 +211,24 @@ public final class ServerToolDispatcher {
                         : "DENIED:授权已过期、不属于当前任务或任务为只读，请重新查看清单。", null);
             }
             case "cancel" -> {
-                CompanionPlayer cp = companionOfSender(sender);
+                Body cp = companionOfSender(sender);
                 if (cp == null) {
                     broadcast(sender, "cancel_ack", "你名下没有同伴，无从叫停。");
                 } else {
-                    boolean stopped = McbotMod.scheduler().cancel(cp.getUUID(), null);
+                    boolean stopped = scheduler.cancel(cp.id(), null);
                     broadcast(sender, "cancel_ack", stopped
-                            ? "已叫停 " + cp.getGameProfile().name() + " 手头的活。"
+                            ? "已叫停 " + cp.name() + " 手头的活。"
                             : "它现在手头没有进行中的任务。");
                 }
-                permissions.end(sender.getUUID(), 0);
+                permissions.end(sender.owner(), 0);
             }
             case "answer" -> McbotMod.LOG.info("(M3 暂存)主人对 {} 的回答: {}",
                     env.str("question_id"), env.str("text"));
-            default -> McbotMod.LOG.warn("未知信封 kind={} (from {})", env.kind(), profile.name());
+            default -> McbotMod.LOG.warn("未知信封 kind={} (from {})", env.kind(), sender.owner());
         }
     }
 
-    private void handleToolCall(ServerPlayer sender, Envelope env) {
+    private void handleToolCall(Sender sender, Envelope env) {
         int seq = env.num("seq", -1);
         String toolName = env.str("tool");
 
@@ -135,16 +246,16 @@ public final class ServerToolDispatcher {
         JsonObject args = env.body().getAsJsonObject("args");
 
         // 闸③c：owner 强校验——只能驱动自己的同伴
-        CompanionPlayer companion = companionOfSender(sender);
+        Body companion = companionOfSender(sender);
         if (companion == null) {
             replyTool(sender, seq, false,
                     "DENIED:你没有在册的同伴，先召唤一个（/mcbot summon <名字>）。", null);
             return;
         }
         Long taskId = taskId(env);
-        String dimension = companion.level().dimension().identifier().toString();
+        String dimension = companion.dimension();
         ActionPermissions.Context context = taskId == null ? null : permissions.current(
-                sender.getUUID(), companion.getUUID(), dimension, taskId, companion);
+                sender.owner(), companion.id(), dimension, taskId, companion.identity());
 
         // 受理即回执（R2-S4）：**客户端显式要求**才走 ACCEPT。
         // 缺省 false 是刻意的向后兼容——老客户端不认识 job_ack，若服务端擅自改形态，
@@ -158,13 +269,12 @@ public final class ServerToolDispatcher {
         try {
             JsonObject resourceArgs = args.deepCopy();
             if ("collect".equals(toolName) && !args.has("x") && !args.has("y") && !args.has("z")) {
-                resourceArgs.addProperty("x", companion.blockPosition().getX());
-                resourceArgs.addProperty("y", companion.blockPosition().getY());
-                resourceArgs.addProperty("z", companion.blockPosition().getZ());
+                resourceArgs.addProperty("x", companion.x());
+                resourceArgs.addProperty("y", companion.y());
+                resourceArgs.addProperty("z", companion.z());
             }
-            fut = ServerActionGate.execute(context, companion.getUUID(), dimension, toolName, resourceArgs,
-                    McbotMod.scheduler(), () -> tool.runAuthorized(companion, args,
-                            McbotMod.scheduler(), permissions, context));
+            fut = ServerActionGate.execute(context, companion.id(), dimension, toolName, resourceArgs,
+                    scheduler, () -> access.run(tool, companion, args, permissions, context));
         } catch (Throwable t) {
             McbotMod.LOG.error("工具 {} 派发异常", toolName, t);
             logToolTiming(toolName, t0, -1);
@@ -235,11 +345,15 @@ public final class ServerToolDispatcher {
         catch (RuntimeException invalid) { return null; }
     }
 
-    private void revokeTask(ServerPlayer owner) {
-        Object original = permissions.body(owner.getUUID());
-        permissions.end(owner.getUUID(), 0);
-        if (original instanceof CompanionPlayer cp) {
-            McbotMod.scheduler().cancel(cp.getUUID(), "同伴生命周期操作撤销旧任务。");
+    private void revokeTask(Sender owner) {
+        Object original = permissions.body(owner.owner());
+        permissions.end(owner.owner(), 0);
+        if (original instanceof CompanionPlayer player) {
+            scheduler.cancel(player.getUUID(), "同伴生命周期操作撤销旧任务。");
+        } else {
+            Body cp = companionOfSender(owner);
+            if (cp != null && cp.identity() == original)
+                scheduler.cancel(cp.id(), "同伴生命周期操作撤销旧任务。");
         }
     }
 
@@ -294,15 +408,11 @@ public final class ServerToolDispatcher {
         McbotMod.LOG.info("[brain] tool {} {}ms chars={}", toolName, ms, chars);
     }
 
-    private CompanionPlayer companionOfSender(ServerPlayer sender) {
-        ServerPlayer p = summon.companionOf(sender.getUUID());
-        if (p instanceof CompanionPlayer cp) {
-            return cp;
-        }
-        return null;
+    private Body companionOfSender(Sender sender) {
+        return access.companion(sender.owner());
     }
 
-    private void replyTool(ServerPlayer owner, int seq, boolean ok, String feedback, JsonObject data) {
+    private void replyTool(Sender owner, int seq, boolean ok, String feedback, JsonObject data) {
         JsonObject body = new JsonObject();
         body.addProperty("seq", seq);
         body.addProperty("ok", ok);
@@ -314,7 +424,7 @@ public final class ServerToolDispatcher {
     }
 
     /** 受理回执：seq 这条待办就此定性（转成 job 通道），所以它自己就是一个"终局"。 */
-    private void replyAck(ServerPlayer owner, int seq, String jobId, String tool, String text, int capTicks) {
+    private void replyAck(Sender owner, int seq, String jobId, String tool, String text, int capTicks) {
         JsonObject body = new JsonObject();
         body.addProperty("seq", seq);
         body.addProperty("job_id", jobId);
@@ -327,7 +437,7 @@ public final class ServerToolDispatcher {
     }
 
     /** 长活的后续：progress / done / failed / cancelled / superseded。 */
-    private void replyJobEvent(ServerPlayer owner, int seq, String jobId, String tool,
+    private void replyJobEvent(Sender owner, int seq, String jobId, String tool,
                                String phase, String text, JsonObject data) {
         JsonObject body = new JsonObject();
         body.addProperty("seq", seq);
@@ -341,7 +451,7 @@ public final class ServerToolDispatcher {
         send(owner, "job_event", body);
     }
 
-    private void broadcast(ServerPlayer owner, String kind, Object payload) {
+    private void broadcast(Sender owner, String kind, Object payload) {
         JsonObject body = new JsonObject();
         if (payload instanceof Integer i) {
             body.addProperty("v", i);
@@ -350,13 +460,13 @@ public final class ServerToolDispatcher {
         }
         if ("summon_result".equals(kind) || "dismiss_result".equals(kind)
                 || "companion_state".equals(kind)) {
-            ServerPlayer companion = summon.companionOf(owner.getUUID());
-            body.addProperty("companion", companion == null ? "" : companion.getGameProfile().name());
+            Body companion = companionOfSender(owner);
+            body.addProperty("companion", companion == null ? "" : companion.name());
         }
         send(owner, kind, body);
     }
 
-    private void send(ServerPlayer owner, String kind, JsonObject body) {
+    private void send(Sender owner, String kind, JsonObject body) {
         String json = new Envelope(kind, body).encode();
         // 闸①（出站）：按 UTF-8 字节量，不是字符数。旧写法用 json.length() 比较 32*1024，
         // 而本项目的回执几乎全是中文（一字三字节）：那等于把上限抬到了 ~96KB，
@@ -367,10 +477,10 @@ public final class ServerToolDispatcher {
                     bytes, WireSize.MAX_BODY_BYTES, kind);
             json = shrink(kind, body, bytes);
         }
-        McbotMod.LOG.info("[m3] S2C -> {} {} ({}B)", owner.getGameProfile().name(), kind,
+        McbotMod.LOG.info("[m3] S2C -> {} {} ({}B)",
+                owner.player() == null ? owner.owner() : owner.player().getGameProfile().name(), kind,
                 WireSize.utf8Bytes(json));
-        net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(owner,
-                new McbotPayloads.S2c(json));
+        owner.output().accept(json);
     }
 
     /**

@@ -12,7 +12,8 @@
 ├─ Minecraft 客户端（本地玩家）  src/client/
 │    AgentRunner：大脑宿主（agent-core AgentLoop）
 │    BridgeHttp：127.0.0.1 任务桥（供连接器接入）
-│    McbotPanelScreen：G 面板（任务/模型/同伴三页，滚动、固定操作区）
+│    McbotPanelScreen：G 面板（对话/同伴/设置，滚动、固定多行输入）
+│    PanelHistory：会话显示档案；CompanionHud：任务/待答提示
 │    ⇅ 自定义 payload mcbot:c2s / mcbot:s2c（单 JSON 信封）
 │
 └─ Minecraft 服务器（联机服） src/main/
@@ -46,31 +47,48 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
                      StreamingTurnReader(聚合+闭合判定)/ToolArgsScanner(配平+required 齐=可派发)
   convo/             Conversation：软水位压缩（"[对话前情提要]"前缀，保尾部）
   loop/              AgentLoop 状态机（含 Ledger 保序落账 + PARK）/ToolExecutor 契约
+                     ItemGoal(任务开始背包基线、当前真实数量与结束校验)
                      PendingJobs(两段式等待: seq→终局 / 受理后 jobId→事件 + 超时口径)
   prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
   body/              FakeConnection/CompanionPlayer/CompanionRoster/CompanionChunkPads/SummonService/SafeSpawn/SelfTest
+                     CompanionPhysics(原版被动重力/碰撞步进，不依赖任务槽)
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
-                     PathTask(搜索→确认→执行)/PlanCache(lastPlan 复用,纯逻辑可单测)
+                     PathTask(搜索→确认→执行)/PathGrounding(落地高度与旧路失效)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
                      ItemTransfers(实际移动量+组件完整的剩余堆栈、存储槽/容器/接触面约束)
                      BlockMining/BlockPlacement(单格与路径共用原版动作入口)
+                     BlockAim(已加载视线、轮廓与实际命中距离)
+                     GroundItems(触碰盒与有界实体描述)/WorkPositions(安全站位候选)
                      PathMaterials(规划/执行共用四种无附加组件垫料)
                      ServerToolDispatcher(三道闸+tool_result/job_ack/job_event)/RateGuard + tools/(15 个服务端工具)
                      EntityAttack(单目标有界近战/实际出手与前后观测)
                      ActionPermissions(服务端任务身份/一次性具体路线授权)/ServerActionGate(统一动作入口)
   task/              TickTask/CompanionScheduler/ResourceLocks(身体、有界世界区域与实体UUID)
   common/            Envelope/McbotPayloads（两通道各一条）
-  command/           /mcbot ping|summon|dismiss|list（需 OP，gamemaster 级）
+  command/           /mcbot ping|summon|dismiss|list|verify_readonly（需 OP，gamemaster 级）
 src/client/          客户端
-  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(模型侧描述)/BoundedWorkflow(清单)
+  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(20项模型描述)
+                     BoundedWorkflow(清单)/BoundedGather(本地有界采集循环)
+                     PanelHistory(独立会话显示档案，不随模型压缩/重建删除)
   bridge/            BridgeHttp(JDK HttpServer 适配)/BridgeEvents(生产者总线)
   cfg/               ClientConfig（client.json + MCBOT_* 环境变量覆盖）
-  ui/                McbotPanelScreen / PanelLayout / PanelFields（G 面板、GUI 像素布局、完整输入/密钥掩码）
+  ui/                McbotPanelScreen / PanelLayout / PanelFields（G 面板、GUI 像素布局、多行输入/密钥掩码）
+                     PanelButton/PanelToggle/PanelDialog/PanelHistoryScreen/CompanionHud
 ```
 
 ## 4. 网络协议与三道闸
+
+身体转向统一由CompanionPlayer.facePoint复用原版EYES lookAt并同步bodyYaw，
+移动、挖掘、放置、攻击使用同一入口。身体tick补原版updateSwingTime，
+不启用完整Player.doTick或被动自动拾取；显式gather按任务权限组合挖掘/触碰拾取。
+BlockMining每拍通过BlockAim检查可见轮廓与原版blockInteractionRange，
+转向后按实际getLookAngle再次确认第一命中为目标，才挥手、推进进度或移除。
+沿射线未加载/越界先拒绝，遮挡/空气/目标与主手变化停止并清裂纹。
+BlockPlacement在原版上下文/消费前检查视线与实际距离，转向后使用既有准确目标上下文。
+这是本体现有坐标工具的守卫补强，不是完整鼠标/物理输入层；
+路径水平插值和跨层传送保留。原生动画/同步/复杂形状须实测，离线边界见STATUS。
 
 - 通道就两条：`mcbot:c2s`、`mcbot:s2c`，各携带一个 JSON 信封 `{kind, ...}`；
   语义演进只加 kind 不加密道。闸① 是**显式的字节尺寸闸**（不再是“靠 codec 默认上限”）：
@@ -98,15 +116,29 @@ src/client/          客户端
   发送者名下的同伴（名册 `ownerUuid == 发送者 UUID`），无从伪造"替别人下令"。
 - 动作入口随后检查服务端任务身份/维度与只读模式，经 ServerActionGate 取得身体和目标区域锁。
   没有有效任务上下文的旧客户端只能查询；客户端/服务端须一起更新，外部桥 v1.0 不变。
+  权限拒绝保留DENIED文案，内部tool_result可附 `data.permission_denial`：
+  gate=server_action、reason、tool，有上下文时另含task_id/dimension。
+  reason区分TASK_REQUIRED、TASK_IDENTITY_MISMATCH、READ_ONLY、TOOL_NOT_ALLOWED；
+  dispatcher查找失效任务/身体/维度时不给有效上下文，返回TASK_REQUIRED，
+  不能把该结果当作READ_ONLY证据。
+- RG2显式入口 `/mcbot verify_readonly` 由实际玩家身份查自己的空闲同伴，
+  临时task_begin → 固定wait(1) → task_end共用生产handle；
+  不替换已有任务、不绕开速率/白名单/owner/任务门，限流结束失败仍清理自身上下文。
+  只有匹配seq/task/tool/维度的结构化READ_ONLY拒绝为PASS，其他为FAIL/BLOCKED。
+  回执在服务端本地捕获，不投递客户端PendingJobs；命令不经过C2S codec/Fabric网络，
+  不验证模型或外部连接器。游戏验收说明见REAL-GAME-RETESTING。
+  包级Sender/Body/ToolAccess只隔离MC观测、效果和输出，离线17项执行同一dispatcher、
+  实际权限/调度器/速率桶与回执编码，不创建真实世界/玩家。
 
 ## 5. 大脑回路（AgentLoop）
 
 ```
 submit(task_id, 指令) → pump → onTaskStarted → step → LLM(流式) → turn
-  turn 无 tool_calls → onReply(展示) → onTaskFinished(COMPLETED) → [链尾压缩?] → pump
+  turn 无 tool_calls → 已登记物品目标重新观测校验 → 满足/无目标才COMPLETED
+                     → 未满足续step，反复无进展/受阻FAILED → [链尾压缩?] → pump
   turn 有 tool_calls → 串行执行（ToolExecutor）→ 每条回执进对话 → step
 cancelTask(id)：匹配活动/排队项；0 全部。活动项立即终止并合成补账，旧回调按代际号丢弃。
-close()：取消全部并拒绝后续 submit；配置重载/断线先关闭旧 loop 再丢引用。
+close()：取消全部并拒绝后续 submit；连接配置变更/断线先关闭旧 loop 再丢引用。
 ```
 
 ### 5.1 受理即回执与 PARK（R2-S4 阶段 2）
@@ -146,6 +178,9 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 可以在**整轮落地之前**就知道，工具当场起跑（省下的是挂起时间）。
 闭合判定两道人门：①顶层括号配平（自己维护"在不在字符串/是否被转义"）；②schema 的 required
 字段在顶层全出现——只看配平会把 `{"x":1}` 这种半截参数当成品派发。
+StreamingTurnReader按工具名称查required，tool_call.index只表示本轮调用槽，
+不与工具目录顺序关联。名称迟到回放已累积参数，未知名称留正常整轮处理；
+ID到齐、实际累积参数与检查对象一致后才报告，一槽一次、按实际索引升序。
 写回纪律不变：`Msg.Tool` 一律按 index 原序记账（协议要求与 `assistant.tool_calls` 严格同序），
 所以等待是**顺序折叠**而不是 `allOf`（后者只保证都到、不保证按序）。
 传输层在响应头到达时记录 `ttfb`，消费文本增量/闭合工具时记录 `ttft/first_tool` 与计数。
@@ -170,11 +205,23 @@ turn 有 tool_calls → runTools 只把结果填进 Ledger（不直接写对话�
 护栏数值：每指令 40 步；同一调用连续 3 次 → Nudge 换思路、5 次 → 停链——但只有
 **同调用且同结果**才计数（TIMEOUT 后原参重试是合法恢复，不算打转，M4.5 吸取参考项目实战教训）。
 上下文闸门 M4.5 改真数驱动：每步记 API 回报的 prompt_tokens（无则 CJK 感知估算），
-超 6000 在**任务步边界**压缩；切分铁律：保留段只能从 User/Assistant 起切，绝不拆孤儿 Tool；
-同名工具旧回执出站前折叠成占位（存储全量）；摘要端点连败 2 次熔断至下个指令边界。
+默认阈值6000、近期预算1500；工具配对完整后的任务内请求边界及正常链尾可自动整理；
+切分铁律：保留段只能从 User/Assistant 起切，绝不拆孤儿 Tool；
+仅status/inventory的可替代旧查询出站折叠为占位，动作回执不按同名折叠（存储全量）；
+摘要端点连败2次熔断至下个指令边界，空白/带工具/超预算或旧代际摘要不能替换历史。
+已有摘要单独累积更新；整理后重新观测身体，原指令和已登记目标事实独立注入。
+完整请求预算含system/工具/历史/临时观测/目标，输出预留min(2048,窗口/4)；
+usage加新增估算和完整本地估算取保守值，摘要输入也限预算，仍装不下则CONTEXT_LIMIT停下。
 `ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`
 （或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
-长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。本地工具为 `ask_owner` / `workflow`。
+长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。本地工具为
+ask_owner/workflow/gather/set_goal/report_blocked，后两者由loop本地拦截。
+
+BoundedGather使用任务开始背包基线：状态、匹配掉落、站位/移动/等待/collect，
+没有待拾取候选才查来源方块、工作站位、move_to、break_block，再刷新状态。
+子调用复用terminalOnly票与原权限/资源锁，每步等真终态；取消/超时清子票且禁止迟到续跑。
+目标固定item/count/mode，按实际背包净新增或总量完成，不累计挖掘格或掉落。
+作用范围限本段起点附近，不自行探索/补给；需路线授权或缺事实时交回模型，详见TOOLS §1.1。
 
 C6流程不占服务端外层槽：BoundedWorkflow逐步调用原子工具，子票terminalOnly=true时，
 job_ack只搬PendingJobs、不兑现future；实际job_event兑现子票，不送入AgentLoop的普通job账本。
@@ -196,7 +243,15 @@ CallbackChatEngine取消向delegate传播，排队旧信号丢弃；LlmClient每
 反问由 AgentRunner 绑定 task_id 与进程内递增的 question_id，回答必须使用原编号且只消费一次。
 tick 和回答入口都检查 120s 期限；过期回失败回执，重复/未知/已取消问题拒绝回答。
 回答确认先发布 state，再兑现工具 future 继续原任务；无有效问题的游戏内回答不创建新任务。
-重载/关闭先清理旧 loop 和问题，再建立新历史，关闭可重复调用。
+连接重载/关闭先清理旧 loop 和问题；重载建立新模型上下文，关闭可重复调用。
+只改人设/偏好不重建loop或取消任务；人设标脏后在下一条指令边界换发system。
+显示档案PanelHistory独立于Conversation，保留当前世界会话内20任务/2000记录，
+连接重载/模型整理/清空不删除，退出世界或重启不持久化。
+面板问题快照和答复保留原ID，授权确认需读到全文末尾且问题仍有效；
+面板直接读取runner快照/档案，没有将BridgeEvents改为多播。
+Conversation暴露实际摘要与真数/估算用量，预算可配置；
+手动整理仅空闲开始并与新任务串行，失败保留原文，清空取消在途摘要。
+前缀重置原因现在为compaction、directive-boundary、context-clear。
 已关闭 runner 拒绝 reconfigure，不再保存配置或显示重启提示。
 只读检查显示另外绑定大脑代际，防止同一个 runner 重载后显示旧检查的回执。
 客户端服务通过内部 ClientServices 边界提供模型、提示词、时钟、聊天、取消、配置保存、
@@ -208,6 +263,16 @@ McbotClient 的 JOIN/DISCONNECT/S2C 交由 ClientSession 持有当前 runner：
 退出先关闭旧 runner、再关桥、最后移除 runner；加入建立新 runner、查询同伴后启动桥。
 重复加入先收尾旧会话；已排队 S2C 同时校验接收时捕获的 runner 身份。
 配置重载复用 runner 和桥，新进世界更换 runner 与桥。
+
+### 5.2 长任务能力边界（2026-10-13实现）
+
+LT1物品目标校验/任务内请求预算与有界LT2采集已接线，40模型轮数和原权限护栏保留。
+数量条件需模型set_goal或gather登记，原始指令与目标事实独立保留，不能降低既有条件。
+没有登记条件的普通文字结束仍按COMPLETED；没有任意自然语言/建筑/交付通用验证器。
+gather减少逐格模型安排，在本段起点附近按真实回执选下一步；固定workflow保持12步。
+探索/补给/目标跨退出恢复、跟随护卫和技能按需读取尚未实现，技能正文仍全量注入system。
+实现与离线证据见STATUS，机制对照及剩余卡见 `AGENT-PERFORMANCE-AND-LONG-TASKS.md`。
+64份离线回执测试不替代自然世界自主采集钻石或真实模型速度测量。
 
 ## 6. 桥接（连接器入口）
 
@@ -236,6 +301,15 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 
 ## 7. 身体层（假玩家）
 
+- 被动物理：CompanionPlayer在super.tick及装备/动作计时之后每刻调用CompanionPhysics，
+  无任务/任务取消也继续推进。检查身体及速度扫过的邻域区块已加载，再更新原版流体状态、
+  travel(Vec3.ZERO)与方块接触；速度/重力/碰撞由原版负责，不按方块坐标猜落地。
+  原版Player仍是client-authoritative，Entity.move不结算其摔落，因此按实际位移调用一次
+  doCheckFallDamage；setKnownMovement记录本刻位移，移动后更新区块位置。
+  不开启完整doTick/饥饿时钟/自动playerTouch；既有无敌保持，不宣称完整生存物理。
+  死亡/移除/睡眠/骑乘跳过；未知邻域等待区块票，不强制读取未加载碰撞格。
+  路径未落地不搜索/执行，清当前裂纹；落地高度偏离此前提交高度时按原上限重规划。
+  原有水平插值/跨层传送仍保留，并非完整键盘驱动寻路。
 - 身份：`offlineUuid(name)`（OfflinePlayer 公式）→ 名册（`<世界目录>/mcbot/companions.json`）记归属；
   背包/坐标在原版 `playerdata/<uuid>.dat`，名册不备份身体数据。
   **1.21.11 的 `placeNewPlayer` 不负责加载存档**：SummonService 先调用
@@ -327,6 +401,13 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   正常终态用 onFinish，异常/中止用 onAbort；清理钩子失败也释放资源并完成唯一 future。
   锁仅协调本插件，不排斥玩家/ticker/其他模组；未做服务器抢占/续跑/progress 生产。
 
+RG6在CompanionPlayer/SummonService/status读取处补 `[body-health]` 观测：
+构造完成、加载/无存档、定位、注册、就绪各采样，tick/status相邻生命/吸收/无敌变化才输出；
+原hurtServer前后采样并记录首个伤害请求。每个身体有本次body_id，UUID/名称/维度/游戏刻
+与相邻快照用于对齐，body_id不是存档或桥session。原版返回/异常继续传播，
+不补血或改无敌/移动/存档，不调用完整doTick。采样不能覆盖所有直接写值或间隔内恢复，
+没有来源的变化不猜伤因；说明及真实待验见RG6-HEALTH-WORLD-OBSERVATIONS/STATUS。
+
 ### 7.1 有界近战（C4）
 
 AttackTool 以实体编号+UUID或一次近身Enemy选择构造 EntityAttack，交给现有调度器，
@@ -342,7 +423,8 @@ TickTask.interruptedResult 让取消/超时/异常保留已完成出手与未知
 现有假连接没有 listener tick，ServerPlayer.tick 本身也不调用 Player.tick。
 因此 CompanionPlayer 的世界tick通过 MeleeClock 推进原生 attackStrengthTicker/itemSwapTicker，
 换物品类型重置；LivingEquipmentAccess 调原生 detectEquipmentUpdates 完成装备属性同步。
-不引入完整 ServerPlayer.doTick 的物理/食物/自动触碰拾取，保留身体无敌。
+不引入完整 ServerPlayer.doTick/食物/自动触碰拾取；被动物理由CompanionPhysics单独推进，
+保留身体无敌。
 新Mixin、实际身体时钟/装备属性/原版伤害/横扫/取消仅编译，离线使用可控观测及实际逻辑；
 不代表完整生存战斗、自动防御/进食、死亡复活、模组钩子隔离或连接器联合验收已完成。
 完整契约/边界见 TOOLS §2.7 / DEVELOPMENT §3.8 / STATUS。
@@ -360,7 +442,7 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 
 | 文件 | 归属进程 | 说明 |
 |---|---|---|
-| `<gameDir>/mcbot/client.json` | 客户端 | `{base_url, model, api_key, persona}`；`MCBOT_*` 环境变量优先覆盖；缺任一必填 = 大脑不启动 |
+| `<gameDir>/mcbot/client.json` | 客户端 | 连接/人设、accept_mode及Preferences（context_window/compact_threshold/recent_budget/auto_compact/fold_tools/dark/show_hud）；`MCBOT_*`优先覆盖连接字段；缺任一必填 = 大脑不启动 |
 | `<世界目录>/mcbot/companions.json` | 服务器 | 该存档的名册（uuid/name/ownerUuid/ownerName），Gson；同一存档重进恢复，不跨存档召唤 |
 | `<gameDir>/mcbot/bridge.token` | 客户端 | 桥鉴权 token，首次进世界随机生成，跨重启稳定 |
 | `<gameDir>/mcbot/skills/*.md` | 客户端 | 技能笔记原文拼进 system prompt |
@@ -378,12 +460,18 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 ## 9. 交互入口速查
 
 - 键位：**G** 开面板（`key.mcbot.panel`，MISC 分类，可重映射）。
-- 面板：任务页派发/停止与换行记录；模型页完整配置/安全错误提示/连接测试；同伴页召唤/遣散。
-  模型/记录区域可滚动，切页与 resize 复用输入控件保留草稿；仅完整落入视口的表单控件可交互。
+- 面板：对话页派发/改派/停止、回答反问与完整授权确认、会话历史回看；
+  同伴页真实身体/36格背包/快捷栏/装备及召唤/确认遣散/刷新；
+  设置分模型/上下文/通用，含差分保存、摘要管理、主题、HUD及桥令牌复制。
+  居中窗口默认浅色，常规约80%屏宽/83%屏高、最大760×460 GUI像素，
+  历史页/确认框最大440×320；外部游戏画面不加全屏底色或菜单模糊，右上角关闭。
+  宽面板侧栏/小面板顶部导航；区域可滚动，多行草稿切页与resize保留，
+  Enter发送/Shift+Enter换行，工具过程默认折叠；仅完整落入视口的表单控件可交互。
   密钥通过 EditBox.addFormatter 星号显示，覆写读屏消息避免朗读原值。
-- 查看状态/扫描附近直接派发白名单只读游戏工具，不调用模型、不生成 agent task，
-  不干扰当前任务；同伴页显示当前世界的生命周期回执。未召唤仍由 owner 闸拒绝工具。
-- 模型页连接测试：ModelConnectionTest 使用独立 LlmClient，仅声明 connection_probe，
+- 查看状态入口及同伴页刷新直接派发白名单只读游戏工具，不调用模型、不生成agent task；
+  身体快照按runner/身体代际隔离；未召唤仍由owner闸拒绝工具。
+  物品图标按注册ID展示基础外观，不假设未回传组件，点槽不操作背包。详见 `PANEL.md`。
+- 设置的模型子页连接测试：ModelConnectionTest 使用独立 LlmClient，仅声明 connection_probe，
   本地补配对工具回执后再请求最终文字，游戏工具不参与，配置不自动保存。
   非 200 为 LlmFailure（HTTP 状态/网页类别），未知异常不回显原文；200 空流不作为成功作答。
 - 模型通信当前仅实现 OpenAI 兼容 Chat Completions SSE；模型名称可自定义，
@@ -401,28 +489,31 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
   空响应仍失败、不自动重试，单次失败不是不兼容的证明。
 - 聊天：`@bot <指令>`（不进服务器聊天）；整句 `停/停下/停手/取消/别干了/别做了/cancel/stop`
   = 叫停（不走模型）。
-- 服务器命令（OP，gamemaster 级）：`/mcbot ping|summon <名>|dismiss <名>|list`。
+- 服务器命令（OP，gamemaster 级）：`/mcbot ping|summon <名>|dismiss <名>|list|verify_readonly`。
+  verify_readonly只接受玩家，在自己的同伴空闲时显式验证服务端只读拒绝。
 - 桥/对外：`docs/BRIDGE.md` 或随包的 `dist/README-BRIDGE.md`。
 
 ## 10. 关键常数速查（改代码请同步这里）
 
 | 位置 | 数值 |
 |---|---|
-| AgentLoop | 40 步/指令；nudge@3；abort@5（同调用**且同结果**才累计）；压缩闸门 6000 真 token（CJK 估算兜底）；近段保留预算 1500 token；熔断 2 次 |
+| AgentLoop | 固定40步/指令、nudge@3、abort@5（同调用**且同结果**才累计）；压缩阈值默认6000、近段预算默认1500 token（可配置，CJK估算兜底）；熔断2次 |
+| 面板偏好/档案(R3) | 窗口默认64000（4096..2000000）、阈值≥2048且<窗口、近期≥256且<阈值；auto_compact/fold_tools/show_hud=true、dark=false；会话内20任务/2000记录，不跨退出/重启 |
 | 流程(C6) | 本地1-12步、默认180/最多300秒；请求量合计≤128（不等于材料/产量）；明确挖放≤12；参数≤16384B；累计反馈12000B停后续、结果全文展示预算24000B；任务空搜索3次停 |
+| 目标/采集(LT1/LT2) | item/count/mode固定；count1-4096，36槽任务开始基线；结束前三次无进展回复FAILED；gather起点附近r默认8/最大16，默认600/最大900秒，默认128/最大256挖，子调用≤1024，参数≤4096B/子反馈≤24000B，候选站位≤6；三次操作无入包且无可拾取候选停 |
 | 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |
 | 任务帽 | 默认 60s；break 60s；move 3min；attack 400tick≈20s；wait n·20+100 tick |
 | 行动参数 | break 预检 5.5、执行 6.5；place 6.5 与 3×3×3 已加载/可交互邻域；滑步 ≤48 格、0.45 格/tick；挖掘用实时 getDestroyProgress，零硬度可立即完成、无效增量连续 10t 停手；新掉落范围目标 AABB 膨胀 0.5 |
 | 路径垫料(C2) | 存储 0-35；无 components patch 的圆石/深板岩圆石/泥土/下界岩；规划预算和执行选择同一谓词，装备/副手不算 |
-| 动作权限(C3) | 服务端 proposal TTL 180s，一次使用；最多256个独立改动，完整坐标/方块清单≤12000 UTF-8字节；每任务一个待确认方案；区域初始≤256，累计≤512，重规划重复区域去重；collect 中心/实体距身体≤6.5格且在请求球体内 |
+| 动作权限(C3) | 服务端proposal TTL180s，一次使用；最多256个独立改动，完整清单≤12000B；每任务一个待确认方案；区域初始≤256，累计≤512；collect中心/实体≤6.5格且在请求球体内，还须与body.inflate(1,.5,1)相交，原版playerTouch执行拾取 |
 | 攻击(C4) | 原版isWithinAttackRange(AABB,0)且身体局部≤6.5；近身候选最近≤64；已加载邻域≤4096格；默认1/最多10次；完整冷却及目标invulnerableTime≤10；剑扫域AABB.inflate(1,.25,1)不能有第三活物；每租约实体UUID≤256 |
 | 感知(C5) | 每轮快照≤16384 UTF-8字节、沿用status90s超时；find_resource目标1-8、r1-16默认8、最多4096格/16候选；inspect_block6.5格、每页24槽/容器≤1024槽 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |
-| 前缀(R2-S2) | FOLD_KEEP_TAIL=12；折叠只在 index<foldCheckpoint 冻结区；prefix reset 全库仅两事件（compaction / directive-boundary）；system 换发仅指令边界；压缩链尾 finishChain（叫停链不压） |
+| 前缀(R2-S2/R3/LT1) | FOLD_KEEP_TAIL=12；仅status/inventory在index<foldCheckpoint冻结区折叠；prefix reset为compaction/directive-boundary/context-clear；system换发仅指令边界；自动整理在工具结算后的请求边界和正常链尾，手动仅空闲；完整窗口预留min(2048,窗口/4) |
 | 流式(R2-A/F0) | SSE 逐行解析；闭合判定=顶层括号配平且 required 齐；客户端 CallbackChatEngine 送主线程；仅 index 0 早派发，后序延迟串行；记账按 index 原序；arguments 只累积一次 |
 | 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具为 move_to(3600tick)/break_block(1200tick)/attack(400tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
 | 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |

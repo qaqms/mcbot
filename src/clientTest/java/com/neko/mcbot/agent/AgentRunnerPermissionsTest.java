@@ -108,6 +108,9 @@ class AgentRunnerPermissionsTest {
                 .toList().getLast();
         assertTrue(questionEvent.get("text").getAsString().contains(SUMMARY));
         assertFalse(questionEvent.get("text").getAsString().contains("misleading"));
+        assertEquals(questionEvent.get("text").getAsString(), runner.questionSnapshot().text());
+        assertTrue(runner.questionSnapshot().authorization());
+        assertEquals(task, runner.questionSnapshot().taskId());
         assertTrue(runner.answerQuestion(question(), "确认"));
         client.drain();
         assertEquals(2, client.engine().responses.size(), "授权回执前不能继续模型");

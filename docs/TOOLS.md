@@ -19,34 +19,77 @@ record Result(boolean ok, String feedback, JsonObject data)
 - **每同伴单活跃任务槽**：同步/异步动作统一占身体资源，目标区域冲突回 `BUSY`；只读查询不占锁。
 - 所有执行都发生在服务器主线程、作用于**发送者名下**的同伴（owner 校验在闸③）。
 
-## 2. 在册工具（15 服务端 + 2 本地，真实行为仍待验）
+### 1.1 数量目标与有界连续采集
+
+`set_goal {"item":"dirt","count":64,"mode":"additional"}`登记任务物品条件；
+additional默认按任务开始完整36槽背包的净新增计算，total按当前总量计算。
+既有目标不能降低数量、换物品或改口径；相同目标可重复登记。
+模型须保留主人原目标和口径；本体没有通用自然语言目标解析器。
+每轮和结束前观测实际背包，不累计矿格/collected_count/地上掉落。
+未满足的结束回复继续同一task_id；三次无实际进展的结束回复后FAILED。
+受阻可report_blocked，取消不会续目标。交付/建筑和跨退出持久化不在当前校验内。
+
+```json
+{"item":"dirt","targets":["dirt","grass_block"],"count":64,"mode":"additional","r":8}
+```
+
+以上为gather参数。gather自动登记同一目标，本地优先拾取匹配掉落；否则查来源方块、
+选可工作站位、移动后挖掘、走近拾取、更新实际背包，直到满足或受阻。
+应先用本轮最新完整装备事实选好工具；本地循环不自动合成镐或处理补给。
+targets为1-8个方块ID/#标签，不是物品ID；item为期望入包的物品，count为1-4096。
+本段起点附近目标r默认8、最大16；timeout_seconds默认600、最大900，
+max_blocks默认128、最大256；子调用最多1024，参数最多4096 UTF-8字节。
+三次操作无入包成果且没有可继续拾取候选时停止；刚挖出的掉落先尝试拾取再判断。
+掉落附近站位仅为已加载/无流体/完整地板/身体无碰撞候选，最多6个，
+路径和实际触碰须子工具验证；复杂半砖站位暂不支持。
+每个子动作沿用任务身份、只读限制、权限、资源锁和真正终态；job_ack不能推进。
+路线NEED_CONFIRM/PARTIAL、缺工具/空间、预算或未知事实返回模型判断，不自行批准开路。
+取消/超时清子票，迟到结果不续跑，保留已完成与在途未知。
+data给goal_satisfied、mined_blocks、actual_progress、primitive_calls、
+skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包核对。
+当前没有自行探索/勘探洞、补给、危险响应或跟随护卫，不保证自然世界找到64颗钻石。
+
+## 2. 在册工具（15 服务端 + 5 本地，真实行为仍待验）
 
 > 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 15 个），
-> 本表就是那 15 个 + 客户端本地的 `ask_owner` / `workflow`。别拿本表数字反推代码。
+> 本表就是那15个与本地 `ask_owner` / `workflow` / `gather` / `set_goal` / `report_blocked`。
+> set_goal/report_blocked由AgentLoop拦截，其余本地工具由AgentRunner编排，不发服务端同名工具。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
 | `status` | `details?` | 同步 | 最新位置/生命/饥饿/背包占用/主手及实际任务计数；details=true包含背包/装备逐槽明细 |
-| `find_resource` | `targets,r?` | 同步 | 方块ID/#标签定向搜索；r默认8/最多16，最近优先4096格采样，最多16候选，明确未知/撞帽 |
+| `find_resource` | `targets,r?,work?` | 同步 | 方块ID/#标签定向搜索；r默认8/最多16，最近优先4096格采样，最多16候选，明确未知/撞帽；work=true附当前可工作性和最多6个安全站位候选 |
 | `inspect_block` | `x,y,z,offset?` | 同步 | 6.5格内完整加载方块/本体容器明细，每页24槽；拒锁/未展开战利品，不打开GUI |
 | `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
 | `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
-| `scan_area` | `r`(1-32，默认16) | 同步 | 附近实体 + 可行动方块分层摘要（classify 词表 container/ore/**rock**/workbench/farm/hostile）；坐标一律**绝对** `@(x,y,z) d距离`，首行含同伴位置+八向朝向；客户端随指令注入准星目标（`[我此刻盯着]`）。目标=直接可下指令；泥土沙**不是**目标（材料走 place/transfer 显式指令） |
-| `break_block` | `x,y,z` | 异步(≤60s) | 实时原版挖掘进度、采收门、裂纹；完成调用玩家破坏入口处理耐久/掉落，回执核对实际移除与入包/留地量；真实动作待验 |
+| `scan_area` | `r`(1-32，默认16),`items_only?,item?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落。不保证候选可达，泥土/沙用find_resource定向查 |
+| `break_block` | `x,y,z` | 异步(≤60s) | 每拍核验目标/主手、原版距离与视线，转向后确认实际命中再挥手；原版破坏处理耐久/地上掉落，不直接入包；回执给移除、留地量和实体位置，原生视觉待测 |
 | `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；中立/命名目标确认，拒绝玩家/宠物/同队及不安全横扫 |
-| `collect` | `x?,y?,z?,r?` | 同步 | 坐标全部省略则自己脚下，r=1-12 默认 3；中心/物品均限身体6.5格内，尊重延迟/拾取目标；余量留地上，忙时拒绝 |
-| `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；原版玩家放置上下文，face 默认 up，实际目标变化/消耗核验，忙时拒绝 |
+| `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
+| `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
 | `move_to` | `x,y,z,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：改动世界先回 `NEED_CONFIRM`+清单与编号，主人确认后携带编号执行；旧布尔不授权。搜索预算 8000 节点/128 挖/放≤背包存量；重规划新改动重新确认 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
 | `workflow` | `steps,timeout_seconds?` | **本地** | 明确近身清单，1-12步/默认180最多300秒/请求量合计≤128；逐步等终态，失败/空搜索/缺条件/需确认即停 |
+| `gather` | `item,targets,count,mode?,r?,timeout_seconds?,max_blocks?` | **本地** | 数量型有界连续采集；本地扫描、站位、移动、挖掘、走近拾取并核对背包，每个子动作仍走原权限/真实终态 |
+| `set_goal` | `item,count,mode?` | **本地** | 固定本任务物品完成条件，additional净新增或total总量；结束前重新观测背包，未满足不发完成done |
+| `report_blocked` | `reason` | **本地** | 1-512字符实际障碍，以FAILED结束并保留成果/目标事实；不能把受阻说成完成 |
 
 游戏内 `@bot 答 <文本>` / `@bot answer <文本>` 只用于回答当前最新的有效问题。
 没有待答问题、问题已回答或已过期时提示回答未提交，不作为新任务执行；
 普通任务仍从任务页、桥或不带回答前缀的 `@bot <指令>` 投递。
+
+工作朝向与可见性：移动朝下一落脚点，挖掘朝当前可见目标点，放置朝指定点击点，
+攻击朝实体；不由主人的相机实时驱动。挖掘和开路共享同一视线守卫，放置也拒绝穿过
+近处遮挡格；距离按身体眼睛和原版交互属性计算，旧5.5/6.5格球距不是额外臂长授权。
+遮挡/无可点击轮廓回TARGET_BLOCKED，实际超距回OUT_OF_REACH，未知沿线/失效目标回
+TARGET_LOST；空气本来就拒绝。拒绝不会挖邻格/移动补救，模型须依据回执重新规划。
+扫描是周边采样，不是相机视锥；主人准星只记录提交瞬间，不能证明同伴此刻仍看见。
+轮廓有限采样可能保守拒绝狭缝；既有精确格放置上下文和跨层移动保留，
+不宣称完整原版鼠标点击或物理输入已经实现。新场景见REAL-GAME-RETESTING。
 
 未上（DESIGN §5 规划中）：
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。
@@ -190,11 +233,17 @@ WorldlyContainer 另检查同伴眼睛相对容器中心方向的最近面、该
 collect 的 x/y/z 须完整提供或全部省略；r 为 1-12 数值整数，默认 3。
 data 保留 collected，并加入 collected_count、remaining_count、partial；
 反馈明细每类最多 32 项、使用注册 ID/数量/耐久，不序列化自定义名称或原始组件。
-部分拾取时只将剩余完整堆栈写回实体，全部拾取才 discard。
-单格挖掘和开路掉落共用同一入包/剩余量逻辑；C2 已改为接收原版产生的本次附近新实体，
-余量写回原实体，不重复求战利品或生成掉落。collect 的身体局部范围与拾取延迟/目标规则
-已由 C3 限制身体距离、实体延迟和拾取目标，不宣称原版 playerTouch 已接入。
+生产collect调用原版ItemEntity.playerTouch，由原版维护完整堆栈、部分余量和实体删除。
+身体须未骑乘、存活，物品盒与body.inflate(1,.5,1)相交；搜索半径不能远程吸取。
+原版删除实体后会恢复堆栈数量以发送拾取包，回执按实体是否已删除及堆栈实际缩减计数。
+item为可选有效物品ID，省略时处理可触碰匹配范围的所有物品。
+单格挖掘和开路只观察原版地上新掉落，不执行收取，不重复求战利品或生成掉落。
+生产playerTouch已接入，原生动画/统计/成就和Mixin加载仍待实测；不新增被动自动拾取。
 专项离线回归和真实行为待验范围见 DEVELOPMENT §3.5。
+collect本身不调用move_to或寻路，超距拒绝而非自动靠近；
+这只是单工具行为，不能证明普通任务的其他步骤没有移动权限。
+collect会修改背包/地面实体，仍是非只读动作；当前没有独立“只拾取”许可模式，
+权限表达评估见 `RG5-PERMISSION-REVIEW.md`。
 
 ### 2.5 挖放语义（C2 实现/离线完成，真实动作待验）
 
@@ -210,13 +259,14 @@ BlockState.getDestroyProgress 的实时增量；零硬度的正无穷进度可�
 最终只调用一次 ServerPlayerGameMode.destroyBlock，让原版执行采收/耐久/方块钩子。
 其返回 true 不保证实际移除，因此还要核对目标原方块是否仍在。
 移除失败不自行求战利品、不吸取新实体；原版仍可能已消耗耐久，勿自动重试。
-成功移除后只处理目标 AABB 向外扩 0.5 格内、本次动作前不存在的物品实体；
-旧实体不动，完整入包才删除新实体，部分入包只回写完整组件余量。
+成功移除后只观察目标AABB向外扩0.5格内、本次动作前不存在的物品实体；
+不改新旧实体、不写背包、不删除掉落；需要物品时走近后显式collect。
 这是有界的附近新实体观测，不是所有掉落的精确归因：邻格钩子产生的物品可能在内，
-远处/延迟生成的模组掉落不在内，经验球不自动收取，不宣称 playerTouch。
+远处/延迟生成的模组掉落不在内，经验球不自动收取。
 data 含 removed、reported_success（已观察移除时）、collected_count、remaining_count、
-collected/leftover（各最多 32 组）；feedback 同时给实际数量和注册 ID/数量/耐久明细。
-溢出允许 ok=false 且 removed=true，留在地上的物品不能再次按原目标整次重挖。
+collected/leftover（各最多32组）及drops实体坐标；collected_count固定0，collected为空，
+remaining_count是移除时观测到的新掉落数量。留在地上是正常成功，不因未入包返回失败。
+原版未报告成功但观察到移除时仍ok=false、removed=true；勿按原目标整次重挖。
 
 place_block 的 item 是物品注册 ID，不是方块 ID；背包来源只用 0-35，
 不交换主手或借用装备/副手。face 可选 up/down/north/south/east/west，省略为 up；
@@ -235,7 +285,7 @@ place_block 的 item 是物品注册 ID，不是方块 ID；背包来源只用 0
 路径规划与执行共用 PathMaterials，只有无组件补丁的圆石、深板岩圆石、泥土、下界岩
 计入 0-35 垫料预算；不自动使用重力方块、木材、工作台、贵重块或命名物品。
 成功放置后还需确认真实支撑，否则停止移动；不因目标已占据就认定能站立。
-开路溢出可继续路线并记录留地量；原版报告失败则停手，即使目标已观察移除。
+开路掉落留地、可继续路线并记录留地量；原版报告失败则停手，即使目标已观察移除。
 路径终态给 removed_blocks/placed_blocks/remaining_items，按本趟实际执行计数，
 途中失败也保留已完成改动，不把计划清单当作执行成果。
 有限授权、缓存/重规划新增改动批准及统一资源互斥见下节，任务桥 v1.0 不变。
@@ -251,15 +301,29 @@ place_block 的 item 是物品注册 ID，不是方块 ID；背包来源只用 0
 
 任务入口支持明确的 `[只读]`（或 `[read-only]`）文本标记；若指令包含已列出的只读限制短语，
 也只会收紧权限。策略在主人投令时计算，不读取模型的 read_only 参数。
-只读允许 status/inventory/scan_area、craft query=true、smelt query；其他身体或物品动作拒绝。
+只读允许 status/inventory/scan_area/find_resource/inspect_block、craft query=true、smelt query；
+其他身体或物品动作（包括wait）拒绝。
 普通任务保留现有原子操作能力，工具仍按本次具体坐标、身体局部范围和原版规则校验。
 这不是通用自然语言授权解析器：未识别的语言/否定表达不能声称已得到可靠语义解析；
 需要确定只读边界时使用明确标记。只读任务不能通过反问升级，须另投新的普通任务。
+当前“不要移动”“禁止移动”会触发整项只读，因此collect/transfer/equip也拒绝；
+“不移动”没有被当前短语表识别，不能据此保证服务端禁止移动而允许拾取。
+换措辞不等于权限粒度实现；需要“只准拾取”硬约束时先记录当前限制，
+另卡协调任务能力，保留严格只读。RG5仅作评估，不修改上述允许名单。
 
 服务端 ActionPermissions 将任务绑定发送者、同伴、task_id 和维度；
 变更任务、任务结束、取消即撤销方案。旧客户端没有 task_begin/task_id 时，
 仍可只读查询，修改工具拒绝；需与本轮客户端一起更新。这是内部 C2S 的收紧，
 外部 REST/MCP/SSE 的 v1.0 字段、事件和终态不变。
+
+服务端权限拒绝保留DENIED文案，内部tool_result的可选data附
+`permission_denial {gate:"server_action",reason,tool,task_id?,dimension?}`。
+reason分别为TASK_REQUIRED、TASK_IDENTITY_MISMATCH、READ_ONLY、TOOL_NOT_ALLOWED；
+没有有效上下文时不附task_id/dimension，旧任务、身体替换和换维度由dispatcher返回TASK_REQUIRED。
+只有有效只读上下文的READ_ONLY才能证明触达只读门，限流/白名单/owner拒绝不附此证据。
+RG2游戏聊天命令 `/mcbot verify_readonly` 固定尝试wait(1)，保留真实派发守卫，
+只接受当前任务/工具/维度匹配的只读拒绝；空闲前置和补测判据见REAL-GAME-RETESTING，
+17项dispatcher离线回归及网络/模型未覆盖边界见DEVELOPMENT §3.11。
 
 路线确认流程：move_to → NEED_CONFIRM → ask_owner(text,authorization_id) →
 主人明确回答「确认」→ 服务端批准回执 → move_to(x,y,z,authorization_id)。
@@ -273,8 +337,8 @@ may_alter_terrain 保留类型兼容，但 true 不能批准世界改动。
 
 collect 的中心需在身体6.5格内；实际候选同时在请求球体和身体6.5格内、已加载且存活，
 没有拾取延迟，且 target 为空或匹配同伴 UUID。getOwner 是投掷来源，不能代替 target。
-通过只读 ItemTargetAccess 取得原版私有 target；仍使用 C1 的实际入包/余量写回，
-不调用 playerTouch，不宣称已验证统计/成就或真实 Mixin 加载。
+通过只读ItemTargetAccess取得原版私有target，并要求身体触碰盒相交；
+生产调用原版playerTouch处理实际拾取/余量，统计/成就、动画和真实Mixin加载仍待验。
 离线范围、测试与真实待验见 DEVELOPMENT §3.7 / STATUS。
 
 ### 2.7 有界近战（C4 实现与离线验证，真实战斗待验）
@@ -340,7 +404,8 @@ observation_known=false，最后一次结果未知，可能已有副作用，不
 假连接不驱动 Player.tick；CompanionPlayer 的现有世界tick补两项近战时钟，
 换主手物品类型重置，原版 onAttack 后持续充能；耐久/组件变化不重置同类物品时钟。
 LivingEquipmentAccess 调原版 detectEquipmentUpdates 同步装备属性，不复制属性规则。
-当前仍未开启完整 doTick/玩家物理/自动 playerTouch，保留既有无敌身体；
+当前未开启完整doTick/自动playerTouch；被动重力/碰撞由身体每刻原版travel推进，
+取消任务停止工具但不冻结下落，路径等待落地并按高度变化重规划，保留既有无敌身体；
 自动防御、远程、追击、自动换武器/进食、受伤/死亡复活不在本卡。
 Mixin实际加载、真实属性/冷却/伤害/附魔/耐久/横扫、玩家/模组并发与真实停手待安排，
 原版/数据包/模组回调可能产生其他副作用，租约不是沙盒。离线范围见 DEVELOPMENT §3.8。

@@ -5,6 +5,8 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.common.ResourceLocationHelper;
 import com.neko.mcbot.server.ServerTool;
+import com.neko.mcbot.server.BlockAim;
+import com.neko.mcbot.server.WorkPositions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -28,6 +30,7 @@ public final class FindResourceTool implements ServerTool {
         BlockPos center();
         boolean readable(BlockPos pos);
         BlockState state(BlockPos pos);
+        default void work(JsonObject target, BlockPos pos) { }
     }
     @Override public String name() { return "find_resource"; }
     @Override public Result run(CompanionPlayer companion, JsonObject args) {
@@ -43,12 +46,19 @@ public final class FindResourceTool implements ServerTool {
                 if (chunk == null) throw new IllegalStateException("chunk left during server-thread scan");
                 return chunk.getBlockState(pos);
             }
+            @Override public void work(JsonObject target, BlockPos pos) {
+                target.addProperty("can_work_here", BlockAim.mining(BlockAim.forPlayer(companion), pos,
+                        Math.min(5.5, companion.blockInteractionRange())).ok());
+                target.add("stand_positions", WorkPositions.describe(companion, pos));
+            }
         });
     }
 
     static Input arguments(JsonObject args) {
         try {
-            for (String key : args.keySet()) if (!List.of("targets", "r").contains(key)) return null;
+            for (String key : args.keySet()) if (!List.of("targets", "r", "work").contains(key)) return null;
+            if (args.has("work") && (!args.get("work").isJsonPrimitive()
+                    || !args.get("work").getAsJsonPrimitive().isBoolean())) return null;
             int radius = args.has("r") ? integer(args.get("r")) : 8;
             if (radius < 1 || radius > 16 || !args.has("targets") || !args.get("targets").isJsonArray()) return null;
             var values = args.getAsJsonArray("targets");
@@ -110,6 +120,7 @@ public final class FindResourceTool implements ServerTool {
             target.addProperty("y", pos.getY());
             target.addProperty("z", pos.getZ());
             target.addProperty("distance", Math.sqrt(distance));
+            if (args.has("work") && args.get("work").getAsBoolean()) access.work(target, pos);
             results.add(target);
             lines.append("\n").append(id).append(" @(").append(pos.getX()).append(",")
                     .append(pos.getY()).append(",").append(pos.getZ()).append(")");

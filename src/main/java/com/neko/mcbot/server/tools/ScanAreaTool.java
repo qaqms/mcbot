@@ -12,11 +12,14 @@ import com.neko.mcbot.common.ScanSummary;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.EntityAttack;
 import com.neko.mcbot.common.WireSize;
+import com.neko.mcbot.server.GroundItems;
+import com.neko.mcbot.server.WorkPositions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -59,6 +62,30 @@ public final class ScanAreaTool implements ServerTool {
                 : DEFAULT_RADIUS;
         var level = companion.level();
         BlockPos center = companion.blockPosition();
+        if (args.has("items_only") && (!args.get("items_only").isJsonPrimitive()
+                || !args.get("items_only").getAsJsonPrimitive().isBoolean()))
+            return new Result(false, "DENIED:items_only须为布尔。", null);
+        String wantedItem = null;
+        if (args.has("item")) {
+            try {
+                var item = args.get("item");
+                if (!item.isJsonPrimitive() || !item.getAsJsonPrimitive().isString()
+                        || item.getAsString().isBlank() || item.getAsString().length() > 128) throw new IllegalArgumentException();
+                var id = com.neko.mcbot.common.ResourceLocationHelper.of(item.getAsString());
+                if (!BuiltInRegistries.ITEM.containsKey(id)) throw new IllegalArgumentException();
+                wantedItem = id.toString();
+            } catch (RuntimeException invalid) { return new Result(false, "DENIED:item须为有效物品ID。", null); }
+        }
+        var items = scanItems(companion, r, wantedItem);
+        if (args.has("items_only")) {
+            if (args.get("items_only").getAsBoolean()) {
+                var data = new JsonObject();
+                data.add("item_targets", items);
+                data.addProperty("no_targets", items.isEmpty());
+                return new Result(true, "地上掉落观测（最多16实体，未加载不读）：" + items
+                        + "；站位仅是候选，路径可达性/拾取延迟仍须实际检查。", data);
+            }
+        }
         var look = companion.getLookAngle();
         ScanSummary summary = new ScanSummary(center.getX(), center.getY(), center.getZ(), r);
 
@@ -100,6 +127,7 @@ public final class ScanAreaTool implements ServerTool {
         entities.forEach(ents::add);
         data.add("entities", ents);
         data.add("entity_targets", entityTargets);
+        data.add("item_targets", items);
         List<String> ring = summary.lines();   // 只装配一次：下面 data 与 feedback 用同一份
         JsonArray lines = new JsonArray();
         ring.forEach(lines::add);
@@ -115,7 +143,7 @@ public final class ScanAreaTool implements ServerTool {
         data.addProperty("samples_planned", plan.cells().size());
         data.addProperty("truncated", plan.truncated());
         data.addProperty("unloaded", unloaded);
-        data.addProperty("no_targets", summary.total() == 0 && entities.isEmpty());
+        data.addProperty("no_targets", summary.total() == 0 && entities.isEmpty() && items.isEmpty());
 
         StringBuilder fb = new StringBuilder();
         // 首行：模型每轮都要知道"我在哪、朝哪"，否则绝对坐标和它的意图对不上（R2-D）
@@ -143,6 +171,7 @@ public final class ScanAreaTool implements ServerTool {
         if (!entities.isEmpty()) {
             fb.append("\n活物: ").append(String.join("; ", entities));
         }
+        if (!items.isEmpty()) fb.append("\n地上掉落（最多16实体）：").append(items);
 
         lastScanMillis = (blockDone - t0) / 1_000_000;
         long nearMs = ((nearDone == 0 ? blockDone : nearDone) - loopT0) / 1_000_000;
@@ -153,6 +182,26 @@ public final class ScanAreaTool implements ServerTool {
                     r, lastScanMillis, nearMs, plan.cells().size(), cells);
         }
         return new Result(true, fb.toString(), data);
+    }
+
+    private static JsonArray scanItems(CompanionPlayer companion, int radius, String wantedItem) {
+        var data = new JsonArray();
+        companion.level().getEntitiesOfClass(ItemEntity.class, companion.getBoundingBox().inflate(radius),
+                item -> item.isAlive() && companion.level().getChunkSource()
+                        .getChunkNow(item.blockPosition().getX() >> 4, item.blockPosition().getZ() >> 4) != null
+                        && item.distanceToSqr(companion) <= radius * radius
+                        && (wantedItem == null || wantedItem.equals(BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).toString())))
+                .stream().sorted(java.util.Comparator.comparingDouble(item -> item.distanceToSqr(companion)))
+                .limit(16).forEach(item -> {
+                    var observation = GroundItems.describe(item);
+                    observation.add("stand_positions", WorkPositions.describe(companion, item.blockPosition()));
+                    observation.addProperty("can_touch_here",
+                            GroundItems.touches(companion.getBoundingBox(), item.getBoundingBox()));
+                    var target = ((com.neko.mcbot.mixin.ItemTargetAccess) item).mcbot$getPickupTarget();
+                    observation.addProperty("pickup_allowed", target == null || target.equals(companion.getUUID()));
+                    data.add(observation);
+                });
+        return data;
     }
 
     /** 容器判定只在"确有 BlockEntity"时走：省掉逐格 BlockEntity 查表（那是本工具最贵的一跳）。 */

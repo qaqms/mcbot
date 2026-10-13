@@ -22,7 +22,12 @@ public final class PromptBuilder implements Supplier<String> {
             你是一个 Minecraft 服务器里的同伴，主人通过消息指挥你。
             规则：
             - 只能通过给出的工具与世界交互；每次工具回执都是真实结果，失败时按回执建议改变策略。
-            - 把大任务拆成小步，一次调用一步，看结果再走下一步。
+            - 数量型采集优先用gather连续执行本段扫描、站位、移动、挖掘、走近拾取和实际数量核对，
+              而非每格一个模型调用或反复写12格清单；根据实际来源选择targets，先装备合适工具。
+              gather自动登记物品目标；其他执行方式先用set_goal登记目标，不缩减主人要求。
+              没有明确“包里总量”时采集按additional净新增；建筑/交付不能冒充入包目标。
+              纯文本结束前系统会核对实际背包；未完成继续推进，真正受阻用report_blocked。
+            - 按阶段安排任务，已具备条件的连续工作交给本地工具执行，看真实结果再换阶段。
               已掌握实际槽位/坐标、没有依赖未知返回值时，可用workflow组合近身采集/制作/烧制，
               写明确数量与有限步骤；系统等真实终态后才推进，失败/缺料/空搜索/需确认即停，不会重试。
               不猜制作后的背包槽位；需要用新回执决定参数时，先结束这段流程再规划。
@@ -32,6 +37,8 @@ public final class PromptBuilder implements Supplier<String> {
               根据真实结果决定下一步，主人可以在等待期间叫停任务。
             - 不确定的数量/位置先查再答；任务完成或受阻时用一两句话向主人汇报。
             - 每轮末尾的服务端身体观测只对本轮有效，旧位置/背包不能替代最新观测。
+              最新观测已含完整背包时直接使用，不为相同事实再开inventory轮次。
+              挖掘会产生地上掉落；需要物品须走近后collect，挖掉方块不等于入包。
               任务耗时不是完成率；缺材料用find_resource按具体方块ID或#标签查找，容器数量用inspect_block。
               分类扫描无目标不等于周边没有资源，连续空查询应停止并说明已查范围，不挖掘探查。
             - 方向拿不准用 ask_owner 问主人一句再动手；查数量查位置用工具，别拿问题代替查询。
@@ -47,7 +54,6 @@ public final class PromptBuilder implements Supplier<String> {
     private final Supplier<String> source;
     private final AtomicReference<String> text = new AtomicReference<>();
     private volatile boolean dirty;
-    private volatile boolean armed; // 只有在指令边界才允许兑现脏
 
     /**
      * 前缀缓存构造：source（如 "PromptBuilder.build(persona, SkillLoader.load(dir))"）
@@ -64,24 +70,21 @@ public final class PromptBuilder implements Supplier<String> {
     }
 
     /** 指令边界（AgentLoop.pump 经监听调）：脏标记在此兑现。 */
-    public void onDirectiveBoundary() {
-        armed = true;
+    public synchronized void onDirectiveBoundary() {
         if (dirty) {
             rerender();
         }
     }
 
     private synchronized void rerender() {
-        if (dirty && armed) {
+        if (dirty) {
             text.set(source.get());
             dirty = false;
-            armed = false;
         }
     }
 
     @Override
     public String get() {
-        rerender();
         return text.get();
     }
 

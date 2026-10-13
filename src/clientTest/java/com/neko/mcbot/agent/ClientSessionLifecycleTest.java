@@ -53,6 +53,12 @@ class ClientSessionLifecycleTest {
         bridges.forEach(RunnerBridgeHarness::close);
     }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
+    private static Envelope companionState(String name) {
+        var data = new JsonObject();
+        data.addProperty("companion", name);
+        data.addProperty("text", name.isEmpty() ? "No companion in this world." : "Current companion: " + name);
+        return new Envelope("companion_state", data);
+    }
     private static void assertIdle(JsonObject status) {
         for (String key : new String[]{"current_task", "queued_tasks", "pending_asks", "pending_tools",
                 "pending_jobs", "pending_questions", "parked_jobs"})
@@ -230,5 +236,47 @@ class ClientSessionLifecycleTest {
             client.engine().reply(1, "new report");
             client.drain();
         }
+    }
+
+    @Test void worldSwitchesExposeOnlyTheCurrentNameAndKeepSessionOnSummonOrReload() throws Exception {
+        join();
+        String sessionA = bridge.status().get("session_id").getAsString();
+        session.receive(companionState("testbot"), Runnable::run);
+        assertEquals("testbot", bridge.status().get("companion").getAsString());
+        var oldBridge = bridge;
+        session.receive(companionState("testbot"), client::executeOnClient);
+        session.disconnect();
+        join();
+        String sessionB = bridge.status().get("session_id").getAsString();
+        assertNotEquals(sessionA, sessionB);
+        assertEquals("", bridge.status().get("companion").getAsString());
+        assertEquals("", json(oldBridge.backend().statusJson()).get("companion").getAsString());
+        session.receive(companionState(""), Runnable::run);
+        assertEquals("", bridge.status().get("companion").getAsString());
+        assertEquals(sessionB, bridge.status().get("session_id").getAsString());
+        session.receive(companionState("testbotb"), Runnable::run);
+        assertEquals("testbotb", bridge.status().get("companion").getAsString());
+        assertEquals(sessionB, bridge.status().get("session_id").getAsString(),
+                "summoning in the same bridge lifetime must not mint a session");
+        session.runner().reconfigure(OfflineAgentClient.NEXT);
+        client.drain();
+        assertEquals("testbotb", bridge.status().get("companion").getAsString());
+        assertEquals(sessionB, bridge.status().get("session_id").getAsString());
+        long task = bridge.backend().submitTask("report B");
+        client.engine().reply(0, "B report");
+        client.drain();
+        var frames = bridge.framesThroughTask(task);
+        assertTrue(frames.stream().allMatch(frame -> sessionB.equals(
+                frame.getAsJsonObject("data").get("session_id").getAsString())));
+        assertFalse(frames.stream().anyMatch(frame ->
+                frame.getAsJsonObject("data").has("text")
+                        && frame.getAsJsonObject("data").get("text").getAsString().contains("testbot")
+                        && !frame.getAsJsonObject("data").get("text").getAsString().contains("testbotb")));
+        session.disconnect();
+        join();
+        assertNotEquals(sessionB, bridge.status().get("session_id").getAsString());
+        assertEquals("", bridge.status().get("companion").getAsString());
+        session.receive(companionState("testbot"), Runnable::run);
+        assertEquals("testbot", bridge.status().get("companion").getAsString());
     }
 }

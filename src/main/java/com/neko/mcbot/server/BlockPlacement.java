@@ -25,6 +25,7 @@ public final class BlockPlacement {
         ServerTool.Result guard(BlockPos pos);
         Container inventory();
         BlockState state(BlockPos pos);
+        ServerTool.Result sight(BlockPos pos, Direction face);
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
     }
 
@@ -56,6 +57,8 @@ public final class BlockPlacement {
             return failed("DENIED:暂不支持该特殊方块物品的放置上下文，换普通方块。", false, 0);
         }
         BlockState before = access.state(pos);
+        failure = access.sight(pos, face);
+        if (failure != null) return failed(failure.feedback(), false, 0);
         int count = stack.getCount();
         InteractionResult result = access.place(pos, stack, face);
         BlockState after = access.state(pos);
@@ -106,16 +109,28 @@ public final class BlockPlacement {
         }
         @Override public Container inventory() { return player.getInventory(); }
         @Override public BlockState state(BlockPos pos) { return player.level().getBlockState(pos); }
+        @Override public ServerTool.Result sight(BlockPos pos, Direction face) {
+            var aim = BlockAim.placement(BlockAim.forPlayer(player), pos, clickPoint(pos, face),
+                    Math.min(6.5, player.blockInteractionRange()));
+            return aim.ok() ? null : failed(aim.failure(), false, 0);
+        }
         @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
-            Vec3 click = Vec3.atCenterOf(pos).add(face.getStepX() * .5, face.getStepY() * .5, face.getStepZ() * .5);
+            Vec3 click = clickPoint(pos, face);
+            if (!player.mayUseItemAt(pos, face, stack)) return InteractionResult.FAIL;
+            player.facePoint(click);
             BlockPlaceContext context = new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack,
                     new BlockHitResult(click, face, pos, false)) {
                 @Override public BlockPos getClickedPos() { return pos; }
                 @Override public boolean canPlace() { return state(pos).canBeReplaced(this); }
             };
-            if (!player.mayUseItemAt(pos, face, stack)) return InteractionResult.FAIL;
             // Invoke placement directly: using a block must not open its menu or eat an item.
-            return ((BlockItem) stack.getItem()).place(context);
+            InteractionResult result = ((BlockItem) stack.getItem()).place(context);
+            if (result.consumesAction()) player.swing(InteractionHand.MAIN_HAND);
+            return result;
         }
+    }
+
+    private static Vec3 clickPoint(BlockPos pos, Direction face) {
+        return Vec3.atCenterOf(pos).add(face.getStepX() * .5, face.getStepY() * .5, face.getStepZ() * .5);
     }
 }

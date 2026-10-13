@@ -17,6 +17,8 @@ final class PanelFields {
         // setValue truncates immediately at the vanilla default (32); raising the limit later cannot recover it.
         field.setMaxLength(Math.max(maxLength, value == null ? 0 : value.length()));
         field.setValue(value == null ? "" : value);
+        field.setBordered(false);
+        field.setTextShadow(false);
         return field;
     }
 

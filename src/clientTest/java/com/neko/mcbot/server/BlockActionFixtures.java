@@ -36,7 +36,7 @@ public final class BlockActionFixtures {
         public Drop(ItemStack stack) { this.stack = stack; }
         @Override public Object identity() { return this; }
         @Override public ItemStack stack() { return stack; }
-        @Override public void settle(ItemStack remainder) {
+        public void settle(ItemStack remainder) {
             settlements++;
             stack = remainder.copy();
         }
@@ -49,6 +49,8 @@ public final class BlockActionFixtures {
         public final List<Double> reaches = new ArrayList<>();
         public BlockState state = Blocks.STONE.defaultBlockState();
         public ServerTool.Result denied;
+        public ServerTool.Result sightFailure;
+        public ServerTool.Result turnFailure;
         public boolean correct = true;
         public boolean permitted = true;
         public boolean reported = true;
@@ -56,6 +58,8 @@ public final class BlockActionFixtures {
         public float gain = .25f;
         public int destroys;
         public int reads;
+        public int turns;
+        public int swings;
         public Runnable action = () -> state = Blocks.AIR.defaultBlockState();
 
         public Mining() {
@@ -66,10 +70,12 @@ public final class BlockActionFixtures {
         @Override public float hardness(BlockState state) { return hardness; }
         @Override public boolean correctTool(BlockState state) { return correct; }
         @Override public boolean mayDestroy(BlockState state) { return permitted; }
+        @Override public ServerTool.Result sight(double reach) { return sightFailure; }
+        @Override public ServerTool.Result faceTarget() { turns++; return turnFailure; }
+        @Override public void swing() { swings++; }
         @Override public float progress(BlockState state) { return gain; }
         @Override public int selectedSlot() { return inventory.getSelectedSlot(); }
         @Override public ItemStack held() { return inventory.getSelectedItem(); }
-        @Override public Container inventory() { return inventory; }
         @Override public List<? extends BlockMining.Drop> nearbyDrops() { return List.copyOf(drops); }
         @Override public boolean destroy() { destroys++; action.run(); return reported; }
         @Override public void crack(int stage) { cracks.add(stage); }
@@ -80,6 +86,7 @@ public final class BlockActionFixtures {
         public BlockState before = Blocks.AIR.defaultBlockState();
         public BlockState after = Blocks.COBBLESTONE.defaultBlockState();
         public ServerTool.Result denied;
+        public ServerTool.Result sightFailure;
         public InteractionResult result = InteractionResult.SUCCESS;
         public ItemStack supplied;
         public Direction face;
@@ -91,6 +98,7 @@ public final class BlockActionFixtures {
         @Override public ServerTool.Result guard(BlockPos pos) { return denied; }
         @Override public Container inventory() { return inventory; }
         @Override public BlockState state(BlockPos pos) { reads++; return calls == 0 ? before : after; }
+        @Override public ServerTool.Result sight(BlockPos pos, Direction face) { return sightFailure; }
         @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
             calls++;
             target = pos;

@@ -217,4 +217,28 @@ class CollectToolOperationsTest {
         assertFalse(CollectTool.eligible(null, body, true, false, true, 1, 10, 3));
         assertFalse(CollectTool.eligible(null, body, true, false, true, Double.NaN, 1, 3));
     }
+
+    @Test void vanillaTouchBoxRejectsRemoteAndVerticallySeparatedDrops() {
+        var body = new net.minecraft.world.phys.AABB(0, 90, 0, .6, 91.8, .6);
+        assertTrue(com.neko.mcbot.server.GroundItems.touches(body,
+                new net.minecraft.world.phys.AABB(.8, 90, .8, 1, 90.25, 1)));
+        assertFalse(com.neko.mcbot.server.GroundItems.touches(body,
+                new net.minecraft.world.phys.AABB(3, 90, 0, 3.25, 90.25, .25)));
+        assertFalse(com.neko.mcbot.server.GroundItems.touches(body,
+                new net.minecraft.world.phys.AABB(0, 93, 0, .25, 93.25, .25)));
+    }
+
+    @Test void itemFilterPreservesOtherGroundItemsAndCountsOnlyActualPickup() {
+        Fixture f = new Fixture();
+        Ground dirt = new Ground(new ItemStack(Items.DIRT, 3));
+        Ground diamond = new Ground(new ItemStack(Items.DIAMOND, 2));
+        f.ground.add(dirt);
+        f.ground.add(diamond);
+        var result = f.execute("{\"item\":\"diamond\"}");
+        assertEquals(2, result.data().get("collected_count").getAsInt());
+        assertEquals(3, dirt.stack.getCount());
+        assertFalse(dirt.discarded);
+        assertTrue(diamond.discarded);
+        assertFalse(f.execute("{\"item\":\"nonexistent_item\"}").ok());
+    }
 }

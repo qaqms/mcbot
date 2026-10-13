@@ -78,6 +78,7 @@ public final class SummonService {
                     false);
             playerList.placeNewPlayer(connection, companion,
                     CommonListenerCookie.createInitial(profile, false));
+            companion.observeHealth(HealthObservation.Phase.JOINED);
         } catch (RuntimeException e) {
             connections.remove(companionUuid);
             connection.closeQuietly();
@@ -88,6 +89,7 @@ public final class SummonService {
         companion.setGameMode(GameType.SURVIVAL);
         companion.setInvulnerable(true); // M4 战斗里程碑再放开伤害
         companion.teleportTo(where.getX() + 0.5, where.getY(), where.getZ() + 0.5);
+        companion.observeHealth(HealthObservation.Phase.READY);
 
         roster.add(new CompanionRoster.Entry(companionUuid, name,
                 owner != null ? owner.getUUID() : CompanionRoster.NO_OWNER,
@@ -142,6 +144,7 @@ public final class SummonService {
                 connections.put(entry.uuid(), connection);
                 server.getPlayerList().placeNewPlayer(connection, companion,
                         CommonListenerCookie.createInitial(profile, false));
+                companion.observeHealth(HealthObservation.Phase.JOINED);
                 companion.setGameMode(GameType.SURVIVAL);
                 companion.setInvulnerable(true);
                 // .dat 可能停在死角（上次硬杀/被埋/被水淹）：进场后检查落点，不可站就挪
@@ -156,6 +159,7 @@ public final class SummonService {
                     McbotMod.LOG.info("同伴 {} 存档落点 {} 不可站立，已挪到 {}",
                             entry.name(), here.toShortString(), safe.toShortString());
                 }
+                companion.observeHealth(HealthObservation.Phase.READY);
                 McbotMod.LOG.info("同伴 {} 随服务器重进", entry.name());
             } catch (RuntimeException e) {
                 connections.remove(entry.uuid());
@@ -179,13 +183,17 @@ public final class SummonService {
             ServerLevel level = restorePosition ? savedLevel.orElse(server.overworld()) : server.overworld();
             CompanionPlayer companion = new CompanionPlayer(server, level, profile,
                     ClientInformation.createDefault(), ownerUuid);
+            companion.observeHealth(HealthObservation.Phase.CREATED);
             input.ifPresent(companion::load);
+            companion.observeHealth(input.isPresent()
+                    ? HealthObservation.Phase.LOADED : HealthObservation.Phase.NO_SAVED_DATA);
             Vec3 fallbackPosition = new Vec3(fallback.getX() + 0.5, fallback.getY(), fallback.getZ() + 0.5);
             Vec3 position = restorePosition && savedLevel.isPresent()
                     ? saved.position().orElse(fallbackPosition) : fallbackPosition;
             Vec2 rotation = saved.rotation().orElse(Vec2.ZERO);
             // Explicit summon/fallback positions must be chosen before login packets/world registration.
             companion.snapTo(position, rotation.x, rotation.y);
+            companion.observeHealth(HealthObservation.Phase.POSITIONED);
             return companion;
         }
     }

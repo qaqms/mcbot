@@ -7,10 +7,10 @@ import com.neko.mcbot.agentcore.llm.ToolSpec;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * 流式读取器（R2-A）：把 {@link TurnBuilder}（纯聚合）与"参数写完了没有"
@@ -29,21 +29,22 @@ import java.util.Set;
 public final class StreamingTurnReader implements TurnSinkTarget {
 
     private final TurnBuilder builder = new TurnBuilder();
-    private final Map<Integer, ToolArgsScanner> scanners = new LinkedHashMap<>();
-    /** index → 该 index 的 schema required 名单（工具表顺序即 index 约定）。 */
-    private final Map<Integer, List<String>> requiredByIndex = new HashMap<>();
+    private record CallScanner(String name, ToolArgsScanner args) { }
+    private final Map<Integer, CallScanner> scanners = new TreeMap<>();
+    /** 调用 index 是本轮的位置，与工具目录顺序无关；必填参数只按名称匹配。 */
+    private final Map<String, List<String>> requiredByName = new HashMap<>();
     private final Set<Integer> alreadyReported = new HashSet<>();
     private final boolean accumulateText;
 
     /**
-     * @param tools          本次请求带上的工具（按下发顺序，index 即模型回的 tool_call index）
+     * @param tools          本次请求声明的工具；按名称提供各自的必填参数
      * @param accumulateText true = 仍把整轮文本攒在 {@link TurnBuilder} 里（默认路径：
      *                       AssistantTurn.text 要进对话历史）；false = 不攒，只算增量片段
      */
     public StreamingTurnReader(List<ToolSpec> tools, boolean accumulateText) {
         if (tools != null) {
-            for (int i = 0; i < tools.size(); i++) {
-                requiredByIndex.put(i, tools.get(i).requiredFields());
+            for (ToolSpec tool : tools) {
+                requiredByName.put(tool.name(), tool.requiredFields());
             }
         }
         this.accumulateText = accumulateText;
@@ -73,15 +74,23 @@ public final class StreamingTurnReader implements TurnSinkTarget {
     @Override
     public ToolCall toolCallDeltaChecked(int index, String id, String name, String argsDelta) {
         builder.toolCallDelta(index, id, name, argsDelta);
-        if (argsDelta == null || argsDelta.isEmpty()) {
+        ToolCall call = builder.snapshot(index);
+        if (call == null || !requiredByName.containsKey(call.name())) {
             return null;
         }
-        ToolArgsScanner sc = scanners.computeIfAbsent(index,
-                i -> new ToolArgsScanner(requiredByIndex.get(i)));
-        if (!sc.accept(argsDelta)) {
+        CallScanner scanner = scanners.get(index);
+        String fresh = argsDelta;
+        if (scanner == null || !scanner.name().equals(call.name())) {
+            scanner = new CallScanner(call.name(), new ToolArgsScanner(requiredByName.get(call.name())));
+            scanners.put(index, scanner);
+            // 名称迟到时，已到的参数仍须经过该工具的完整必填检查。
+            fresh = call.argsJson();
+        }
+        if (!scanner.args().accept(fresh)
+                || !ToolArgsScanner.normalize(call.argsJson()).equals(scanner.args().normalizedArgs())) {
             return null;
         }
-        return builder.snapshot(index);
+        return call;
     }
 
     @Override
@@ -106,21 +115,22 @@ public final class StreamingTurnReader implements TurnSinkTarget {
     /** 本片之后新到达"可派发"的调用，按 index 升序；同一个 index 一生只出现一次。 */
     public List<ReadyCall> drainReady() {
         List<ReadyCall> out = new ArrayList<>();
-        int slots = builder.callSlots();
-        for (int idx = 0; idx < slots; idx++) {
+        for (var entry : scanners.entrySet()) {
+            int idx = entry.getKey();
             if (alreadyReported.contains(idx)) {
                 continue;
             }
-            ToolArgsScanner sc = scanners.get(idx);
-            if (sc == null || !sc.isReady()) {
+            CallScanner scanner = entry.getValue();
+            if (!scanner.args().isReady()) {
                 continue;
             }
             ToolCall call = builder.snapshot(idx);
-            if (call == null || call.name().isEmpty()) {
-                continue; // name 还没到：协议上 name 先于 arguments，真碰上就当没就绪
+            if (call == null || call.id().isBlank() || !call.name().equals(scanner.name())
+                    || !ToolArgsScanner.normalize(call.argsJson()).equals(scanner.args().normalizedArgs())) {
+                continue;
             }
             alreadyReported.add(idx);
-            out.add(new ReadyCall(idx, call, sc.normalizedArgs()));
+            out.add(new ReadyCall(idx, call, scanner.args().normalizedArgs()));
         }
         return out;
     }

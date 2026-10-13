@@ -7,7 +7,7 @@ import com.neko.mcbot.server.tools.InventoryTool;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.Container;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
@@ -22,7 +22,7 @@ public final class BlockMining {
     public interface Drop {
         Object identity();
         ItemStack stack();
-        void settle(ItemStack remainder);
+        default JsonObject observation() { return null; }
     }
 
     public interface Access {
@@ -31,10 +31,12 @@ public final class BlockMining {
         float hardness(BlockState state);
         boolean correctTool(BlockState state);
         boolean mayDestroy(BlockState state);
+        ServerTool.Result sight(double reach);
+        ServerTool.Result faceTarget();
+        void swing();
         float progress(BlockState state);
         int selectedSlot();
         ItemStack held();
-        Container inventory();
         List<? extends Drop> nearbyDrops();
         boolean destroy();
         void crack(int stage);
@@ -79,6 +81,8 @@ public final class BlockMining {
         if (!access.correctTool(current)) {
             return failure("WRONG_TOOL:当前主手没有采收资格；先 inventory/equip 换合适工具，目标未破坏。");
         }
+        failure = access.sight(reach);
+        if (failure != null) return failure;
         if (target == null) {
             target = current;
             selected = access.selectedSlot();
@@ -101,6 +105,9 @@ public final class BlockMining {
             return null;
         }
         stalled = 0;
+        failure = access.faceTarget();
+        if (failure != null) return finish(failure);
+        access.swing();
         progress += gain;
         int nextStage = Math.min(9, (int) (progress * 10));
         if (nextStage != stage) {
@@ -117,32 +124,32 @@ public final class BlockMining {
         boolean removed = !access.state().is(target.getBlock());
         if (!removed) return finish(failure("BREAK_FAILED:目标没有移除；原版可能已处理工具耐久，先核对状态，勿自动重试。"));
 
-        int collected = 0;
         int remaining = 0;
-        JsonArray got = new JsonArray();
         JsonArray left = new JsonArray();
+        JsonArray drops = new JsonArray();
         for (Drop drop : access.nearbyDrops()) {
             if (!oldDrops.add(drop.identity())) continue;
             ItemStack stack = drop.stack();
             if (stack.isEmpty()) continue;
-            var move = ItemTransfers.receive(access.inventory(), stack, drop::settle);
-            collected += move.moved();
-            remaining += move.remainder().getCount();
-            if (move.moved() > 0 && got.size() < 32) got.add(InventoryTool.describe(stack.copyWithCount(move.moved())));
-            if (!move.remainder().isEmpty() && left.size() < 32) left.add(InventoryTool.describe(move.remainder()));
+            remaining += stack.getCount();
+            if (left.size() < 32) left.add(InventoryTool.describe(stack));
+            JsonObject observation = drop.observation();
+            if (observation != null && drops.size() < 32) drops.add(observation);
         }
         JsonObject data = new JsonObject();
         data.addProperty("removed", true);
         data.addProperty("reported_success", reported);
-        data.addProperty("collected_count", collected);
+        data.addProperty("collected_count", 0);
         data.addProperty("remaining_count", remaining);
-        data.add("collected", got);
+        data.add("collected", new JsonArray());
         data.add("leftover", left);
-        String feedback = "已移除目标方块，收到背包 " + collected + " 个，留在地上 " + remaining
-                + " 个；收到明细（最多32组）：" + got + "；留地明细（最多32组）：" + left
-                + "；主手耐久由原版破坏流程处理。";
+        data.add("drops", drops);
+        String feedback = "已移除目标方块，挖掘不直接入包；移除时观测到本次地上掉落 " + remaining
+                + " 个，明细（最多32组）：" + left + "；掉落位置：" + drops
+                + "。需要物品时走近后collect，遵守原版拾取延迟；实际入包量须重新查看背包。"
+                + "主手耐久由原版破坏流程处理。";
         if (!reported) feedback = "BREAK_FAILED:原版未报告成功，但已观察到目标移除。" + feedback + "先核对现场，勿自动重试。";
-        return finish(new ServerTool.Result(reported && remaining == 0, feedback, data));
+        return finish(new ServerTool.Result(reported, feedback, data));
     }
 
     public void abort() {
@@ -171,7 +178,18 @@ public final class BlockMining {
         return new ServerTool.Result(false, feedback, data);
     }
 
-    private record PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos) implements Access {
+    private static final class PlayerAccess implements Access {
+        private final CompanionPlayer player;
+        private final ServerLevel level;
+        private final BlockPos pos;
+        private BlockAim.Aim aim;
+
+        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos) {
+            this.player = player;
+            this.level = level;
+            this.pos = pos;
+        }
+
         @Override public ServerTool.Result guard(double reach) {
             if (player.level() != level) return failure("TARGET_LOST:身体已换维度，原目标作废。");
             if (!level.isInWorldBounds(pos) || !level.getWorldBorder().isWithinBounds(pos)) {
@@ -199,9 +217,21 @@ public final class BlockMining {
                     && player.getMainHandItem().canDestroyBlock(state, level, pos, player);
         }
         @Override public float progress(BlockState state) { return state.getDestroyProgress(player, level, pos); }
+        @Override public ServerTool.Result sight(double reach) {
+            aim = BlockAim.mining(BlockAim.forPlayer(player), pos, Math.min(reach, player.blockInteractionRange()));
+            return aim.ok() ? null : failure(aim.failure());
+        }
+        @Override public ServerTool.Result faceTarget() {
+            player.facePoint(aim.point());
+            var eye = player.getEyePosition();
+            var actualPoint = eye.add(player.getLookAngle().scale(eye.distanceTo(aim.point())));
+            var actual = BlockAim.miningRay(BlockAim.forPlayer(player), pos, actualPoint,
+                    Math.min(6.5, player.blockInteractionRange()));
+            return actual.ok() ? null : failure(actual.failure());
+        }
+        @Override public void swing() { player.swing(InteractionHand.MAIN_HAND); }
         @Override public int selectedSlot() { return player.getInventory().getSelectedSlot(); }
         @Override public ItemStack held() { return player.getMainHandItem(); }
-        @Override public Container inventory() { return player.getInventory(); }
         @Override public boolean destroy() { return player.gameMode.destroyBlock(pos); }
         @Override public void crack(int stage) {
             level.getServer().getPlayerList().broadcastAll(
@@ -216,9 +246,6 @@ public final class BlockMining {
     private record LiveDrop(ItemEntity entity) implements Drop {
         @Override public Object identity() { return entity.getUUID(); }
         @Override public ItemStack stack() { return entity.getItem(); }
-        @Override public void settle(ItemStack remainder) {
-            if (remainder.isEmpty()) entity.discard();
-            else entity.setItem(remainder.copy());
-        }
+        @Override public JsonObject observation() { return GroundItems.describe(entity); }
     }
 }

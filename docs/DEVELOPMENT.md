@@ -4,22 +4,70 @@
 
 ## 当前验证安排（2026-10-13）
 
+最新维护者初步反馈重力包正常，已核对实例哈希及无mcbot异常的进出世界日志；
+日志不含连续下落轨迹，其他物理场景继续待验。随后转入效率/长任务评估，
+P0流式参数按工具名称匹配的历史检查点为656项；随后日志确认早派发已生效，
+批次停顿主要来自模型往返。本轮顺序完成实体掉落/触碰拾取、LT1目标与任务内整理、
+有界LT2连续采集初版；最后审查修正第三次挖掘先拾取再判无进展，强制全量681项通过。
+证据与候选包见STATUS「有界连续采集与最终交付」，机制及剩余范围见
+`AGENT-PERFORMANCE-AND-LONG-TASKS.md`。探索/补给/持久化/跟随护卫仍未实现，
+不启动游戏/模型或自动安装。
+
+维护者其后自行安装e800942候选，17:40日志取得本地连续采集、显式拾取与净新增校验正证；
+目标净新增64最终21，路径受阻而FAILED，不记为完整任务通过。
+详细判读见 `real-game-log-review-2026-10-13.md`；实际摘要只看到触发提示，成功仍待验。
+本轮恢复Git并归档此前本体改动/测试/文档，没有覆盖工作文件或改实例；
+无代码修改时沿用已完成的681项强制全量，不为文档收尾重复运行。
+
+维护者最新反馈为挖脚下方块后悬浮；被动重力/碰撞已接入每刻身体tick。
+CompanionPhysics在已加载运动邻域复用原版travel(Vec3.ZERO)，先更新流体，
+随后处理方块接触、实际位移的落地结算与区块位置；不调用完整doTick或playerTouch。
+PathGrounding与PathTask让下落期间暂停路线/清裂纹，落地高度改变后按旧上限重规划，
+有意提交的跨层节点不误算为被动下落。新增7项物理调度和5项落地状态回归；
+物理回调使用替身，碰撞样本执行原版Shapes.collide，不运行真实travel/世界/玩家。
+专项与全量日志见STATUS「被动重力与落地」；原生下落已有维护者初步反馈，
+复杂落地/路径场景继续待验，最新包按STATUS当前节核对。
+
+上一轮维护者要求优先修工作朝向与虚空工作，本体动作朝向/可见性实现和离线回归已完成。
+新增BlockAim原版轮廓/clip回归及挖放停手/物品保全，共16项；
+完整强制构建633项通过，具体执行与JAR哈希见STATUS「动作朝向与可见性」。
+每拍目标与实际视线、交互距离和动作转向已经接线，未启动真实身体/世界、
+模型或安装包，原生画面/路径补测追加在REAL-GAME-RETESTING。
+本轮不是完整原版输入层重构，不以离线clip运行代替实体转头/动画或网络同步验收。
+
+维护者已批准G面板HTML原型，R3原生重设计已实现并通过离线构建；
+实际行为、配置默认及会话历史边界见 `PANEL.md`，本轮执行/缓存范围见
+`../STATUS.md`「R3 G面板重设计」。新增面板体验清单并入集中补测筹备；
+本轮不启动游戏、真实模型或安装包，不把GUI像素布局单测当作原生渲染已验。
+
 开发端以离线测试为主：使用单元测试、可控模型/网络/时钟替身、
 实际 runner/桥接线与临时回环 HTTP/SSE 验证，不调用真实模型。
 暂不通过 `runClient` / `runServer` 启动真实游戏验收；本文保留的服务端工装与真机流程
 供维护者安排时使用。C1–C6 已合入 main，PR #5 已关闭但未合并；
-首轮外部反馈已核对，RG1攻击参数诊断实现/离线完成，当前卡为RG2服务端只读验证。
+首轮外部反馈已核对，RG1攻击参数诊断与RG2服务端只读验证实现/离线完成，
+T11实机入口为 `/mcbot verify_readonly`，真实结果仍待集中补测。
 维护者选择相关开发完成后集中实机补测，筹备见 `REAL-GAME-RETESTING.md`；
 旧顺序/反馈入口 `REAL-GAME-TESTING.md`、`../dist/game-testing.html` 和
 `templates/GAME-TEST-FEEDBACK.md` 保留原revision。本轮开发端不启动游戏/模型或安装包。
 构建及离线通过只证明对应实现范围；首轮基本烧制/动作/保存重进已有正证，
 复杂边界、T11/T12/T14剩余项和连接器联合问答仍单独挂账，
 不以未安排实测阻断当前实现与离线验证。
+RG6身体生命采样与世界名称切换回归已准备，现场首次变化/连接器展示仍待证据，
+交接见 `RG6-HEALTH-WORLD-OBSERVATIONS.md`；没有自动补血或完整生存战斗。
+RG1–RG6开发与补测准备阶段已完成，卡片范围、未关账项和下一步统一见
+`../STATUS.md`「RG阶段总览与下一步」。其后维护者批准先落实G面板重设计，
+集中补测时固定包含RG6诊断及R3面板的包和源码检查点，并确认协作者连接器实际版本；
+尚未取得新的游戏或联合验收结果。
 
 浏览器测试手册与文字反馈模板由 `tools/build-game-testing-docs.mjs` 从
 `docs/REAL-GAME-TESTING.md` 生成，仓根执行 `node tools/build-game-testing-docs.mjs`；
 脚本只用 Node 标准库，不访问网络或游戏。修改源文档后同步生成两份输出；
 调整测试编号/字段时同步修改版本和反馈兼容校验，避免混入另一批验收记录。
+当前首轮手册已固定；RG5使用独立源 `REAL-GAME-TESTING-RG5.md`，
+运行 `node tools/build-game-testing-docs.mjs --rg5` 只生成
+`../dist/game-testing-rg5.html` 与 `templates/RG5-GAME-TEST-FEEDBACK.md`。
+新revision为2026-10-13-rg5-clarifications-v1，旧默认输出及旧反馈导入能力保留；
+新旧反馈页拒绝互相导入，不把旧结果自动转成新复测结果。
 
 0.1.0 测试发行说明见 `releases/0.1.0.md`，发布附件与源码提交分开：
 JAR/测试ZIP/校验清单通过GitHub Release交付，不提交源码仓。
@@ -390,6 +438,120 @@ HTTP测试仅起临时127.0.0.1端口，用真实JDK HttpClient/SSE订阅：
 HTTP取消不回滚已发送的游戏动作；真实世界/机器/取消停手、模型与连接器另待验。
 请求预算与原版材料消耗、取整产量和掉落的区别见TOOLS §2.9，不是硬消费沙盒。
 
+### 3.11 确定性服务端只读验证（RG2）
+
+```bash
+./gradlew clientTest --offline --tests com.neko.mcbot.server.ServerToolDispatcherTest --tests com.neko.mcbot.server.ServerActionGateTest --tests com.neko.mcbot.agent.AgentRunnerPermissionsTest
+```
+
+RG2新增17项实际dispatcher回归，专项共27项通过；完整构建与XML统计见STATUS。
+生产网络入口、显式验证命令和离线夹具共用同一个信封处理函数，
+仅替换MC身体查找、工具效果和包投递，RateGuard使用可控时钟；
+白名单/args/owner、任务身份/维度、ActionPermissions、ServerActionGate、
+CompanionScheduler与回执编码都执行生产实现。
+覆盖10类修改工具只读拒绝、观察及craft/smelt查询可用、伪造参数无效、
+失效/畸形任务与身体替换/换维度、任务结束/取消、按发送者限流、
+验证PASS/FAIL/BLOCKED及临时任务清理、正常受理唯一ack/终态。
+没有创建MinecraftServer、世界或玩家，也未调用真实模型。
+
+游戏内由有OP/gamemaster权限的同伴主人在聊天栏执行 `/mcbot verify_readonly`；
+必须已有自己的同伴且无活动任务，命令不接受控制台代投，不替换任务。
+固定建立只读任务并尝试wait(1)，只接受服务端结构化READ_ONLY拒绝为PASS；
+限流/未知工具/任务未建立分别失败或阻塞，不伪装成通过，最后清理临时上下文。
+该命令验证实际服务端dispatcher/权限与身体查找，不经过自定义C2S codec/Fabric传输、
+客户端模型循环或外部桥；T11真实结果仍待维护者补测，操作/判据见REAL-GAME-RETESTING。
+没有权限绕行开关或任意工具诊断接口，桥v1.0不变。
+
+### 3.12 取消视觉补证准备（RG3）
+
+RG3只补T12实机缺证：可见裂纹后取消/清除、回到非暂停世界连续10秒停手、
+不重载/换世界/重召直接投新status任务。连续录像时间线和分项判据见
+REAL-GAME-RETESTING的T12节，反馈用 `templates/RG3-T12-FEEDBACK.md`；
+不改首轮REAL-GAME-TESTING/HTML/原反馈revision，不因缺画面预先修改动作实现。
+本地候选包只包含既有测试JAR、补测步骤、未测模板与相对路径/哈希清单，
+产物放忽略的build，位置与SHA256记入STATUS；不覆盖发行附件，不含配置/日志/凭据。
+构建缓存检查和打包验证不等于新增取消实机证据，开发端仍不启动游戏或真实模型。
+
+### 3.13 宿主问答本体离线与交接准备（RG4）
+
+```bash
+./gradlew clientTest --offline --console=plain --no-daemon --tests com.neko.mcbot.agent.AgentRunnerBridgeQuestionTest --tests com.neko.mcbot.agent.AgentRunnerQuestionTest --tests com.neko.mcbot.agent.AgentRunnerPermissionsTest --tests com.neko.mcbot.agent.ClientSessionLifecycleTest --tests com.neko.mcbot.bridge.BridgeHttpContractTest
+```
+
+新增3项使用既有OfflineAgentClient/RunnerBridgeHarness，执行实际runner/loop、
+RunnerBackend、BridgeHttp/BridgeService与回环随机端口HTTP/SSE。
+原样中文/多行/空格任务、session/task/question、超过400字符的授权全文和尾项、
+一次回答与服务端回执前等待、重复REST/MCP/回执、过期旧qid与新问题隔离均有断言。
+模型future、客户端发包、服务端授权回执及可控时钟采用替身；
+未创建世界或服务器、不等待真实120秒、不读玩家配置/令牌、不调用真实模型。
+监听器、流、HTTP客户端和runner在测试结束关闭，无生产逻辑或桥v1.0修改。
+
+本体专项/完整构建的执行与缓存事实见STATUS。
+协作者整改交接见 `RG4-CONNECTOR-HANDOFF.md`，
+B01操作与分项反馈见REAL-GAME-RETESTING及 `templates/RG4-B01-FEEDBACK.md`。
+协作者源码保持只读；本体离线通过不证明连接器cue编号/全文展示或真人回答已修好，
+无真实question时继续记“问题未生成”，不推定丢弃事件。
+
+### 3.14 测试说明与权限表达评估（RG5）
+
+本卡只调整说明和文档生成器，不修改Java生产/测试、权限策略或桥v1.0。
+`REAL-GAME-TESTING-RG5.md`是七个关联项目的补充，不要求重跑已认可项：
+T16从真实问题生成起120秒内保存（建议60秒内操作），保存前TIMEOUT不能证明重载清理；
+workflow由客户端校验/编排，每步仍走原服务端门；拒绝看实际层及reason，
+机器空槽和剩余燃烧时间分别记录，取消工具链不熄炉。
+
+权限评估见 `RG5-PERMISSION-REVIEW.md`。collect属于物品修改，单工具不寻路，
+当前没有“允许拾取、禁止移动及其他修改”的独立许可；“不要移动”触发整项只读。
+未识别的“不移动”措辞不是新的硬权限，不以改提示词或放宽observation解决。
+
+生成校验只使用Node标准库，对旧默认生成器输出作内存候选/原文件逐字节比较，
+检查新版路径、revision、七项编号及实际安装JAR哈希留空。
+反馈逻辑可在内存DOM边界执行生成的实际脚本，验证本机保存、JSON/Markdown导出、
+同版本导入和新旧revision互相拒绝；这是替身验证，不是浏览器UI或截图验收。
+浏览器工具禁止file协议时记录该限制，不据生成成功宣称视觉/文件选择器已测。
+校验与完整离线build的执行/缓存、哈希和本地日志见STATUS。
+旧HTML/模板/手册及RG3候选包不覆盖，仍不启动游戏/真实模型或安装包。
+
+### 3.15 生命与世界身份观察（RG6）
+
+```bash
+./gradlew :test --offline --tests com.neko.mcbot.body.HealthObservationTest
+./gradlew clientTest --offline --tests com.neko.mcbot.agent.ClientSessionLifecycleTest --tests com.neko.mcbot.bridge.CompanionStateTest --tests com.neko.mcbot.body.CompanionRosterTest --tests com.neko.mcbot.server.tools.AwarenessToolTest
+```
+
+新增6项HealthObservation回归不创建MC身体或世界：加载后低血量、稳定采样不刷日志、
+最近采样位置/时间、首次拒绝伤害、实际血量/吸收/无敌/最大生命变化、
+异常无返回与新身体互不继承。执行生产采样/JSON，输入仍是可控快照，
+不把它写成原版load/hurtServer、tick或现场掉血已运行。
+新增1项实际ClientSession/runner/backend/回环HTTP/SSE回归，验证A名字→B新桥空名字→
+B名字更新、召唤/配置重载session不变、旧回调不写B、回A重新确认；
+游戏S2C、模型、配置与客户端队列仍为替身，监听器/流关闭，不调用真实模型。
+
+CompanionPlayer观测入口经编译/字节码核对，新增hurtServer覆写只调用原版一次并返回原值，
+finally观察不吞原异常；诊断RuntimeException每身体固定警告一次，不改动作。
+不调用完整doTick，不添加伤害处理Mixin，不改变无敌/食物/拾取/移动/存档。
+`[body-health]`阶段、字段与采样遗漏边界见RG6-HEALTH-WORLD-OBSERVATIONS；
+日志不是上一条输出之间的连续轨迹，首次变化须按实际相邻采样判读。
+原日志G:808仅为模型HP19，G:1562才是直接status19；不能事后归因T04移动。
+连接器名称传递缺口由协作者修，实际session与显示仍待采集，本卡桥v1.0不变。
+独立反馈见 `templates/RG6-OBSERVATION-FEEDBACK.md`，不强制重跑已认可T04/T18。
+完整build、专项执行范围、XML、JAR哈希及原件指纹核对见STATUS。
+
+### 3.16 流式工具Schema匹配（P0）
+
+```bash
+./gradlew :agent-core:test clientTest --offline --console=plain --no-daemon --tests com.neko.mcbot.agentcore.provider.StreamingTurnReaderTest --tests com.neko.mcbot.agentcore.provider.ToolArgsScannerTest --tests com.neko.mcbot.agentcore.llm.LlmStreamDispatchTest --tests com.neko.mcbot.agentcore.loop.AgentLoopEarlyDispatchTest --tests com.neko.mcbot.agentcore.loop.AgentLoopParkTest --tests com.neko.mcbot.agentcore.llm.LlmCancellationTest --tests com.neko.mcbot.agent.ClientToolStreamingTest --tests com.neko.mcbot.agent.AgentRunnerWorkflowTest
+```
+
+新增读取器9/SSE接线1/生产工具目录1，共11项；旧实现先复现7项失败。
+工具必填字段按名称取，调用index只标本轮槽位；晚到名称/ID、未声明工具、
+目录长度外的重复调用、非连续索引及异常独立对象不误判。
+实际生产SSE字节订阅器、provider、reader与AgentLoop在可控模型/执行器边界运行，
+确认完整坐标到达但流未EOF时执行，终态仅一次且assistant/tool配对完整。
+不发送HTTP模型请求或创建游戏；原取消回归仍只用临时回环HTTP/SSE。
+70项专项、656项强制全量及最新JAR见STATUS，不据此声称真实提供商速度已提升。
+后续现场比较同attempt的first_dispatch/stream，不将ready或early计数直接当作省时。
+
 ## 4. 真实端到端（客户端侧）
 
 开发服直连 `runClient`，或使用本次构建的 `build/libs/mcbot-0.1.0.jar`，
@@ -492,6 +654,23 @@ RunnerBackend、BridgeHttp/BridgeService，通过临时回环端口与测试令�
 不调用模型端点。该结果不证明真实 Fabric JOIN/DISCONNECT 事件触发、
 断网后的服务器身体停手或连接器联调通过。失败复现报告可另存到本地 build 目录，
 不能仅以完整构建成功代替 XML 的 failures/errors/skipped 核对。
+
+### 4.4 掉落、目标、任务内整理与连续采集离线验证
+
+```bash
+./gradlew build --offline --console=plain --no-daemon --rerun-tasks
+```
+
+最终日志为 `../build/long-task-final-build-20261013.log`，20任务全部执行，
+XML核心240/根93/客户端348，共681项，失败/错误/跳过全0；产物哈希见STATUS。
+BlockMining/Collect回归检查不直接入包、组件保全、身体触碰和物品过滤；
+生产collect的playerTouch入口以本地官方映射javap与编译确认，未运行原版实体。
+AgentLoopGoalTest/AgentLoopContextBudgetTest/ConversationTaskMemoryTest
+覆盖数量基线、拒绝假完成、取消、完整请求预算、摘要失败保留和工具配对。
+BoundedGatherTest以可控回执验证超过12步的64份真实计数格式、走近拾取、无进展、
+第三次挖掘掉落、授权/满包、取消/超时；WorkPositionsTest检查有界候选排序。
+AgentRunnerGatherTest运行实际runner，验证job_ack不推进、终态/最终数量与取消迟到隔离。
+这些结果不替代真实拾取动画、世界中的可达性、真实模型提速或野外钻石任务验收。
 
 ## 5. 施工纪律（红线）
 

@@ -55,6 +55,13 @@ public final class RunnerBridgeHarness implements AutoCloseable {
                 .getLast().getAsJsonObject("data").get("question_id").getAsString();
     }
 
+    public JsonObject questionFrame(long task) throws Exception {
+        return framesUntil(frame -> {
+            JsonObject data = frame.getAsJsonObject("data");
+            return "question".equals(data.get("ev").getAsString()) && data.get("task_id").getAsLong() == task;
+        }).getLast();
+    }
+
     public List<JsonObject> framesThroughTask(long task) throws Exception {
         return framesUntil(frame -> {
             JsonObject data = frame.getAsJsonObject("data");

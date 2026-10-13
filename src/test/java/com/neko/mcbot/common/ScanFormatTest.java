@@ -57,7 +57,7 @@ class ScanFormatTest {
     @Test
     void 准星注入格式与字节帽() {
         String s = ScanFormat.crosshair("cobblestone", 12, 63, -4, 3.2);
-        assertEquals("[我此刻盯着] cobblestone @(12,63,-4) 距3.2", s);
+        assertEquals("[主人提交时的准星，非同伴视野] cobblestone @(12,63,-4) 距3.2", s);
         assertTrue(WireSize.utf8Bytes(s) <= ScanFormat.CROSSHAIR_MAX_BYTES);
 
         // 超长路径（模组方块名可能很长）必须裁到帽内，且仍是合法 UTF-8/不切坏字符
@@ -65,6 +65,6 @@ class ScanFormatTest {
                 -1234567, 64, 1234567, 123.45);
         assertTrue(WireSize.utf8Bytes(fat) <= ScanFormat.CROSSHAIR_MAX_BYTES,
                 "got " + WireSize.utf8Bytes(fat) + "B: " + fat);
-        assertTrue(fat.startsWith("[我此刻盯着] "));
+        assertTrue(fat.startsWith("[主人提交时的准星，非同伴视野] "));
     }
 }

@@ -3,7 +3,36 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-13）：RG1攻击参数诊断离线完成；实机集中补测待安排
+## 当前状态（2026-10-13）：新包实测取得采集/拾取/数量校验正证；路径受阻待修，整理归档并恢复Git提交
+
+维护者新日志确认P0早派发已生效，但workflow每批后仍等待模型查找/生成下一批。
+维护者要求修复挖掘直接入包，并继续学习参考机制处理执行粒度、长期目标及上下文。
+已按掉落/拾取、目标/上下文、连续采集顺序分别构建，最终强制全量681项通过，见下节；
+维护者随后自行安装同哈希新包，17:40实测连续采集超过12格、显式拾取并按净新增校验；
+因路径NO_PATH受阻，最终净新增21/目标64，没有误报完成。任务内整理只确认触发提示，
+实际摘要成功未取得证据。详细复核见 `docs/real-game-log-review-2026-10-13.md`。
+原宿主/连接器/桥v1.0边界不变，画面/复杂路径和旧验收债务分别保留。
+
+维护者最新反馈重力修复后初步正常，实例包已核对为被动重力候选包；
+latest.log无mcbot异常，但无连续下落轨迹，其他物理场景仍独立待验。
+本轮转入效率/长任务评估，修复流式工具必填参数按目录index错配的具体问题，
+该P0历史检查点全量656项离线回归通过；最新包见「有界连续采集与最终交付」。
+长任务机制与边界见 `docs/AGENT-PERFORMANCE-AND-LONG-TASKS.md`：
+LT1及有界LT2初版已实现，探索/补给/持久化、LT3和技能按需读取仍未实施。
+被动重力、动作朝向/可见性成果保留。本轮只修改MC agent本体，宿主、
+协作者连接器和参考副本只读；不启动游戏/真实模型、不安装到玩家实例。
+本轮已恢复Git元数据并从远端main 006a02c建立本地基线，没有覆盖任何工作文件；
+当前整理此前未提交本体改动与文档，提交/推送结果记在下节。历史“无Git快照”按当时阅读。
+原生视觉/路径与旧验收债务独立挂账。
+
+维护者认可HTML原型并授权按此实施，当前G面板已重设计为对话、同伴、设置三页，
+反问/完整授权确认、真实任务状态与步数、会话历史、身体快照、差分配置、
+上下文管理及HUD已接线。说明见 `docs/PANEL.md`，本轮证据见下方R3节。
+历史仅保留当前世界会话内，不跨退出或重启。
+维护者游戏内体验反馈全屏遮挡，现已将主面板、历史和确认框改为居中窗口，
+四周显示游戏、取消全屏底色/菜单模糊，右上角可关闭。
+最新包与证据见「R3窗口化修正」；修正版原生效果及其他体验项尚待确认。
+此轮优先级覆盖此前先整理集中补测材料的安排，RG1–RG6成果与旧验收债务继续保留。
 
 当前优先级：连接器由协作者独立维护，本仓已收到首轮联调报告 PR #5，
 2026-10-12已拉取其独立仓库并审查，源码/补丁未并入本仓；
@@ -20,7 +49,15 @@ F0 问答/活动任务生命周期离线卡已完成，剩余真机验收保留�
 逐项证据与任务见 `docs/real-game-feedback-review-2026-10-12.md`。
 首轮19项记为15项认可、T12部分认可、T11/T14/B01阻塞；
 三类炉子基本烧制有真实正证，完整身体/权限专项及连接器联合验收仍未关账。
-RG1攻击参数诊断已实现并通过离线回归，当前下一张本体卡为RG2服务端只读验证。
+RG1攻击参数诊断和RG2确定性服务端只读验证已实现并通过离线回归；
+T11入口 `/mcbot verify_readonly` 已就绪，真实结果与RG3取消视觉补证留待集中测试。
+RG3连续录像步骤、三项反馈模板和本地候选包已准备；
+RG4本体HTTP/SSE问答回归、协作者整改清单和B01分项表已准备，
+连接器修复由协作者继续交付。RG5独立补充手册/反馈页与权限评估已完成，
+只拾取许可仍为功能限制，未放宽只读。当前RG6已补身体生命采样与世界名称离线回归，
+旧日志不能定位首次真实20到19变化，连接器名称传递缺口只读记录、现场仍待对齐。
+没有更改生命/无敌/移动/存档规则，没有新增实机证据，
+T12继续部分认可、B01继续阻塞，不将准备/本体离线完成当作联合验收通过。
 维护者于2026-10-13确认由本人承担需要的实机补测，偏好相关开发完成后集中测试；
 统一筹备清单见 `docs/REAL-GAME-RETESTING.md`，本轮不要求进游戏，
 不以T14待验阻塞下一张本体离线卡，不修改旧反馈或覆盖旧0.1.0发行资产。
@@ -44,7 +81,622 @@ PR #5当前CLOSED、未合并，其旧联调待验项继续保留；下方历史
 原 R2-S4 阶段 3（服务端抢占/剩余路线续跑/progress 生产及限速）后置，未宣称完成。
 既有 M0–M4/M4.5/M4.6/M6/M8/R1/R2 阶段 1/2 历史证据保留在下方；`[m9] A3` 仍是已知未解红项。
 
-### 换设备开发交接与文档同步（2026-10-13，Asia/Shanghai）
+### 新包日志复核与源码归档（2026-10-13，Asia/Shanghai）
+
+- 按维护者要求只读最新日志并整理文档/开发日志，恢复Git、提交推送本体改动。
+  实例JAR已由维护者更新为e800942候选，与681项离线通过产物一致；
+  日志快照151203字节、最后写入17:44:14，原件未改、不入仓。
+  复核记录见docs/real-game-log-review-2026-10-13.md。
+- 17:40:13–17:40:55一段gather本地连续挖掘/扫描/等待/拾取超过12格，
+  不逐格请求模型；该完整数量任务request7–13共7次普通模型请求，21次挖掘/17次拾取子调用。
+  17:41:10显式collect实际拾取2个；最终完整背包账为开始4、当前25、净新增21，
+  目标净新增64、尚缺43，17:41:49以BLOCKED结束，不记为64任务通过。
+  没有同条件基准、画面或逐子步骤完整回执，不报告固定提速、动画或距离专项已验。
+- 新待修：move_to反复“下一落脚格变化→两次重规划→NO_PATH”，部分计划nodes=1，
+  两段gather与一次单独移动均受阻；先补同格终点、挖后支撑/落地、站位与路径契约复现，
+  不增加重规划帽或放松权限/碰撞规则。17:34首段拾取无进展也保留待定位。
+  任务内整理多次提示但未看到摘要请求/compaction重置，只记边界触发，摘要成功待验。
+- 远端main已核对为006a02c（换设备交接）；恢复.git、fetch后只更新HEAD/索引，
+  不checkout/覆盖工作文件，远端跟踪文件无本地删除。此前RG2–RG6、R3面板、朝向/
+  重力/P0、实体拾取及LT1/有界LT2本体改动与对应测试/文档一并归档；
+  build/run/原始日志、实例配置/世界、JAR/ZIP和宿主/连接器不进入提交。
+  本轮只改文档，沿用17:21强制全量681项零失败证据，未重复启动游戏/模型或替换包。
+- 提交前核对92份本体源码/测试/文档/生成手册，git diff --cached --check通过；
+  暂存不含构建/运行数据、JAR/ZIP/日志、玩家配置或世界。
+  新增行凭据样式和机器文件绝对路径计数均0，HTTP测试地址按URL区分，
+  tools/build-game-testing-docs.mjs语法检查通过。XML再次确认240/93/348共681项零失败/
+  错误/跳过，候选哈希保持e800942，tools/list-java.ps1未列Java进程。
+
+### 有界连续采集与最终交付（2026-10-13 17:21，Asia/Shanghai）
+
+- 新增BoundedGather本地领域循环：最新状态→匹配地上物品→走近/等待延迟/collect→
+  重新核对背包；没有待拾取物则定向查方块、选择站位、等待move_to终态、挖掘并循环。
+  不需要模型逐格填坐标或每12格生成清单；缺工具/满包/需要具体路线授权/
+  未知事实/无进展交回模型。所有子调用仍走原任务、服务端权限、资源锁和原版动作入口。
+  子票terminalOnly等job_event，job_ack不能推进；客户端队列避免同步future递归。
+- 目标使用任务开始完整背包基线，与LT1同物品/数量/口径；取消/超时清子票，
+  迟到结果不恢复，已完成动作保留，在途效果可能未知。终态按实际背包，
+  不累计矿格数或掉落数。最后审查补第三次挖掘先尝试拾取新掉落、再判无进展的回归。
+- 本段起点附近目标r默认8/最大16；默认600/最大900秒，挖掘默认128/最大256格，
+  子调用最多1024；三次操作无入包成果且无可继续拾取候选时停止。
+  WorkPositions在附近27格检查加载、流体、完整上表面支撑与身体碰撞，返回最多6站位；
+  路径可达性交move_to验证。半砖等复杂站位尚未扩展，不自行探索或开勘探洞。
+  find_resource work=true与scan_area items_only/item补齐候选及地上物品事实。
+  模型目录现20项（15服务端+5本地），普通workflow仍保留原12步上限。
+- 连续采集初次强制全量build 35s成功，680项通过，
+  build/long-task-build-20261013.log；最后审查修正后再次强制全量build 35s成功，
+  20任务全部执行，日志build/long-task-final-build-20261013.log。
+  最终XML核心240/根93/客户端348，共681，失败/错误/跳过全0。
+  本段新增BoundedGather9、WorkPositions1、实际AgentRunner采集接线2，共12项。
+  64份测试使用受控世界回执和完整背包事实，没有运行真实游戏/模型或自然世界钻石探索。
+- 最新build/libs/mcbot-0.1.0.jar SHA256：
+  `e8009425327b98839ff0b90c204067525c5e1d9512e2f8ec1ca0c1e5f206782e`。
+  17:21复核实例仍为维护者自行安装的4feb212流式包；未替换、发布、
+  修改玩家配置/世界或宿主/连接器/参考副本，无新的Git提交号。
+  tools/list-java.ps1未列Java进程；文档收尾不重复构建。
+- 原生实体拾取、动画、连续采集速度和模型使用gather仍待维护者新包复测，
+  小范围补测已加入REAL-GAME-RETESTING，不要求重跑旧18项。
+  自主自然世界64钻石仍缺探索/补给/危险处理，目标不跨退出持久化，跟随护卫未实现；
+  不能用本地循环测试或预放资源成绩冒充野外采集通过。旧验收债务独立保留。
+- 文档同步AGENTS/README/DEVELOPMENT/HANDOFF/ROADMAP/TOOLS/ARCHITECTURE/PANEL/
+  机制评估及集中补测清单；旧16:08评估明确标历史，当前能力不与旧检查点混记。
+  最后只读日志复核末轮16:30:39–16:30:43挖掘约852–854ms/格，
+  16:30:50模型报告背包总量64，不能推定任务净新增64；P0早派发多次出现early=1。
+  该日志仍属旧流式包，不能当作新实体拾取或gather实测。
+  最终33份本轮文件的新增/修改内容凭据样式、机器文件绝对路径与尾空白计数均为0；
+  候选哈希再次一致，tools/list-java.ps1仍未列Java进程。
+
+### LT1目标校验与任务内上下文（2026-10-13，Asia/Shanghai）
+
+- 物品目标set_goal固定item/count及additional背包净新增或total总量，初始完整36槽做基线，
+  不能降低数量/换物品/改口径；每轮注入独立事实，结束前再观测真实背包。
+  未满足不发送完成done，继续同一task_id；连续三次无新增成果的结束回复则FAILED。
+  report_blocked保留真实障碍/数量并以失败终止；取消/关闭不会续目标。
+  数量目标需模型登记，或后续gather自动登记；不宣称任意自然语言目标/交付/建筑已硬校验，
+  不把矿格数、地上物品或collected_count累加当成真实背包数量。目标暂不跨退出持久化。
+- 整理移入真实工具配对结算后的请求边界；完整预算含system/工具/历史/临时状态/目标及
+  输出预留，参考usage与本地估算；contextWindow已进入生产请求判断。
+  摘要也有输入预算，失败保留原文；整理后再观测世界，仍超窗口则明确CONTEXT_LIMIT停下。
+  摘要正文空白/带工具/超量或旧代际返回不能替换历史；既有摘要单独作为累积记录更新。
+  同名动作事实不再折叠，只对可替代的status/inventory旧查询折叠；保留原工具配对和缓存规则。
+- 新增目标5、请求预算2、任务记忆4，共11项离线回归；构建26s成功，
+  20任务11执行/9缓存，build/goal-context-build-20261013.log。
+  核心240/根93/客户端336，共669项当前XML零失败/错误/跳过；
+  新目标/上下文测试使用受控模型和观测，没有调用付费模型。
+  接着按维护者授权推进有界连续采集，依旧不扩大40轮或绕开授权。
+
+### 实体掉落与触碰拾取（2026-10-13 16:44，Asia/Shanghai）
+
+- 实例安装哈希已更新为4feb212流式修复包；16:26:33 first_dispatch=5282ms、
+  stream=5617ms、early=1，确认该次完整参数到达后的流尾等待有重叠。
+  16:27:25–16:27:37第一批12格连续完成，下一搜索11414ms、下一批生成11908ms；
+  停顿主要发生在批次间模型决策，不将其判为动作调度冻结。
+  16:26:34及各批回执明确“收到背包1个”，与维护者凭空获取反馈一致。
+- 移除BlockMining直接收取新掉落，复用原版destroyBlock产生实体；留地不再让成功挖掘失败。
+  回执保留collected_count=0/remaining_count/leftover，新增drops实际实体位置，不写入背包/
+  改堆栈/丢弃实体；单格与路径共用修复。
+  collect查询半径不扩大身体触碰范围，生产入口使用ItemEntity.playerTouch，
+  尊重原版延迟/归属/背包余量，item过滤可选；不新增无条件自动拾取或绕开任务权限。
+  本地官方映射javap实核Player的未骑乘触碰盒inflate(1,.5,1)及playerTouch签名/
+  原版丢弃后恢复堆栈计数，回执按实际消失/缩减量判读。
+- 先调整4项挖掘回归，旧生产实现4项失败（pickup-red-20261013.log）。
+  更新回归并新增触碰盒/过滤2项后，完整build离线30s通过，
+  20任务9执行/11缓存，日志build/pickup-build-20261013.log。
+  注册表/回调/原版AABB离线不替代真实原版实体拾取、动画或多人效果。
+  此卡中间JAR SHA256为6223959c9e6857d8cfe3583bf3cd6650f0df58e4f1d21b5f5110e219d91ee5ce，
+  尚未安装；最终交付按后续最新节，不能使用中间包哈希代替。
+  修改前20份文件/JAR已备份build/long-task-baseline-20261013。
+- 参考只读核对work循环、拾取/掉落观察、目标续跑与请求边界整理机制，没有复制代码/
+  注释/提示词或脚本。以下旧评估的“未实施”是当时检查点，当前新增安排以上方为准。
+
+### 任务效率评估与流式参数匹配（2026-10-13 16:08，Asia/Shanghai）
+
+- **重力反馈复核**：维护者初步反馈新包正常；实例已安装SHA256为
+  `bda11859f61366a3c7afd550de55f2ede3033486c1ae98fd4403512bb5108987`，
+  与此前被动重力候选包一致，更新由维护者自行完成。
+  新latest.log在15:41:52–15:42:17正常进出世界，无mcbot异常；
+  READY前存档落点从-60调整到可站立的-61，是入场SafeSpawn修正，
+  没有运行期连续Y轨迹或挖掘任务，不把它当作下落测量。按维护者画面反馈记初步正证，
+  连续下降/半砖/移动中掉落与取消期间下落等继续独立待验。
+- **任务耗时**：只读归档日志15:05:23–15:06:20，6次模型请求stream累计52270ms，
+  成功break_block实际4604ms；find_resource 1ms，inventory/inspect_block/status约0ms。
+  每轮17定义/11322B，有cached=2432报告；工具轮ready/early为0。
+  这是此前朝向包的一个约57秒样本，不是新包或参考项目同条件基准。
+  stream含网络/服务/生成，不能归为纯推理；15:04:43还有独立UPSTREAM流内错误，
+  没有改模型配置/重试策略，也没调用真实模型探测。
+- **P0根因/修复**：StreamingTurnReader把本轮tool_call.index误当工具目录索引，
+  第一目录项workflow的steps条件挡住其他合法首调用；反方向又会放松必填检查。
+  现在按工具名称取required、按本轮index维护扫描器，名称迟到回放参数，
+  未声明工具留正常整轮处理。实际索引排序、ID到齐及完整累积参数一致性检查，
+  防止独立对象替换误报；只报告一次。AgentLoop仍只早派发index0，后续等终态，
+  未改动作、重力、权限或桥v1.0。不承诺省去参数生成前等待或减少模型轮次。
+- **验证**：新读取器先在原生产实现运行7项全部失败，日志
+  `build/performance-red-20261013.log`。修复新增读取器9、真实SSE解析接loop1、
+  生产ClientToolDefs目录1，共11项；70项专项通过，日志
+  `build/performance-focused-20261013.log`，20s、10任务6执行/4UP-TO-DATE。
+  完整 `build --offline --console=plain --no-daemon --rerun-tasks` 33s成功，
+  20个任务全部执行，日志 `build/performance-build-20261013.log`。
+  XML核心229/根93/客户端334，共656，失败/错误/跳过全0。
+  新SSE测试直接喂生产字节订阅器/解析器并运行实际AgentLoop，未创建游戏、
+  调用HTTP模型或真实服务端；证明完整参数到达后EOF前调用、终态只记一次且历史配对完整。
+  专项中的既有HTTP取消测试只用临时回环端口，不读取玩家凭据。
+- **评估/下一卡**：对照实际参考源码归纳本地条件循环、目标续跑、任务内整理、
+  技能/帮助按需读取与游戏刻跟随/战斗；未运行参考项目或抄其实现/文字。
+  它当前也发完整工具目录，不能将工具懒加载缺失认定为主因。
+  本体缺少目标硬校验、任务内窗口预算和自主领域任务；三次空搜索/固定清单/原地攻击
+  不能承诺野外64颗钻石或随行护卫。详细证据与LT1目标/上下文、LT2采集/探索、
+  LT3跟随/护卫的分卡建议见 `docs/AGENT-PERFORMANCE-AND-LONG-TASKS.md`；
+  本轮只完成P0，未写上述扩展卡代码，不直接放大40步或删除无进展/权限护栏。
+- **产物与保全**：最新 `build/libs/mcbot-0.1.0.jar` SHA256
+  `4feb212ef7b5b43778a1e7eba9c1b22d6493f78df768efcef2b9091374b37fab`。
+  修改前源码/文档/JAR备份 `build/performance-baseline-20261013/`。
+  未安装实例、发布或改宿主/连接器/参考副本；无Git元数据、无新提交号。
+  新包实际提前量待维护者对照first_dispatch与stream，集中补测清单已追加。
+  旧T11/T12/T14/B01与[m9] A3仍独立挂账。
+- **收尾核对**：候选与修改前JAR逐项哈希对照，外层仅内嵌agent-core变化，
+  内层仅StreamingTurnReader及其两个内部类变化；实例仍为上述bda118重力包。
+  XML复核656项零失败/错误/跳过；本轮新增行未检出凭据样式、机器文件绝对路径
+  或尾空白（SSE测试的回环HTTP地址属于离线替身配置，不是文件路径）。
+  `tools/list-java.ps1`未列出Java进程；交接/路线图/补测清单/README已同步，
+  仅文档收尾未重复构建。
+
+### 被动重力与落地（2026-10-13 15:34，Asia/Shanghai）
+
+- **本地证据**：维护者报告挖脚下方块后身体仍悬浮。实际实例目录与既有本机记录一致；
+  本轮只读latest.log相关窗口，15:05:03就绪位置(7.5,-60,-0.5)，
+  15:05:59 inspect_block为(7,-61,-1)的grass_block，
+  15:06:07受理break_block，15:06:12明确移除成功、收到1个dirt，15:06:20任务汇报。
+  日志没有连续身体Y轨迹，悬浮是维护者画面反馈，不伪造日志中的下落测量。
+  实例JAR哈希为上一轮9025dd...649ea，确认已由维护者安装朝向包；
+  不是此前开发端未自动安装的旧b9d998包。没有修改原日志、世界或实例配置。
+- **根因与机制**：FakeConnection不在原版网络tick表中，ServerPlayer.tick不执行Player.tick/
+  aiStep/travel。上一轮只补动作时钟，脚下失去碰撞支撑后没有任何被动物理步进。
+  只读参考副本了解假玩家须自行驱动原版移动/落地的机制，不复制实现或文字；
+  1.21.11调用链、权威性与签名均以本地官方映射JAR的javap实核。
+- **修复范围**：CompanionPlayer每实体刻在super.tick、装备/动作时钟之后调用CompanionPhysics，
+  不依赖任务槽，空闲/取消后继续被动运动。死亡/移除/睡眠/骑乘跳过；运动扫过邻域
+  未加载则等待既有区块票，不强读碰撞格。复用原版流体更新、travel(Vec3.ZERO)与
+  applyEffectsFromBlocks；重力/阻力/真实碰撞表面由原版处理，不猜整数落点或强行传送向下。
+  Player仍client-authoritative，Entity.move不结算玩家摔落，按本刻实际位移调用一次
+  doCheckFallDamage；setKnownMovement记录位移，移动时更新区块位置。
+  不启用完整doTick/食物时钟/自动playerTouch，不重复更新挥手或攻击计时，既有无敌保持。
+  PathGrounding让路径未落地时暂停搜索/执行并清裂纹，落地高度偏离上次提交高度则
+  丢旧计划、有界重规划（沿用最多2次），不会直接按旧路线拉回原高度；
+  有意提交的跨层节点更新预期高度，避免误耗重规划。既有授权/资源锁/改动成果保留。
+- **离线验证**：新增CompanionPhysicsTest7与PathGroundingTest5共12项。
+  专项42项通过，日志 `build/gravity-focused-20261013.log`；
+  完整强制 `gradlew build --offline --console=plain --no-daemon --rerun-tasks`
+  34秒成功、20个任务全部执行，日志 `build/gravity-build-20261013.log`。
+  实核XML：核心219、根93、客户端333，合计645，failures/errors/skipped均0。
+  物理测试的运动速度/原版travel回调是替身，落地样本实际运行Shapes.collide，
+  覆盖支撑移除、完整底板/半砖/无底、每刻顺序和实际位移、未知区块等待、失活及异常传播；
+  路径状态覆盖首次落地、工作中下落、负高度、计划升降与同高度短暂离地。
+  未创建真实身体/世界/服务器，不把体素碰撞或回调测试当作原版travel已经运行。
+  编译后 `build/gravity-wiring-javap.txt` 确认物理tick一次、原版travel/流体/接触/
+  落地/区块调用接线，无doTick，现有动画/攻击时钟保持单次。
+- **产物与保全**：当前JAR `build/libs/mcbot-0.1.0.jar` SHA256
+  `bda11859f61366a3c7afd550de55f2ede3033486c1ae98fd4403512bb5108987`。
+  修改前文件/JAR备份在 `build/gravity-baseline-20261013/`；实例仍为
+  `9025dd61569586382a68244b988f735816e79b6b14e1ea9d10a02d9d961649ea`，
+  未自动替换、安装、发布或覆盖旧发行附件。仍无Git元数据，没有新提交号。
+- **实际边界**：原生连续下落、同步/半砖落地、工作中脚下变化和取消期间下落待维护者
+  用新包补测，步骤已加入REAL-GAME-RETESTING。原有路径水平插值/跨层传送保留，
+  并非完整键盘输入/生存物理；泳姿/药水时钟/骑乘、摔伤放开等另行考虑。
+  宿主/连接器/桥v1.0与旧测试revision保持不变，不销账T11/T12/T14/B01或[m9] A3。
+
+### 动作朝向与可见性（2026-10-13 14:42，Asia/Shanghai）
+
+- **证据与归因**：复核首轮正式反馈、工作底稿、逐项摘录与原日志相关窗口，
+  连接器README/桥v1.0以及现有RG整改记录；参考副本仅只读了解视角与动手机制。
+  原T05/T13有真实移除/掉落/耐久正证，不能归为从未挖掉。
+  T12的12:57:21空气目标已返回TARGET_LOST，原先就有空气拒绝，不能将其写成新修复。
+  ffprobe确认旧录像48.088005秒/1920×1080/30fps，本轮只做每秒采样总览，
+  产物 `build/action-view-evidence-20261013/video-overview.png`，不当作新现场或连续逐帧验收。
+  代码确认挖掘/路径移动无转向调用，放置沿用旧朝向，破坏只校验身体球距而无视线门；
+  客户端主人的准星提示却使用“我此刻盯着”，与原日志同伴自述来源混淆一致。
+- **身体与朝向**：CompanionPlayer.facePoint复用原版EYES lookAt（含头部yaw），
+  同步身体yaw；移动按下一落脚点水平转向，挖掘按可见轮廓内点转向，
+  放置在创建原版上下文前朝指定点，攻击沿用同一入口。
+  未启用完整Player.doTick或新增自主行为；只补原版updateSwingTime，让真实swing可推进/
+  收尾，保持已有装备/攻击冷却接线。原生动画时序仍待观察。
+- **挖掘与遮挡**：新增BlockAim，单格与开路通过共享BlockMining每拍核验目标/主手、
+  可见轮廓及实际交互距离；有限采样最多16个轮廓箱×27点，射线先核验沿线已加载/
+  世界边界，再用原版OUTLINE/NONE clip。必须getType==BLOCK且第一命中为指定目标，
+  距离从身体眼睛到真实命中表面计，受原版blockInteractionRange及原工具上限共同约束。
+  转向后还用getLookAngle复核实际射线，再挥手、推进裂纹/挖掘；遮挡/失效/
+  超距即停并清裂纹，后续终态不重复挥手/移除，原版破坏、耐久与掉落守恒流程保留。
+  放置同样先核验视线/实际距离，拒绝时消费0；成功原版放置才挥手。
+- **模型输入**：准星提示改为“主人提交时的准星，非同伴视野”，保持120字节帽。
+  scan_area仍是周边采样，不代表相机视锥或所有候选都能直接动手；未新增模型视觉或截图接口。
+- **验证**：修改前专项29项通过；第一轮专项日志
+  `build/action-view-focused-20261013.log`，新增实际转向射线复核后执行完整
+  `gradlew build --offline --console=plain --no-daemon --rerun-tasks`，
+  14:40左右41秒成功，20个任务全部执行，见 `build/action-view-build-20261013.log`。
+  实核XML：核心219、根88、客户端326，合计633，failures/errors/skipped均0；
+  新增BlockAim11、BlockMining4、BlockPlacement1共16项。
+  测试使用原版BlockState/VoxelShape/BlockGetter.clip、内存格子图与真实物品，
+  世界加载/身体动作由Access控制；不创建世界/服务器/玩家或调用模型。
+  墙后目标、半砖、部分遮挡、命中表面距离、未知沿线不读、MISS不是命中、
+  实际视线偏离、工作中丢视线、停手/终态不再挥手及放置拒绝物品保全均覆盖。
+  编译后javap确认facePoint/lookAt/bodyYaw、tick中一次原版updateSwingTime及
+  挖掘getLookAngle/miningRay接线；不把字节码检查写成实体/网络/渲染已经运行。
+- **产物/保全**：JAR `build/libs/mcbot-0.1.0.jar` SHA256
+  `9025dd61569586382a68244b988f735816e79b6b14e1ea9d10a02d9d961649ea`。
+  修改前源码/文档及旧JAR在 `build/action-view-baseline-20261013/`；
+  旧包与本地玩家实例已安装包均为
+  `b9d998bdd3da411a45272e53289c5523f5115cc66745472be59c224c736eb1b7`，
+  未替换实例包，不覆盖发行附件/固定RG3 ZIP。list-java检查无残留。
+- **实际边界/待验**：原生头/身体/挥手显示、多人同步、T12停止后10秒与不重载直接新任务、
+  原T13密闭双格开路及方向性放置仍须新包实测。有限采样可能保守拒绝很窄的可见缝隙。
+  放置仍使用既有准确目标的BlockPlaceContext，不是完整原版鼠标拾取/邻格点击实现；
+  路径保留水平插值与跨层传送，没有完成物理输入重构。
+  本轮没有证明所有“虚空工作”来源消失，也未关闭T11/T12/T14/B01、
+  `[m9] A3`、历史模型错误或复杂组件/多人行为债务。
+  集中补测新增“动作朝向与可见性”小节；桥v1.0、旧反馈/revision保持不变。
+
+### R3窗口化修正（2026-10-13，Asia/Shanghai）
+
+- **反馈/范围**：维护者亲自打开游戏后反馈面板完全遮住全屏；
+  记录为真实体验反馈，不据此将其他UI或原验收项目记作已通过。
+  只改4份客户端UI、1份既有布局测试及交接说明，服务端生产代码、
+  大脑/桥契约、宿主、连接器、只读参考项目和运行配置不改。
+  本轮不启动游戏/真实模型、不自动安装或发布包，无Git元数据、未提交推送。
+- **修正**：PanelLayout以窗口frame为坐标原点，常规约80%屏宽/83%屏高，
+  主面板最大760×460 GUI像素，小窗口至少留8像素边距；
+  极小窗口缩紧顶部间隔，仍保留至少20像素正文空间以滚动访问表单。
+  历史/确认窗口最大440×320；侧栏、历史按钮、标题分隔线和底部操作统一随frame定位。
+  三种Screen不再画全屏不透明底色，显式覆盖renderBackground取消默认菜单模糊；
+  仅窗口底色、边线和局部轻阴影，四周直接显示游戏画面，仍不暂停世界。
+  右上角新增带提示的关闭按钮，同时保留Esc关闭。
+  原多行输入、任务/反问/授权全文滚动和会话历史规则保持。
+- **API确认**：本机映射JAR经javap确认Screen.renderWithTooltipAndSubtitles
+  在render前调用renderBackground；默认背景调用renderBlurredBackground/menu背景，
+  仅缩小render中的fill无法消除模糊。覆盖签名为
+  renderBackground(GuiGraphics,int,int,float)，ChatScreen也使用空实现。
+- **回归**：更新原PanelLayoutTest并新增窗口居中/四周留白检查，
+  覆盖7宽×7高共49组GUI尺寸、主窗口与弹窗，以及16组尺寸下所有配置行可滚动到达。
+  初次额外的Screen构造探针在无Minecraft单例环境失败（Screen构造读font），
+  未据此修改生产构造器或声称游戏失败；移除不适用的无头构造探针，
+  背景方法通过本机签名/字节码及编译确认，实际渲染留待原生体验。
+  最终UI专项 `build/panel-window-ui-tests-final-20261013.log`，
+  14:11:38结束，14s成功，8任务3执行/5UP-TO-DATE，15项通过；
+  最初探针失败日志保留为 `build/panel-window-ui-tests-20261013.log`。
+- **完整构建（14:13:09结束）**：`build/panel-window-build-20261013.log`，
+  `build --offline --console=plain --no-daemon` 25s成功，
+  20任务6执行/14UP-TO-DATE。根88、客户端310本次执行，
+  核心219沿用12:29专项结果；81套XML共617项，失败/错误/跳过全0，
+  不写作617项全部本次重新运行。
+  JAR `build/libs/mcbot-0.1.0.jar` 624384B，14:12:59生成，
+  SHA256=`b9d998bdd3da411a45272e53289c5523f5115cc66745472be59c224c736eb1b7`。
+  本轮前UI/测试/文档及旧JAR保存在 `build/panel-window-baseline-20261013/`，
+  不覆盖已发布的0.1.0附件或固定RG3 ZIP。
+- **待验/交接**：PANEL、ARCHITECTURE、HANDOFF、ROADMAP和集中体验清单同步。
+  修正版游戏内窗口大小、背景清晰度、GUI缩放/输入法、皮肤/图标及HUD仍待体验，
+  不替代原T11/T12/T14/B01验收，实机债务不销账。
+  list-java无残留，当前Java数量199，本轮无新增/删除生产Java。
+  收尾11份改动文件新增行路径/凭据样式/尾空白扫描无问题；
+  新旧JAR内容仅4个上述UI类不同，无删除条目，内嵌核心及其他条目保持一致，
+  最终JAR SHA256复核一致。
+
+### R3 G面板重设计（2026-10-13，Asia/Shanghai）
+
+- **授权/范围**：维护者认可独立HTML原型，授权落实原生G面板。
+  只改mcbot客户端、agent-core、对应测试和文档；服务端生产代码、宿主、
+  协作者连接器及参考项目未改，参考只用于机制理解，不复制代码/文本/资产。
+  未启动runClient/runServer、调用真实模型、安装或发布包；当前无Git元数据，未提交或推送。
+- **布局/显示**：浅色对话优先，宽窗口窄侧栏、小窗口顶部导航；对话/同伴/设置三页，
+  设置分模型/上下文/通用。多行草稿、Enter发送/Shift+Enter换行、工具过程折叠、
+  回复复制、任务历史只读回看、改派/遣散/清空确认及可关闭HUD已实现。
+  HUD仅忙/待答显示，打开任意界面或hideGui隐藏。
+- **真实接线**：问题快照带原ID/任务归属/120秒剩余时间，面板答复复用一次性入口；
+  草稿绑定原ID，过期不能误投新任务/新问题。授权确认展示完整服务端清单，
+  阅读至末尾且问题仍有效才批准，保留原服务端authorize回执。
+  步数读取AgentLoop，受理/进度不写成完成；改派停止活动及排队项，停止取消全部。
+  同伴页静默读取status(details=true)，显示生命/饱食度/位置/游戏刻、36格存储/快捷栏、
+  选中槽、数量/耐久及装备；代际隔离迟到身体快照，包括A→B→A。
+  原生皮肤和按注册ID的基础物品图标，不假设未回传组件；缺明细明确提示。
+- **配置/上下文**：连接字段差分变化才确认重建；人设/偏好保存保留任务，
+  PromptBuilder在人设变更后的下一条指令边界换发，避免链中改system。
+  密钥掩码、环境覆盖来源和编辑锁定保留；写盘失败不应用运行配置。
+  默认窗口64000/阈值6000/近期1500，预算范围校验、自动整理开关、
+  手动摘要/查看实际摘要/确认清空已接线。窗口是手工配置，非模型能力自动探测。
+  自动整理仍仅正常任务链尾；手动摘要与新任务串行，失败保留原文，
+  清空取消在途摘要。前缀重置增加context-clear，40/3/5/90/120固定护栏未调整。
+- **历史边界**：新增PanelHistory显示档案，当前世界会话内最多20任务/2000记录，
+  模型压缩、清空和连接重建不删除显示档案；退出世界/重启不持久化。
+  BridgeEvents未改为多播，面板直接读取runner快照及显示档案；任务桥v1.0不变。
+- **专项（12:29:42结束）**：`build/panel-focused-tests-20261013.log`，
+  21s成功，10任务7执行/3UP-TO-DATE；过滤clientTest及全量agent-core:test执行通过。
+  新增18项回归（runner6、配置4、显示历史3、核心上下文5），
+  另更新像素布局及原权限测试的完整授权快照断言。
+- **完整构建与最终包（12:44:20结束）**：
+  `build/panel-build-final-20261013.log`，`build --offline --console=plain --no-daemon`
+  29s成功，20任务8执行/12UP-TO-DATE；根88和客户端309本次执行，
+  核心219沿用12:29专项结果。81套XML共616项，失败/错误/跳过全0，
+  不写成616项本次全部重新运行。前一轮完整构建也成功，
+  最后布局高度/提示文字修正后以本记录为准。
+  JAR `build/libs/mcbot-0.1.0.jar` 623382B，12:44:10生成，
+  SHA256=`38d1038a69869b4133083817c5e09c8273fb8d789e019c8dcc59b98bfc24df13`。
+  仅本地候选包，不覆盖既有0.1.0发行附件或固定RG3 ZIP。
+- **API防漂移**：本机映射及Fabric JAR经javap确认Button.renderWidget为final、
+  renderContents需实现；MultiLineEditBox.Builder支持颜色/背景/装饰及build；
+  PlayerFaceRenderer.draw接PlayerSkin、GuiGraphics.renderFakeItem支持原生图标；
+  HUD接HudElementRegistry.addLast及HudElement.render(GuiGraphics,DeltaTracker)。
+  签名/编译不替代实际游戏渲染验收。
+- **交接/待验**：新增PANEL说明并同步AGENTS、DEVELOPMENT、HANDOFF、ROADMAP、
+  ARCHITECTURE、原R3设计卡、BRIDGE及集中体验清单；旧手册/反馈revision不改。
+  原生字体/缩放/皮肤/图标/输入法/HUD与真实模型交互留待集中体验；
+  实机记账仍15项认可、T12部分认可、T11/T14/B01阻塞，原[m9]A3及其他债务不销账。
+  源码对照使用 `build/panel-source-baseline-20261013/`；
+  `build/panel-baseline-20261013/` 为早期目录碰撞产物，不作为有效基线。
+- **收尾复核（12:58后）**：有效基线对照共21份Java变更（11修改/10新增），
+  服务端生产代码0变更、无删除；新增行机器路径/凭据样式/尾空白扫描无问题。
+  10份本轮文档新增行扫描无问题，旧首轮手册/反馈模板指纹不变。
+  JAR内新面板/HUD/历史类齐全，内嵌agent-core与当前核心构建SHA256一致，
+  fabric.mod.json仍为mcbot/0.1.0；最终JAR哈希再核对一致，list-java无残留。
+  构建后只同步文档，未因文档改动重复测试，未改工具链或运行配置。
+
+### RG阶段总览与下一步（2026-10-13）
+
+RG是首轮实机反馈后的整改与补证任务编号，覆盖实现修复、诊断、
+离线回归、测试说明和协作交接；每张卡的开发完成与真实验收分别记账。
+
+| 卡 | 本轮已完成 | 仍待取得的结果 |
+|---|---|---|
+| RG1 | 攻击参数拒绝诊断、修正提示和离线回归 | T14显式目标、玩家拒绝与牛未批准 |
+| RG2 | 确定性服务端只读验证入口和离线回归 | T11游戏内服务端拒绝、无改动及后续任务 |
+| RG3 | T12连续录像步骤和分项反馈模板 | 裂纹清除、非暂停10秒停手及直接新任务 |
+| RG4 | 本体HTTP/SSE问答回归、连接器交接和反馈表 | 协作者修复版本及B01真人问答/取消/重连闭环 |
+| RG5 | 独立补充手册、反馈页和权限表达评估 | 浏览器实际操作仍未验证；只拾取许可未实现 |
+| RG6 | 生命采样诊断、世界身份离线回归和观察表 | 首次真实生命变化与连接器名称现场对齐 |
+
+当前没有安排RG7或RG8。其后维护者批准的R3面板实现/离线已完成，证据见上节；
+集中补测交付材料使用同时包含RG6诊断和R3面板的新JAR，
+固定包哈希、对应源码检查点与协作者实际连接器版本；恢复Git时保留全部本地改动。
+随后按 `docs/REAL-GAME-RETESTING.md` 补T14、T11和T12剩余证据，
+连接器就绪后补B01，RG6观察顺带留证。B01未就绪可单独保持阻塞，
+不要求重跑已认可15项；实机结果仍为15项认可、T12部分认可、T11/T14/B01阻塞。
+
+### 文档与开发日志同步（2026-10-13，Asia/Shanghai）
+
+- 按维护者要求同步当前阶段、RG总览、交接保留范围与后续安排；
+  更新本文件、AGENTS及DEVELOPMENT/HANDOFF/ROADMAP/REAL-GAME-RETESTING。
+  本文件继续作为唯一进度事实源，不另建重复开发日志，不改写历史时点记录。
+- 10:57复核现有JAR为570243B，SHA256与下方RG6记录一致；
+  现有XML为核心214、根88、客户端296，共77套/598项，失败/错误/跳过均0。
+  本次读取既有报告，没有重新执行测试；完整构建的执行/缓存范围仍以下方记录为准。
+- 本轮仅文档同步，没有新增实机证据、代码改动或发布包；
+  旧手册/反馈revision及固定RG3 ZIP继续保留，当前无Git元数据，未提交或推送。
+  新诊断包仍在 `build/libs/mcbot-0.1.0.jar`，集中补测交付包尚未重新整理。
+
+### RG6生命与世界身份观察（2026-10-13，Asia/Shanghai）
+
+- **范围**：维护者授权进入RG6并提供本机测试原件目录，原件只读重新核对。
+  本卡只改mcbot观测/回归和交接；宿主/连接器/参考项目未改，
+  不启动游戏/真实服务端/真实模型、不安装或发布包、不发协作者消息。
+  本机仍无Git元数据，未初始化、提交或推送。
+- **生命证据**：原件G最后可直接读到的20为11:06:22/G:178；
+  11:14:08/G:225及11:29:24/G:475有人工传送但无血量。
+  T04前后G:777/797仅chars=589，11:37:40/G:808的首次HP19为模型汇报；
+  最早直接status19为12:20:41/G:1562、game_tick=75330。
+  不能把整个取样间隔收窄为T04的954ms或按落地/箭伤定因；T04已有移动正证保留。
+  原日志/底稿核对、定位及指纹见 `docs/RG6-HEALTH-WORLD-OBSERVATIONS.md`。
+- **观测实现**：新增HealthObservation，CompanionPlayer/SummonService/StatusTool接入。
+  `[body-health]`记录CREATED、LOADED/NO_SAVED_DATA、POSITIONED、JOINED、READY；
+  tick/status相邻hp/max_hp/absorption/invulnerable变化才输出，首个hurtServer请求也输出。
+  JSON保留身体实例body_id、同伴UUID/名称、精确坐标/维度/游戏刻及相邻快照，
+  有伤害调用时另有注册DamageType、请求量与返回值；false/true/null不替代实际血量判读。
+  相邻样本不是上一条输出，未采到的写值/间隔内恢复不承诺记录；
+  无damage字段不猜来源，加载后19不补血。原hurtServer调用一次、返回/异常继续传播，
+  诊断RuntimeException固定警告每身体至多一次；不改伤害/无敌/移动/食物/拾取/保存或完整doTick。
+- **身份核对**：H记录A(testbot)→B(testbotb)→A→B分别恢复，T18已有认可不撤回；
+  P:37–48只记录会话变更文字，缺session_id/完整status，不能按14:52:32时间相邻推断
+  召唤B导致换session或跨存档顶替。桥v1.0每次退进世界重建session符合设计。
+  当前连接器get_status未缓存companion、在线状态展示用本地快照，
+  离线探测成功分支把完整live字典赋给companion，是源码缺口；
+  实际安装件/各层身份未对齐，未据此认定旧现场根因。连接器由协作者整改。
+- **新增回归**：6项纯采样/JSON单测（加载低血、相邻样本、首伤拒绝、不刷稳定日志、
+  吸收/无敌/max变化、异常无返回、跨身体不继承等），不创建MC世界/身体。
+  1项实际session/runner/backend/HTTP/SSE名称切换回归验证新桥先空再确认、
+  同会话召唤/配置重载不换session、旧回调不写新世界及回A重建；
+  模型/网络S2C/客户端队列/配置为可控边界，不当作Fabric生命周期或宿主展示实测。
+- **专项（10:36:59结束）**：`build/rg6-observation-tests-20261013.log`，
+  32s成功，10任务6执行/4UP-TO-DATE。该命令同时跑根test和过滤的clientTest，
+  实际根88全量、客户端27项，共17套/115项，失败/错误/跳过全0；
+  不是把根工程当作只执行新6项。XML保留 `build/rg6-observation-test-results/`。
+- **完整构建（10:44:16结束）**：`build/rg6-build-20261013.log`，
+  `build --offline --console=plain --no-daemon` 23s成功，20任务5执行/15UP-TO-DATE。
+  客户端296项实际执行；根88沿用10:36本卡结果，核心214沿用09:22既有结果。
+  77套XML共598项失败/错误/跳过全0，不写为598项全部重跑。
+  JAR `build/libs/mcbot-0.1.0.jar` 570243B，
+  SHA256=`71620f7a5abb86fab52ce0ce463bfdbde959e3ecfd61b4155f11d0cb8fc7c854`。
+  当前本地诊断包，不覆盖0.1.0发行附件或固定RG3 ZIP，不沿用旧包哈希。
+- **API/接线**：当前映射JAR的javap确认hurtServer(ServerLevel,DamageSource,float):boolean、
+  生命/吸收/无敌/落地读取及DamageSource.typeHolder/ResourceKey.identifier；
+  编译后的CompanionPlayer字节码仅一次原版hurtServer调用、保持super.tick且无doTick/setHealth。
+  只证明签名/调用点，真实身体诊断加载与伤因另待验。
+- **交接/边界**：新增上述RG6说明与 `docs/templates/RG6-OBSERVATION-FEEDBACK.md`，
+  revision=2026-10-13-rg6-observations-v1，初始未测，不导入旧HTML/RG5反馈。
+  同步AGENTS/ROADMAP/HANDOFF/DEVELOPMENT §3.15/ARCHITECTURE/BRIDGE/集中补测清单；
+  顺带观察不强制重跑已认可T04/T18，不扩生存战斗或新增强制项目编号。
+  改动前文件与187份Java指纹在 `build/rg6-baseline/`，当前189份Java，
+  仅3份既有生产文件/1份既有客户端测试改动及2份新增Java。
+  旧手册/HTML/模板、固定RG3 ZIP及连接器4份关键指纹保持不变，list-java无残留。
+  10:50新增行空白/机器路径/凭据样式及Java改动范围扫描通过，
+  记录 `build/rg6-scope-check-20261013.log`；G/H/P/原反馈JSON指纹再核对一致。
+  实机记账仍15项认可、T12部分认可、T11/T14/B01阻塞；
+  RG6本体诊断/离线准备完成不代表生命原因、连接器错名或联合验收已解决。
+
+### RG5测试说明与权限表达评估（2026-10-13 10:16，Asia/Shanghai）
+
+- **范围**：维护者授权进入RG5，只修改mcbot补充说明、生成器和接手文档。
+  宿主/协作者连接器/参考项目未改，不启动游戏或真实模型，不安装/发布包。
+  当前无Git元数据，未提交/推送；RG6生命与世界名称定位本轮未开始。
+- **独立说明**：新增 `docs/REAL-GAME-TESTING-RG5.md`，
+  revision=`2026-10-13-rg5-clarifications-v1`，仅关联T02/T08/T09/T10/T11/T15/T16，
+  不要求重跑已认可15项。T16从实际问题生成起120秒内保存，建议60秒内操作；
+  保存前TIMEOUT不能证明重载清待答。澄清workflow客户端编排和子工具服务端门、
+  客户端预派发/服务端具体reason及限流/参数等拒绝的区分，
+  三槽为空不等于burn_remaining_ticks为零，取消工具链不会熄炉。
+- **权限结论**：新增 `docs/RG5-PERMISSION-REVIEW.md`，复核实际TaskPolicy、
+  AgentRunner、ServerActionGate、CollectTool、BoundedWorkflow和SmeltTool。
+  “不要移动”触发整项只读，collect仍是物品修改；单工具不寻路不能形成整个普通任务
+  “只准拾取”的硬许可。当前无独立拾取模式，不加collect到observation、
+  不删只读短语、不以改词或模型参数升级。后置许可设计条件与已实现行为明确分开。
+- **生成与兼容（10:11）**：生成器增加显式 `--rg5`，
+  只输出 `dist/game-testing-rg5.html` 和 `docs/templates/RG5-GAME-TEST-FEEDBACK.md`。
+  新页七项反馈初始未测，安装JAR哈希留空，独立revision/localStorage/导出文件名；
+  旧默认源/路径/revision和schema=1保持。未覆盖原手册/HTML/模板或旧发行附件。
+  `node --check`通过；标准库离线检查在内存执行实际生成器，
+  默认两份候选与旧文件逐字节相同，非法参数在写出前拒绝，新输出与生成文件相同。
+- **反馈逻辑（10:11）**：`build/rg5-verify-docs.mjs`及
+  `build/rg5-docs-check-20261013.log`留在忽略的build。
+  使用内存DOM/存储/下载边界运行实际生成的反馈脚本，
+  验证保存/恢复、JSON/Markdown导出、同revision导入，
+  新旧revision双向拒绝且不改已有内容；七项/49个反馈字段断言通过。
+  不调用浏览器、网络、游戏或模型，不把替身当真实文件选择器/浏览器行为已验。
+- **浏览器限制**：尝试打开本地file页面被浏览器安全策略拒绝，
+  原因是只允许http/https协议；没有取得实际界面或截图验证。
+  该限制保留，不用生成/替身通过替代视觉验收，不绕过浏览器拦截。
+- **完整构建（10:14）**：`build --offline --console=plain --no-daemon` 12s成功，
+  `build/rg5-build-20261013.log`，20任务全部UP-TO-DATE，没有Java测试新执行。
+  76份既有XML共591项（核心214/根82/客户端295）失败/错误/跳过全0，
+  核心/根仍为09:22报告、客户端仍为09:50 RG4报告。
+  187份Java源码/测试指纹与本卡开始时一致；
+  JAR仍为 `ce762458248dc0a1ac4531a8b68c01ca64f8f60cdcc463c277beb1e9d95d0549`，
+  没有新运行包或MC API事实。
+- **交接与记账**：同步AGENTS/ROADMAP/HANDOFF/DEVELOPMENT §3.14、
+  TOOLS权限/拾取说明及REAL-GAME-RETESTING的可选T16复测；
+  T12/B01仍各用RG3/RG4分项表，旧JSON继续用旧HTML打开。
+  改动前8份文件与187个Java指纹在 `build/rg5-baseline/`。
+  差异空白与新增行机器路径/凭据样式扫描通过，list-java无残留；
+  连接器四份关键文件与RG4交接指纹一致。
+  原手册/HTML/反馈模板及已固定RG3 ZIP哈希未变，本体仍为
+  15项认可、T12部分认可、T11/T14/B01阻塞；RG5文档/策略评估完成不销实机债务，
+  RG4协作者修复和集中补测继续待安排。
+
+### RG4本体问答离线与协作准备（2026-10-13 09:53，Asia/Shanghai）
+
+- **范围**：维护者授权进入RG4，只修改mcbot测试夹具/回归与协作、补测文档；
+  本体生产逻辑和桥v1.0字段不变，宿主、独立连接器、参考项目未改。
+  本地仍无Git元数据，不初始化仓库、不生成提交号，未提交/推送。
+- **新增回归**：AgentRunnerBridgeQuestionTest三项复用OfflineAgentClient及
+  RunnerBridgeHarness，执行生产runner/loop/backend/HTTP桥和真实回环HTTP/SSE。
+  验证中文多行/首尾空格任务原样进入历史，问题session/task/qid准确，
+  超过400字符的服务端授权全文及尾项保全且不被模型文案替换；
+  一次回答只恢复一次，批准等待实际回执，重复REST/MCP/授权回执不再恢复，
+  过期HTTP回答在下一tick前拒绝且旧qid不消费新任务问题。
+  模型、时钟、游戏发包及服务端回执采用替身，无世界/玩家/真实路线或真人授权；
+  不把本体边界回归写成宿主展示或连接器已通过。
+- **专项（09:47）**：新增3 + runner问答13 + 权限6 + 会话5 + HTTP契约6，
+  共33项实际执行，5份XML失败/错误/跳过全0；
+  `build/rg4-question-tests-20261013.log`，19s，8任务中2执行/6缓存。
+  XML在完整构建前另存 `build/rg4-question-test-results/`。
+- **完整构建（09:50）**：`build --offline --console=plain --no-daemon` 17s成功，
+  日志 `build/rg4-build-20261013.log`，20任务中1执行/19缓存；
+  客户端295项本次实际执行，核心214/根82使用09:22既有缓存报告。
+  现存76份XML合计591项，失败/错误/跳过全0，不宣称591项全新执行。
+  生产JAR仍为 `ce762458248dc0a1ac4531a8b68c01ca64f8f60cdcc463c277beb1e9d95d0549`，
+  本轮未安装或发布包，未启动游戏/真实模型，list-java无残留。
+- **连接器核对与交接**：本地无Git源码副本仍见cue缺session/task/question编号、
+  `text[:400]`及全局问题合并键；该副本不是已验证的最新上游。
+  四份关键文件SHA256及可执行整改判据写入 `docs/RG4-CONNECTOR-HANDOFF.md`，
+  未运行新连接器测试，历史56项通过/9组失败探针保留历史属性。
+  新增 `docs/templates/RG4-B01-FEEDBACK.md`（rg4-b01-v1，A/B/C/D均未测）；
+  REAL-GAME-RETESTING细化原B01四步与逐层原句/参数/编号/全文/真人回答证据，
+  没有question时先记“问题未生成”，普通选择不冒充完整路线授权实机正证。
+  同步AGENTS/ROADMAP/HANDOFF/DEVELOPMENT §3.13/BRIDGE §6当前入口。
+- **材料与待验**：旧手册/HTML/反馈模板及已固定RG3 ZIP哈希未变，
+  RG3包保留其当时检查点，不回写RG4测试/材料；RG4交接另用本次文档。
+  改动前8份文件保存在忽略的 `build/rg4-baseline/`；
+  协作者四份关键源码哈希未变，未向协作者发送消息。
+  差异空白检查及新增行机器路径/凭据样式扫描通过；
+  交接表四个SHA256已与实际文件逐项匹配。
+  当前卡为RG4协作者修复/联合验收待交付；15项认可、T12部分认可、
+  T11/T14/B01阻塞保持，RG3/T11/T14留待集中实测，RG5/RG6本轮未开始。
+
+### RG3取消视觉补证准备（2026-10-13 09:37，Asia/Shanghai）
+
+- **范围**：维护者授权进入RG3，继续按相关开发后集中补测的安排推进准备。
+  首轮已经有真实取消、无后续scan、方块保留与零耐久消耗的正证；
+  本卡只补可见裂纹→取消清除、正常世界连续10秒停手、不重载直接新status三项。
+  本轮未修改动作实现、未新增MC API或测试，不修改宿主/协作者连接器/参考项目。
+- **材料**：细化 `docs/REAL-GAME-RETESTING.md` 的T12连续录像步骤，
+  单独记录受理、裂纹、停止点击/回执、恢复世界起止、新任务回执的时间点，
+  不将菜单/后台时间计入10秒，不以按钮状态查询替代新任务。
+  新增 `docs/templates/RG3-T12-FEEDBACK.md`（rg3-t12-v1），A/B/C初始均未测，
+  场景未触达/缺画面记阻塞，实际继续破坏/旧scan/恢复旧任务按现场记失败；
+  新任务模型/网络错误单独定位，不直接归属取消资源释放。
+  同步ROADMAP、HANDOFF、DEVELOPMENT §3.12及AGENTS当前卡指向。
+- **本地候选包**：`build/mcbot-rg3-retest-20261013.zip`，567397字节，
+  SHA256 `12cbd92ec531eda1fbeb17b7b52485a2332398ee2cd478636649b5cea336ac15`。
+  展开目录 `build/rg3-retest-20261013/`；START-HERE、同一份JAR、补测步骤、
+  初始未测T12模板、首轮历史手册（只参考准备）、SOURCE-CHECKPOINT与MANIFEST共7文件。
+  manifest状态PREPARED_NOT_GAME_ACCEPTED；当前无Git元数据，git_commit为null，
+  指纹清单记录196个源码/构建配置的相对路径与SHA256，不伪造提交号。
+  包不含凭据、玩家配置、世界、日志或外部连接器；仅存忽略的build，
+  未覆盖/发布旧0.1.0资产。
+- **构建检查（09:34）**：`build --offline --console=plain --no-daemon` 13s成功，
+  20任务全部UP-TO-DATE，日志 `build/rg3-preparation-build-20261013.log`。
+  588项XML（核心214/根82/客户端292）仍为09:22的RG2既有报告，
+  失败/错误/跳过全0，本次没有重新执行测试。
+  JAR SHA256仍为 `ce762458248dc0a1ac4531a8b68c01ca64f8f60cdcc463c277beb1e9d95d0549`；
+  本轮仅整理补测材料，不另增重复实现的离线测试。
+- **交付验证（09:36）**：直接读取ZIP，核对7项清单与6项payload长度/SHA256；
+  196个源码/配置指纹与当前文件匹配，原REAL-GAME-TESTING、HTML、
+  GAME-TEST-FEEDBACK三份哈希未变；list-java无残留。
+  未启动runClient/runServer或真实模型，未安装包或向协作者发送消息。
+- **未关账**：当前卡为RG3真实验收待集中测试；15项认可、T12部分认可、
+  T11/T14/B01阻塞保持。收到录像/日志/新JAR哈希后按三个子项复核，
+  不用本次缓存构建、包哈希或代码收尾路径充当真实停手证据；
+  本轮未开始RG4实现或后置卡，当前源码快照无法提交/推送。
+
+### RG2确定性服务端只读验证（2026-10-13 09:24，Asia/Shanghai）
+
+- **范围与检查点**：维护者授权进入RG2。本轮只修改mcbot服务端派发/权限诊断、
+  显式命令、离线回归及相关文档，未修改宿主、独立连接器、参考项目或旧实机手册/HTML。
+  换设备后的当前目录是无 `.git` 的源码快照，RG2未提交/推送，没有新提交号；
+  下方RG1/main/远端同步记录是历史检查点，不代表本机已有Git检出。
+- **确定性入口**：游戏聊天 `/mcbot verify_readonly`，需要OP/gamemaster、
+  主人自己的同伴且无活动任务；控制台代投、缺同伴、已有任务均拒绝。
+  固定临时task_id=9223372036854775807，task_begin(read_only=true) → wait(1) → task_end
+  执行生产dispatcher同一handle，保留实际限流桶、白名单、args对象、owner、身份/维度门。
+  不提供任意工具诊断接口或权限绕行开关；桥v1.0不变。
+- **可定位拒绝**：ServerActionGate保留DENIED反馈，内部data可附
+  `permission_denial {gate,reason,tool,task_id?,dimension?}`；
+  区分TASK_REQUIRED、TASK_IDENTITY_MISMATCH、READ_ONLY和TOOL_NOT_ALLOWED。
+  PASS必须为匹配seq/task/tool/维度的ok=false与server_action/READ_ONLY；
+  限流、未知工具或只读任务未建立为FAIL/BLOCKED，不能记权限门通过。
+  日志 `[rg2-readonly] RG2 PASS ... gate=server_action reason=READ_ONLY`；
+  命令本地捕获编码回执，不向客户端PendingJobs注入额外tool_result。
+  最后只清自身临时上下文；task_end受限流拒绝时仍收尾，不替换旧任务。
+- **离线边界**：包级Sender/Body/ToolAccess只替换MC身体查找、效果、包投递，
+  RateGuard增加包级可控时钟，生产仍使用System.nanoTime和20/s、突发60。
+  实际dispatcher/Envelope编码、ActionPermissions、ServerActionGate、
+  CompanionScheduler执行；17项新增覆盖10类修改工具与观察/query、
+  伪造参数/失效畸形task/身体替换/换维度、撤销/取消、按发送者限流、
+  验证前置/PASS/FAIL/BLOCKED/受限流收尾、下一任务与唯一ack/终态。
+  没有创建世界/服务器/玩家或调用真实模型；无新增MC API签名事实。
+- **专项证据（09:18）**：dispatcher17 + ServerActionGate4 + runner权限6，共27项，
+  failures/errors/skipped均0；`build/rg2-dispatcher-tests.log`，18s成功，
+  8任务中4执行/4缓存。客户端test任务实际执行，XML已核对。
+- **完整构建（09:22）**：`build --offline --console=plain --no-daemon` 30s成功，
+  20任务中14执行/6缓存，日志 `build/rg2-build-20261013.log`。
+  核心214、根82、客户端292共588项本轮全部重新执行，75份XML失败/错误/跳过全0；
+  本轮新增17项，不把历史571项缓存证据充作本次执行。
+  本地测试JAR `build/libs/mcbot-0.1.0.jar` SHA256：
+  `ce762458248dc0a1ac4531a8b68c01ca64f8f60cdcc463c277beb1e9d95d0549`。
+  list-java无残留；未安装包，未启动runClient/runServer或真实模型，
+  不覆盖/发布旧0.1.0发行附件。
+- **实机与交接**：T11入口就绪但未运行游戏；命令将验证真实服务端dispatcher/权限与
+  owned身体查找，不经过自定义C2S codec/Fabric网络、客户端预派发/模型循环或外部桥。
+  固定wait触达共用动作门，不代替每个工具的物理行为验证。
+  操作、完整PASS定位、无改动与不重载直接新任务判据见 `docs/REAL-GAME-RETESTING.md`；
+  同步DEVELOPMENT §3.11、TOOLS §2.6、ARCHITECTURE、ROADMAP和接手入口。
+  15项认可、T12部分认可、T11/T14/B01阻塞不变；RG3仅补T12视觉证据，
+  RG4由协作者推进真实question闭环，本轮未开始其他卡。
+
+### 换设备开发交接与文档同步（2026-10-13，Asia/Shanghai，RG2前历史记录）
 
 - **维护者安排**：本轮只整理文档/开发日志并提交推送，换设备后继续本体开发；
   不在交接时提前实施RG2，不要求立即进游戏。相关开发完成后集中实机补测的偏好继续有效。
@@ -2675,8 +3327,11 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 被动重力/落地（10-13 javap/编译/离线体素，未运行身体） | Player.travel(Vec3)公开，经LivingEntity.travelInAir/travelInFluid与Entity.move处理原版重力/碰撞。Entity.updateInWaterStateAndDoFluidPushing/applyEffectsFromBlocks为protected；doCheckFallDamage(double,double,double,boolean)公开final。Player.isClientAuthoritative恒true，Entity.move仅local-instance-authoritative自动checkFallDamage，因此玩家须额外结算一次实际位移。LevelReader.hasChunksAt(int,int,int,int)是水平块坐标范围，不检查Y，不生成区块；ServerPlayer.setKnownMovement(Vec3)与ServerChunkCache.move(ServerPlayer)公开。ServerLevel.tickNonPassenger在实体tick前设置旧位置并推进tickCount。本轮不调用完整doTick，不以编译/体素测试推定原生下落已验 |
+| 动作朝向/可见性（10-13 javap/编译/离线clip，未运行身体） | Entity.lookAt(EYES,Vec3)设置pitch/yaw/headYaw；ServerPlayer覆写另向自身连接发look包，不设置bodyYaw，因此同伴另调用setYBodyRot。ServerEntity根据yaw/headYaw向观察者同步。LivingEntity.updateSwingTime为protected，可直接复用推进/收尾swing；ServerPlayer.tick不执行它。Player.blockInteractionRange公开。BlockState.getShape(BlockGetter,BlockPos,CollisionContext)、VoxelShape.toAabbs、BlockGetter.clip(ClipContext)/traverseBlocks公开；OUTLINE/NONE可用。ServerPlayer.teleportTo(double,double,double)带Relative.ROTATION保留当前旋转。未启用完整doTick，不以编译/字节码推定原生画面已验 |
+| 身体生命观测（RG6，10-13 javap/编译，未运行身体） | ServerPlayer.hurtServer(ServerLevel,DamageSource,float):boolean可覆写；getHealth/getMaxHealth/getAbsorptionAmount、Entity.isInvulnerable/onGround及公开double fallDistance可读。DamageSource.typeHolder().unwrapKey()返回注册ResourceKey，ResourceKey.identifier()返回Identifier。字节码调用一次原版hurtServer、保留super.tick，无doTick/setHealth；不以此推定现场伤因或原版损伤已运行 |
 | 资源/容器读取（C5，10-11 javap + 编译，未运行世界） | ServerChunkCache.getChunkNow(int,int)返回LevelChunk，缓存缺失返回null；LevelChunk.getBlockState(BlockPos)可用。Registry.getOptional(Identifier)、getTagOrEmpty(TagKey)与BlockState.is(TagKey)可用；未知/空标签拒绝。RandomizableContainerBlockEntity.getLootTable()可先识别未展开战利品，不调用getItem触发展开；世界/标签运行时仍待验 |
-| 拾取目标/维度（C3，10-10 javap + 编译，未运行实体/Mixin） | ItemEntity 私有 `UUID target` 与 `int pickupDelay`；`getOwner()` 返回 thrower 对应 Entity，不能代替 target；playerTouch 的字节码检查 pickupDelay==0 且 target为空或等于玩家UUID，`hasPickUpDelay()` 则为 pickupDelay>0。本体 collect 使用 hasPickUpDelay 和只读 target accessor，不宣称 playerTouch 已运行。ResourceKey.identifier() 可取得维度 ID，身体实例与提交时 ServerLevel 引用另外绑定 |
+| 拾取目标/维度（C3与10-13掉落卡，javap + 编译，未运行实体/Mixin） | ItemEntity 私有 `UUID target` 与 `int pickupDelay`；`getOwner()` 返回thrower，不能代替target。playerTouch(Player):void检查pickupDelay==0与target；hasPickUpDelay为>0。collect已接原版playerTouch，调用前检查未骑乘触碰盒body.inflate(1,.5,1)、延迟/归属/加载；原版discard后为拾取包恢复堆栈数量，回执按isRemoved?0:剩余count判实际移动。无被动自动拾取；原生效果仍待验。ResourceKey.identifier()取得维度ID，身体与提交时ServerLevel引用另外绑定 |
 | 近战/身体时钟（C4，10-11 javap + 编译，未运行实体/Mixin） | Player.attack(Entity)返回void，经原版伤害/耐久/附魔/击退路径，onAttack只resetOnlyAttackStrengthTicker；满冷却用getAttackStrengthScale(0)，cannotAttackWithItem(ItemStack,int)另检查MINIMUM_ATTACK_CHARGE；isWithinAttackRange(AABB,double)委托AttackRange。ServerPlayer.tick不调用Player.tick；ServerPlayer.doTick才调用后者，假连接不驱动listener doTick。Player.tick推进protected attackStrengthTicker/itemSwapTicker，主手不同物品时两者归零，同类耐久/组件变化不归零 |
 | 装备/横扫/保护（C4，10-11 javap + 编译，未运行世界） | LivingEntity私有detectEquipmentUpdates先collectEquipmentChanges移除旧modifier再用实际ItemStack.forEachModifier/原版附魔效果加入新modifier，用Invoker复用。Player剑横扫查询目标AABB.inflate(1,.25,1)内LivingEntity，排自己/主目标/同队等再hurtServer；本体更保守地拒绝第三活物。OwnableEntity.getOwnerReference可不加载主人判定归属，TamableAnimal.isTame、animal.equine.AbstractHorse.isTamed；Enemy接口覆盖不属于Monster的敌对类型。PIERCING_WEAPON/KINETIC_WEAPON组件与MaceItem单独拒绝 |
 | 破坏/耐久（C2，10-10 javap + 编译；未运行世界动作） | BlockState.getDestroySpeed(BlockGetter,BlockPos) 是硬度，getDestroyProgress(Player,BlockGetter,BlockPos) 按真实身体速度/硬度/采收门计算；零硬度可正无穷。ServerPlayerGameMode.destroyBlock(BlockPos) 使用真实主手 canDestroyBlock、限制检查、playerWillDestroy/removeBlock/destroy，非创造模式执行主手 mineBlock，只有移除且可采收才 playerDestroy；返回 true 不保证 removeBlock 成功，失败也可能已损耗耐久 |

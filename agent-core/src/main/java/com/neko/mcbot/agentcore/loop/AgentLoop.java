@@ -51,7 +51,7 @@ public final class AgentLoop {
         default void onUsage(long prompt, long completion, long cached) {
         }
 
-        /** 合法 prefix reset 事件（reason: compaction / directive-boundary）。
+        /** 合法 prefix reset 事件（reason: compaction / directive-boundary / context-clear）。
          *  宿主接成 "[brain] prefix reset reason=..." 日志；观测用，不影响逻辑。 */
         default void onPrefixReset(String reason) {
         }
@@ -188,6 +188,12 @@ public final class AgentLoop {
     private int repeatCount;
     private boolean stuckAbort;
     private boolean noTargetsAbort;
+    private int contextWindow = 64000;
+    private com.google.gson.JsonObject initialInventory;
+    private com.google.gson.JsonObject latestObservation;
+    private ItemGoal itemGoal;
+    private int rejectedFinishes;
+    private int lastFinishProgress = -1;
     /** 本步工具调用的落账账本；非 null = "这一步的工具还没全部写进对话"。 */
     private Ledger ledger;
     /**
@@ -222,6 +228,52 @@ public final class AgentLoop {
 
     public Conversation conversation() {
         return convo;
+    }
+
+    public synchronized int steps() { return steps; }
+    public synchronized boolean busy() { return running || activeDirective != null || !pending.isEmpty(); }
+
+    public synchronized void configureContext(int threshold, int recentBudget, boolean automatic) {
+        convo.configure(threshold, recentBudget, automatic);
+    }
+
+    public synchronized void configureWindow(int tokens) {
+        if (tokens < 512) throw new IllegalArgumentException("Context window too small");
+        contextWindow = tokens;
+    }
+
+    /** Serializes manual summaries with task submission and uses the same cancellation owner. */
+    public synchronized CompletableFuture<Boolean> compactNow() {
+        if (closed || busy()) return CompletableFuture.completedFuture(false);
+        int resets = convo.prefixResets();
+        running = true;
+        long expectedGeneration = generation;
+        try {
+            convo.onDirectiveBoundary();
+            return convo.compact(this::summaryRequest).handle((v, failure) -> {
+                synchronized (AgentLoop.this) {
+                    if (closed || generation != expectedGeneration) return false;
+                    boolean changed = convo.prefixResets() > resets;
+                    activeResponse = null;
+                    pump();
+                    return changed;
+                }
+            });
+        } catch (RuntimeException failure) {
+            activeResponse = null;
+            pump();
+            return CompletableFuture.completedFuture(false);
+        }
+    }
+
+    public synchronized void clearContext() {
+        cancelDirective();
+        // A chain-end or manual summary can still be in flight while currentTaskId is zero.
+        generation++;
+        if (activeResponse != null) activeResponse.cancel(true);
+        activeResponse = null;
+        convo.clear();
+        running = false;
     }
 
     public synchronized void submit(String directive) {
@@ -420,6 +472,12 @@ public final class AgentLoop {
         stuckAbort = false;
         noTargetsAbort = false;
         emptySearches = 0;
+        initialInventory = null;
+        latestObservation = null;
+        itemGoal = null;
+        rejectedFinishes = 0;
+        lastFinishProgress = -1;
+        blockReason = null;
         // 新指令不继承上一条的账本/PARK（换发路径已在 submit 里补齐合成回执）
         ledger = null;
         parked = false;
@@ -433,7 +491,7 @@ public final class AgentLoop {
             return;
         }
         if (stuckAbort) {
-            finishCurrent(TaskStatus.FAILED, noTargetsAbort
+            finishCurrent(TaskStatus.FAILED, blockReason != null ? blockReason : noTargetsAbort
                     ? "NO_TARGETS:三次有界搜索未取得目标，先停止并汇报已查范围；空结果不证明资源不存在。"
                     : "[内部] 我在同一个操作上反复无进展，先停下了。");
             return;
@@ -450,6 +508,10 @@ public final class AgentLoop {
         long stepGeneration = generation;
         StepReactor reactor = new StepReactor(stepGeneration);
         activeReactor = reactor;
+        observeForTurn(stepGeneration, reactor, false);
+    }
+
+    private void observeForTurn(long stepGeneration, StepReactor reactor, boolean compactAttempted) {
         CompletableFuture<ToolOutcome> observation;
         try {
             observation = java.util.Objects.requireNonNull(executor.observe(activeDirective.id()));
@@ -464,13 +526,63 @@ public final class AgentLoop {
                     finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:没有取得有效的最新身体状态，任务已停止；不能猜测完成。");
                     return;
                 }
-                var history = new ArrayList<>(convo.outboundHistory());
-                if (!state.feedback().isBlank()) history.add(new Msg.Nudge(
-                        "[本轮服务端身体观测 task_id=" + activeDirective.id() + " step=" + steps
-                                + "，仅对本次请求有效]\n" + state.feedback()));
-                requestTurn(stepGeneration, reactor, List.copyOf(history));
+                latestObservation = state.data();
+                if (initialInventory == null && latestObservation.has("inventory"))
+                    initialInventory = latestObservation.deepCopy();
+                if (itemGoal != null) {
+                    try { itemGoal.observe(latestObservation); }
+                    catch (RuntimeException invalid) {
+                        finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:无法核对目标的实际背包数量，未判完成。");
+                        return;
+                    }
+                }
+                var history = turnHistory(state);
+                String system = systemPrompt.get();
+                int tokens = convo.requestTokens(system, tools, history);
+                int reserve = Math.min(2048, contextWindow / 4);
+                boolean tooLarge = tokens > contextWindow - reserve;
+                if (!compactAttempted && convo.canAutoCompact()
+                        && (tooLarge || convo.compactionDue(tokens))) {
+                    listener.onNotice("正在整理任务内历史，目标和实际进度单独保留。");
+                    convo.compact((s, h, t) -> summaryRequest(s, h, t)).whenComplete((v, error) -> {
+                        synchronized (AgentLoop.this) {
+                            if (!isCurrent(stepGeneration) || activeReactor != reactor) return;
+                            activeResponse = null;
+                            // Summarization may take seconds: re-read world facts before the next action.
+                            observeForTurn(stepGeneration, reactor, true);
+                        }
+                    });
+                    return;
+                }
+                if (tooLarge) {
+                    finishCurrent(TaskStatus.FAILED, "CONTEXT_LIMIT:完整请求超出配置窗口的输入预算，已停止；原历史保留，未继续调用模型。");
+                    return;
+                }
+                convo.noteRequest(system, tools, history);
+                requestTurn(stepGeneration, reactor, history);
             }
         });
+    }
+
+    private List<Msg> turnHistory(ToolOutcome state) {
+        var history = new ArrayList<>(convo.outboundHistory());
+        if (itemGoal != null || history.stream().noneMatch(m -> m instanceof Msg.User u
+                && u.text().equals(activeDirective.text())))
+            history.add(new Msg.Nudge("[当前任务的独立事实账]\n原始指令："
+                    + activeDirective.text() + (itemGoal == null ? "" : "\n" + itemGoal.facts())));
+        if (!state.feedback().isBlank()) history.add(new Msg.Nudge(
+                "[本轮服务端身体观测 task_id=" + activeDirective.id() + " step=" + steps
+                        + "，仅对本次请求有效]\n" + state.feedback()));
+        return List.copyOf(history);
+    }
+
+    private CompletableFuture<AssistantTurn> summaryRequest(String system, List<Msg> history, List<ToolSpec> definitions) {
+        long tokens = Conversation.estimateTokens(system);
+        for (Msg m : history) if (m instanceof Msg.User u) tokens += Conversation.estimateTokens(u.text());
+        if (tokens > contextWindow - Math.min(2048, contextWindow / 4))
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Summary exceeds context budget"));
+        activeResponse = engine.chat(system, history, definitions);
+        return activeResponse;
     }
 
     private void requestTurn(long stepGeneration, StepReactor reactor, List<Msg> history) {
@@ -509,13 +621,49 @@ public final class AgentLoop {
         reactor.seal();
         convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
         if (!turn.hasToolCalls()) {
-            finishCurrent(TaskStatus.COMPLETED, turn.text());
+            if (itemGoal == null) finishCurrent(TaskStatus.COMPLETED, turn.text());
+            else verifyFinish(stepGeneration, reactor, turn.text());
             return;
         }
         Ledger led = new Ledger(turn.toolCalls(), reactor);
         ledger = led;
         runTools(reactor.startedSnapshot(), turn, led, stepGeneration)
                 .thenRun(() -> afterTools(led, stepGeneration));
+    }
+
+    private void verifyFinish(long expectedGeneration, StepReactor reactor, String text) {
+        CompletableFuture<ToolOutcome> observation;
+        try { observation = java.util.Objects.requireNonNull(executor.observe(activeDirective.id())); }
+        catch (RuntimeException failure) { observation = CompletableFuture.failedFuture(failure); }
+        observation.whenComplete((state, failure) -> {
+            synchronized (AgentLoop.this) {
+                if (!isCurrent(expectedGeneration) || activeReactor != reactor) return;
+                try {
+                    if (failure != null || state == null || !state.ok() || state.accepted())
+                        throw new IllegalArgumentException();
+                    itemGoal.observe(state.data());
+                } catch (RuntimeException unavailable) {
+                    finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:结束前没有有效背包事实，未判目标完成。");
+                    return;
+                }
+                if (itemGoal.satisfied()) {
+                    finishCurrent(TaskStatus.COMPLETED, text);
+                    return;
+                }
+                int progress = itemGoal.progress();
+                rejectedFinishes = progress > lastFinishProgress ? 1 : rejectedFinishes + 1;
+                lastFinishProgress = progress;
+                if (rejectedFinishes >= 3) {
+                    finishCurrent(TaskStatus.FAILED, "GOAL_NOT_MET:连续结束但实际目标未满足，已停止。"
+                            + itemGoal.facts());
+                    return;
+                }
+                convo.add(new Msg.Nudge("[目标校验未通过] " + itemGoal.facts()
+                        + "\n继续按当前事实推进；若确实无法继续，用report_blocked说明实际障碍。不要再次声称完成。"));
+                listener.onNotice("目标实际数量未满足，继续当前任务；尚未发送done。");
+                step();
+            }
+        });
     }
 
     private void finishCurrent(TaskStatus status, String text) {
@@ -614,11 +762,46 @@ public final class AgentLoop {
 
     private CompletableFuture<ToolOutcome> executeTool(ToolCall call) {
         try {
+            if ("set_goal".equals(call.name())) return CompletableFuture.completedFuture(setGoal(call.argsJson()));
+            if ("report_blocked".equals(call.name())) {
+                var args = com.google.gson.JsonParser.parseString(call.argsJson()).getAsJsonObject();
+                if (!args.keySet().equals(Set.of("reason")) || !args.get("reason").isJsonPrimitive()
+                        || !args.get("reason").getAsJsonPrimitive().isString()
+                        || args.get("reason").getAsString().isBlank() || args.get("reason").getAsString().length() > 512)
+                    return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:受阻原因须为1-512字符。"));
+                stuckAbort = true;
+                blockReason = "BLOCKED:" + args.get("reason").getAsString()
+                        + (itemGoal == null ? "" : "\n" + itemGoal.facts());
+                return CompletableFuture.completedFuture(new ToolOutcome(false, blockReason));
+            }
+            if ("gather".equals(call.name())) {
+                var args = com.google.gson.JsonParser.parseString(call.argsJson()).getAsJsonObject();
+                var goal = new com.google.gson.JsonObject();
+                for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
+                var receipt = setGoal(goal.toString());
+                if (!receipt.ok()) return CompletableFuture.completedFuture(receipt);
+            }
             return java.util.Objects.requireNonNull(executor.execute(call.name(), call.argsJson()))
                     .handle((outcome, failure) -> failure == null && outcome != null
                             ? outcome : toolFailure());
         } catch (RuntimeException failure) {
             return CompletableFuture.completedFuture(toolFailure());
+        }
+    }
+
+    private String blockReason;
+
+    private ToolOutcome setGoal(String json) {
+        try {
+            ItemGoal.Target target = ItemGoal.Target.parse(json);
+            if (itemGoal != null && !itemGoal.target().equals(target))
+                return new ToolOutcome(false, "DENIED:当前任务的物品目标已固定，不能降低数量/更换物品/改口径。");
+            ItemGoal candidate = itemGoal == null ? new ItemGoal(target, initialInventory) : itemGoal;
+            candidate.observe(latestObservation);
+            itemGoal = candidate;
+            return new ToolOutcome(true, itemGoal.facts());
+        } catch (RuntimeException invalid) {
+            return new ToolOutcome(false, "DENIED:目标须为有效物品ID、1-4096整数count、additional或total口径，且有任务开始的完整背包事实。");
         }
     }
 
@@ -851,10 +1034,7 @@ public final class AgentLoop {
         if (convo.needsCompaction()) {
             long expectedGeneration = generation;
             try {
-                convo.compact((system, history, definitions) -> {
-                    activeResponse = engine.chat(system, history, definitions);
-                    return activeResponse;
-                }).whenComplete((v, t) -> {
+                convo.compact(this::summaryRequest).whenComplete((v, t) -> {
                     synchronized (AgentLoop.this) {
                         if (!closed && generation == expectedGeneration) {
                             pump();

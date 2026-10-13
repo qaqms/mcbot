@@ -5,6 +5,9 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.server.ItemTransfers;
+import com.neko.mcbot.server.GroundItems;
+import com.neko.mcbot.common.ResourceLocationHelper;
+import net.minecraft.core.registries.BuiltInRegistries;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.task.CompanionScheduler;
 import com.neko.mcbot.mixin.ItemTargetAccess;
@@ -18,15 +21,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-/** collect：把指定点（默认为自己脚下）半径内掉落地上的物品吸进背包。 */
+/** Explicit local pickup; a search radius never extends the body's vanilla touch range. */
 public final class CollectTool implements ServerTool {
-    record Arguments(BlockPos center, int radius) {
+    record Arguments(BlockPos center, int radius, String item) {
     }
 
     interface GroundItem {
         ItemStack stack();
         void settle(ItemStack remainder);
         default boolean eligible() { return true; }
+        default int pickup(Container inventory) {
+            return ItemTransfers.receive(inventory, stack(), this::settle).moved();
+        }
     }
 
     interface Access {
@@ -62,11 +68,20 @@ public final class CollectTool implements ServerTool {
         @Override public boolean eligible() {
             // getOwner() is the thrower, not the pickup target in this version.
             var target = ((ItemTargetAccess) entity).mcbot$getPickupTarget();
-            return CollectTool.eligible(target, companion.getUUID(), entity.isAlive(), entity.hasPickUpDelay(),
+            return companion.isAlive() && !companion.isPassenger()
+                    && GroundItems.touches(companion.getBoundingBox(), entity.getBoundingBox())
+                    && CollectTool.eligible(target, companion.getUUID(), entity.isAlive(), entity.hasPickUpDelay(),
                     companion.level().isLoaded(entity.blockPosition()), entity.distanceToSqr(companion),
                     entity.distanceToSqr(center.getX() + .5, center.getY() + .5, center.getZ() + .5), radius);
         }
         @Override public ItemStack stack() { return entity.getItem(); }
+        @Override public int pickup(Container inventory) {
+            int before = entity.getItem().getCount();
+            entity.playerTouch(companion);
+            // Vanilla restores a discarded stack's count for its pickup packet.
+            int left = entity.isRemoved() ? 0 : entity.getItem().getCount();
+            return Math.max(0, before - left);
+        }
         @Override public void settle(ItemStack remainder) {
             if (remainder.isEmpty()) entity.discard();
             else entity.setItem(remainder);
@@ -105,7 +120,18 @@ public final class CollectTool implements ServerTool {
             center = new BlockPos(x, y, z);
         }
         Integer radius = args.has("r") ? integer(args, "r") : Integer.valueOf(3);
-        return radius == null || radius < 1 || radius > 12 ? null : new Arguments(center, radius);
+        String item = null;
+        if (args.has("item")) {
+            var value = args.get("item");
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) return null;
+            try {
+                if (value.getAsString().isBlank() || value.getAsString().length() > 128) return null;
+                var id = ResourceLocationHelper.of(value.getAsString());
+                if (!BuiltInRegistries.ITEM.containsKey(id)) return null;
+                item = id.toString();
+            } catch (RuntimeException invalid) { return null; }
+        }
+        return radius == null || radius < 1 || radius > 12 ? null : new Arguments(center, radius, item);
     }
 
     private static Integer integer(JsonObject args, String key) {
@@ -140,17 +166,19 @@ public final class CollectTool implements ServerTool {
         Container inventory = access.inventory();
         for (GroundItem it : access.items(at, args.radius())) {
             if (!it.eligible()) continue;
-            ItemStack stack = it.stack();
+            ItemStack stack = it.stack().copy();
             if (stack.isEmpty()) {
                 continue;
             }
-            var movement = ItemTransfers.receive(inventory, stack, it::settle);
-            collectedCount += movement.moved();
-            remainingCount += movement.remainder().getCount();
-            if (movement.moved() > 0) {
-                if (got.size() < 32) got.add(InventoryTool.describe(stack.copyWithCount(movement.moved())));
+            if (args.item() != null && !BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().equals(args.item())) continue;
+            int moved = it.pickup(inventory);
+            int remainder = Math.max(0, stack.getCount() - moved);
+            collectedCount += moved;
+            remainingCount += remainder;
+            if (moved > 0) {
+                if (got.size() < 32) got.add(InventoryTool.describe(stack.copyWithCount(moved)));
             }
-            if (!movement.remainder().isEmpty() && left.size() < 32) left.add(InventoryTool.describe(movement.remainder()));
+            if (remainder > 0 && left.size() < 32) left.add(InventoryTool.describe(stack.copyWithCount(remainder)));
         }
         JsonObject data = new JsonObject();
         JsonArray arr = new JsonArray();
@@ -160,7 +188,7 @@ public final class CollectTool implements ServerTool {
         data.addProperty("remaining_count", remainingCount);
         data.addProperty("partial", collectedCount > 0 && remainingCount > 0);
         if (collectedCount == 0 && remainingCount == 0) {
-            return new Result(true, "半径 " + args.radius() + " 内地上没有可捡的东西。", data);
+            return new Result(true, "当前身体触碰范围内没有可拾取的匹配物品；搜索半径不会扩大拾取距离，需走近或等拾取延迟。", data);
         }
         return new Result(remainingCount == 0,
                 "捡起 " + collectedCount + " 个：" + String.join("、", got)

@@ -15,6 +15,64 @@ import static org.junit.jupiter.api.Assertions.*;
 class BlockMiningTest {
     @BeforeAll static void registriesOnly() { bootstrap(); }
 
+    @Test void miningFacesAndSwingsOnlyDuringValidatedWork() {
+        Mining access = new Mining();
+        BlockMining mining = new BlockMining(access);
+        assertNull(mining.preflight(5.5));
+        assertEquals(0, access.turns);
+        assertEquals(0, access.swings);
+        for (int i = 0; i < 3; i++) assertNull(mining.tick());
+        assertTrue(mining.tick().ok());
+        assertEquals(4, access.turns);
+        assertEquals(4, access.swings);
+        mining.tick();
+        mining.abort();
+        assertEquals(4, access.swings);
+        assertEquals(1, access.destroys);
+    }
+
+    @Test void lostSightStopsWorkAndClearsCracksWithoutAnotherSwing() {
+        Mining access = new Mining();
+        BlockMining mining = new BlockMining(access);
+        assertNull(mining.tick());
+        access.sightFailure = new ServerTool.Result(false, "TARGET_BLOCKED:wall", null);
+        var result = mining.tick();
+        assertTrue(result.feedback().startsWith("TARGET_BLOCKED:"));
+        assertFalse(result.data().get("removed").getAsBoolean());
+        assertEquals(1, access.turns);
+        assertEquals(1, access.swings);
+        assertEquals(-1, access.cracks.getLast());
+        assertEquals(0, access.destroys);
+        assertSame(result, mining.tick());
+    }
+
+    @Test void blockedOrAirTargetsAndInvalidProgressNeverSwing() {
+        for (int scenario = 0; scenario < 3; scenario++) {
+            Mining access = new Mining();
+            switch (scenario) {
+                case 0 -> access.sightFailure = new ServerTool.Result(false, "TARGET_BLOCKED:wall", null);
+                case 1 -> access.state = Blocks.AIR.defaultBlockState();
+                case 2 -> access.gain = 0;
+            }
+            new BlockMining(access).tick();
+            assertEquals(0, access.turns);
+            assertEquals(0, access.swings);
+            assertEquals(0, access.destroys);
+            assertTrue(access.cracks.isEmpty());
+        }
+    }
+
+    @Test void actualViewMismatchAfterTurningStopsBeforeSwingOrCrack() {
+        Mining access = new Mining();
+        access.turnFailure = new ServerTool.Result(false, "TARGET_BLOCKED:actual view missed", null);
+        var result = new BlockMining(access).tick();
+        assertTrue(result.feedback().startsWith("TARGET_BLOCKED:"));
+        assertEquals(1, access.turns);
+        assertEquals(0, access.swings);
+        assertEquals(0, access.destroys);
+        assertTrue(access.cracks.isEmpty());
+    }
+
     @Test void wrongHarvestToolStopsBeforeCracksLootOrDurability() {
         Mining access = new Mining();
         access.correct = false;
@@ -26,6 +84,8 @@ class BlockMiningTest {
         assertEquals(0, access.destroys);
         assertTrue(access.cracks.isEmpty());
         assertTrue(ItemStack.matches(before, access.held()));
+        assertEquals(0, access.turns);
+        assertEquals(0, access.swings);
         assertTrue(access.state.is(Blocks.STONE));
     }
 
@@ -150,8 +210,9 @@ class BlockMiningTest {
         assertFalse(result.ok());
         assertTrue(result.data().get("removed").getAsBoolean());
         assertFalse(result.data().get("reported_success").getAsBoolean());
-        assertEquals(2, result.data().get("collected_count").getAsInt());
-        assertEquals(2, access.inventory.countItem(Items.COBBLESTONE));
+        assertEquals(0, result.data().get("collected_count").getAsInt());
+        assertEquals(2, result.data().get("remaining_count").getAsInt());
+        assertEquals(0, access.inventory.countItem(Items.COBBLESTONE));
     }
 
     @Test void actionMutatesOriginalToolAndIsNotInvokedAgainForLootOrDamage() {
@@ -176,7 +237,7 @@ class BlockMiningTest {
         assertEquals(1, access.destroys);
     }
 
-    @Test void oldDropsStayUntouchedAndNewPartialRemainderKeepsAllComponents() {
+    @Test void miningLeavesAllNewAndOldDropsUntouchedEvenWithPartialInventorySpace() {
         Mining access = new Mining();
         access.gain = 1;
         ItemStack sample = new ItemStack(Items.COBBLESTONE, 10);
@@ -193,23 +254,23 @@ class BlockMiningTest {
         };
         BlockMining mining = new BlockMining(access);
         var result = mining.tick();
-        assertFalse(result.ok());
+        assertTrue(result.ok());
         assertTrue(result.data().get("removed").getAsBoolean());
-        assertEquals(4, result.data().get("collected_count").getAsInt());
-        assertEquals(6, result.data().get("remaining_count").getAsInt());
+        assertEquals(0, result.data().get("collected_count").getAsInt());
+        assertEquals(10, result.data().get("remaining_count").getAsInt());
         assertEquals(0, old.settlements);
         assertEquals(5, old.stack.getCount());
-        assertEquals(1, fresh.settlements);
-        assertTrue(ItemStack.matches(sample.copyWithCount(6), fresh.stack));
-        assertTrue(ItemStack.matches(sample.copyWithCount(64), access.inventory.getItem(1)));
+        assertEquals(0, fresh.settlements);
+        assertTrue(ItemStack.matches(sample, fresh.stack));
+        assertTrue(ItemStack.matches(sample.copyWithCount(60), access.inventory.getItem(1)));
         assertEquals(75, old.stack.getCount() + fresh.stack.getCount() + access.inventory.countItem(Items.COBBLESTONE));
         assertTrue(result.feedback().contains("minecraft:cobblestone"));
         assertFalse(result.feedback().contains("sample"));
         assertSame(result, mining.tick());
-        assertEquals(1, fresh.settlements);
+        assertEquals(0, fresh.settlements);
     }
 
-    @Test void fullCollectionEmptiesOriginalDropWithoutRespawningAnything() {
+    @Test void miningNeverCollectsEvenWithAnEmptyPackAndDoesNotRespawnDrops() {
         Mining access = new Mining();
         access.gain = 1;
         Drop fresh = new Drop(new ItemStack(Items.COBBLESTONE, 4));
@@ -219,9 +280,11 @@ class BlockMiningTest {
         };
         var result = new BlockMining(access).tick();
         assertTrue(result.ok());
-        assertEquals(4, result.data().get("collected_count").getAsInt());
-        assertTrue(fresh.stack.isEmpty());
-        assertEquals(1, fresh.settlements);
+        assertEquals(0, result.data().get("collected_count").getAsInt());
+        assertEquals(4, result.data().get("remaining_count").getAsInt());
+        assertEquals(4, fresh.stack.getCount());
+        assertEquals(0, access.inventory.countItem(Items.COBBLESTONE));
+        assertEquals(0, fresh.settlements);
         assertEquals(1, access.drops.size());
     }
 
@@ -237,9 +300,9 @@ class BlockMiningTest {
             }
         };
         var result = new BlockMining(access).tick();
-        assertEquals(35, result.data().get("collected_count").getAsInt());
-        assertEquals(5, result.data().get("remaining_count").getAsInt());
-        assertEquals(32, result.data().getAsJsonArray("collected").size());
+        assertEquals(0, result.data().get("collected_count").getAsInt());
+        assertEquals(40, result.data().get("remaining_count").getAsInt());
+        assertEquals(32, result.data().getAsJsonArray("leftover").size());
         assertTrue(result.feedback().contains("最多32组"));
         assertTrue(WireSize.utf8Bytes(result.feedback()) < 12_000);
     }

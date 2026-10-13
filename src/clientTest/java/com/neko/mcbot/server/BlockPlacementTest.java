@@ -26,6 +26,18 @@ class BlockPlacementTest {
         return access;
     }
 
+    @Test void sightRefusalNeverPlacesOrConsumesTheSourceStack() {
+        Placement access = access();
+        access.sightFailure = new ServerTool.Result(false, "TARGET_BLOCKED:wall", null);
+        ItemStack before = access.inventory.getItem(13).copy();
+        var result = BlockPlacement.place(access, POS, 13, Direction.UP);
+        assertTrue(result.feedback().startsWith("TARGET_BLOCKED:"));
+        assertFalse(result.data().get("changed").getAsBoolean());
+        assertEquals(0, result.data().get("consumed_count").getAsInt());
+        assertEquals(0, access.calls);
+        assertTrue(ItemStack.matches(before, access.inventory.getItem(13)));
+    }
+
     @Test void originalFullStackFaceAndExactTargetCrossThePlacementBoundary() {
         Placement access = access();
         ItemStack original = access.inventory.getItem(13);

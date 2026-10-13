@@ -3,8 +3,38 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = fs.readFileSync(path.join(root, "docs/REAL-GAME-TESTING.md"), "utf8");
-const revision = "2026-10-11-main-60e523f-essential-v1";
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 1 || args[0] !== "--rg5")) {
+  throw new Error("Usage: node tools/build-game-testing-docs.mjs [--rg5]");
+}
+const rg5 = args.length === 1;
+const profile = rg5 ? {
+  source: "docs/REAL-GAME-TESTING-RG5.md",
+  revision: "2026-10-13-rg5-clarifications-v1",
+  ids: ["T02", "T08", "T09", "T10", "T11", "T15", "T16"],
+  page: "dist/game-testing-rg5.html",
+  template: "docs/templates/RG5-GAME-TEST-FEEDBACK.md",
+  pageTitle: "mcbot RG5 测试补充说明与反馈",
+  reportHeading: "# mcbot RG5 补充反馈",
+  jsonPrefix: "mcbot-rg5-feedback-",
+  markdownFilename: "mcbot-rg5-feedback.md",
+  timeExample: "2026-10-13 20:15 +08:00",
+  jar: ""
+} : {
+  source: "docs/REAL-GAME-TESTING.md",
+  revision: "2026-10-11-main-60e523f-essential-v1",
+  ids: [...Array.from({ length: 18 }, (_, i) => `T${String(i + 1).padStart(2, "0")}`), "B01"],
+  page: "dist/game-testing.html",
+  template: "docs/templates/GAME-TEST-FEEDBACK.md",
+  pageTitle: "mcbot 首轮实机必测与反馈",
+  reportHeading: "# mcbot 实机反馈",
+  jsonPrefix: "mcbot-feedback-",
+  markdownFilename: "mcbot-feedback.md",
+  timeExample: "2026-10-11 20:15 +08:00",
+  jar: "9d1260f975bc7f4005f63561c598fa5cd9f52c562fe869d2bbf0f8d916935b38"
+};
+const source = fs.readFileSync(path.join(root, profile.source), "utf8");
+const revision = profile.revision;
 const cases = [];
 const escape = (text) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 const inline = (text) => escape(text).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -19,7 +49,7 @@ function feedback(id) {
 <div class="fields">
 <label>结果<select data-field="result"><option>未测</option><option>通过</option><option>失败</option><option>阻塞</option></select></label>
 <label>指定工具是否执行<select data-field="execution"><option>看不清</option><option>执行了</option><option>没执行</option><option>不适用</option></select></label>
-<label>本地时间和时区<input data-field="time" placeholder="2026-10-11 20:15 +08:00"></label>
+<label>本地时间和时区<input data-field="time" placeholder="${profile.timeExample}"></label>
 <label>问题编号<input data-field="issue" placeholder="问题01"></label>
 </div>
 <label>实际现象和前后数量<textarea data-field="actual" rows="3" placeholder="填写你实际看到的；多个子场景分别写结果"></textarea></label>
@@ -68,7 +98,7 @@ for (const line of source.split(/\r?\n/)) {
   }
 }
 flush(); closeCase();
-const expectedIds = [...Array.from({ length: 18 }, (_, i) => `T${String(i + 1).padStart(2, "0")}`), "B01"];
+const expectedIds = profile.ids;
 if (code !== null || cases.map(c => c.id).join(",") !== expectedIds.join(",")) throw new Error("Manual structure invalid");
 
 const script = String.raw`
@@ -127,17 +157,17 @@ function download(text, filename, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 document.getElementById("json").addEventListener("click", () => {
-  save(); download(JSON.stringify(report(), null, 2), "mcbot-feedback-" + new Date().toISOString().slice(0,10) + ".json", "application/json");
+  save(); download(JSON.stringify(report(), null, 2), JSON_PREFIX + new Date().toISOString().slice(0,10) + ".json", "application/json");
 });
 document.getElementById("markdown").addEventListener("click", () => {
   const data = report();
-  const text = ["# mcbot 实机反馈", "", "手册版本：" + revision, "导出时间：" + data.savedAt, "",
+  const text = [REPORT_HEADING, "", "手册版本：" + revision, "导出时间：" + data.savedAt, "",
     ...envNames.map(n => n + "：" + data.env[n]), "", ...data.cases.flatMap(c => [
       "## " + c.id + " " + c.title,
       "结果：" + c.result + "；指定工具：" + c.execution, "时间：" + c.time + "；问题编号：" + c.issue,
       "实际现象和数量：\n" + c.actual, "指令错误及附件：\n" + c.evidence, "回复与复测：\n" + c.retest, ""
     ])].join("\n");
-  download("\uFEFF" + text, "mcbot-feedback.md", "text/markdown;charset=utf-8"); save();
+  download("\uFEFF" + text, MARKDOWN_FILENAME, "text/markdown;charset=utf-8"); save();
 });
 document.getElementById("import").addEventListener("change", async event => {
   const file = event.target.files[0]; if (!file) return;
@@ -164,7 +194,7 @@ update();
 `;
 const envFields = [
   ["tester","测试者",""], ["date","本轮日期",""], ["timezone","时区","+08:00"],
-  ["jar","测试包 SHA256","9d1260f975bc7f4005f63561c598fa5cd9f52c562fe869d2bbf0f8d916935b38"],
+  ["jar","测试包 SHA256",profile.jar],
   ["minecraft","Minecraft","1.21.11"], ["loader","Fabric Loader","0.19.5"],
   ["api","Fabric API","0.141.6+1.21.11"], ["java","实际 Java 版本",""],
   ["model","模型名 不填密钥",""], ["mode","单人或联机",""],
@@ -172,7 +202,7 @@ const envFields = [
 ];
 const page = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>mcbot 首轮实机必测与反馈</title>
+<title>${escape(profile.pageTitle)}</title>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#fff;color:#202124;font:16px/1.7 "Microsoft YaHei","Noto Sans CJK SC",sans-serif;letter-spacing:0}
 main{max-width:1060px;margin:auto;padding:28px 30px 72px}h1{font-size:28px;line-height:1.35;margin:20px 0}h2{font-size:22px;margin:38px 0 16px}
@@ -204,11 +234,15 @@ nav{display:flex;flex-wrap:wrap;gap:8px 14px;margin:18px 0}#counts{font-weight:6
 <div id="counts" role="status"></div>
 <nav aria-label="测试项目">${cases.map(c => `<a href="#${c.id}">${c.id}</a>`).join(" ")}</nav>
 ${html}
-</main><script>${script.replace("const cases = CASES;", `const cases = ${JSON.stringify(cases)};`).replace("const revision = REVISION;", `const revision = ${JSON.stringify(revision)};`)}</script></body></html>`;
-fs.writeFileSync(path.join(root, "dist/game-testing.html"), page, "utf8");
+</main><script>${script.replace("const cases = CASES;", `const cases = ${JSON.stringify(cases)};`)
+  .replace("const revision = REVISION;", `const revision = ${JSON.stringify(revision)};`)
+  .replace("JSON_PREFIX", JSON.stringify(profile.jsonPrefix))
+  .replace("REPORT_HEADING", JSON.stringify(profile.reportHeading))
+  .replace("MARKDOWN_FILENAME", JSON.stringify(profile.markdownFilename))}</script></body></html>`;
+fs.writeFileSync(path.join(root, profile.page), page, "utf8");
 const template = `# mcbot 实机测试反馈模板
 
-本表初始全部未测。操作步骤见 docs/REAL-GAME-TESTING.md；方便填写的浏览器版为 dist/game-testing.html。
+${rg5 ? `手册版本：${revision}。本表仅记录RG5关联项的新增复测，不重跑已认可项目，不导入首轮旧反馈。\n\n` : ""}本表初始全部未测。操作步骤见 ${profile.source}；方便填写的浏览器版为 ${profile.page}。
 每轮复制本模板作为自己的记录，原失败不删，修复后追加版本和复测结果。
 
 ## 本轮环境
@@ -245,5 +279,5 @@ ${cases.map(c => `### ${c.id} ${c.title}
 不要提交密钥、令牌、配置文件、日志或测试世界到源码仓库。
 `;
 fs.mkdirSync(path.join(root, "docs/templates"), { recursive: true });
-fs.writeFileSync(path.join(root, "docs/templates/GAME-TEST-FEEDBACK.md"), template, "utf8");
+fs.writeFileSync(path.join(root, profile.template), template, "utf8");
 console.log(`Generated handbook and feedback template for ${cases.length} test cases.`);

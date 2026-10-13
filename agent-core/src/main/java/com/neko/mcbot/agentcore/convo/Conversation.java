@@ -22,8 +22,8 @@ import java.util.function.Consumer;
  *    outboundHistory() 字节恒等，增长中的历史旧前缀不被新消息撕裂，prompt cache
  *    才吃得到。存储永远是全量（展示/未来持久化用），瘦身只发生在出站视图。
  *
- * 前缀 reset 仅两处合法事件：压缩（摘要插 index 0，旧字节前缀整体作废）与
- * 指令边界归零策略；每次 reset 计数并回调（纯库无日志框架，[brain] 日志由宿主接）。
+ * 前缀 reset 包括压缩、指令边界归零，以及主人显式清空模型上下文。
+ * 每次 reset 计数并回调（纯库无日志框架，[brain] 日志由宿主接）。
  *
  * 熔断：摘要端点连续失败 2 次后停止自动压缩（每条新指令恢复尝试资格），
  * 免得每步都拖一次注定失败的往返。
@@ -41,9 +41,13 @@ public final class Conversation {
     private static final int MSG_OVERHEAD = 8;
 
     private final List<Msg> msgs = new ArrayList<>();
-    private final int compactAtTokens;
+    private int compactAtTokens;
+    private int keepBudgetTokens = KEEP_BUDGET_TOKENS;
+    private boolean autoCompact = true;
     private int realPromptTokens;
     private int compactFailures;
+    private long revision;
+    private int lastRequestEstimate;
 
     /** 折叠检查点：index < cp 的消息进入冻结区；同一条指令内单调不回退，
      *  只在两类合法 prefix reset 事件（压缩/指令边界归零）时归零。 */
@@ -58,7 +62,32 @@ public final class Conversation {
         this.compactAtTokens = compactAtTokens;
     }
 
+    public void configure(int threshold, int recentBudget, boolean automatic) {
+        if (threshold <= 0 || recentBudget <= 0 || recentBudget >= threshold)
+            throw new IllegalArgumentException("Invalid compaction budget");
+        compactAtTokens = threshold;
+        keepBudgetTokens = recentBudget;
+        autoCompact = automatic;
+    }
+
+    public int contextTokens() { return realPromptTokens > 0 ? realPromptTokens : approxTokens(); }
+    public boolean reportedUsage() { return realPromptTokens > 0; }
+    public String summary() {
+        return !msgs.isEmpty() && msgs.getFirst() instanceof Msg.User u
+                && u.text().startsWith(SUMMARY_PREFIX) ? u.text().substring(SUMMARY_PREFIX.length()) : "";
+    }
+
+    public void clear() {
+        revision++;
+        msgs.clear();
+        realPromptTokens = 0;
+        compactFailures = 0;
+        resetFoldState();
+        firePrefixReset("context-clear");
+    }
+
     public void add(Msg m) {
+        revision++;
         msgs.add(m);
     }
 
@@ -95,7 +124,9 @@ public final class Conversation {
         while (foldCheckpoint < target) {
             Msg m = msgs.get(foldCheckpoint);
             // 只有工具回执有折叠语义；其余类型冻结为"不折"
-            frozenFolded.add(m instanceof Msg.Tool t && hasNewerToolWithSameName(foldCheckpoint, t.name()));
+            // Action receipts contain distinct effects; a later same-name action cannot supersede them.
+            frozenFolded.add(m instanceof Msg.Tool t && java.util.Set.of("status", "inventory").contains(t.name())
+                    && hasNewerToolWithSameName(foldCheckpoint, t.name()));
             foldCheckpoint++;
         }
     }
@@ -155,10 +186,32 @@ public final class Conversation {
      * 本地估算作为下限哨兵。压缩失败熔断期内一律 false。
      */
     public boolean needsCompaction() {
-        if (compactFailures >= COMPACT_FAILURES_MAX) {
+        if (!autoCompact || compactFailures >= COMPACT_FAILURES_MAX) {
             return false;
         }
         return Math.max(realPromptTokens, approxTokens()) > compactAtTokens && msgs.size() > 8;
+    }
+
+    public boolean canAutoCompact() { return autoCompact && compactFailures < COMPACT_FAILURES_MAX; }
+    public boolean compactionDue(int requestTokens) {
+        return canAutoCompact() && requestTokens > compactAtTokens && msgs.size() > 8;
+    }
+
+    public int requestTokens(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
+        long estimate = estimateTokens(system) + 32L;
+        for (var spec : tools) estimate += estimateTokens(spec.name()) + estimateTokens(spec.description())
+                + estimateTokens(spec.paramsJsonSchema()) + 32L;
+        for (Msg message : history) estimate += estimateTokens(textOf(message));
+        int local = (int) Math.min(Integer.MAX_VALUE, estimate);
+        long measured = realPromptTokens > 0 ? realPromptTokens + Math.max(0L, (long) local - lastRequestEstimate) : 0;
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(local, measured));
+    }
+
+    public void noteRequest(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
+        int real = realPromptTokens;
+        realPromptTokens = 0;
+        lastRequestEstimate = requestTokens(system, tools, history);
+        realPromptTokens = real;
     }
 
     /** 每条新指令的边界：恢复压缩尝试资格（熔断只惩罚同一条链内的连续失败）。 */
@@ -179,6 +232,7 @@ public final class Conversation {
     public void noteCompacted() {
         compactFailures = 0;
         realPromptTokens = 0;
+        lastRequestEstimate = 0;
         // 折叠坐标同步作废：msgs 被重写（摘要插 index 0），旧 index 的冻结决定已无指代对象；
         // 这也是两类合法 prefix reset 之一。
         resetFoldState();
@@ -205,11 +259,6 @@ public final class Conversation {
         long sum = 0;
         for (Msg m : msgs) {
             sum += estimateTokens(textOf(m));
-            if (m instanceof Msg.Assistant a) {
-                for (var tc : a.toolCalls()) {
-                    sum += estimateTokens(tc.name() + tc.argsJson());
-                }
-            }
         }
         return (int) Math.min(Integer.MAX_VALUE, sum);
     }
@@ -251,28 +300,42 @@ public final class Conversation {
         if (compactFailures >= COMPACT_FAILURES_MAX) {
             return CompletableFuture.completedFuture(null); // 熔断期内不打端点
         }
-        int cut = findCutIndex(msgs, KEEP_BUDGET_TOKENS);
+        int cut = findCutIndex(msgs, keepBudgetTokens);
         if (cut <= 0) {
             return CompletableFuture.completedFuture(null);
         }
+        long expectedRevision = revision;
+        List<Msg> snapshot = List.copyOf(msgs);
         StringBuilder old = new StringBuilder();
-        for (Msg m : msgs.subList(0, cut)) {
+        String previous = summary();
+        for (Msg m : snapshot.subList(0, cut)) {
+            if (m instanceof Msg.User u && u.text().startsWith(SUMMARY_PREFIX)) continue;
             old.append(m.getClass().getSimpleName()).append(": ")
                     .append(textOf(m)).append('\n');
         }
         List<Msg> prompt = List.of(
-                new Msg.User("请把以下对话历史压缩成不超过 15 行的要点清单，必须保留：任务目标、"
-                        + "已完成步骤与关键结论、未决问题、涉及的具体数量/位置。只输出清单。\n\n" + old));
+                new Msg.User("更新一份简洁的工作记录，保留任务约束、实际数量、关键位置、失败原因及下一步。"
+                        + "下方既有记录是累积事实，请根据新事件更新，保留仍有效的事实；不要把旧记录再次缩写。"
+                        + "未核实的成果不能写成完成，不包含工具调用；只输出工作记录，控制在"
+                        + Math.min(2048, Math.max(64, compactAtTokens / 2)) + "个token内。"
+                        + "\n既有记录：\n" + previous + "\n新事件：\n" + old));
         return engine.chat("你是对话压缩器。", prompt, List.of())
                 .thenAccept(turn -> {
-                    List<Msg> tail = new ArrayList<>(msgs.subList(cut, msgs.size()));
+                    if (revision != expectedRevision) return;
+                    if (turn == null || turn.hasToolCalls() || turn.text() == null || turn.text().isBlank()
+                            || estimateTokens(turn.text()) > Math.min(2048, Math.max(64, compactAtTokens / 2))) {
+                        compactFailures++;
+                        return;
+                    }
+                    List<Msg> tail = new ArrayList<>(snapshot.subList(cut, snapshot.size()));
                     msgs.clear();
                     msgs.add(new Msg.User(SUMMARY_PREFIX + turn.text()));
                     msgs.addAll(tail);
+                    revision++;
                     noteCompacted();
                 })
                 .exceptionally(t -> {
-                    compactFailures++;
+                    if (revision == expectedRevision) compactFailures++;
                     return null; // 失败不丢历史，只是这轮不压
                 });
     }

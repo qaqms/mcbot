@@ -104,6 +104,7 @@ public final class PathTask extends TickTask {
     private int executed;          // 已提交节点计数（复核节拍用）
     private int replans;
     private int tickWarmup;        // 进场让世界加载/防抖的缓冲拍
+    private final PathGrounding grounding = new PathGrounding();
 
     // 挖掘子状态
     private BlockPos digPos;
@@ -145,10 +146,23 @@ public final class PathTask extends TickTask {
             onAbort();
             return terminal(new Result(false, "TARGET_LOST:身体已换维度，原路线作废。", null));
         }
+        PathGrounding.Decision grounded = grounding.poll(c.onGround(), c.blockPosition().getY());
+        if (grounded == PathGrounding.Decision.WAIT) {
+            clearCrack();
+            return running();
+        }
+        if (grounded == PathGrounding.Decision.REPLAN && sampler != null) {
+            if (replans >= MAX_REPLAN) return terminal(new Result(false,
+                    "NO_PATH:身体下落后原路线失效，重规划上限已到；已停止移动。", null));
+            dropPlan();
+            beginReplan(c);
+            executed = 0;
+        }
         if (++tickWarmup < 2) {
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
         Progress progress = phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
+        grounding.committed(c.blockPosition().getY());
         return progress instanceof Progress.Done done ? terminal(done.result()) : progress;
     }
 
@@ -590,6 +604,11 @@ public final class PathTask extends TickTask {
             return running();
         }
         // 3) 落位：同层走路用 0.45/tick 插值（视觉与滑步版一致），其余直接传送
+        double facingX = next.x() + .5 - c.getX();
+        double facingZ = next.z() + .5 - c.getZ();
+        if (Math.hypot(facingX, facingZ) > 1e-5) {
+            c.facePoint(new net.minecraft.world.phys.Vec3(next.x() + .5, c.getEyeY(), next.z() + .5));
+        }
         if (next.y() == c.blockPosition().getY() && next.action() == DigAStar.ACT_WALK) {
             double dx = next.x() + 0.5 - c.getX();
             double dz = next.z() + 0.5 - c.getZ();

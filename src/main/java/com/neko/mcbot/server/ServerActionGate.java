@@ -18,10 +18,12 @@ public final class ServerActionGate {
     public static CompletableFuture<ServerTool.Result> execute(ActionPermissions.Context context,
             UUID companion, String dimension, String tool, JsonObject args, CompanionScheduler scheduler,
             Supplier<CompletableFuture<ServerTool.Result>> action) {
-        if (!ActionPermissions.allowed(context, tool, args)) return denied();
         if (TaskPolicy.observation(tool, args)) return action.get();
-        if (context == null || !context.companion().equals(companion)
-                || !context.dimension().equals(dimension)) return denied();
+        if (context == null) return denied("TASK_REQUIRED", null, tool);
+        if (!context.companion().equals(companion) || !context.dimension().equals(dimension))
+            return denied("TASK_IDENTITY_MISMATCH", context, tool);
+        if (context.readOnly()) return denied("READ_ONLY", context, tool);
+        if (!ActionPermissions.allowed(context, tool, args)) return denied("TOOL_NOT_ALLOWED", context, tool);
         return scheduler.execute(companion, regions(dimension, tool, args), action);
     }
 
@@ -47,8 +49,19 @@ public final class ServerActionGate {
         return value.getAsBigDecimal().intValueExact();
     }
 
-    private static CompletableFuture<ServerTool.Result> denied() {
+    private static CompletableFuture<ServerTool.Result> denied(String reason,
+            ActionPermissions.Context context, String tool) {
+        var denial = new JsonObject();
+        denial.addProperty("gate", "server_action");
+        denial.addProperty("reason", reason);
+        denial.addProperty("tool", tool);
+        if (context != null) {
+            denial.addProperty("task_id", context.taskId());
+            denial.addProperty("dimension", context.dimension());
+        }
+        var data = new JsonObject();
+        data.add("permission_denial", denial);
         return CompletableFuture.completedFuture(new ServerTool.Result(false,
-                "DENIED:当前任务权限不允许此动作；只读任务只能观察，不能移动、换装或改动世界/物品。", null));
+                "DENIED:当前任务权限不允许此动作；只读任务只能观察，不能移动、换装或改动世界/物品。", data));
     }
 }

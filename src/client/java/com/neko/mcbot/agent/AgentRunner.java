@@ -91,6 +91,9 @@ public final class AgentRunner implements ToolExecutor {
     }
     private BoundedWorkflow workflow;
     private long workflowTask;
+    private BoundedGather gather;
+    private long gatherTask;
+    private JsonObject taskInitialObservation;
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
      * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
@@ -98,6 +101,13 @@ public final class AgentRunner implements ToolExecutor {
     private final PendingJobs<ToolTicket> pending = new PendingJobs<>();
     private final TaskReplies askWaiters = new TaskReplies();
     private final ArrayDeque<String> transcript = new ArrayDeque<>();
+    private final PanelHistory panelHistory = new PanelHistory();
+    private JsonObject companionBody = new JsonObject();
+    private String companionObservation = "尚未读取同伴信息";
+    private boolean readingCompanion;
+    private long bodyObservedAt;
+    private long companionGeneration;
+    private PromptBuilder sessionPrompt;
     private volatile long currentTask;
     private volatile String companionName = "";
     private volatile String lifecycleResult = "";
@@ -204,12 +214,14 @@ public final class AgentRunner implements ToolExecutor {
             return;
         }
         // R2-B：prefix 缓存也接上了——启动读一次盘，指令边界才允许换发（链中不换=不裂前缀）。
-        PromptBuilder sessionPrompt = client.prompt(cfg);
+        sessionPrompt = new PromptBuilder(() -> client.prompt(this.cfg).get());
         loop = new AgentLoop(engine, ClientToolDefs.SPECS, this, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
                     public void onTaskStarted(long taskId) {
                         currentTask = taskId;
+                        taskInitialObservation = null;
+                        panelHistory.status(taskId, "running");
                         JsonObject scope = new JsonObject();
                         scope.addProperty("task_id", taskId);
                         scope.addProperty("read_only", taskPolicies.getOrDefault(taskId, true));
@@ -232,6 +244,8 @@ public final class AgentRunner implements ToolExecutor {
                         authorizationPlans.entrySet().removeIf(entry -> entry.getValue().taskId() == taskId);
                         clearTaskWaits(taskId, status.name() + ":任务已终止。");
                         if (wasActive) currentTask = 0;
+                        panelHistory.status(taskId, status.name().toLowerCase(java.util.Locale.ROOT));
+                        if (status != AgentLoop.TaskStatus.COMPLETED) panelHistory.add(taskId, "[mcbot] " + text);
                         emitDone(taskId, status, text);
                         askWaiters.finish(taskId, status, text);
                     }
@@ -287,6 +301,7 @@ public final class AgentRunner implements ToolExecutor {
                     public void onToolAccepted(String name, String argsJson, String feedback, String jobId) {
                         // 受理 ≠ 结果：这里只播报，不进 transcript 的"已做完"叙事。
                         LOG.info("[brain] tool {} 受理 job={}", name, jobId);
+                        panelHistory.add(currentTask, name + " · 已受理，等待真实结果\n" + feedback);
                         JsonObject d = new JsonObject();
                         d.addProperty("text", feedback);
                         d.addProperty("tool", name);
@@ -308,17 +323,30 @@ public final class AgentRunner implements ToolExecutor {
                     }
                 },
                 sessionPrompt::get,
-                // 压缩闸门：6000 真 token（API 数优先，本地 CJK 感知估算兜底）。
-                // 参考实测：固定开销≈350，每步只追加；这个数给中转站通道留了延迟余地。
+                // Default budgets stay backward compatible; the panel may explicitly change them.
                 sessionPrompt,
-                6_000);
+                cfg.preferences.compactThreshold());
+        loop.configureContext(cfg.preferences.compactThreshold(), cfg.preferences.recentBudget(),
+                cfg.preferences.autoCompact());
+        loop.configureWindow(cfg.preferences.contextWindow());
         LOG.info("大脑已上线：{} / {}", cfg.baseUrl, cfg.model);
     }
 
-    /** 面板"保存并应用"：落盘配置并重建大脑（对话历史清零属预期；悬着的问题就地终止）。 */
+    /** Connection changes rebuild the brain; persona/preferences apply without discarding tasks. */
     public void reconfigure(ClientConfig newCfg) {
         if (closed) return;
         client.saveConfig(newCfg);
+        if (!cfg.connectionChanged(newCfg)) {
+            boolean personaChanged = !cfg.persona.equals(newCfg.persona);
+            cfg = newCfg;
+            if (loop != null) {
+                loop.configureContext(cfg.preferences.compactThreshold(),
+                        cfg.preferences.recentBudget(), cfg.preferences.autoCompact());
+                loop.configureWindow(cfg.preferences.contextWindow());
+            }
+            if (personaChanged && sessionPrompt != null) sessionPrompt.reloadSkills();
+            return;
+        }
         shutdownBrain();
         cfg = newCfg;
         start();
@@ -348,6 +376,7 @@ public final class AgentRunner implements ToolExecutor {
         currentTask = 0;
         parked = false;
         parkedJobs = 0;
+        readingCompanion = false;
         latestQuestion = null;
         clearTaskWaits(0, "CANCELLED:会话已重载或关闭。");
     }
@@ -373,6 +402,82 @@ public final class AgentRunner implements ToolExecutor {
         }
     }
 
+    public PanelHistory panelHistory() { return panelHistory; }
+    public long currentTaskId() { return currentTask; }
+    public int queuedTasks() { return loop == null ? 0 : loop.queuedTasks(); }
+    public boolean brainOnline() { return !closed && loop != null; }
+    public String taskState() {
+        if (closed) return "会话已关闭";
+        var question = questionSnapshot();
+        if (question != null) return question.authorization() ? "等待你的确认" : "等待你的回答";
+        if (currentTask != 0) return parked ? "等待游戏操作完成" : "正在处理任务";
+        if (loop != null && loop.busy()) return "正在整理上下文";
+        if (loop == null) return "模型未配置";
+        var tasks = panelHistory.tasks();
+        if (!tasks.isEmpty()) return switch (tasks.getFirst().status()) {
+            case "completed" -> "任务已结束";
+            case "cancelled" -> "任务已取消";
+            case "failed" -> "任务失败";
+            case "superseded" -> "任务已替换";
+            default -> "空闲";
+        };
+        return "空闲";
+    }
+    public record ContextSnapshot(int used, int window, boolean reported, String summary,
+                                  int steps, boolean busy) {}
+    public ContextSnapshot contextSnapshot() {
+        AgentLoop brain = loop;
+        return new ContextSnapshot(brain == null ? 0 : brain.conversation().contextTokens(),
+                cfg.preferences.contextWindow(), brain != null && brain.conversation().reportedUsage(),
+                brain == null ? "" : brain.conversation().summary(),
+                brain == null ? 0 : brain.steps(), brain != null && brain.busy());
+    }
+    public CompletableFuture<Boolean> compactContext() {
+        AgentLoop brain = loop;
+        if (closed || brain == null || brain.busy()) return CompletableFuture.completedFuture(false);
+        long generation = brainGeneration;
+        return brain.compactNow().thenApply(changed -> {
+            if (closed || generation != brainGeneration || brain != loop) return false;
+            if (changed) record("§7[mcbot] 上下文已整理，对话记录保留。§r");
+            return changed;
+        });
+    }
+    public void clearContext() {
+        if (closed || loop == null) return;
+        loop.clearContext();
+        record("§7[mcbot] 模型上下文已清空，对话记录保留。§r");
+    }
+    public JsonObject companionSnapshot() { return companionBody.deepCopy(); }
+    public String companionObservation() { return companionObservation; }
+    public long bodyObservedAt() { return bodyObservedAt; }
+    public void refreshCompanion() {
+        if (closed || readingCompanion) return;
+        readingCompanion = true;
+        long generation = brainGeneration;
+        long bodyGeneration = companionGeneration;
+        String name = companionName;
+        companionObservation = "正在读取同伴信息";
+        executeRemote("status", "{\"details\":true}", 0, null).whenComplete((result, failure) ->
+                client.executeOnClient(() -> {
+                    if (closed || generation != brainGeneration || bodyGeneration != companionGeneration || !name.equals(companionName)
+                            || !client.isCurrentRunner(this)) return;
+                    readingCompanion = false;
+                    if (failure == null && result.ok()) {
+                        captureBody(result);
+                        companionObservation = "已读取最新信息";
+                    } else {
+                        companionBody = new JsonObject();
+                        companionObservation = "读取失败，请确认同伴在当前世界中";
+                    }
+                }));
+    }
+    private void captureBody(ToolOutcome result) {
+        JsonObject data = result.data();
+        if (!result.ok() || !data.has("hp") || !data.has("dimension")) return;
+        companionBody = data.deepCopy();
+        bodyObservedAt = client.nowMs();
+    }
+
     public void handleS2c(Envelope env) {
         if (closed) return;
         switch (env.kind()) {
@@ -392,6 +497,12 @@ public final class AgentRunner implements ToolExecutor {
             case "job_ack" -> onJobAck(env);
             case "job_event" -> onJobEvent(env);
             case "companion_state" -> {
+                if (!companionName.equals(env.str("companion"))) {
+                    companionGeneration++;
+                    companionBody = new JsonObject();
+                    readingCompanion = false;
+                    companionObservation = "尚未读取同伴信息";
+                }
                 companionName = env.str("companion");
                 lifecycleResult = env.str("text");
                 emitState(lifecycleResult);
@@ -404,6 +515,11 @@ public final class AgentRunner implements ToolExecutor {
                 String text = env.body().has("text") ? env.str("text") : env.kind();
                 say("§7[mcbot] " + text + "§r");
                 if (env.body().has("companion")) {
+                    if (!companionName.equals(env.str("companion"))) {
+                        companionGeneration++;
+                        companionBody = new JsonObject();
+                        readingCompanion = false;
+                    }
                     companionName = env.str("companion");
                     lifecycleResult = text;
                 }
@@ -448,6 +564,7 @@ public final class AgentRunner implements ToolExecutor {
             d.addProperty("job_id", jobId);
             d.addProperty("tool", env.str("tool"));
             emit("progress", known.ticket().taskId(), d);
+            panelHistory.add(known.ticket().taskId(), env.str("tool") + " · " + text);
             return;
         }
         if (!List.of("done", "failed", "cancelled", "superseded").contains(phase)) return;
@@ -519,6 +636,7 @@ public final class AgentRunner implements ToolExecutor {
     public void tick() {
         if (closed) return;
         if (workflow != null) workflow.tick();
+        if (gather != null) gather.tick();
         long now = client.nowMs();
         for (var t : pending.sweepTools(now)) {
             if (t.ticket().owner() != null) sendCancel();
@@ -551,14 +669,29 @@ public final class AgentRunner implements ToolExecutor {
         final long at;
         final long taskId;
         final String authorizationId;
+        final String text;
 
-        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f, String authorizationId) {
+        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f, String authorizationId, String text) {
             this.taskId = taskId;
             this.future = f;
             this.at = client.nowMs();
             this.authorizationId = authorizationId;
+            this.text = text;
         }
     }
+
+    public record QuestionSnapshot(String id, long taskId, String text, long remainingMs,
+                                   boolean authorization) {}
+    public QuestionSnapshot questionSnapshot() {
+        Long id = latestQuestion;
+        QuestionRecord question = id == null ? null : questionRecords.get(id);
+        if (closed || question == null || questionExpired(question, client.nowMs())) return null;
+        return new QuestionSnapshot("q" + id, question.taskId, question.text,
+                Math.max(0, QUESTION_TIMEOUT_MS - (client.nowMs() - question.at)),
+                question.authorizationId != null);
+    }
+    /** Uses the captured ID; a stale input must never answer a newer question. */
+    public boolean answerFromPanel(String id, String text) { return answerQuestion(id, text); }
 
     private static final java.util.regex.Pattern CANCEL_WORDS = java.util.regex.Pattern
             .compile("(停|停下|停手|取消|别干了|别做了|cancel|stop)", java.util.regex.Pattern.CASE_INSENSITIVE);
@@ -576,7 +709,8 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void submitTask(long id, String text) {
-        record("§9我> §r" + text);   // 面板回看只记主人原话：注入是给模型的上下文，不是主人说过的话
+        panelHistory.begin(id, text);
+        record("§9我> §r" + text, id);   // Display only the owner's original directive.
         AgentLoop brain = loop;
         if (closed || brain == null) {
             say("§c[mcbot] 大脑未配置：打开面板（默认 G）填 base_url/model/api_key 后保存。§r");
@@ -650,7 +784,6 @@ public final class AgentRunner implements ToolExecutor {
         if (ans.matches()) {
             Long qid = latestQuestion;
             if (qid != null && answerQuestion("q" + qid, ans.group(2).trim())) {
-                record("§9我> §r" + text);
                 return;
             }
             say("§7[mcbot] 同伴现在没有可回答的问题，回答未提交。§r");
@@ -704,6 +837,7 @@ public final class AgentRunner implements ToolExecutor {
                 timeoutQuestion(rec);
                 return false;
             }
+            record("§9我> §r" + text, rec.taskId);
             JsonObject d = new JsonObject();
             d.addProperty("text", "主人已回答 " + qid);
             emit("state", rec.taskId, d);
@@ -751,11 +885,22 @@ public final class AgentRunner implements ToolExecutor {
     public CompletableFuture<ToolOutcome> observe(long taskId) {
         if (closed || taskId != currentTask) return CompletableFuture.completedFuture(
                 ToolOutcome.synthetic("CANCELLED:观测所属任务已结束。"));
-        return client.observe(this, taskId);
+        return client.observe(this, taskId).thenApply(state -> {
+            if (!closed && taskId == currentTask && state != null && state.ok()
+                    && taskInitialObservation == null && state.data().has("inventory"))
+                taskInitialObservation = state.data();
+            return state;
+        });
     }
 
     CompletableFuture<ToolOutcome> requestObservation(long taskId) {
-        return executeRemote("status", "{\"details\":true}", taskId, loop);
+        long generation = brainGeneration;
+        long bodyGeneration = companionGeneration;
+        return executeRemote("status", "{\"details\":true}", taskId, loop).thenApply(result -> {
+            if (!closed && generation == brainGeneration && bodyGeneration == companionGeneration && taskId == currentTask)
+                captureBody(result);
+            return result;
+        });
     }
 
     @Override
@@ -765,12 +910,48 @@ public final class AgentRunner implements ToolExecutor {
             return askOwner(argsJson);
         }
         if ("workflow".equals(name)) return executeWorkflow(argsJson);
+        if ("gather".equals(name)) return executeGather(argsJson);
         return executeRemote(name, argsJson, currentTask, loop);
     }
 
     @Override
     public void stop(long taskId, String reason) {
         if (workflow != null && (taskId == 0 || workflowTask == taskId)) workflow.stop(reason);
+        if (gather != null && (taskId == 0 || gatherTask == taskId)) gather.stop(reason);
+    }
+
+    private CompletableFuture<ToolOutcome> executeGather(String argsJson) {
+        if (currentTask == 0 || loop == null || taskPolicies.getOrDefault(currentTask, true))
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:连续采集须属于当前非只读任务。"));
+        if (gather != null && !gather.done() || workflow != null && !workflow.done())
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "BUSY:已有本地流程等待终态。"));
+        long taskId = currentTask;
+        AgentLoop owner = loop;
+        try {
+            var plan = BoundedGather.parse(argsJson);
+            var run = new BoundedGather(plan, taskInitialObservation, client::nowMs,
+                    (tool, args) -> executeRemote(tool, args, taskId, owner, true),
+                    client::executeOnClient,
+                    () -> {
+                        var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
+                        if (!tickets.isEmpty()) sendCancel();
+                        tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:连续采集停止，在途效果未知。")));
+                    },
+                    text -> {
+                        panelHistory.add(taskId, "gather · " + text);
+                        var data = new JsonObject();
+                        data.addProperty("tool", "gather");
+                        data.addProperty("text", text);
+                        emit("progress", taskId, data);
+                    });
+            gatherTask = taskId;
+            gather = run;
+            return run.start();
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:连续采集须有效物品/方块targets、明确count/口径、r=1-16、时限1-900秒、"
+                            + "挖掘预算1-256，且有完整任务开始背包事实。"));
+        }
     }
 
     private CompletableFuture<ToolOutcome> executeWorkflow(String argsJson) {
@@ -778,6 +959,8 @@ public final class AgentRunner implements ToolExecutor {
                 new ToolOutcome(false, "DENIED:流程须属于当前活动任务。"));
         if (workflow != null && !workflow.done()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有流程等待终态，不要重发。"));
+        if (gather != null && !gather.done()) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "BUSY:已有连续采集等待终态，不要重发。"));
         BoundedWorkflow.Plan plan;
         try { plan = BoundedWorkflow.parse(argsJson); }
         catch (RuntimeException invalid) {
@@ -892,7 +1075,7 @@ public final class AgentRunner implements ToolExecutor {
         } catch (RuntimeException e) {
             text = String.valueOf(argsJson);
         }
-        questionRecords.put(seq, new QuestionRecord(taskId, f, authorizationId));
+        questionRecords.put(seq, new QuestionRecord(taskId, f, authorizationId, text));
         say("§d[同伴想问] §r" + text + " §7（回答：@bot 答 <文本>）§r");
         latestQuestion = seq;
         JsonObject d = new JsonObject();
@@ -979,6 +1162,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void emitDone(long taskId, AgentLoop.TaskStatus status, String text) {
+        panelHistory.status(taskId, status.name().toLowerCase(java.util.Locale.ROOT));
         JsonObject d = new JsonObject();
         d.addProperty("text", text);
         d.addProperty("status", status.name().toLowerCase(java.util.Locale.ROOT));
@@ -1003,6 +1187,11 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void record(String text) {
+        record(text, currentTask);
+    }
+
+    private void record(String text, long taskId) {
+        panelHistory.add(taskId, text);
         synchronized (transcript) {
             transcript.addLast(text);
             while (transcript.size() > TRANSCRIPT_CAP) {

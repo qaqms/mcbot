@@ -60,13 +60,13 @@ public final class ScanFormat {
     }
 
     /**
-     * 客户端准星注入：{@code [我此刻盯着] cobblestone @(12,63,-4) 距3.2}。
+     * 客户端准星注入来自主人，不是同伴当前视野。
      *
      * <p>字节帽用 {@link WireSize#truncateToBytes} 而不是 substring：中文按字符裁会
      * 一路裁到 360B（每字符 3 字节），且可能切坏代理对。
      */
     public static String crosshair(String regPath, int x, int y, int z, double d) {
-        String s = "[我此刻盯着] " + regPath + " " + abs(x, y, z) + " 距"
+        String s = "[主人提交时的准星，非同伴视野] " + regPath + " " + abs(x, y, z) + " 距"
                 + String.format(Locale.ROOT, "%.1f", d);
         return WireSize.truncateToBytes(s, CROSSHAIR_MAX_BYTES);
     }
