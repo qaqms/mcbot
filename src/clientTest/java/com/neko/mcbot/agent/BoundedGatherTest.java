@@ -55,6 +55,8 @@ class BoundedGatherTest {
         boolean pickupDuringMining;
         boolean stolen;
         int pickupAttempts;
+        int clearPerMining;
+        final List<JsonObject> breakArgs = new ArrayList<>();
         CompletableFuture<ToolOutcome> mining;
         CompletableFuture<ToolOutcome> movement;
         final BoundedGather gather;
@@ -99,6 +101,9 @@ class BoundedGatherTest {
                 }
                 case "break_block" -> {
                     breakAttempts++;
+                    var args = JsonParser.parseString(json).getAsJsonObject();
+                    breakArgs.add(args);
+                    assertTrue(args.get("clear_obstructions").getAsBoolean());
                     assertEquals("minecraft:dirt", JsonParser.parseString(json).getAsJsonObject()
                             .get("expected_block").getAsString());
                     if (mining != null) return mining;
@@ -109,6 +114,7 @@ class BoundedGatherTest {
                     data.addProperty("removed", true);
                     data.addProperty("collected_count", 0);
                     data.addProperty("remaining_count", 1);
+                    data.addProperty("cleared_blocks", clearPerMining);
                     if (pickupDuringMining) automaticPickup(true);
                 }
                 case "move_to" -> {
@@ -163,6 +169,33 @@ class BoundedGatherTest {
         assertTrue(result.data().get("goal_satisfied").getAsBoolean());
         assertEquals(64, result.data().get("actual_progress").getAsInt());
         assertEquals(0, f.cancelled);
+    }
+
+    @Test void clearableOccludedResourceRunsLocallyAndCountsOnlyInventoryAsGoalProgress() {
+        var f = new Fixture(2, 0);
+        var target = withStances(false);
+        target.addProperty("can_clear_here", true);
+        f.blockTargets = List.of(target);
+        f.clearPerMining = 2;
+        f.pickupDuringMining = true;
+        var result = f.run();
+        assertTrue(result.ok());
+        assertEquals(2, result.data().get("mined_blocks").getAsInt());
+        assertEquals(4, result.data().get("cleared_blocks").getAsInt());
+        assertEquals(2, result.data().get("actual_progress").getAsInt());
+        assertEquals(0, f.moved);
+    }
+
+    @Test void incidentalClearsConsumeTheSameSegmentMiningBudget() {
+        var f = new Fixture(100, 0);
+        f.clearPerMining = 3;
+        f.pickupDuringMining = true;
+        var result = f.run();
+        assertFalse(result.ok());
+        assertTrue(result.feedback().startsWith("BLOCK_LIMIT:"));
+        assertEquals(32, f.dug);
+        assertEquals(96, result.data().get("cleared_blocks").getAsInt());
+        assertEquals(3, f.breakArgs.getLast().get("clear_limit").getAsInt());
     }
 
     private static JsonObject withStances(boolean here, int... xs) {

@@ -7,6 +7,7 @@ import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.ActionPermissions;
 import com.neko.mcbot.server.BlockAim;
 import com.neko.mcbot.server.WorkPositions;
+import com.neko.mcbot.server.MiningWork;
 import com.neko.mcbot.task.CompanionScheduler;
 import net.minecraft.core.BlockPos;
 
@@ -70,6 +71,11 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:work_target须为仅含整数x/y/z的目标对象，并使用exact=true。", null));
         }
+        boolean clear;
+        try { clear = BreakBlockTool.clearObstructions(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false, "DENIED:clear_obstructions须为布尔。", null));
+        }
         if (args.has("exact") && (!args.get("exact").isJsonPrimitive()
                 || !args.get("exact").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:exact 须为布尔。", null));
@@ -105,7 +111,7 @@ public final class MoveToTool implements ServerTool {
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
         return f.thenApply(moved -> finishWork(moved, workTarget == null ? null
-                : () -> WorkPositions.miningAim(c, workTarget)));
+                : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget)));
     }
 
     static BlockPos workTarget(JsonObject args) {

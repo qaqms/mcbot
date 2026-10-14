@@ -123,6 +123,41 @@ class AgentRunnerGatherTest {
         assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsInt());
     }
 
+    @Test void occluderClearingUsesOneModelTurnAndItsRealTerminalBeforeInventoryVerification() {
+        start();
+        reply(BoundedGatherTest.state(0));
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        var target = BoundedGatherTest.block(false);
+        target.addProperty("can_clear_here", true);
+        var targets = new JsonArray();
+        targets.add(target);
+        var found = new JsonObject();
+        found.add("targets", targets);
+        reply(found);
+        assertEquals("break_block", client.lastTool().str("tool"));
+        assertTrue(client.lastTool().obj("args").get("clear_obstructions").getAsBoolean());
+        assertEquals(3, client.lastTool().obj("args").get("clear_limit").getAsInt());
+        reply(JsonParser.parseString("{\"removed\":true,\"cleared_blocks\":2}").getAsJsonObject());
+        assertEquals("status", client.lastTool().str("tool"));
+        assertEquals(1, client.engine().responses.size());
+        reply(BoundedGatherTest.state(1));
+        reply(BoundedGatherTest.state(1));
+        assertEquals(2, client.engine().responses.size());
+    }
+
+    @Test void clearingConsentReturnsTheOriginalServerProposalToTheModel() {
+        reachMining();
+        reply(false, "NEED_CONFIRM:authorization_id=clear-plan", JsonParser.parseString(
+                "{\"removed\":false,\"cleared_blocks\":0,\"authorization_id\":\"clear-plan\","
+                        + "\"authorization_summary\":\"server cells\"}").getAsJsonObject());
+        assertEquals("status", client.lastTool().str("tool"));
+        reply(BoundedGatherTest.state(0));
+        assertEquals(2, client.engine().responses.size());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(message ->
+                message instanceof com.neko.mcbot.agentcore.llm.Msg.Tool tool
+                        && tool.content().contains("clear-plan")));
+    }
+
     @Test void cancellingLocalGatherPreventsAnyLateChildFromContinuing() {
         reachMining();
         long seq = client.lastTool().num("seq", -1);

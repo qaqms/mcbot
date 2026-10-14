@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class AwarenessToolTest {
     @BeforeAll static void boot() { SharedConstants.tryDetectVersion(); Bootstrap.bootStrap(); }
     private static JsonObject json(String value) { return JsonParser.parseString(value).getAsJsonObject(); }
-    private static final class Scan implements FindResourceTool.Access {
+    private static class Scan implements FindResourceTool.Access {
         final Map<BlockPos, BlockState> cells = new HashMap<>();
         boolean loaded = true;
         int reads;
@@ -84,6 +84,33 @@ class AwarenessToolTest {
         assertFalse(FindResourceTool.execute(args, scan).data().get("no_targets").getAsBoolean());
         scan.cells.clear();
         assertTrue(FindResourceTool.execute(args, scan).data().get("no_targets").getAsBoolean());
+    }
+
+    @Test void exposedWorkableResourceBeyondSixteenBuriedHitsGetsAnOutputSlot() {
+        var scan = new Scan() {
+            int checked;
+            @Override public void work(JsonObject target, BlockPos pos) {
+                checked++;
+                assertTrue(checked <= FindResourceTool.MAX_WORK_CHECKS);
+                boolean viable = pos.equals(center().offset(5, 0, 0));
+                target.addProperty("can_work_here", viable);
+                target.addProperty("can_clear_here", viable);
+                target.add("stand_positions", new com.google.gson.JsonArray());
+            }
+        };
+        for (int x = -2; x <= 2; x++) for (int y = -2; y <= 2; y++) for (int z = -2; z <= 2; z++)
+            scan.cells.put(scan.center().offset(x, y, z),
+                    (Math.max(Math.abs(x), Math.max(Math.abs(y), Math.abs(z))) < 2
+                            ? Blocks.STONE : Blocks.DIRT).defaultBlockState());
+        scan.cells.put(scan.center().offset(5, 0, 0), Blocks.STONE.defaultBlockState());
+        var result = FindResourceTool.execute(json("{\"targets\":[\"stone\"],\"r\":8,\"work\":true}"), scan);
+        var targets = result.data().getAsJsonArray("targets");
+        assertEquals(16, targets.size());
+        assertEquals(scan.center().getX() + 5, targets.get(0).getAsJsonObject().get("x").getAsInt());
+        assertTrue(targets.get(0).getAsJsonObject().get("can_work_here").getAsBoolean());
+        assertEquals(24, result.data().get("work_checks").getAsInt());
+        assertTrue(result.data().get("work_truncated").getAsBoolean());
+        assertEquals(result.data().get("cells_read").getAsInt(), scan.reads, "no extra neighbor world reads");
     }
 
     private static final class Storage implements InspectBlockTool.Access {

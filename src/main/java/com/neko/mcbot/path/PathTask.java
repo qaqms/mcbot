@@ -8,6 +8,7 @@ import com.neko.mcbot.server.BlockMining;
 import com.neko.mcbot.server.BlockPlacement;
 import com.neko.mcbot.server.PathMaterials;
 import com.neko.mcbot.server.ActionPermissions;
+import com.neko.mcbot.server.DropObservations;
 import com.neko.mcbot.task.CompanionScheduler;
 import com.neko.mcbot.task.ResourceLocks.Region;
 import com.neko.mcbot.server.ServerTool.Result;
@@ -112,7 +113,7 @@ public final class PathTask extends TickTask {
     private BlockMining mining;
     private int actualDigs;
     private int actualPlaces;
-    private int leftoverItems;
+    private final DropObservations drops = new DropObservations();
 
     private PathSteering steering;
     private CompanionPlayer drivenBody;
@@ -143,7 +144,7 @@ public final class PathTask extends TickTask {
         data.addProperty("committed_nodes", executed);
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
-        data.addProperty("remaining_items", leftoverItems);
+        drops.snapshot(level).entrySet().forEach(entry -> data.add(entry.getKey(), entry.getValue()));
         data.addProperty("replans", replans);
         return data;
     }
@@ -185,13 +186,19 @@ public final class PathTask extends TickTask {
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
-        data.addProperty("remaining_items", leftoverItems);
+        var dropSnapshot = drops.snapshot(level);
+        dropSnapshot.entrySet().forEach(entry -> data.add(entry.getKey(), entry.getValue()));
         String feedback = result.feedback();
         if (!result.ok() && !feedback.startsWith("PARTIAL:") && actualDigs + actualPlaces > 0) {
             feedback += "本趟实际挖 " + actualDigs + " 格、放 " + actualPlaces
-                    + " 格，" + leftoverItems + " 个掉落未入包；已完成的改动不回滚。";
+                    + " 格；已完成的改动不回滚。";
         }
+        feedback += DropObservations.sentence(dropSnapshot);
         return new Progress.Done(new Result(result.ok(), feedback, data));
+    }
+
+    @Override public Result interruptedResult(Result reason) {
+        return ((Progress.Done) terminal(reason)).result();
     }
 
     // ---- SEARCH ----
@@ -716,19 +723,16 @@ public final class PathTask extends TickTask {
         JsonObject data = new JsonObject();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
-        data.addProperty("remaining_items", leftoverItems);
         if (partialTail) {
             // §C 回执模板：撞帽从"失败"变"缩短射程"，行动指令写给模型（从本段落点重发）
             return new Progress.Done(new Result(false,
                     "PARTIAL:未能到 " + target.toShortString() + "。已走到能到的最近点 "
                             + at.toShortString() + "，离目标还差约 " + partialRemain + " 格。"
                             + "这一段已走完，请从该点重发 move_to（可分多段）"
-                            + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。")
-                            + (leftoverItems > 0 ? "有 " + leftoverItems + " 个掉落未装入背包。" : ""), data));
+                            + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。"), data));
         }
         String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
-                + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。")
-                + (leftoverItems > 0 ? "有 " + leftoverItems + " 个掉落未装入背包。" : "");
+                + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
         return new Progress.Done(new Result(true, fb, data));
     }
 
@@ -833,7 +837,7 @@ public final class PathTask extends TickTask {
         if (!result.data().get("removed").getAsBoolean()) return new Progress.Done(result);
         actualDigs++;
         authorization.observed("dig", pos.asLong());
-        leftoverItems += result.data().get("remaining_count").getAsInt();
+        drops.record(result.data());
         McbotMod.LOG.info("[path] 开路 {} 收进={} 留地={}", pos.toShortString(),
                 result.data().get("collected_count").getAsInt(), result.data().get("remaining_count").getAsInt());
         if (!result.data().get("reported_success").getAsBoolean()) return new Progress.Done(result);

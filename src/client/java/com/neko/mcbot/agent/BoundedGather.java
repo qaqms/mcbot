@@ -70,6 +70,7 @@ final class BoundedGather {
     private long started;
     private int calls;
     private int dug;
+    private int cleared;
     private int stalls;
     private int lastProgress;
     private int workPositionAttempts;
@@ -168,7 +169,7 @@ final class BoundedGather {
                 return;
             }
             if (stalls >= 3) { finish(false, "NO_PROGRESS:三次采集/拾取未增加实际背包数量。" + lastProblem); return; }
-            if (dug >= plan.maxBlocks()) { finish(false, "BLOCK_LIMIT:本段挖掘预算已到，实际物品目标未满足。"); return; }
+            if (dug + cleared >= plan.maxBlocks()) { finish(false, "BLOCK_LIMIT:本段挖掘预算已到，实际物品目标未满足。"); return; }
             findBlocks();
         });
     }
@@ -227,7 +228,9 @@ final class BoundedGather {
                 var positions = positions(block);
                 var tried = new HashSet<String>();
                 tried.add(currentFeet);
-                if (flag(block, "can_work_here")) { mine(block, positions, 0, tried); return; }
+                if (flag(block, "can_work_here") || block.has("can_clear_here") && flag(block, "can_clear_here")) {
+                    mine(block, positions, 0, tried); return;
+                }
                 if (positions.isEmpty()) {
                     skippedBlocks.add(blockKey(block));
                     if (block.has("work_failure")) lastProblem = block.get("work_failure").getAsString();
@@ -237,7 +240,7 @@ final class BoundedGather {
                 return;
             }
             finish(false, "RESOURCE_BLOCKED:当前有界区域没有可继续采集的已观测候选；"
-                    + "站位已筛选实际视线/距离；埋藏或遮挡目标需要另行规划具体清理，未自动挖邻格。"
+                    + "站位已筛选实际视线/距离及有界安全清理；超出预算或保护条件的埋藏目标须另行规划。"
                     + "未加载/撞帽范围不证明无资源，不扩大范围或挖掘探查。" + lastProblem);
         });
     }
@@ -248,6 +251,7 @@ final class BoundedGather {
         JsonObject point = positions.get(index).deepCopy();
         tried.add(blockKey(point));
         point.addProperty("exact", true);
+        point.addProperty("clear_obstructions", true);
         var target = new JsonObject();
         for (String key : List.of("x", "y", "z")) target.addProperty(key, exact(block, key));
         point.add("work_target", target);
@@ -285,7 +289,15 @@ final class BoundedGather {
         var args = new JsonObject();
         for (String key : List.of("x", "y", "z")) args.addProperty(key, exact(block, key));
         args.addProperty("expected_block", block.get("block").getAsString());
+        args.addProperty("clear_obstructions", true);
+        args.addProperty("clear_limit", Math.min(3, plan.maxBlocks() - dug - cleared - 1));
         call("break_block", args, receipt -> {
+            lastData = receipt.data();
+            int incidental = receipt.data().has("cleared_blocks")
+                    ? receipt.data().get("cleared_blocks").getAsInt() : 0;
+            if (incidental < 0 || incidental > args.get("clear_limit").getAsInt()) throw new IllegalArgumentException();
+            cleared += incidental;
+            if (incidental > 0) skippedBlocks.clear();
             if (receipt.data().has("removed") && receipt.data().get("removed").getAsBoolean()) {
                 dug++;
                 stalls++;
@@ -366,16 +378,19 @@ final class BoundedGather {
         data.addProperty("goal_satisfied", ok && goal != null && goal.satisfied());
         data.addProperty("scope", plan.scope() == ItemGoal.Scope.TASK ? "task" : "subtask");
         data.addProperty("mined_blocks", dug);
+        data.addProperty("cleared_blocks", cleared);
         data.addProperty("actual_progress", goal == null ? 0 : goal.progress());
         data.addProperty("primitive_calls", calls);
         data.addProperty("work_position_attempts", workPositionAttempts);
         data.addProperty("skipped_blocks", skippedBlocks.size());
         data.addProperty("skipped_items", skippedItems.size());
         data.add("last_observation", lastData);
+        for (String key : List.of("authorization_id", "authorization_summary"))
+            if (lastData.has(key)) data.add(key, lastData.get(key).deepCopy());
         result.complete(new ToolOutcome(ok, reason + "\n"
                 + (goal == null ? "尚未取得本次采集的完整背包基线。" : goal.facts())
                 + (plan.scope() == ItemGoal.Scope.SUBTASK ? "\n此回执只结算材料子任务，不代表主人的整项目标完成。" : "")
-                + "\n本段实际挖掘=" + dug + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
+                + "\n本段实际目标挖掘=" + dug + "，另清遮挡=" + cleared + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
                 + "，未拾取候选=" + skippedItems.size() + "；请按实际回执决定后续。", data));
     }
 }

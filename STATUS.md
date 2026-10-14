@@ -3,7 +3,62 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-14）：下坡净空与清理顺序
+## 当前状态（2026-10-14）：资源候选、许可遮挡与掉落事实
+
+### 资源候选、许可遮挡与掉落事实（2026-10-14 17:06，Asia/Shanghai）
+
+- 维护者要求对15:49石镐成功日志剩余三项共用问题继续学习参考并优化：
+  埋藏匹配占满16名额、落叶等遮挡需要模型逐格清理、历史掉落15件误报当前未入包。
+  只读核对参考BlockSearch/BlockGroups、Goals/Sight、DigCompanionTask与Drops；
+  学习先收集再分配、共享工作判据、许可实际遮挡及去向口径，不复制/翻译代码、
+  注释、提示词或脚本，不修改宿主/连接器/参考副本。
+- FindResourceTool保留4096采样及16输出；work=true对全部已读匹配做露出预筛，
+  用已读邻格判断非实心/未知/封闭，不增加邻格世界读取。再评当前眼睛及安全站位，
+  24目标/整次2048共享原版射线，单计划64射线/3遮挡，工作候选先于受阻诊断。
+  work_checked/work_checks/work_traces/work_truncated及WORK_BUDGET保留未知事实；
+  普通work=false仍按最近输出，不保留全扫描状态表或创建全部命中的JSON。
+- MiningWork统一资源当前眼睛、假想站位、move_to工作终态与组合挖掘的可清理判据。
+  ClearingMining处理最多3格实际射线遮挡，先完整状态清单/审批或主人自主模式，
+  再扩展全部改动区域租约；逐拍复核状态/许可/安全/完整主手，动作后刷新实际耐久。
+  拒绝神圣格及支撑、身体脚下、液体邻接、重力方块与不具采收资格；
+  新格/状态变化不扩大原清单。实际动作继续原BlockMining，不穿墙点击或直接入包。
+- gather自动带clear_obstructions及剩余clear_limit，目标挖掘与清理共用max_blocks，
+  removed/mined_blocks只算请求资源，cleared_blocks/clearing_results单列遮挡真实效果；
+  批准方案及原编号传回模型，确认模式不自行批准。取消/超时和原版报告失败
+  保留已完成清理，目标已移除但回执等待期间取消也保留真实removed。
+  材料subtask、最终背包目标、共享程序原子预算及原1024调用/时间帽不变。
+- PathTask使用DropObservations，每次实际移除记录有界新掉落UUID，终态/status再读，
+  最多256记录/16展示。observed_drop_items是历史量，remaining_items是当刻可见
+  原记录量，unresolved_drop_items是未核实去向；合并增长不充当本趟产物，
+  消失/变少/卸载/撞帽不能证明拾取。失败/取消同口径保留账，回执不再称历史15件
+  “未入包”。尚无原版拾取/合并事件精准归因，完整性只相对移除时观察，不覆盖全部模组掉落。
+- 新增20项回归：BlockAim4项执行原版轮廓/clip，覆盖实际遮挡次序、四片落叶、
+  超帽/未知/拒绝及共享射线预算；Awareness1项证明16近埋藏匹配之外的露出资源取得名额；
+  ClearingMining8项运行生产组合及真实BlockMining逻辑，验证原一次性批准、状态替换、
+  区域冲突/剩余预算、安全/主手/撤销、取消与原版失败；掉落3项区分历史/当前/未知及记录帽；
+  gather2项检查本地清理/实际成果与预算，runner2项检查同模型轮推进及批准原回执传递。
+  首次专项72项有1失败：默认落叶仅部分覆盖，仍可从边缘挖到；
+  改用原版AMOUNT=4完整覆盖夹具，不放宽视线断言。后补runner测试有一次编译失败，
+  使用正确Msg.Tool.content访问器后专项通过；这些不是原生世界/模型/网络验收。
+- 第一次强制全量构建：build/resource-work-delivery-build-20261014.log，
+  17:01:57完成，38秒，20/20任务执行；XML核心273/根105/客户端446，
+  共824项，失败/错误/跳过均0。build/libs/mcbot-0.1.0.jar SHA256：
+  `83653253b70f84acbb77994981ed9f90d4359c1b9d76d5d4a623eef258f4330d`。
+  JAR确认包含MiningWork/ClearingMining/DropObservations、agent-core/LuaJ及许可；
+  tools/list-java.ps1未列Java进程。官方映射javap确认Level.getEntity(UUID)、
+  BlockGetter.clip/LevelHeightAccessor.getHeight/getMinY、FallingBlock与SegmentableBlock.AMOUNT。
+- 收尾复核补最终目标工具/世界规则预检，只有TARGET_BLOCKED可进入局部清理；
+  不能先挖覆盖层再发现最终矿物没有采收资格。新增1项生产BlockMining预检回归，
+  清理专项现9项，本卡新增共21项。**最终交付强制全量构建**：
+  build/resource-work-final-build-20261014.log，17:06:07完成，34秒/20任务全执行；
+  XML核心273/根105/客户端447，共825，失败/错误/跳过0。
+  最新build/libs/mcbot-0.1.0.jar SHA256：
+  `2dd1d3c5c0819c54b3e395eb3e4fb972198946e86bee478c65c95232900bc538`。
+  最终JAR再次确认三个新增生产类、agent-core/LuaJ与许可，Java进程清单为空。
+- 工具契约/架构/性能设计/开发说明/交接/补测及AGENTS已同步。
+  没有启动游戏或真实模型、改配置/世界或替换实例包；实际耗时/原生清理继续待维护者验证。
+  完整工作目标A*、半砖/碰撞盒、跨区域探索、精确掉落事件账与落地后无站位有限重评仍待后续。
+  按既有授权扫描暂存后提交推送；候选与源码分开，JAR/构建日志不入仓，实际归档以Git为准。
 
 ### 下坡净空与清理顺序（2026-10-14，Asia/Shanghai）
 

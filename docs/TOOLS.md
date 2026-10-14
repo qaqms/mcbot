@@ -46,7 +46,7 @@ additional默认按任务开始完整36槽背包的净新增计算，total按当
 应先用本轮最新完整装备事实选好工具；本地循环不自动合成镐或处理补给。
 targets为1-8个方块ID/#标签，不是物品ID；item为期望入包的物品，count为1-4096。
 本段起点附近目标r默认8、最大16；timeout_seconds默认600、最大900，
-max_blocks默认128、最大256；子调用最多1024，参数最多4096 UTF-8字节。
+max_blocks默认128、最大256，目标移除与额外遮挡清理共用此预算；子调用最多1024，参数最多4096 UTF-8字节。
 三次操作无入包成果且没有可继续拾取候选时停止；刚挖出的掉落先尝试拾取再判断。
 掉落附近站位仅为已加载/无流体/完整地板/身体无碰撞候选，最多6个，
 路径和实际触碰须子工具验证；复杂半砖站位暂不支持。
@@ -62,12 +62,18 @@ gather的move_to携带exact=true及work_target，移动真终态再次评估视�
 仅耗尽本目标站位后计一次受阻；NO_PATH/NO_PROGRESS可换站位，
 TARGET_LOST放弃旧目标并重新观测，权限/缺工具/未知效果直接交回模型。
 真正移除方块后撤销此前的受阻目标记录，再按新查询评估，原三次无成果、
-1024调用/时间/矿格/共享预算不变。完全埋藏目标没有可见站位时直接报告已观测原因，
-不自动清邻格；具体遮挡清单与授权执行仍待后续卡。掉落站位不套用挖掘视线筛选。
+1024调用/时间/矿格/共享预算不变。2026-10-14追加局部清理：
+当前与假想站位、move_to终态和清理执行共用MiningWork/BlockAim.miningPlan，
+允许射线上最多3格已核对安全的遮挡，计划只读，不点击穿墙或改变世界。
+gather自动携带clear_obstructions=true及clear_limit=min(3,剩余挖掘预算-1)，
+服务端按具体清单/自主模式裁决，不需模型逐格安排落叶或少量泥土清理。
+清理超限、神圣方块/支撑、脚下支撑、液体邻接、重力方块或不具采收资格时仍停止。
+目标与遮挡使用真实BlockMining，清理后重评射线；清单外新格/状态变化不自动扩大范围。
+掉落站位不套用挖掘视线筛选，完全埋藏的大范围勘探仍需另行规划。
 break_block可带expected_block完整ID；不匹配则TARGET_LOST，不能挖新出现的替换物。
 路线NEED_CONFIRM/PARTIAL、缺工具/空间、预算或未知事实返回模型判断，不自行批准开路。
 取消/超时清子票，迟到结果不续跑，保留已完成与在途未知。
-data给goal_satisfied、mined_blocks、actual_progress、primitive_calls、
+data给goal_satisfied、mined_blocks、cleared_blocks、actual_progress、primitive_calls、
 skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包核对。
 另给work_position_attempts，统计实际派发的工作换位次数，便于区分恢复与模型等待。
 当前没有自行探索/勘探洞、补给、危险响应或跟随护卫，不保证自然世界找到64颗钻石。
@@ -172,18 +178,18 @@ status的实际服务端回执包含permission_mode=confirm/autonomous/read_only
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
 | `status` | `details?` | 同步 | 最新位置/生命/饥饿/背包占用/主手及实际任务计数；details=true包含背包/装备逐槽明细 |
-| `find_resource` | `targets,r?,work?` | 同步 | 方块ID/#标签定向搜索；r默认8/最多16，最近优先4096格采样，最多16候选，明确未知/撞帽；work=true附当前可工作性和最多6个安全站位候选 |
+| `find_resource` | `targets,r?,work?` | 同步 | 方块ID/#标签定向搜索；4096格采样/16输出；work=true先露出筛选再工作排序，最多24目标/共享2048射线，附直接工作/清理可行性与最多6站位；未知/撞帽明确报告 |
 | `inspect_block` | `x,y,z,offset?` | 同步 | 6.5格内完整加载方块/本体容器明细，每页24槽；拒锁/未展开战利品，不打开GUI |
 | `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
 | `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
 | `scan_area` | `r`(1-32，默认16),`items_only?,item?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落。不保证候选可达，泥土/沙用find_resource定向查 |
-| `break_block` | `x,y,z,expected_block?` | 异步(≤60s) | 可核对观测的完整方块ID；每拍核验目标/主手、原版距离与视线，转向后确认实际命中再挥手；原版破坏处理耐久/地上掉落，不直接入包；回执给移除、留地量和实体位置，原生视觉待测 |
+| `break_block` | `x,y,z,expected_block?,clear_obstructions?,clear_limit?,authorization_id?` | 异步(≤60s) | 默认单格；可选射线安全清理≤3格，走原批准/自主模式与实际BlockMining；目标移除和遮挡清理分列，不直接入包；每拍核验目标/主手/距离/视线，原生视觉待测 |
 | `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；逐次确认模式的中立/命名目标需批准，自主模式免批准，仍拒绝玩家/宠物/同队及不安全横扫 |
 | `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
 | `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
-| `move_to` | `x,y,z,exact?,work_target?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；work_target={x,y,z}要求exact=true，移动终态按最新视线/距离验证可挖性，失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。逐次确认模式改世界先回 `NEED_CONFIRM`+清单与编号，主人确认后携带编号执行；自主模式免批准，旧模型布尔不授权。搜索预算 8000 节点/128 挖/放≤背包存量；确认模式重规划新改动重新确认 |
+| `move_to` | `x,y,z,exact?,work_target?,clear_obstructions?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；work_target={x,y,z}要求exact=true，终态按最新视线/距离验工作，clear_obstructions=true允许按安全清理计划评估，不额外执行目标清理；失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。确认模式改世界先给具体批准方案；自主模式由主人任务放行。搜索预算8000节点/128挖/放≤背包存量；新增改动复核许可 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
@@ -373,11 +379,23 @@ break_block 与 move_to 开路共用 BlockMining：预检 5.5 格、执行期 6.
 BlockState.getDestroyProgress 的实时增量；零硬度的正无穷进度可立即完成，
 无效进度连续 10 tick 停手。失败、完成、取消和路径重规划清理当前裂纹。
 
+break_block默认仍为显式单格动作；可选clear_obstructions=true请求有界组合挖掘，
+clear_limit为0-3整数（默认3），authorization_id沿原主人批准回执使用。
+ClearingMining先生成目标及实际射线遮挡的完整BlockState清单，
+确认模式先NEED_CONFIRM，无世界效果；ask_owner显示服务端清单并确认后，
+以相同坐标/expected_block/clear_obstructions和批准编号重发。
+自主模式仅由当前主人任务上下文放行，模型布尔不授予权限。
+全部改动邻域先租约扩展，逐拍检查状态/当前安全/主手，真实耐久变化在动作后刷新，
+清理前先通过最终目标的工具/世界规则预检，只容许视线遮挡交给局部计划处理，
+取消/超时保留已经清理的记录；不改宿主或外部桥v1.0。
+data的removed仍只指请求目标；cleared_blocks/clearing_results单列实际遮挡移除，
+清掉遮挡后目标受阻不能假报目标已挖或物品目标已满足。
+
 最终只调用一次 ServerPlayerGameMode.destroyBlock，让原版执行采收/耐久/方块钩子。
 其返回 true 不保证实际移除，因此还要核对目标原方块是否仍在。
 移除失败不自行求战利品、不吸取新实体；原版仍可能已消耗耐久，勿自动重试。
 成功移除后只观察目标AABB向外扩0.5格内、本次动作前不存在的物品实体；
-不改新旧实体、不写背包、不删除掉落；需要物品时走近后显式collect。
+不改新旧实体、不写背包、不删除掉落；需要物品时走近后由身体原版触碰拾取。
 这是有界的附近新实体观测，不是所有掉落的精确归因：邻格钩子产生的物品可能在内，
 远处/延迟生成的模组掉落不在内，经验球不自动收取。
 data 含 removed、reported_success（已观察移除时）、collected_count、remaining_count、
@@ -403,8 +421,15 @@ place_block 的 item 是物品注册 ID，不是方块 ID；背包来源只用 0
 计入 0-35 垫料预算；不自动使用重力方块、木材、工作台、贵重块或命名物品。
 成功放置后还需确认真实支撑，否则停止移动；不因目标已占据就认定能站立。
 开路掉落留地、可继续路线并记录留地量；原版报告失败则停手，即使目标已观察移除。
-路径终态给 removed_blocks/placed_blocks/remaining_items，按本趟实际执行计数，
-途中失败也保留已完成改动，不把计划清单当作执行成果。
+路径终态给removed_blocks/placed_blocks，按本趟实际执行计数。
+observed_drop_items为各次移除时观测的新掉落历史总量；
+remaining_items改为终态/观察当刻仍可见记录实体的数量，逐实体最多计原记录数，
+合并增量不冒认为本趟产物。最多跟踪256个UUID、展示16个remaining_drops。
+unresolved_drop_items给原记录中此刻未核实的量，remaining_items_complete只表示
+移除时已记录量是否都仍可见，不代表全世界/全部模组战利品已覆盖。
+实体消失/变少、合并、卸载或记录撞帽均不能证明入包；实际成果仍核对新鲜背包。
+目前没有原版拾取/合并事件归因账，因此不能把未知去向分类为主人拾取或销毁。
+途中失败/取消也保留已完成改动和同口径掉落观察，不把计划当作执行成果。
 有限授权、缓存/重规划新增改动批准及统一资源互斥见下节，任务桥 v1.0 不变。
 离线证据与范围见 DEVELOPMENT §3.6。
 
@@ -543,6 +568,14 @@ find_resource的targets须1-8个实际方块ID或已加载非空#方块标签，
 不是物品ID或自然语言。r为1-16整数，默认8；查询以身体为中心，最近优先采样最多4096格，
 最多返回16个绝对坐标。仅getChunkNow取得的完整区块可读，未知/界外不读，不加载或生成。
 data同时给samples_planned/samples_examined/cells_read/unknown/truncated/results_truncated/no_targets。
+work=true保留全部已读匹配，用已读邻格的非实心/未知/封闭分层预筛，
+不额外读邻格或把未知当露出；最多24目标、整次查询共享2048次原版轮廓射线，
+每个工作计划最多64射线/3遮挡。先评当前眼睛，再评站位，最终将已核对直接工作、
+可局部清理、有站位的候选排在受阻诊断前，最近16埋藏匹配不再直接占满输出。
+can_work_here为无需清理；can_clear_here为当前有安全几何计划（可能零遮挡），
+clear_blocks为计划遮挡数。work_checked/work_checks/work_traces/work_truncated
+明确工作评估边界，WORK_BUDGET是未知，不是已证明不可工作。
+站位最多6、完整地板规则不变；查询不证明路径可达或已取得清理许可。
 候选只证明采样格中存在方块，不证明露出、可达、采收资格或实际掉落；空结果不证明不存在。
 scan_area同样给no_targets并明确分类遗漏木材，不鼓励挖掘探查或改变半径持续空转。
 

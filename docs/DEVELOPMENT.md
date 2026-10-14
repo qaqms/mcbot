@@ -4,6 +4,14 @@
 
 ## 当前验证安排（2026-10-14）
 
+资源/清理/掉落事实卡：find_resource先露出预筛再分配工作/输出名额，
+整查询共享2048射线、24目标；MiningWork连接站位/移动终态/ClearingMining，
+最多3个实际遮挡，原权限/安全/区域锁/主手/取消及采集预算保留。
+BlockAimTest执行原版shape/clip；ClearingMiningTest执行实际组合与BlockMining逻辑，
+世界回调/身体与网络仍受控；AgentRunnerGatherTest检查实际runner无需新增模型轮次
+及批准回执传递。DropObservationsTest检查当前/历史区分及合并/消失未知，
+没有运行真实拾取/合并事件或PathTask完整世界遍历。最终证据以STATUS为准。
+
 下坡净空修复：搜索/重建/活体清单/移动前复核检查身体迈出边沿时经过的上方格，
 挖掘顺序改为自上而下；途中重建剩余授权清单携带前一落脚高度。
 DescendingClearanceTest验证实际A*的三格费用/帽及不可挖拒绝，

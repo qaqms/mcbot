@@ -6,7 +6,10 @@ import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.common.ResourceLocationHelper;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.WorkPositions;
+import com.neko.mcbot.server.MiningWork;
+import com.neko.mcbot.server.BlockAim;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.tags.TagKey;
@@ -22,6 +25,8 @@ import java.util.function.Predicate;
 public final class FindResourceTool implements ServerTool {
     public static final int MAX_SAMPLES = 4096;
     public static final int MAX_RESULTS = 16;
+    public static final int MAX_WORK_CHECKS = 24;
+    public static final int MAX_WORK_TRACES = 2048;
     private static final List<BlockPos> OFFSETS = offsets();
     record Input(int radius, List<String> targets, Predicate<BlockState> matches) {
     }
@@ -30,6 +35,8 @@ public final class FindResourceTool implements ServerTool {
         boolean readable(BlockPos pos);
         BlockState state(BlockPos pos);
         default void work(JsonObject target, BlockPos pos) { }
+        default void work(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { work(target, pos); }
+        default void stands(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { }
     }
     @Override public String name() { return "find_resource"; }
     @Override public Result run(CompanionPlayer companion, JsonObject args) {
@@ -45,11 +52,16 @@ public final class FindResourceTool implements ServerTool {
                 if (chunk == null) throw new IllegalStateException("chunk left during server-thread scan");
                 return chunk.getBlockState(pos);
             }
-            @Override public void work(JsonObject target, BlockPos pos) {
-                var aim = WorkPositions.miningAim(companion, pos);
-                target.addProperty("can_work_here", aim.ok());
-                if (!aim.ok()) target.addProperty("work_failure", aim.failure());
-                target.add("stand_positions", WorkPositions.describeMining(companion, pos));
+            @Override public void work(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) {
+                var plan = MiningWork.plan(companion, pos, companion.getEyePosition(), companion.blockPosition(), budget);
+                target.addProperty("can_work_here", plan.ok() && plan.blockers().isEmpty());
+                target.addProperty("can_clear_here", plan.ok());
+                target.addProperty("clear_blocks", plan.blockers().size());
+                if (!plan.ok()) target.addProperty("work_failure", plan.aim().failure());
+                target.add("stand_positions", new JsonArray());
+            }
+            @Override public void stands(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) {
+                target.add("stand_positions", WorkPositions.describeMining(companion, pos, budget));
             }
         });
     }
@@ -96,8 +108,11 @@ public final class FindResourceTool implements ServerTool {
         if (input == null) return new Result(false,
                 "DENIED:targets 为1-8个有效方块ID或非空方块#标签，r为1-16整数；如 oak_log 或 #minecraft:logs。", null);
         BlockPos center = access.center();
+        boolean work = args.has("work") && args.get("work").getAsBoolean();
         int planned = 0, sampled = 0, read = 0, unknown = 0, matches = 0;
         var results = new JsonArray();
+        var observed = new java.util.HashMap<BlockPos, BlockState>();
+        var candidates = new ArrayList<JsonObject>();
         StringBuilder lines = new StringBuilder();
         for (BlockPos offset : OFFSETS) {
             int distance = offset.getX() * offset.getX() + offset.getY() * offset.getY() + offset.getZ() * offset.getZ();
@@ -108,10 +123,11 @@ public final class FindResourceTool implements ServerTool {
             BlockPos pos = center.offset(offset);
             if (!access.readable(pos)) { unknown++; continue; }
             BlockState state = access.state(pos);
+            if (work) observed.put(pos, state);
             read++;
             if (!input.matches().test(state)) continue;
             matches++;
-            if (results.size() >= MAX_RESULTS) continue;
+            if (!work && candidates.size() >= MAX_RESULTS) continue;
             String id = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
             if (id.length() > 128) continue;
             var target = new JsonObject();
@@ -120,7 +136,50 @@ public final class FindResourceTool implements ServerTool {
             target.addProperty("y", pos.getY());
             target.addProperty("z", pos.getZ());
             target.addProperty("distance", Math.sqrt(distance));
-            if (args.has("work") && args.get("work").getAsBoolean()) access.work(target, pos);
+            candidates.add(target);
+        }
+        int workChecks = 0;
+        var traceBudget = new BlockAim.TraceBudget(MAX_WORK_TRACES);
+        if (work) {
+            // Rank all observed hits before spending scarce geometric checks or output slots.
+            for (var target : candidates) {
+                BlockPos pos = point(target);
+                int exposure = 2;
+                for (Direction direction : Direction.values()) {
+                    var neighbor = observed.get(pos.relative(direction));
+                    if (neighbor == null) exposure = Math.min(exposure, 1);
+                    else if (!neighbor.blocksMotion()) exposure = 0;
+                }
+                target.addProperty("exposure_rank", exposure);
+            }
+            candidates.sort(Comparator.comparingInt(t -> t.get("exposure_rank").getAsInt()));
+            for (var target : candidates) {
+                if (workChecks >= MAX_WORK_CHECKS || !traceBudget.available()) break;
+                access.work(target, point(target), traceBudget);
+                target.addProperty("work_checked", true);
+                workChecks++;
+            }
+            // Assess current-eye candidates first so one buried target cannot spend every stance ray.
+            candidates.sort(Comparator.comparingInt(FindResourceTool::workRank));
+            for (var target : candidates) {
+                if (!traceBudget.available()) break;
+                if (!target.has("work_checked")) continue;
+                access.stands(target, point(target), traceBudget);
+            }
+            // Unchecked candidates stay diagnostic; never advertise them as actionable.
+            candidates.sort(Comparator.comparingInt(FindResourceTool::workRank));
+        }
+        for (var target : candidates) {
+            if (results.size() >= MAX_RESULTS) break;
+            if (work && !target.has("work_checked")) {
+                target.addProperty("work_checked", false);
+                target.addProperty("can_work_here", false);
+                target.addProperty("can_clear_here", false);
+                target.add("stand_positions", new JsonArray());
+                target.addProperty("work_failure", "WORK_BUDGET:本次几何评估预算已到，该候选可工作性未知。");
+            }
+            BlockPos pos = point(target);
+            String id = target.get("block").getAsString();
             results.add(target);
             lines.append("\n").append(id).append(" @(").append(pos.getX()).append(",")
                     .append(pos.getY()).append(",").append(pos.getZ()).append(")");
@@ -135,13 +194,28 @@ public final class FindResourceTool implements ServerTool {
         data.addProperty("truncated", sampled < planned);
         data.addProperty("results_truncated", matches > results.size());
         data.addProperty("no_targets", results.isEmpty());
+        data.addProperty("work_checks", workChecks);
+        data.addProperty("work_traces", traceBudget.used());
+        data.addProperty("work_truncated", work && (workChecks < candidates.size() || !traceBudget.available()));
         String feedback = "定向查找 " + input.targets() + "，半径 " + input.radius() + "，实读 "
                 + read + "/" + planned + " 格，未知 " + unknown + " 格，采样上限 " + MAX_SAMPLES
                 + "；列出 " + results.size() + " 个候选（最多16）。" + lines
-                + "\n这是已读格的方块观测，不证明可达、露出、当前能挖或掉落数量；未找到不等于周边没有资源。"
+                + (work ? "\n优先露出候选，再按已核对的直接工作/局部清理/站位排序；几何评估最多24个，未检查为未知。" : "")
+                + "\n这是已读格的方块观测，不证明路径可达或掉落数量；未找到不等于周边没有资源。"
                 + (sampled < planned ? "采样撞帽，远处未看全。" : "")
                 + "不要靠挖掘探查或连续改变半径空转；受阻时说明已查范围。";
         return new Result(true, feedback, data);
+    }
+
+    private static BlockPos point(JsonObject target) {
+        return new BlockPos(target.get("x").getAsInt(), target.get("y").getAsInt(), target.get("z").getAsInt());
+    }
+
+    private static int workRank(JsonObject target) {
+        if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean()) return 0;
+        if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean()) return 1;
+        if (target.has("stand_positions") && !target.getAsJsonArray("stand_positions").isEmpty()) return 2;
+        return target.has("work_checked") ? 3 : 4;
     }
 
     private static List<BlockPos> offsets() {

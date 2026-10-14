@@ -22,8 +22,13 @@ mc.call切回客户端，真实terminalOnly回执才恢复；变量、分支和�
 find_resource work=true附当前失败原因及最多6站位；掉落describe不受挖掘筛选影响。
 move_to可带work_target，在PathTask真正结束后重新检查几何工作条件并保留实际移动账。
 BoundedGather在不同站位间有限恢复，移除后重新查询此前受阻目标；
-break_block的expected_block防止旧目标被替换后误挖。仍沿既有坐标A*，
-没有为遮挡清理扩大授权或添加完整工作目标搜索，具体范围见TOOLS §1.1。
+break_block的expected_block防止旧目标被替换后误挖。后续已接MiningWork/ClearingMining：
+work查询、假想站位、移动工作终态与组合挖掘使用同一有界清理判据；
+射线上最多3格安全遮挡走原ActionPermissions具体批准/自主上下文及区域锁，
+清理实际结果与目标移除分列，不添加完整工作目标A*，具体范围见TOOLS §1.1/2.5。
+资源先对全部已读匹配做露出预筛，再分配24目标/2048共享射线与16输出名额。
+PathTask用DropObservations重查最多256个记录UUID，历史量、当前可见量、
+未知去向分开；没有拾取/合并事件精确归因，不用消失替代背包成果。
 
 自主执行为主人客户端偏好autonomous_actions（默认false），新任务用内部
 task_begin.autonomous建立服务端Context；模型工具参数不能升级，只读优先。
@@ -570,7 +575,7 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 | 路径垫料(C2) | 存储 0-35；无 components patch 的圆石/深板岩圆石/泥土/下界岩；规划预算和执行选择同一谓词，装备/副手不算 |
 | 动作权限(C3) | 服务端proposal TTL180s，一次使用；最多256个独立改动，完整清单≤12000B；每任务一个待确认方案；区域初始≤256，累计≤512；collect中心/实体≤6.5格且在请求球体内，还须与body.inflate(1,.5,1)相交，原版playerTouch执行拾取 |
 | 攻击(C4) | 原版isWithinAttackRange(AABB,0)且身体局部≤6.5；近身候选最近≤64；已加载邻域≤4096格；默认1/最多10次；完整冷却及目标invulnerableTime≤10；剑扫域AABB.inflate(1,.25,1)不能有第三活物；每租约实体UUID≤256 |
-| 感知(C5) | 每轮快照≤16384 UTF-8字节、沿用status90s超时；find_resource目标1-8、r1-16默认8、最多4096格/16候选；inspect_block6.5格、每页24槽/容器≤1024槽 |
+| 感知(C5) | 每轮快照≤16384 UTF-8字节、沿用status90s超时；find_resource目标1-8、r1-16默认8、4096格/16输出；work≤24目标/2048共享射线，单计划≤64射线/3遮挡；路径掉落≤256 UUID/16展示；inspect_block6.5格、每页24槽/容器≤1024槽 |
 | 寻路(R1 后) | 双帽：8000 节点 **或** 累计 CPU 400ms（先到先停）；单拍切片 6ms/300 节点；128 挖帽；放≤背包存量；搜索盒 64×32×64；单格挖 ≤20s；h=1.8×0.467×L1距体积+入柱价（**故意不可采纳**，代价上界 W×最优）；PARTIAL 下限 gain≥4；重规划 ≤2 且分帧（旧路格 ×0.7 降权，失效格周围不入集）；复核 20/5；memo 帽 262144 格（超帽退直读）；验尸 256 实查/抽 8 格/不符超 24 丢图重开≤2；dig 量化 0.25s |
 | 同伴区块票(S3b) | 自定义超时票 40t（LOADING|SIMULATION，无 PERSIST）；半径 2 chunk（5×5 垫）；END_SERVER_TICK 每拍续票（先于 scheduler）；只续不撤，停续即过期自清；不设 owner 在线闸 |
 | 感知(R2-S1) | classify 6 词表；ROCK_PATHS 10 路径常数（**不含**泥土沙/加工石）；ore=endsWith("_ore")；三层步长 1/2/3，名额 细列≤8/组≤10/远≤12，MAX_SAMPLES=900；坐标 `@(x,y,z) d3.2`+首行八向；准星注入≤120B（MISS/ENTITY 不注入） |

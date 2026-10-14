@@ -50,6 +50,10 @@ class BlockAimTest {
             return clip(new ClipContext(from, to, ClipContext.Block.OUTLINE,
                     ClipContext.Fluid.NONE, CollisionContext.empty()));
         }
+        @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
+            traces++;
+            return BlockAim.clipIgnoring(this, from, to, CollisionContext.empty(), ignored);
+        }
         @Override public BlockState getBlockState(BlockPos pos) {
             assertTrue(loaded(pos), "unknown blocks must never be read");
             reads++;
@@ -213,5 +217,61 @@ class BlockAimTest {
     private static BlockPos pathPos(long cell) {
         return new BlockPos(com.neko.mcbot.path.DigAStar.unpackX(cell),
                 com.neko.mcbot.path.DigAStar.unpackY(cell), com.neko.mcbot.path.DigAStar.unpackZ(cell));
+    }
+
+    @Test void clearingPlanUsesNativeShapeAndOrdersTheActualOccluders() {
+        Grid grid = new Grid();
+        grid.eye = new Vec3(.5, 1.62, .5);
+        grid.wall();
+        var plan = BlockAim.miningPlan(grid, TARGET, 4.5, pos -> true);
+        assertTrue(plan.ok());
+        assertEquals(List.of(new BlockPos(1, 1, 0)), plan.blockers());
+        assertTrue(grid.traces <= BlockAim.MAX_PLAN_TRACES);
+        assertTrue(grid.blocks.containsKey(plan.blockers().getFirst()), "query never edits the world");
+        grid.blocks.remove(plan.blockers().getFirst());
+        assertTrue(BlockAim.mining(grid, TARGET, 4.5).ok());
+    }
+
+    @Test void leafLitterAboveTheTargetCanBeClearedWithoutClickingThroughIt() {
+        Grid grid = new Grid();
+        grid.blocks.clear();
+        BlockPos target = new BlockPos(0, 0, 0);
+        grid.eye = new Vec3(.5, 2.62, .5);
+        grid.blocks.put(target, Blocks.GRASS_BLOCK.defaultBlockState());
+        grid.blocks.put(target.above(), Blocks.LEAF_LITTER.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.SegmentableBlock.AMOUNT, 4));
+        assertFalse(BlockAim.mining(grid, target, 4.5).ok());
+        var plan = BlockAim.miningPlan(grid, target, 4.5, pos -> pos.equals(target.above()));
+        assertTrue(plan.ok());
+        assertEquals(List.of(target.above()), plan.blockers());
+        assertFalse(BlockAim.miningPlan(grid, target, 4.5, pos -> false).ok());
+    }
+
+    @Test void clearingPlanRejectsTooManyBlockersUnknownCellsAndDeniedChanges() {
+        Grid grid = new Grid();
+        grid.blocks.clear();
+        BlockPos target = new BlockPos(0, 0, 0);
+        grid.eye = new Vec3(.5, 5.62, .5);
+        for (int y = 0; y <= 4; y++) grid.blocks.put(target.above(y), Blocks.STONE.defaultBlockState());
+        assertFalse(BlockAim.miningPlan(grid, target, 6.5, pos -> true).ok());
+        grid = new Grid();
+        grid.wall();
+        assertFalse(BlockAim.miningPlan(grid, TARGET, 4.5, pos -> false).ok());
+        grid.unknown.add(new BlockPos(1, 1, 0));
+        grid.traces = 0;
+        assertFalse(BlockAim.miningPlan(grid, TARGET, 4.5, pos -> true).ok());
+        assertEquals(0, grid.traces);
+    }
+
+    @Test void workQueriesShareATraceBudgetAndReportUnknownWhenItRunsOut() {
+        Grid grid = new Grid();
+        grid.wall();
+        var budget = new BlockAim.TraceBudget(3);
+        assertTrue(BlockAim.miningPlan(grid, TARGET, 4.5, pos -> false, budget).aim().failure()
+                .startsWith("WORK_BUDGET:"));
+        assertEquals(3, grid.traces);
+        assertEquals(3, budget.used());
+        assertFalse(BlockAim.miningPlan(grid, TARGET, 4.5, pos -> true, budget).ok());
+        assertEquals(3, grid.traces, "the next candidate cannot start another ray after the shared cap");
     }
 }

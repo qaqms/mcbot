@@ -11,6 +11,9 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 
 import java.util.List;
+import java.util.Set;
+import java.util.ArrayList;
+import java.util.function.Predicate;
 
 /** Loaded, bounded sight checks before a coordinate-based action can touch the world. */
 public final class BlockAim {
@@ -19,10 +22,33 @@ public final class BlockAim {
         boolean loaded(BlockPos pos);
         List<AABB> outline(BlockPos pos);
         BlockHitResult trace(Vec3 from, Vec3 to);
+        default BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
+            return ignored.isEmpty() ? trace(from, to) : null;
+        }
     }
 
     public record Aim(Vec3 point, String failure) {
         public boolean ok() { return failure == null; }
+    }
+
+    public record MiningPlan(Aim aim, List<BlockPos> blockers) {
+        public boolean ok() { return aim.ok(); }
+    }
+
+    public static final int MAX_CLEAR_BLOCKS = 3;
+    public static final int MAX_PLAN_TRACES = 64;
+
+    public static final class TraceBudget {
+        private final int limit;
+        private int used;
+        public TraceBudget(int limit) { this.limit = limit; }
+        public boolean available() { return used < limit; }
+        public int used() { return used; }
+        private boolean take() {
+            if (!available()) return false;
+            used++;
+            return true;
+        }
     }
 
     private static final double[] SAMPLES = {.5, .1, .9};
@@ -45,6 +71,9 @@ public final class BlockAim {
                 return level.clip(new ClipContext(from, to, ClipContext.Block.OUTLINE,
                         ClipContext.Fluid.NONE, player));
             }
+            @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
+                return clipIgnoring(level, from, to, CollisionContext.of(player), ignored);
+            }
         };
     }
 
@@ -55,7 +84,84 @@ public final class BlockAim {
             @Override public boolean loaded(BlockPos pos) { return world.loaded(pos); }
             @Override public List<AABB> outline(BlockPos pos) { return world.outline(pos); }
             @Override public BlockHitResult trace(Vec3 from, Vec3 to) { return world.trace(from, to); }
+            @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
+                return world.traceIgnoring(from, to, ignored);
+            }
         };
+    }
+
+    /** Only admitted cells disappear in this read-only view; real mining never uses it. */
+    public static BlockHitResult clipIgnoring(BlockGetter world, Vec3 from, Vec3 to,
+                                              CollisionContext context, Set<BlockPos> ignored) {
+        BlockGetter view = new BlockGetter() {
+            @Override public net.minecraft.world.level.block.state.BlockState getBlockState(BlockPos pos) {
+                return ignored.contains(pos) ? net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()
+                        : world.getBlockState(pos);
+            }
+            @Override public net.minecraft.world.level.material.FluidState getFluidState(BlockPos pos) {
+                return getBlockState(pos).getFluidState();
+            }
+            @Override public net.minecraft.world.level.block.entity.BlockEntity getBlockEntity(BlockPos pos) {
+                return ignored.contains(pos) ? null : world.getBlockEntity(pos);
+            }
+            @Override public int getHeight() { return world.getHeight(); }
+            @Override public int getMinY() { return world.getMinY(); }
+        };
+        return view.clip(new ClipContext(from, to, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, context));
+    }
+
+    /** A small concrete sight-clearing plan, ranked by actual blockers rather than target distance. */
+    public static MiningPlan miningPlan(Access access, BlockPos target, double reach,
+                                        Predicate<BlockPos> clearable) {
+        return miningPlan(access, target, reach, clearable, new TraceBudget(MAX_PLAN_TRACES));
+    }
+
+    public static MiningPlan miningPlan(Access access, BlockPos target, double reach,
+                                        Predicate<BlockPos> clearable, TraceBudget budget) {
+        if (!validReach(reach)) return new MiningPlan(failed("OUT_OF_REACH:当前交互距离无效。"), List.of());
+        if (!access.loaded(target)) return new MiningPlan(unloaded(), List.of());
+        Vec3 eye = access.eye();
+        MiningPlan best = null;
+        int traces = 0;
+        boolean distant = false;
+        boolean capped = false;
+        boolean unknown = false;
+        var boxes = access.outline(target);
+        search: for (int i = 0; i < Math.min(MAX_BOXES, boxes.size()); i++) {
+            AABB box = boxes.get(i);
+            for (double x : SAMPLES) for (double y : SAMPLES) for (double z : SAMPLES) {
+                Vec3 point = new Vec3(target.getX() + box.minX + (box.maxX - box.minX) * x,
+                        target.getY() + box.minY + (box.maxY - box.minY) * y,
+                        target.getZ() + box.minZ + (box.maxZ - box.minZ) * z);
+                if (eye.distanceToSqr(point) > (reach + 2) * (reach + 2)) { distant = true; continue; }
+                if (!loadedSegment(access, eye, point)) { unknown = true; continue; }
+                var blockers = new ArrayList<BlockPos>();
+                var ignored = new java.util.HashSet<BlockPos>();
+                while (true) {
+                    if (++traces > MAX_PLAN_TRACES || !budget.take()) { capped = true; break search; }
+                    var hit = access.traceIgnoring(eye, point, ignored);
+                    if (hit == null || hit.getType() != HitResult.Type.BLOCK) break;
+                    if (eye.distanceToSqr(hit.getLocation()) > reach * reach) { distant = true; break; }
+                    BlockPos pos = hit.getBlockPos().immutable();
+                    if (target.equals(pos)) {
+                        var plan = new MiningPlan(new Aim(point, null), List.copyOf(blockers));
+                        if (best == null || blockers.size() < best.blockers().size()) best = plan;
+                        if (blockers.isEmpty()) return plan;
+                        break;
+                    }
+                    if (blockers.size() >= MAX_CLEAR_BLOCKS || !access.loaded(pos)
+                            || !clearable.test(pos) || !ignored.add(pos)) break;
+                    blockers.add(pos);
+                }
+            }
+        }
+        return best != null ? best : new MiningPlan(failed(unknown
+                ? "TARGET_LOST:工作射线经过未加载或界外格子。"
+                : capped
+                ? "WORK_BUDGET:本次工作射线评估已撞帽，未证明不存在工作位置。"
+                : distant
+                ? "OUT_OF_REACH:眼睛到工作表面超出实际交互距离。"
+                : "TARGET_BLOCKED:有界视线内没有可安全清理的工作射线。"), List.of());
     }
 
     public static Aim mining(Access access, BlockPos pos, double reach) {

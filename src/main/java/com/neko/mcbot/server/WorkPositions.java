@@ -20,6 +20,7 @@ public final class WorkPositions {
         boolean standable(BlockPos pos);
         double distanceSquared(BlockPos pos);
         default boolean workable(BlockPos pos) { return true; }
+        default boolean available() { return true; }
     }
 
     public static List<BlockPos> candidates(BlockPos target, Access access) {
@@ -43,6 +44,7 @@ public final class WorkPositions {
         var found = new ArrayList<BlockPos>();
         int checked = 0;
         for (BlockPos pos : nearby) {
+            if (!access.available()) break;
             if (!access.standable(pos)) continue;
             if (++checked > MAX_MINING_CHECKS) break;
             if (access.workable(pos)) found.add(pos);
@@ -60,12 +62,20 @@ public final class WorkPositions {
     }
 
     public static JsonArray describeMining(CompanionPlayer player, BlockPos target) {
-        return describe(player, target, true);
+        return describeMining(player, target, new BlockAim.TraceBudget(MAX_MINING_CHECKS * BlockAim.MAX_PLAN_TRACES));
+    }
+
+    public static JsonArray describeMining(CompanionPlayer player, BlockPos target, BlockAim.TraceBudget budget) {
+        return describe(player, target, true, budget);
     }
 
     private static JsonArray describe(CompanionPlayer player, BlockPos target, boolean mining) {
+        return describe(player, target, mining, new BlockAim.TraceBudget(MAX_MINING_CHECKS * BlockAim.MAX_PLAN_TRACES));
+    }
+
+    private static JsonArray describe(CompanionPlayer player, BlockPos target, boolean mining,
+                                      BlockAim.TraceBudget budget) {
         var level = player.level();
-        var world = BlockAim.forPlayer(player);
         double eyeHeight = player.getEyePosition().y - player.getY();
         var access = new Access() {
             @Override public boolean standable(BlockPos pos) {
@@ -85,9 +95,9 @@ public final class WorkPositions {
             }
             @Override public boolean workable(BlockPos pos) {
                 var eye = new Vec3(pos.getX() + .5, pos.getY() + eyeHeight, pos.getZ() + .5);
-                return BlockAim.mining(BlockAim.fromEye(world, eye), target,
-                        Math.min(5.5, player.blockInteractionRange())).ok();
+                return MiningWork.plan(player, target, eye, pos, budget).ok();
             }
+            @Override public boolean available() { return budget.available(); }
         };
         var positions = new JsonArray();
         for (BlockPos pos : mining ? miningCandidates(target, access) : candidates(target, access)) {
