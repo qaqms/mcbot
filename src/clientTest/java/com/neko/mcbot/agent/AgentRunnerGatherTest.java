@@ -207,17 +207,178 @@ class AgentRunnerGatherTest {
         assertEquals(2, client.engine().responses.size());
     }
 
-    @Test void clearingConsentReturnsTheOriginalServerProposalToTheModel() {
+    private void proposeClearing() {
         reachMining();
         reply(false, "NEED_CONFIRM:authorization_id=clear-plan", JsonParser.parseString(
                 "{\"removed\":false,\"cleared_blocks\":0,\"authorization_id\":\"clear-plan\","
                         + "\"authorization_summary\":\"server cells\"}").getAsJsonObject());
+    }
+
+    private void approve() {
+        assertTrue(runner.answerFromPanel(runner.questionSnapshot().id(), "确认"));
+        client.drain();
+        var grant = client.sent.getLast();
+        assertEquals("authorize", grant.kind());
+        assertEquals("clear-plan", grant.str("authorization_id"));
+        var body = new JsonObject();
+        body.addProperty("seq", grant.num("seq", -1));
+        body.addProperty("ok", true);
+        body.addProperty("feedback", "approved exact cells");
+        runner.handleS2c(new Envelope("tool_result", body));
+        client.drain();
+    }
+
+    @Test void clearingConsentWaitsForHumanAndServerThenContinuesTheSameGather() {
+        proposeClearing();
+        assertEquals(1, client.engine().responses.size());
+        assertTrue(runner.questionSnapshot().text().contains("server cells"));
+        assertEquals("等待你的确认", runner.taskState());
+        long count = client.toolCount();
+        assertTrue(runner.answerFromPanel(runner.questionSnapshot().id(), "确认"));
+        client.drain();
+        var grant = client.sent.getLast();
+        assertEquals("authorize", grant.kind());
+        assertEquals(count, client.toolCount(), "a human answer is not yet a server grant");
+        assertEquals(1, client.engine().responses.size());
+        var body = new JsonObject();
+        body.addProperty("seq", grant.num("seq", -1));
+        body.addProperty("ok", true);
+        body.addProperty("feedback", "approved exact cells");
+        runner.handleS2c(new Envelope("tool_result", body));
+        client.drain();
+        assertEquals("break_block", client.lastTool().str("tool"));
+        assertEquals("clear-plan", client.lastTool().obj("args").get("authorization_id").getAsString());
+        assertEquals("minecraft:dirt", client.lastTool().obj("args").get("expected_block").getAsString());
+        assertEquals(3, client.lastTool().obj("args").get("clear_limit").getAsInt());
+        assertTrue(runner.taskState().contains("挖掘目标"));
+        reply(JsonParser.parseString("{\"removed\":true,\"cleared_blocks\":2}").getAsJsonObject());
+        reply(BoundedGatherTest.state(1));
+        reply(BoundedGatherTest.state(1));
+        assertEquals(2, client.engine().responses.size());
+        var receipt = client.engine().histories.getLast().stream()
+                .filter(m -> m instanceof com.neko.mcbot.agentcore.llm.Msg.Tool)
+                .map(m -> (com.neko.mcbot.agentcore.llm.Msg.Tool) m).toList().getLast();
+        assertTrue(receipt.ok(), receipt.content());
+        assertTrue(receipt.content().contains("子调用=6"), "the approved reissue consumes another primitive");
+        assertEquals("等待模型规划下一步", runner.taskState());
+    }
+
+    @Test void deniedConsentStopsGatherWithoutReplayingAnyWorldAction() {
+        proposeClearing();
+        long count = client.toolCount();
+        assertTrue(runner.answerFromPanel(runner.questionSnapshot().id(), "不要挖"));
+        client.drain();
+        assertEquals(count + 1, client.toolCount(), "only the next model observation may be sent");
+        assertEquals("status", client.lastTool().str("tool"));
+        assertTrue(client.sent.stream().noneMatch(e -> e.kind().equals("authorize")));
+        reply(BoundedGatherTest.state(0));
+        assertEquals(2, client.engine().responses.size());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(message ->
+                message instanceof com.neko.mcbot.agentcore.llm.Msg.Tool tool
+                        && !tool.ok() && tool.content().startsWith("DENIED:")));
+    }
+
+    @Test void changedProposalAfterOneApprovedReissueYieldsInsteadOfAskingForever() {
+        proposeClearing();
+        approve();
+        reply(false, "NEED_CONFIRM:changed cells", JsonParser.parseString(
+                "{\"authorization_id\":\"new-plan\",\"authorization_summary\":\"changed cells\"}").getAsJsonObject());
+        assertNull(runner.questionSnapshot());
         assertEquals("status", client.lastTool().str("tool"));
         reply(BoundedGatherTest.state(0));
         assertEquals(2, client.engine().responses.size());
         assertTrue(client.engine().histories.getLast().stream().anyMatch(message ->
                 message instanceof com.neko.mcbot.agentcore.llm.Msg.Tool tool
-                        && tool.content().contains("clear-plan")));
+                        && tool.content().startsWith("NEED_CONFIRM:changed cells")));
+    }
+
+    @Test void timeoutAndCancellationInvalidateTheAutomaticQuestion() {
+        proposeClearing();
+        var question = runner.questionSnapshot();
+        client.now += 120_001;
+        runner.tick(); client.drain();
+        assertNull(runner.questionSnapshot());
+        assertFalse(runner.answerFromPanel(question.id(), "确认"));
+        assertEquals("status", client.lastTool().str("tool"));
+        reply(BoundedGatherTest.state(0));
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(message ->
+                message instanceof com.neko.mcbot.agentcore.llm.Msg.Tool tool
+                        && tool.content().startsWith("TIMEOUT:")));
+    }
+
+    @Test void cancellationWhileWaitingForGrantDiscardsLateApproval() {
+        proposeClearing();
+        assertTrue(runner.answerFromPanel(runner.questionSnapshot().id(), "确认"));
+        client.drain();
+        long seq = client.sent.getLast().num("seq", -1);
+        assertTrue(runner.cancelTask(0));
+        client.drain();
+        long count = client.toolCount();
+        var body = new JsonObject();
+        body.addProperty("seq", seq); body.addProperty("ok", true); body.addProperty("feedback", "late approval");
+        runner.handleS2c(new Envelope("tool_result", body)); client.drain();
+        assertEquals(count, client.toolCount());
+        assertNull(runner.questionSnapshot());
+        assertEquals(1, client.engine().responses.size());
+    }
+
+    @Test void gatherDeadlineWithdrawsItsQuestionWithoutExtendingTheBudget() {
+        proposeClearing();
+        var question = runner.questionSnapshot();
+        client.now += 600_001;
+        runner.tick(); client.drain();
+        assertNull(runner.questionSnapshot());
+        assertFalse(runner.answerFromPanel(question.id(), "确认"));
+        assertTrue(client.sent.stream().noneMatch(e -> e.kind().equals("authorize")));
+        assertEquals("status", client.lastTool().str("tool"));
+    }
+
+    @Test void pickupRouteConsentUsesTheSameLocalContinuation() {
+        start();
+        reply(BoundedGatherTest.state(0));
+        var item = BoundedGatherTest.block(false);
+        item.addProperty("item", "minecraft:dirt");
+        item.addProperty("target_uuid", "ground-drop");
+        item.addProperty("can_touch_here", false);
+        item.addProperty("pickup_allowed", true);
+        var drops = new JsonArray(); drops.add(item);
+        var scan = new JsonObject(); scan.add("item_targets", drops);
+        reply(scan);
+        assertEquals("move_to", client.lastTool().str("tool"));
+        var original = client.lastTool().obj("args").deepCopy();
+        reply(false, "NEED_CONFIRM:route", JsonParser.parseString(
+                "{\"authorization_id\":\"clear-plan\",\"authorization_summary\":\"one leaf on pickup route\"}").getAsJsonObject());
+        approve();
+        original.addProperty("authorization_id", "clear-plan");
+        assertEquals(original, client.lastTool().obj("args"));
+        reply(new JsonObject());
+        reply(BoundedGatherTest.state(1));
+        reply(BoundedGatherTest.state(1));
+        assertEquals(2, client.engine().responses.size());
+    }
+
+    @Test void missingServerSummaryDoesNotInventAConsentQuestion() {
+        reachMining();
+        reply(false, "NEED_CONFIRM:incomplete proposal", JsonParser.parseString(
+                "{\"authorization_id\":\"incomplete\"}").getAsJsonObject());
+        assertNull(runner.questionSnapshot());
+        assertEquals("status", client.lastTool().str("tool"));
+        reply(BoundedGatherTest.state(0));
+        assertEquals(2, client.engine().responses.size());
+    }
+
+    @Test void anAlreadyRemovedTargetCannotBeReplayedThroughAutomaticConsent() {
+        reachMining();
+        reply(false, "NEED_CONFIRM:partial effects", JsonParser.parseString(
+                "{\"removed\":true,\"cleared_blocks\":1,\"authorization_id\":\"partial\","
+                        + "\"authorization_summary\":\"partial effects\"}").getAsJsonObject());
+        assertNull(runner.questionSnapshot());
+        assertEquals("status", client.lastTool().str("tool"));
+        reply(BoundedGatherTest.state(0));
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(message ->
+                message instanceof com.neko.mcbot.agentcore.llm.Msg.Tool tool
+                        && tool.content().startsWith("NEED_CONFIRM:partial effects")
+                        && tool.content().contains("实际目标挖掘=1")));
     }
 
     @Test void cancellingLocalGatherPreventsAnyLateChildFromContinuing() {

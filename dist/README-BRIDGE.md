@@ -2,7 +2,7 @@
 
 > 本页只是索引；唯一权威规格、Schema/示例路径、兼容变更与验收清单见仓内 `docs/BRIDGE.md`。
 
-> 前提：mcbot 客户端 mod 已进世界（桥随世界起、退世界关）。只监听 127.0.0.1:57121。
+> 前提：mcbot 客户端 mod 已进世界（桥随世界起、退世界关）。只监听 127.0.0.1:17897。
 
 mcbot 提供 MC agent 执行能力与任务桥；连接器负责宿主侧任务适配、用户回答与事件反馈。
 接入仅依赖任务级契约，不需要调用 mcbot 内部游戏工具或修改 agent 实现。
@@ -19,20 +19,20 @@ G 面板底部显示端点；模型页的“复制桥接令牌”可复制 token
 
 ```bash
 TOKEN=$(cat "<你的游戏目录>/mcbot/bridge.token")
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:57121/v1/status
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:17897/v1/status
 
 # 派个任务，等 20 秒看进度片段
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"text":"看看你附近有什么，然后简报给我","wait_s":20}' \
-  http://127.0.0.1:57121/v1/task
+  http://127.0.0.1:17897/v1/task
 
 # 事件流（Ctrl+C 退出）：progress / done / question / state 四类帧
-curl -N -H "Authorization: Bearer $TOKEN" http://127.0.0.1:57121/v1/events
+curl -N -H "Authorization: Bearer $TOKEN" http://127.0.0.1:17897/v1/events
 
 # 同伴反问时（question 帧里有 question_id）回答它：
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"question_id":"q3","text":"用箱子里那把镐"}' \
-  http://127.0.0.1:57121/v1/answer
+  http://127.0.0.1:17897/v1/answer
 ```
 
 ## 端点一览

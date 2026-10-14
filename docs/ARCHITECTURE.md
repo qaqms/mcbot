@@ -3,6 +3,14 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+2026-10-14晚间实测恢复卡：BoundedGather在原子move_to/break_block的首次完整
+NEED_CONFIRM后保留参数，调用runner既有question/authorize入口；真人确认及服务端批准
+后续发一次并计入原调用预算，清单再次变化交回模型。拒绝/超时/已有效果不重放，
+流程截止/取消清理所属问题与在途批准票；嵌套程序仍共用原子预算。
+find_resource将既有工作判据/站位同时写feedback，修复普通模型看不到data的差异。
+AgentLoop暴露真实摘要/模型等待状态，runner结合采集activity与问答显示当前动作；
+不增加推理原文采集或伪造阶段完成。具体证据与剩余缺口统一见STATUS最新节。
+
 2026-10-14后续：身体已接BodyPickup，在物理步进之后按原版未骑乘触碰盒查询物品实体，
 与collect共用GroundItems.pickup/playerTouch。它不依赖模型调用或身体任务槽，
 活动只读任务及身份/维度失配时禁用；非活动、骑乘/睡眠/旁观和未知邻域跳过。
@@ -348,7 +356,7 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 连接器以外部任务契约为集成边界，不依赖内部游戏协议或寻路实现。
 
 - 内核 `BridgeService`（agent-core）：REST `/v1/*` + MCP `/mcp` 双接口一内核；
-  适配层 `BridgeHttp`（客户端）：JDK HttpServer 绑 `127.0.0.1:57121`，
+  适配层 `BridgeHttp`（客户端）：JDK HttpServer 绑 `127.0.0.1:17897`，
   `Authorization: Bearer <token>`（token 在 `mcbot/bridge.token`，常量时间比较），
   SSE `Last-Event-ID` 从 200 条 `EventRing` 补发，15 秒心跳。
 - 外部任务契约 v1.0：BridgeContract 共享输入 Schema 给 MCP discovery；
@@ -598,5 +606,5 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 | 前缀(R2-S2/R3/LT1) | FOLD_KEEP_TAIL=12；仅status/inventory在index<foldCheckpoint冻结区折叠；prefix reset为compaction/directive-boundary/context-clear；system换发仅指令边界；自动整理在工具结算后的请求边界和正常链尾，手动仅空闲；完整窗口预留min(2048,窗口/4) |
 | 流式(R2-A/F0) | SSE 逐行解析；闭合判定=顶层括号配平且 required 齐；客户端 CallbackChatEngine 送主线程；仅 index 0 早派发，后序延迟串行；记账按 index 原序；arguments 只累积一次 |
 | 受理/长活(R2-S4) | `ACCEPTED:` 前缀（agent-core 常量，唯一真源）；受理后等待上限 = `cap_ticks`×50ms + 15s（`PendingJobs.JOB_GRACE_MS`）；ACCEPT 工具为 move_to(3600tick)/break_block(1200tick)/attack(400tick)，其余 SYNC；单终局（一个 seq 只会收到 result **或** ack）；lastPlan TTL 30s（判据：同伴+目标+起点）；`accept_mode` 默认 true（止血开关） |
-| 桥 | 端口 57121、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
+| 桥 | 端口 17897、body ≤64KB、环 200、心跳 15s、线程池 **8**（R0：每 SSE 永占一线程，4 会饥饿；彻底解法归 R2-C） |
 | 名册 | v1 每位玩家 1 同伴；名字 `[a-z0-9_]{2,16}` |

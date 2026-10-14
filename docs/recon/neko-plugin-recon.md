@@ -91,7 +91,7 @@ surface 调 `props.api.call`）、`[plugin.i18n]`。顶层允许自定义表（�
 
 ## 5. mcbot 的接入结论
 
-mcbot 现有两个入口：REST+SSE（`127.0.0.1:57121/v1/*`，全部路径要 `Authorization: Bearer <bridge.token>`，
+mcbot 现有两个入口：REST+SSE（`127.0.0.1:17897/v1/*`，全部路径要 `Authorization: Bearer <bridge.token>`，
 `/v1/events` 额外允许 `?token=`）与 MCP JSON-RPC（`POST /mcp`，
 工具 `mcbot_task/ask/answer/status/cancel`；mcbot 的 `initialize` **忽略客户端请求版本**、
 固定回 `2025-03-26`）。
@@ -100,7 +100,7 @@ mcbot 现有两个入口：REST+SSE（`127.0.0.1:57121/v1/*`，全部路径要 `
 
 1. 启用并启动内置 `mcp_adapter`（`enabled=true`，`auto_start=false`，需手动启）。
 2. 在它的**运行期**配置里加一段 `[mcp_servers.mcbot]`：`transport="streamable-http"`、
-   `url="http://127.0.0.1:57121/mcp"`、`enabled=true`、
+   `url="http://127.0.0.1:17897/mcp"`、`enabled=true`、
    `headers` 里放 `Authorization = "Bearer <bridge.token>"`（token 从 `<gameDir>/mcbot/bridge.token` 读）。
    同时把 `tool_timeout` 设成 **≥130**（必须大于 `mcbot_task` 的 `wait_s` 上限 120 + 余量）。
 3. 打开 agent 的 `user_plugin` 能力，否则这些条目根本不会呈给模型。

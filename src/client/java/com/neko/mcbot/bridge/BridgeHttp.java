@@ -29,13 +29,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * neko 入口（设计 §9）：127.0.0.1:57121，Bearer token 鉴权（token 存 mcbot/bridge.token，跨重启稳定）。
+ * neko 入口（设计 §9）：127.0.0.1:17897，Bearer token 鉴权（token 存 mcbot/bridge.token，跨重启稳定）。
  * REST /v1/* 与 MCP /mcp 全部路由进 BridgeService（agent-core 内核）；SSE /v1/events 在这里直连环形缓冲。
  * 只绑回环——绝不裸监听 0.0.0.0。
  */
 public final class BridgeHttp implements BridgeEvents.Sink {
 
-    public static final int PORT = 57121;
+    public static final int PORT = 17897;
     private static final int MAX_BODY = 64 * 1024;
 
     private static volatile BridgeHttp instance;

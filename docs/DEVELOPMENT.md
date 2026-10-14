@@ -4,6 +4,13 @@
 
 ## 当前验证安排（2026-10-14）
 
+晚间卡聚焦采集授权续跑与工作事实反馈，不改长期目标调度或权限策略。
+AgentRunnerGatherTest/ProgramTest通过实际runner/loop与可控回执验证完整清单、真人/
+服务端双阶段批准、原参数单次续发、变化方案交回、拒绝/取消/迟到/超时/总时限，
+以及嵌套原子预算不可绕过。AwarenessToolTest验证普通feedback可见既有工作事实，
+不增加世界读取；ContextBudgetTest验证任务内摘要与普通模型等待状态。
+最终执行数量、日志和候选以STATUS最新节为准；没有启动游戏/真实模型或安装实例。
+
 通用换区观察与采集探索：独立explore与gather共用ExplorationRoute，调用方决定
 完成条件，不新增木材/配方专用流程。BoundedExplorationTest检查本地分页、真实位移、
 不可达换方向、PARTIAL重观测、范围/维度/步数、取消/超时及禁用探索。

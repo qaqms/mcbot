@@ -425,7 +425,13 @@ public final class AgentRunner implements ToolExecutor {
         if (closed) return "会话已关闭";
         var question = questionSnapshot();
         if (question != null) return question.authorization() ? "等待你的确认" : "等待你的回答";
-        if (currentTask != 0) return parked ? "等待游戏操作完成" : "正在处理任务";
+        if (loop != null && loop.compacting()) return "正在整理上下文";
+        if (currentTask != 0) {
+            if (gather != null && !gather.done()) return "正在采集 · " + gather.activity();
+            if (parked) return "等待游戏操作完成";
+            if (loop != null && loop.awaitingModel()) return "等待模型规划下一步";
+            return "正在处理工具和状态";
+        }
         if (loop != null && loop.busy()) return "正在整理上下文";
         if (loop == null) return "模型未配置";
         var tasks = panelHistory.tasks();
@@ -687,13 +693,15 @@ public final class AgentRunner implements ToolExecutor {
         final long taskId;
         final String authorizationId;
         final String text;
+        final boolean composition;
 
-        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f, String authorizationId, String text) {
+        QuestionRecord(long taskId, CompletableFuture<ToolOutcome> f, String authorizationId, String text, boolean composition) {
             this.taskId = taskId;
             this.future = f;
             this.at = client.nowMs();
             this.authorizationId = authorizationId;
             this.text = text;
+            this.composition = composition;
         }
     }
 
@@ -1006,6 +1014,11 @@ public final class AgentRunner implements ToolExecutor {
                         data.addProperty("tool", "gather");
                         data.addProperty("text", text);
                         emit("progress", taskId, data);
+                    }, proposal -> {
+                        var questionArgs = new JsonObject();
+                        questionArgs.addProperty("text", "采集需要确认具体改动");
+                        questionArgs.add("authorization_id", proposal.data().get("authorization_id"));
+                        return askOwner(questionArgs.toString(), true);
                     });
             gatherTask = taskId;
             gather = run;
@@ -1056,6 +1069,14 @@ public final class AgentRunner implements ToolExecutor {
         var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
         if (!tickets.isEmpty()) sendCancel();
         tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:组合子步骤停止，在途效果未知。")));
+        var questions = new ArrayList<QuestionRecord>();
+        questionRecords.entrySet().removeIf(entry -> {
+            if (entry.getValue().taskId != taskId || !entry.getValue().composition) return false;
+            if (entry.getKey().equals(latestQuestion)) latestQuestion = null;
+            questions.add(entry.getValue());
+            return true;
+        });
+        questions.forEach(question -> question.future.complete(ToolOutcome.synthetic("CANCELLED:采集确认已撤回。")));
     }
 
     private CompletableFuture<ToolOutcome> executeProgram(String argsJson) {
@@ -1195,6 +1216,10 @@ public final class AgentRunner implements ToolExecutor {
 
     /** 本地工具：问题按任务归属，120 秒无回复超时。 */
     private CompletableFuture<ToolOutcome> askOwner(String argsJson) {
+        return askOwner(argsJson, false);
+    }
+
+    private CompletableFuture<ToolOutcome> askOwner(String argsJson, boolean composition) {
         long seq = seqGen.incrementAndGet();
         CompletableFuture<ToolOutcome> f = new CompletableFuture<>();
         long taskId = currentTask;
@@ -1222,7 +1247,7 @@ public final class AgentRunner implements ToolExecutor {
         } catch (RuntimeException e) {
             text = String.valueOf(argsJson);
         }
-        questionRecords.put(seq, new QuestionRecord(taskId, f, authorizationId, text));
+        questionRecords.put(seq, new QuestionRecord(taskId, f, authorizationId, text, composition));
         say("§d[同伴想问] §r" + text + " §7（回答：@bot 答 <文本>）§r");
         latestQuestion = seq;
         JsonObject d = new JsonObject();
@@ -1260,7 +1285,7 @@ public final class AgentRunner implements ToolExecutor {
         body.addProperty("task_id", question.taskId);
         body.addProperty("authorization_id", question.authorizationId);
         var future = new CompletableFuture<ToolOutcome>();
-        var ticket = new ToolTicket(question.taskId, loop, future);
+        var ticket = new ToolTicket(question.taskId, loop, future, question.composition);
         pending.registerTool(seq, "authorize", client.nowMs(), TOOL_TIMEOUT_MS, ticket);
         client.executeOnClient(() -> {
             if (closed || future.isDone()) return;

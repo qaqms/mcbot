@@ -148,6 +148,26 @@ class AwarenessToolTest {
         assertEquals(result.data().get("cells_read").getAsInt(), scan.reads, "no extra neighbor world reads");
     }
 
+    @Test void workFactsAndRealStancesAreVisibleInTheOrdinaryModelReceipt() {
+        var scan = new Scan() {
+            @Override public void work(JsonObject target, BlockPos pos) {
+                target.addProperty("can_work_here", false);
+                target.addProperty("can_clear_here", true);
+                target.addProperty("clear_blocks", 2);
+            }
+            @Override public void stands(JsonObject target, BlockPos pos, com.neko.mcbot.server.BlockAim.TraceBudget budget) {
+                target.add("stand_positions", JsonParser.parseString("[{\"x\":13,\"y\":80,\"z\":-6}]"));
+            }
+        };
+        scan.cells.put(scan.center(), Blocks.STONE.defaultBlockState());
+        var result = FindResourceTool.execute(json("{\"targets\":[\"stone\"],\"work\":true,\"r\":1}"), scan);
+        assertTrue(result.feedback().contains("遮挡=2"));
+        assertTrue(result.feedback().contains("工作站位=[{\"x\":13,\"y\":80,\"z\":-6}]"));
+        assertTrue(result.feedback().contains("work_target={\"x\":12,\"y\":80,\"z\":-6}"));
+        assertTrue(result.feedback().contains("exact=true"));
+        assertEquals(7, scan.reads, "formatting cannot add world reads");
+    }
+
     private static final class Storage implements InspectBlockTool.Access {
         final SimpleContainer slots = new SimpleContainer(27);
         boolean locked, valid = true, pendingLoot;

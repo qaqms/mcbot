@@ -238,7 +238,7 @@ navigation 的 can_reach 预估）+ 够得着（4格）直接 gameMode 挖。堵
 ## 9. 桥接层（neko 看到的 mcbot）
 
 **形态**：客户端内嵌 JDK `HttpServer`，绑 `127.0.0.1`（LAN 可选，需 HTTPS+明确开关），
-端口默认 57121，`Authorization: Bearer <token>`（配置生成随机值）。
+端口固定为 17897，`Authorization: Bearer <token>`（配置生成随机值）。
 
 **双接口，一套内核**（`AgentRunner` 的消息队列）：
 

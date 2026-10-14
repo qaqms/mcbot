@@ -181,6 +181,7 @@ public final class AgentLoop {
     private boolean closed;
     private StepReactor activeReactor;
     private CompletableFuture<AssistantTurn> activeResponse;
+    private boolean compacting;
     private int emptySearches;
     private boolean running;
     private int steps;
@@ -232,6 +233,10 @@ public final class AgentLoop {
 
     public synchronized int steps() { return steps; }
     public synchronized boolean busy() { return running || activeDirective != null || !pending.isEmpty(); }
+    public synchronized boolean compacting() { return compacting; }
+    public synchronized boolean awaitingModel() {
+        return !compacting && activeResponse != null && !activeResponse.isDone();
+    }
 
     public synchronized void configureContext(int threshold, int recentBudget, boolean automatic) {
         convo.configure(threshold, recentBudget, automatic);
@@ -255,12 +260,14 @@ public final class AgentLoop {
                     if (closed || generation != expectedGeneration) return false;
                     boolean changed = convo.prefixResets() > resets;
                     activeResponse = null;
+                    compacting = false;
                     pump();
                     return changed;
                 }
             });
         } catch (RuntimeException failure) {
             activeResponse = null;
+            compacting = false;
             pump();
             return CompletableFuture.completedFuture(false);
         }
@@ -272,6 +279,7 @@ public final class AgentLoop {
         generation++;
         if (activeResponse != null) activeResponse.cancel(true);
         activeResponse = null;
+        compacting = false;
         convo.clear();
         running = false;
     }
@@ -397,6 +405,7 @@ public final class AgentLoop {
             activeResponse.cancel(true);
             activeResponse = null;
         }
+        compacting = false;
         if (activeDirective != null) executor.stop(activeDirective.id(), text);
         if (activeReactor != null) {
             if (ledger == null) {
@@ -555,6 +564,7 @@ public final class AgentLoop {
                         synchronized (AgentLoop.this) {
                             if (!isCurrent(stepGeneration) || activeReactor != reactor) return;
                             activeResponse = null;
+                            compacting = false;
                             // Summarization may take seconds: re-read world facts before the next action.
                             observeForTurn(stepGeneration, reactor, true);
                         }
@@ -588,11 +598,19 @@ public final class AgentLoop {
         for (Msg m : history) if (m instanceof Msg.User u) tokens += Conversation.estimateTokens(u.text());
         if (tokens > contextWindow - Math.min(2048, contextWindow / 4))
             return CompletableFuture.failedFuture(new IllegalArgumentException("Summary exceeds context budget"));
-        activeResponse = engine.chat(system, history, definitions);
-        return activeResponse;
+        var response = engine.chat(system, history, definitions);
+        activeResponse = response;
+        compacting = true;
+        response.whenComplete((turn, failure) -> {
+            synchronized (AgentLoop.this) {
+                if (activeResponse == response) compacting = false;
+            }
+        });
+        return response;
     }
 
     private void requestTurn(long stepGeneration, StepReactor reactor, List<Msg> history) {
+        compacting = false;
         CompletableFuture<AssistantTurn> response;
         try {
             response = java.util.Objects.requireNonNull(

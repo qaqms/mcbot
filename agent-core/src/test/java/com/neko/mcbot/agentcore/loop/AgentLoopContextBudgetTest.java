@@ -56,18 +56,26 @@ class AgentLoopContextBudgetTest {
                 AgentLoop.Config.defaults(), new AgentLoop.Listener() { }, () -> "system", 700);
         loop.configureContext(700, 100, true);
         loop.submit(3, "work");
+        assertTrue(loop.awaitingModel());
+        assertFalse(loop.compacting());
         for (int i = 0; i < 4; i++) {
             requests.getLast().complete(new AssistantTurn("", List.of(
                     new ToolCall("c" + i, "status", "{}")), 0, 0, -1, "tool_calls"));
         }
         assertTrue(definitions.getLast().isEmpty(), "summary happens during the task");
+        assertTrue(loop.compacting());
+        assertFalse(loop.awaitingModel());
         assertEquals(3, loop.currentTaskId());
         requests.getLast().complete(new AssistantTurn("保留实际事实", List.of(), 0, 0, -1, "stop"));
         assertEquals(1, definitions.getLast().size());
+        assertFalse(loop.compacting());
+        assertTrue(loop.awaitingModel());
         assertEquals(3, loop.currentTaskId());
         assertTrue(loop.conversation().history().stream().anyMatch(m -> m instanceof Msg.User u
                 && u.text().contains("保留实际事实")));
         loop.close();
+        assertFalse(loop.compacting());
+        assertFalse(loop.awaitingModel());
     }
 
     @Test void fullBudgetIncludesToolsSystemObservationAndOutputReserve() {

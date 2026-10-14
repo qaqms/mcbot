@@ -206,6 +206,21 @@ public final class FindResourceTool implements ServerTool {
             results.add(target);
             lines.append("\n").append(id).append(" @(").append(pos.getX()).append(",")
                     .append(pos.getY()).append(",").append(pos.getZ()).append(")");
+            if (work) {
+                lines.append("；");
+                if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean())
+                    lines.append("当前可直接挖");
+                else if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean())
+                    lines.append("当前可经安全清理挖掘，遮挡=").append(target.get("clear_blocks"));
+                else lines.append(target.has("work_failure") ? target.get("work_failure").getAsString() : "工作可行性未知");
+                var stands = target.getAsJsonArray("stand_positions");
+                if (stands != null && !stands.isEmpty()) {
+                    lines.append("；工作站位=").append(stands);
+                    lines.append("；work_target=")
+                            .append("{\"x\":").append(pos.getX()).append(",\"y\":").append(pos.getY())
+                            .append(",\"z\":").append(pos.getZ()).append("}");
+                } else lines.append("；没有已核实工作站位");
+            }
         }
         var data = new JsonObject();
         data.add("targets", results);
@@ -235,7 +250,9 @@ public final class FindResourceTool implements ServerTool {
         String feedback = "定向查找 " + input.targets() + "，半径 " + input.radius() + "，实读 "
                 + read + "/" + planned + " 格，未知 " + unknown + " 格，采样上限 " + MAX_SAMPLES
                 + "；列出 " + results.size() + " 个候选（最多16）。" + lines
-                + (work ? "\n优先露出候选，再按已核对的直接工作/局部清理/站位排序；几何评估最多24个，未检查为未知。" : "")
+                + (work ? "\n优先露出候选，再按已核对的直接工作/局部清理/站位排序；几何评估最多24个，未检查为未知。"
+                + "有工作站位时选择该脚格move_to exact=true，并携带对应work_target和clear_obstructions=true；"
+                + "不要把资源方块坐标当作脚格。清理仍需原任务权限，站位不证明路线可达。" : "")
                 + "\n这是已读格的方块观测，不证明路径可达或掉落数量；未找到不等于周边没有资源。"
                 + " 本页offset=" + input.offset() + "，next_offset=" + nextOffset + "。"
                 + (nextOffset >= 0 ? "同中心/半径可续查下一页，当前未看全。" : "")

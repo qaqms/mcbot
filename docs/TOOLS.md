@@ -71,7 +71,12 @@ gather自动携带clear_obstructions=true及clear_limit=min(3,剩余挖掘预算
 目标与遮挡使用真实BlockMining，清理后重评射线；清单外新格/状态变化不自动扩大范围。
 掉落站位不套用挖掘视线筛选，完全埋藏的大范围勘探仍需另行规划。
 break_block可带expected_block完整ID；不匹配则TARGET_LOST，不能挖新出现的替换物。
-路线NEED_CONFIRM/PARTIAL、缺工具/空间、预算或未知事实返回模型判断，不自行批准开路。
+gather内move_to/break_block首次NEED_CONFIRM若有当前任务的完整服务端方案，
+直接通过既有question入口展示原清单并等待真人回答，最长120秒。
+明确确认后仍须等原authorize成功回执，再按原坐标/目标/预算及该编号续发一次；
+不新增模型轮次、不自行批准或扩展清单。续发再次NEED_CONFIRM交回模型，防止无界征询。
+已移除目标/已清遮挡的失败不重放；缺方案、拒绝/超时、PARTIAL、缺工具/空间、
+预算或未知事实仍返回模型判断。等待不延长原采集/程序总时限，续发计原子调用预算。
 取消/超时清子票，迟到结果不续跑，保留已完成与在途未知。
 data给goal_satisfied、mined_blocks、cleared_blocks、actual_progress、primitive_calls、
 skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包核对。
@@ -89,7 +94,8 @@ explore_steps默认8、0关闭、最多16次移动尝试；explore_radius默认6
 这里约束目的地/新鲜观测及工作目标，不是每个导航节点都受球体约束的路线沙盒。
 总时限、1024原子调用、挖掘/清理预算和三次无入包进展不因换区重置。
 NO_PATH/NO_PROGRESS/TARGET_LOST和PARTIAL探索回执后先刷新位置，可能已实质移动；
-原地成功文案不计新区域，试过的目的地不重复；NEED_CONFIRM/权限/未知效果仍交回模型。
+原地成功文案不计新区域，试过的目的地不重复；探索walk_only不申请改地形，
+权限/未知效果仍交回模型；工作/拾取路线的单次确认续发见上。
 预算耗尽、样本不可达或没有新落脚点明确停止，不宣称资源不存在。
 data增加exploration_attempts、explored_regions、search_pages；实际背包仍唯一数量成果。
 未实现任意远程定位、完整地形索引、地下挖掘勘探、补给与危险响应。
@@ -620,6 +626,9 @@ can_work_here为无需清理；can_clear_here为当前有安全几何计划（�
 clear_blocks为计划遮挡数。work_checked/work_checks/work_traces/work_truncated
 明确工作评估边界，WORK_BUDGET是未知，不是已证明不可工作。
 站位最多6、完整地板规则不变；查询不证明路径可达或已取得清理许可。
+普通模型只消费工具feedback，程序另外可读取data；work=true现在也把现有的
+直接可挖/可清遮挡数/工作失败与候选脚格写进feedback，并给对应work_target。
+移动需选脚格、exact=true及work_target，不把矿格当落脚点；不额外读取世界或增加射线预算。
 候选只证明采样格中存在方块，不证明露出、可达、采收资格或实际掉落；空结果不证明不存在。
 scan_area同样给no_targets并明确分类遗漏木材，不鼓励挖掘探查或改变半径持续空转。
 

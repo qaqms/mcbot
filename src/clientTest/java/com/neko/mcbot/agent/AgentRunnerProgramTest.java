@@ -237,6 +237,35 @@ class AgentRunnerProgramTest {
         assertTrue(outcome().content().contains("采集子目标"));
     }
 
+    @Test void nestedGatherConsentReissueCannotEscapeTheProgramsPrimitiveBudget() {
+        start("prepare material", """
+                return mc.call("gather",{item="dirt",targets={"dirt"},count=1,scope="subtask"})
+                """, 4);
+        tool("status", 1);
+        receipt(true, "actual inventory", BoundedGatherTest.state(0).toString());
+        tool("scan_area", 2);
+        receipt(true, "no drops", "{\"item_targets\":[]}");
+        tool("find_resource", 3);
+        receipt(true, "workable target", "{\"targets\":[" + BoundedGatherTest.block(true) + "]}");
+        tool("break_block", 4);
+        receipt(false, "NEED_CONFIRM:exact cells",
+                "{\"authorization_id\":\"program-plan\",\"authorization_summary\":\"exact server cells\"}");
+        assertNotNull(runner.questionSnapshot());
+        assertTrue(runner.answerFromPanel(runner.questionSnapshot().id(), "确认"));
+        client.drain();
+        var grant = client.sent.getLast();
+        assertEquals("authorize", grant.kind());
+        var body = new JsonObject();
+        body.addProperty("seq", grant.num("seq", -1));
+        body.addProperty("ok", true);
+        body.addProperty("feedback", "approved");
+        runner.handleS2c(new Envelope("tool_result", body));
+        assertFalse(outcome().ok());
+        assertEquals(4, client.toolCount());
+        assertTrue(outcome().content().contains("ACTION_LIMIT:"));
+        assertNull(runner.questionSnapshot());
+    }
+
     @Test void nestedGatherCannotSilentlyRegisterOrReplaceAFinalGoal() {
         start("prepare material", "return mc.call('gather',{item='dirt',targets={'dirt'},count=1})");
         assertFalse(outcome().ok());

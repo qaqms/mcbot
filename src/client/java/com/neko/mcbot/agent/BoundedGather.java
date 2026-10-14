@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 
 /** Domain-specific continuation using fresh receipts. Each primitive retains the normal server gate. */
@@ -61,6 +62,8 @@ final class BoundedGather {
     private final Consumer<Runnable> dispatch;
     private final Runnable cancelChild;
     private final Consumer<String> progress;
+    private final Function<ToolOutcome, CompletableFuture<ToolOutcome>> confirm;
+    private String activity = "读取背包进度";
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final Set<String> skippedBlocks = new HashSet<>();
     private final Set<String> skippedItems = new HashSet<>();
@@ -88,6 +91,13 @@ final class BoundedGather {
     BoundedGather(Plan plan, JsonObject baseline, LongSupplier clock,
                   BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
                   Consumer<Runnable> dispatch, Runnable cancelChild, Consumer<String> progress) {
+        this(plan, baseline, clock, remote, dispatch, cancelChild, progress, null);
+    }
+
+    BoundedGather(Plan plan, JsonObject baseline, LongSupplier clock,
+                  BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
+                  Consumer<Runnable> dispatch, Runnable cancelChild, Consumer<String> progress,
+                  Function<ToolOutcome, CompletableFuture<ToolOutcome>> confirm) {
         this.plan = plan;
         exploration = new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius());
         // Material subtasks count from their own fresh start, rather than the owner's directive start.
@@ -97,6 +107,7 @@ final class BoundedGather {
         this.dispatch = dispatch;
         this.cancelChild = cancelChild;
         this.progress = progress;
+        this.confirm = confirm;
     }
 
     CompletableFuture<ToolOutcome> start() {
@@ -105,6 +116,7 @@ final class BoundedGather {
         return result;
     }
     boolean done() { return result.isDone(); }
+    String activity() { return activity; }
     void tick() { if (!done() && clock.getAsLong() - started >= plan.seconds() * 1000L) stop("TIMEOUT:连续采集时限已到。"); }
     void stop(String reason) {
         if (done()) return;
@@ -113,10 +125,24 @@ final class BoundedGather {
     }
 
     private void call(String name, JsonObject args, Consumer<ToolOutcome> next) {
+        call(name, args, next, true);
+    }
+
+    private void call(String name, JsonObject args, Consumer<ToolOutcome> next, boolean mayConfirm) {
         if (done()) return;
         tick();
         if (done()) return;
         if (++calls > 1024) { stop("ACTION_LIMIT:连续采集子调用预算已到。"); return; }
+        activity = switch (name) {
+            case "status" -> "核对实际背包";
+            case "scan_area" -> "查看可拾取掉落";
+            case "find_resource" -> "查找可工作资源";
+            case "move_to" -> "走向站位 (" + exact(args, "x") + "," + exact(args, "y") + "," + exact(args, "z") + ")";
+            case "break_block" -> "挖掘目标 (" + exact(args, "x") + "," + exact(args, "y") + "," + exact(args, "z") + ")";
+            case "wait" -> "等待身体触碰拾取";
+            default -> name;
+        };
+        if (!name.equals("status")) progress.accept(activity);
         CompletableFuture<ToolOutcome> response;
         try { response = java.util.Objects.requireNonNull(remote.apply(name, args.toString())); }
         catch (RuntimeException failure) { stop("INTERNAL:采集子调用未发出有效结果。"); return; }
@@ -129,8 +155,43 @@ final class BoundedGather {
                 stop("INTERNAL:连续采集没有有效的子步骤终态，未自动重发。");
                 return;
             }
-            try { next.accept(receipt); }
+            try {
+                if (mayConfirm && confirm != null && !receipt.ok()
+                        && receipt.feedback().startsWith("NEED_CONFIRM:")
+                        && Set.of("move_to", "break_block").contains(name)
+                        && receipt.data().has("authorization_id")) {
+                    awaitConfirmation(name, args.deepCopy(), receipt, next);
+                } else next.accept(receipt);
+            }
             catch (RuntimeException invalid) { stop("STATE_UNAVAILABLE:采集回执缺少完整事实，未猜测或续发动作。"); }
+        }));
+    }
+
+    private void awaitConfirmation(String name, JsonObject args, ToolOutcome proposal, Consumer<ToolOutcome> next) {
+        String id = proposal.data().get("authorization_id").getAsString();
+        if (id.isBlank() || id.length() > 64) throw new IllegalArgumentException();
+        // Never replay a removal whose effects are already known. The model must reconcile that receipt.
+        if (proposal.data().has("removed") && flag(proposal.data(), "removed")
+                || proposal.data().has("cleared_blocks") && exact(proposal.data(), "cleared_blocks") > 0) {
+            next.accept(proposal);
+            return;
+        }
+        lastData = proposal.data();
+        activity = "等待具体改动授权";
+        progress.accept(activity);
+        confirm.apply(proposal).whenComplete((answer, failure) -> dispatch.accept(() -> {
+            if (done()) return;
+            tick();
+            if (done()) return;
+            if (failure != null || answer == null || answer.accepted()) {
+                finish(false, "INTERNAL:确认没有有效终态，未续发动作。");
+            } else if (!answer.ok()) {
+                finish(false, answer.feedback());
+            } else {
+                args.addProperty("authorization_id", id);
+                // This reissue consumes the same time/action budgets. A changed proposal yields to the model.
+                call(name, args, next, false);
+            }
         }));
     }
 
