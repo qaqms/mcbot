@@ -28,6 +28,7 @@ public final class BlockMining {
     public interface Access {
         ServerTool.Result guard(double reach);
         BlockState state();
+        default String expectedBlock() { return null; }
         float hardness(BlockState state);
         boolean correctTool(BlockState state);
         boolean mayDestroy(BlockState state);
@@ -64,7 +65,16 @@ public final class BlockMining {
     }
 
     public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos) {
-        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable()));
+        return forPlayer(player, pos, null);
+    }
+
+    public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock) {
+        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock));
+    }
+
+    public static boolean matchesExpected(BlockState state, String expectedBlock) {
+        return expectedBlock == null || expectedBlock.equals(
+                net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
     }
 
     /** Freeze the target and hand identity; native pickup growth and live mining speed remain valid. */
@@ -72,6 +82,8 @@ public final class BlockMining {
         ServerTool.Result failure = access.guard(reach);
         if (failure != null) return failure;
         BlockState current = access.state();
+        if (!matchesExpected(current, access.expectedBlock()))
+            return failure("TARGET_LOST:目标不再是观测到的方块，未挖替换物；重新查看后再决定。");
         if (current.isAir()) return failure("TARGET_LOST:那里已经是空气，重新查看目标。");
         if (!current.getFluidState().isEmpty()) return failure("DENIED:不挖液体或含水方块，先选择干燥目标。");
         if (target != null && current != target) return failure("TARGET_LOST:目标方块已改变，重新查看后再决定。");
@@ -180,12 +192,14 @@ public final class BlockMining {
         private final CompanionPlayer player;
         private final ServerLevel level;
         private final BlockPos pos;
+        private final String expectedBlock;
         private BlockAim.Aim aim;
 
-        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos) {
+        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock) {
             this.player = player;
             this.level = level;
             this.pos = pos;
+            this.expectedBlock = expectedBlock;
         }
 
         @Override public ServerTool.Result guard(double reach) {
@@ -208,6 +222,7 @@ public final class BlockMining {
             return null;
         }
         @Override public BlockState state() { return level.getBlockState(pos); }
+        @Override public String expectedBlock() { return expectedBlock; }
         @Override public float hardness(BlockState state) { return state.getDestroySpeed(level, pos); }
         @Override public boolean correctTool(BlockState state) { return player.hasCorrectToolForDrops(state); }
         @Override public boolean mayDestroy(BlockState state) {

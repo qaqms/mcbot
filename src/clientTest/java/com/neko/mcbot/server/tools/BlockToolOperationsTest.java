@@ -33,6 +33,23 @@ class BlockToolOperationsTest {
         assertNull(BreakBlockTool.readPos(new JsonObject()));
     }
 
+    @Test void expectedBlockRejectsMalformedValuesAndChangedTargetsWithoutSwinging() {
+        assertNull(BreakBlockTool.expectedBlock(new JsonObject()));
+        assertEquals("minecraft:stone", BreakBlockTool.expectedBlock(json("{\"expected_block\":\"minecraft:stone\"}")));
+        for (String value : new String[]{"null", "4", "\"stone\"", "\"bad id\"", "{}"}) {
+            var args = json("{\"x\":2,\"y\":90,\"z\":0,\"expected_block\":" + value + "}");
+            assertThrows(RuntimeException.class, () -> BreakBlockTool.expectedBlock(args));
+            assertTrue(new BreakBlockTool().runAsync(null, args, null).join().feedback().startsWith("DENIED:"));
+        }
+        var access = new Mining();
+        access.expectedBlock = "minecraft:dirt";
+        var failure = new BlockMining(access).tick();
+        assertTrue(failure.feedback().startsWith("TARGET_LOST:"));
+        assertEquals(0, access.swings);
+        assertEquals(0, access.destroys);
+        assertTrue(access.cracks.isEmpty());
+    }
+
     @Test void itemRegistryAndOptionalFaceAreStrictWithoutChangingDefault() {
         var input = PlaceBlockTool.arguments(placeArgs());
         assertNotNull(input);

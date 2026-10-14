@@ -27,9 +27,15 @@ public final class BreakBlockTool implements ServerTool {
         BlockPos pos = readPos(args);
         if (pos == null) return CompletableFuture.completedFuture(
                 new Result(false, "DENIED:参数需要数值整数坐标 x/y/z。", null));
+        String expectedBlock;
+        try { expectedBlock = expectedBlock(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:expected_block须为带命名空间的方块ID字符串。", null));
+        }
         if (sched.busy(c.getUUID())) return CompletableFuture.completedFuture(
                 new Result(false, "BUSY:我正忙着上一件事，等它结束或取消。", null));
-        BlockMining mining = BlockMining.forPlayer(c, pos);
+        BlockMining mining = BlockMining.forPlayer(c, pos, expectedBlock);
         Result failure = mining.preflight(5.5);
         if (failure != null) return CompletableFuture.completedFuture(failure);
         CompletableFuture<Result> future = new CompletableFuture<>();
@@ -66,6 +72,16 @@ public final class BreakBlockTool implements ServerTool {
         } catch (RuntimeException invalid) {
             return null;
         }
+    }
+
+    static String expectedBlock(JsonObject args) {
+        if (!args.has("expected_block")) return null;
+        var value = args.get("expected_block");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                || value.getAsString().length() > 128
+                || !value.getAsString().matches("[a-z0-9_.-]+:[a-z0-9_./-]+"))
+            throw new IllegalArgumentException();
+        return value.getAsString();
     }
 
     private static int integer(JsonObject args, String key) {

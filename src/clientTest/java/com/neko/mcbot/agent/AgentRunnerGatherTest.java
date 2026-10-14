@@ -13,10 +13,13 @@ class AgentRunnerGatherTest {
     private final AgentRunner runner = client.create();
     @AfterEach void close() { runner.close(); client.drain(); }
     private void reply(JsonObject data) {
+        reply(true, "world receipt", data);
+    }
+    private void reply(boolean ok, String feedback, JsonObject data) {
         var body = new JsonObject();
         body.addProperty("seq", client.lastTool().num("seq", -1));
-        body.addProperty("ok", true);
-        body.addProperty("feedback", "world receipt");
+        body.addProperty("ok", ok);
+        body.addProperty("feedback", feedback);
         body.add("data", data);
         runner.handleS2c(new Envelope("tool_result", body));
         client.drain();
@@ -42,6 +45,50 @@ class AgentRunnerGatherTest {
         data.add("targets", targets);
         reply(data);
         assertEquals("break_block", client.lastTool().str("tool"));
+    }
+
+    @Test void workRecoveryReusesOneModelTurnAndWaitsForMovementTerminalBeforeMining() {
+        start();
+        reply(BoundedGatherTest.state(0));
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        var target = BoundedGatherTest.block(false);
+        target.getAsJsonArray("stand_positions").add(JsonParser.parseString("{\"x\":3,\"y\":90,\"z\":0}"));
+        var targets = new JsonArray();
+        targets.add(target);
+        var found = new JsonObject();
+        found.add("targets", targets);
+        reply(found);
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertTrue(client.lastTool().obj("args").get("exact").getAsBoolean());
+        assertEquals(2, client.lastTool().obj("args").getAsJsonObject("work_target").get("x").getAsInt());
+        reply(false, "TARGET_BLOCKED:arrival scene changed", new JsonObject());
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertEquals(3, client.lastTool().obj("args").get("x").getAsInt());
+        long seq = client.lastTool().num("seq", -1);
+        var ack = new JsonObject();
+        ack.addProperty("seq", seq);
+        ack.addProperty("job_id", "second-stance");
+        ack.addProperty("cap_ticks", 3600);
+        ack.addProperty("tool", "move_to");
+        runner.handleS2c(new Envelope("job_ack", ack));
+        client.drain();
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertEquals(1, client.engine().responses.size());
+        var terminal = new JsonObject();
+        terminal.addProperty("seq", seq);
+        terminal.addProperty("job_id", "second-stance");
+        terminal.addProperty("phase", "done");
+        terminal.addProperty("text", "arrived and can work");
+        terminal.add("data", JsonParser.parseString("{\"arrived\":true,\"can_work_here\":true}"));
+        runner.handleS2c(new Envelope("job_event", terminal));
+        client.drain();
+        assertEquals("break_block", client.lastTool().str("tool"));
+        assertEquals("minecraft:dirt", client.lastTool().obj("args").get("expected_block").getAsString());
+        assertEquals(1, client.engine().responses.size(), "local recovery must not ask the model again");
+        reply(JsonParser.parseString("{\"removed\":true}").getAsJsonObject());
+        reply(BoundedGatherTest.state(1));
+        reply(BoundedGatherTest.state(1));
+        assertEquals(2, client.engine().responses.size());
     }
 
     @Test void childAcceptanceWaitsForRealTerminalAndCompletionWaitsForGoalVerification() {

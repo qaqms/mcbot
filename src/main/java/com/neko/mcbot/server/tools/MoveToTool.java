@@ -5,10 +5,13 @@ import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.path.PathTask;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.ActionPermissions;
+import com.neko.mcbot.server.BlockAim;
+import com.neko.mcbot.server.WorkPositions;
 import com.neko.mcbot.task.CompanionScheduler;
 import net.minecraft.core.BlockPos;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * move_to（M8 版）：DigAStar 寻路——会走、会跳、会落，也会挖穿/垫脚/搭桥，
@@ -61,6 +64,12 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(
                     new Result(false, "DENIED:需要整数坐标 x/y/z。", null));
         }
+        BlockPos workTarget;
+        try { workTarget = workTarget(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:work_target须为仅含整数x/y/z的目标对象，并使用exact=true。", null));
+        }
         if (args.has("exact") && (!args.get("exact").isJsonPrimitive()
                 || !args.get("exact").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:exact 须为布尔。", null));
@@ -95,6 +104,31 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
-        return f;
+        return f.thenApply(moved -> finishWork(moved, workTarget == null ? null
+                : () -> WorkPositions.miningAim(c, workTarget)));
+    }
+
+    static BlockPos workTarget(JsonObject args) {
+        if (!args.has("work_target")) return null;
+        if (!args.has("exact") || !args.get("exact").isJsonPrimitive()
+                || !args.get("exact").getAsJsonPrimitive().isBoolean() || !args.get("exact").getAsBoolean())
+            throw new IllegalArgumentException();
+        var target = args.getAsJsonObject("work_target");
+        if (!target.keySet().equals(java.util.Set.of("x", "y", "z"))) throw new IllegalArgumentException();
+        BlockPos pos = BreakBlockTool.readPos(target);
+        if (pos == null) throw new IllegalArgumentException();
+        return pos;
+    }
+
+    static Result finishWork(Result moved, Supplier<BlockAim.Aim> assess) {
+        if (!moved.ok() || assess == null) return moved;
+        var aim = assess.get();
+        var data = moved.data() == null ? new JsonObject() : moved.data().deepCopy();
+        data.addProperty("can_work_here", aim.ok());
+        if (!aim.ok()) {
+            data.addProperty("work_failure", aim.failure());
+            return new Result(false, aim.failure() + " 已到站位，但最新视线/距离不满足工作条件；移动效果保留。", data);
+        }
+        return new Result(true, moved.feedback(), data);
     }
 }

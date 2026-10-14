@@ -48,6 +48,16 @@ public final class BlockAim {
         };
     }
 
+    /** Evaluate a proposed stance without moving the body or changing its look direction. */
+    public static Access fromEye(Access world, Vec3 eye) {
+        return new Access() {
+            @Override public Vec3 eye() { return eye; }
+            @Override public boolean loaded(BlockPos pos) { return world.loaded(pos); }
+            @Override public List<AABB> outline(BlockPos pos) { return world.outline(pos); }
+            @Override public BlockHitResult trace(Vec3 from, Vec3 to) { return world.trace(from, to); }
+        };
+    }
+
     public static Aim mining(Access access, BlockPos pos, double reach) {
         if (!validReach(reach)) return failed("OUT_OF_REACH:当前交互距离无效，先核对身体状态。");
         if (!access.loaded(pos)) return unloaded();

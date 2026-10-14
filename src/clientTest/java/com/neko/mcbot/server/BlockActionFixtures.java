@@ -48,6 +48,7 @@ public final class BlockActionFixtures {
         public final List<Integer> cracks = new ArrayList<>();
         public final List<Double> reaches = new ArrayList<>();
         public BlockState state = Blocks.STONE.defaultBlockState();
+        public String expectedBlock;
         public ServerTool.Result denied;
         public ServerTool.Result sightFailure;
         public ServerTool.Result turnFailure;
@@ -67,6 +68,7 @@ public final class BlockActionFixtures {
         }
         @Override public ServerTool.Result guard(double reach) { reaches.add(reach); return denied; }
         @Override public BlockState state() { reads++; return state; }
+        @Override public String expectedBlock() { return expectedBlock; }
         @Override public float hardness(BlockState state) { return hardness; }
         @Override public boolean correctTool(BlockState state) { return correct; }
         @Override public boolean mayDestroy(BlockState state) { return permitted; }

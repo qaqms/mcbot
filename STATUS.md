@@ -3,7 +3,56 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-14）：通用组合执行层
+## 当前状态（2026-10-14）：共享工作站位与有界恢复
+
+### 共享工作站位与有界恢复（2026-10-14 12:27，Asia/Shanghai）
+
+- 维护者11:53日志快照52564字节，实例仍为1fb448f3组合候选；本轮核对末写时间未变，
+  没有新增游戏运行。石镐任务46秒/8次模型请求，6次挖掘全部预检TARGET_BLOCKED，
+  真正受理/移除/圆石均0；嵌套采集另有3次原子调用后预算耗尽。
+  全会话9次HTTP200 SSE，errors=0、配对正常、compaction重置0；
+  不能把本次失败归因为摘要或模型服务错误，不能据同格路线证明传送回归。
+  详细事实、上下文体量及BLOCKED记账问题追加于docs/real-game-log-review-2026-10-14.md。
+- 根据维护者新要求，把共享工作站位/局部恢复提到技能帮助按需读取之前。
+  只读核对参考的工作目标、共同视线/可清理条件、局部恢复及程序预算；
+  参数与执行粒度对照见性能/长任务文档第7节新增表，没有抄代码/注释/脚本/提示词。
+  参考的200次批次API/20分钟不能等同本体原子次数，本卡保留128默认/256最大与原时间/
+  计算/无进展护栏，补模型可见预算说明，查询大表宜局部使用、只输出必要事实。
+- WorkPositions为挖掘单独筛选45个附近脚格，包含目标上方2–3格地表，
+  最近优先、最多24个安全站位视线评估、最多6结果；假想眼睛复用BlockAim，
+  不移动真实身体，不放宽加载/地板/流体/碰撞。掉落站位仍用原契约。
+  find_resource work=true给当前几何可工作性/失败原因；move_to新增可选work_target，
+  必须exact=true，真正站稳终态重新核对同一轮廓/射线/实际距离，失败保留移动真实账。
+  这不是新的完整工作目标A*；安全许可、采收工具、主手和逐拍目标仍由原动作入口复核。
+- gather在TARGET_BLOCKED/OUT_OF_REACH/NO_PATH/NO_PROGRESS时本地尝试剩余不同站位，
+  不因第一个站位失败立即丢掉整个目标，耗尽才计一次受阻；TARGET_LOST重新观测旧目标。
+  真移除后清旧受阻结论、重新查询，回执增加work_position_attempts；
+  缺工具/需确认/权限/未知效果仍直接交模型，取消/超时清子票，嵌套共用原子帽。
+  break_block新增可选expected_block完整ID，gather自动携带；替换物不匹配时停手，
+  不挖错新方块。早派发report_blocked保留实际BLOCKED回执，后续未执行槽才CANCELLED，
+  代际失效/取消隔离和工具组完整配对继续保留。
+- 新增18项回归：核心1、客户端17。原版shape/clip在受控方块表运行，
+  覆盖遮挡最近站位/另一可见站位、地表高度、评估帽、到站变遮挡及移动账保全、
+  目标被替换无挥手/破坏、局部换位/去重/全部不可达/移除后重查、
+  权限/错误工具/完全埋藏的及时停止、取消/超时/迟到隔离。
+  实际runner验证同一模型轮内换位、job_ack不推进、移动真终态后才挖；
+  核心验证早派发/普通report_blocked均保留实际失败并抑制后续动作。
+- 首轮专项build/work-stance-focused-20261014.log为25s成功，核心7/客户端68共75项，
+  后续补2项runner/恢复超时测试后进行完整强制构建。
+  12:23:20 build/work-stance-full-build-20261014.log：35s成功，20/20任务执行；
+  XML核心272/根97/客户端407，共776项，失败/错误/跳过全0。
+  build/libs/mcbot-0.1.0.jar SHA256：
+  `4e93f9077c21c943eff606cbd4505a3882dd20719152b7acb4f8238c462aa859`。
+  核对最终JAR含本卡类、agent-core/LuaJ嵌套库及上游许可。
+  tools/list-java.ps1未列Java进程；未启动游戏/模型、安装实例、修改宿主/连接器/参考或发行资产。
+- 完全埋藏目标的许可遮挡清理尚未实现，本卡直接给出遮挡/有界候选不足，
+  消除无效移动/挖掘不等于石镐实机任务已修复完成，也不等于真实速度已提升。
+  后续先补明确遮挡计划/共享安全判据及具体授权执行，再继续技能帮助按需读取、
+  持续行为和多类型目标；同模型/世界速度与原生画面按REAL-GAME-RETESTING补测。
+  文档、开发日志和交接同步；暂存26文件，禁入产物/新增机器路径/凭据样式均0，
+  diff --cached --check通过。源码按已有授权常规提交推送，实际归档以Git为准。
+
+下方758项与1fb448f3候选为上一检查点；当前候选以上节为准。
 
 ### 通用组合执行层（2026-10-14 11:47，Asia/Shanghai）
 
@@ -3529,6 +3578,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 工作候选距离（10-14本地映射javap/编译） | Vec3i.distSqr(Vec3i):double公开，BlockPos继承可用；仅候选排序测试使用，生产假想眼睛沿用已核对的BlockAim原版shape/clip，不新增移动身体或世界读取API |
 | 自动触碰拾取（10-14后续javap/编译，未运行玩家） | Player.aiStep在非骑乘分支按body.inflate(1,.5,1)查询接触实体，非经验球经私有touch调用Entity.playerTouch；ItemEntity.playerTouch要求pickupDelay==0及target匹配，调用原版Inventory.add，discard后恢复原count用于包。ServerPlayer.tick不自动提供这段。本体单独补物品触碰，不调用aiStep/doTick而重复travel/时钟，不自动收经验，活动只读暂禁 |
 | 连续运动输入（10-14 javap/编译/受控动力与原版体素，未运行身体） | LivingEntity.jumpFromGround():void为public，使用原版跳跃属性并设置needsSync；不自动清onGround，后续move更新实际接触。calculateEntityAnimation(boolean):void为public，从实际位移推进行走动画。Player.getSpeed():float读取MOVEMENT_SPEED属性；LivingEntity.getFlyingSpeed在普通未骑乘分支为0.02。输入在消费时按yaw换算局部坐标，再调用travel；不是完整doTick，不以受控动力测试宣称原生速度/网络画面已验 |
 | 被动重力/落地（10-13 javap/编译/离线体素，未运行身体） | Player.travel(Vec3)公开，经LivingEntity.travelInAir/travelInFluid与Entity.move处理原版重力/碰撞。Entity.updateInWaterStateAndDoFluidPushing/applyEffectsFromBlocks为protected；doCheckFallDamage(double,double,double,boolean)公开final。Player.isClientAuthoritative恒true，Entity.move仅local-instance-authoritative自动checkFallDamage，因此玩家须额外结算一次实际位移。LevelReader.hasChunksAt(int,int,int,int)是水平块坐标范围，不检查Y，不生成区块；ServerPlayer.setKnownMovement(Vec3)与ServerChunkCache.move(ServerPlayer)公开。ServerLevel.tickNonPassenger在实体tick前设置旧位置并推进tickCount。本轮不调用完整doTick，不以编译/体素测试推定原生下落已验 |

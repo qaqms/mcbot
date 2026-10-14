@@ -72,6 +72,8 @@ final class BoundedGather {
     private int dug;
     private int stalls;
     private int lastProgress;
+    private int workPositionAttempts;
+    private String currentFeet;
     private String lastProblem = "";
     private JsonObject lastData = new JsonObject();
 
@@ -132,6 +134,9 @@ final class BoundedGather {
             if (goal == null) goal = new ItemGoal(plan.goal(), state, plan.scope());
             goal.observe(state);
             double x = finite(state, "x"), y = finite(state, "y"), z = finite(state, "z");
+            currentFeet = Math.abs(x - Math.floor(x) - .5) <= .1 && Math.abs(y - Math.rint(y)) <= .05
+                    && Math.abs(z - Math.floor(z) - .5) <= .1
+                    ? (int) Math.floor(x) + ":" + (int) Math.rint(y) + ":" + (int) Math.floor(z) : null;
             String nowDimension = state.get("dimension").getAsString();
             if (!anchored) {
                 originX = x; originY = y; originZ = z; dimension = nowDimension; anchored = true;
@@ -219,34 +224,81 @@ final class BoundedGather {
             for (var entry : blocks) {
                 var block = entry.getAsJsonObject();
                 if (!within(block) || skippedBlocks.contains(blockKey(block))) continue;
-                if (flag(block, "can_work_here")) { mine(block); return; }
                 var positions = positions(block);
-                if (positions.isEmpty()) { skippedBlocks.add(blockKey(block)); continue; }
-                walk(positions, 0, () -> mine(block), () -> {
-                    skippedBlocks.add(blockKey(block)); observe();
-                });
+                var tried = new HashSet<String>();
+                tried.add(currentFeet);
+                if (flag(block, "can_work_here")) { mine(block, positions, 0, tried); return; }
+                if (positions.isEmpty()) {
+                    skippedBlocks.add(blockKey(block));
+                    if (block.has("work_failure")) lastProblem = block.get("work_failure").getAsString();
+                    continue;
+                }
+                approachBlock(block, positions, 0, tried);
                 return;
             }
             finish(false, "RESOURCE_BLOCKED:当前有界区域没有可继续采集的已观测候选；"
+                    + "站位已筛选实际视线/距离；埋藏或遮挡目标需要另行规划具体清理，未自动挖邻格。"
                     + "未加载/撞帽范围不证明无资源，不扩大范围或挖掘探查。" + lastProblem);
         });
     }
 
-    private void mine(JsonObject block) {
+    private void approachBlock(JsonObject block, List<JsonObject> positions, int index, Set<String> tried) {
+        while (index < positions.size() && tried.contains(blockKey(positions.get(index)))) index++;
+        if (index >= positions.size()) { blocked(block); return; }
+        JsonObject point = positions.get(index).deepCopy();
+        tried.add(blockKey(point));
+        point.addProperty("exact", true);
+        var target = new JsonObject();
+        for (String key : List.of("x", "y", "z")) target.addProperty(key, exact(block, key));
+        point.add("work_target", target);
+        int next = index + 1;
+        workPositionAttempts++;
+        call("move_to", point, receipt -> {
+            if (receipt.ok()) {
+                currentFeet = blockKey(point);
+                mine(block, positions, next, tried);
+            } else if (localStanceFailure(receipt.feedback()) || receipt.feedback().startsWith("NO_PATH:")
+                    || receipt.feedback().startsWith("NO_PROGRESS:")) {
+                lastProblem = receipt.feedback();
+                approachBlock(block, positions, next, tried);
+            } else if (receipt.feedback().startsWith("TARGET_LOST:")) {
+                lastProblem = receipt.feedback();
+                blocked(block);
+            } else {
+                lastData = receipt.data();
+                finish(false, receipt.feedback());
+            }
+        });
+    }
+
+    private static boolean localStanceFailure(String feedback) {
+        return feedback.startsWith("TARGET_BLOCKED:") || feedback.startsWith("OUT_OF_REACH:");
+    }
+
+    private void blocked(JsonObject block) {
+        skippedBlocks.add(blockKey(block));
+        stalls++;
+        observe();
+    }
+
+    private void mine(JsonObject block, List<JsonObject> positions, int next, Set<String> tried) {
         var args = new JsonObject();
         for (String key : List.of("x", "y", "z")) args.addProperty(key, exact(block, key));
+        args.addProperty("expected_block", block.get("block").getAsString());
         call("break_block", args, receipt -> {
             if (receipt.data().has("removed") && receipt.data().get("removed").getAsBoolean()) {
                 dug++;
                 stalls++;
+                // A real removal can expose a previously blocked target. Query it afresh, with the same caps.
+                skippedBlocks.clear();
                 if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
                 observe();
-            } else if (receipt.feedback().startsWith("TARGET_BLOCKED:")
-                    || receipt.feedback().startsWith("OUT_OF_REACH:") || receipt.feedback().startsWith("TARGET_LOST:")) {
-                skippedBlocks.add(blockKey(block));
+            } else if (localStanceFailure(receipt.feedback())) {
                 lastProblem = receipt.feedback();
-                stalls++;
-                observe();
+                approachBlock(block, positions, next, tried);
+            } else if (receipt.feedback().startsWith("TARGET_LOST:")) {
+                lastProblem = receipt.feedback();
+                blocked(block);
             } else finish(false, receipt.feedback());
         });
     }
@@ -272,11 +324,12 @@ final class BoundedGather {
         var array = target.getAsJsonArray("stand_positions");
         if (array == null || array.size() > 6) throw new IllegalArgumentException();
         var points = new java.util.ArrayList<JsonObject>();
+        var seen = new HashSet<String>();
         for (var entry : array) {
             var pos = entry.getAsJsonObject();
             var point = new JsonObject();
             for (String key : List.of("x", "y", "z")) point.addProperty(key, exact(pos, key));
-            if (within(point)) points.add(point);
+            if (within(point) && seen.add(blockKey(point))) points.add(point);
         }
         return List.copyOf(points);
     }
@@ -315,6 +368,7 @@ final class BoundedGather {
         data.addProperty("mined_blocks", dug);
         data.addProperty("actual_progress", goal == null ? 0 : goal.progress());
         data.addProperty("primitive_calls", calls);
+        data.addProperty("work_position_attempts", workPositionAttempts);
         data.addProperty("skipped_blocks", skippedBlocks.size());
         data.addProperty("skipped_items", skippedItems.size());
         data.add("last_observation", lastData);

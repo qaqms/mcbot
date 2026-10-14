@@ -19,6 +19,8 @@ public final class ClientToolDefs {
                     + "支持算术、表、局部函数、assert/error/ipairs/pairs/next/tonumber/tostring/type/print；"
                     + "不提供文件/网络/Java/require/load/debug/coroutine/string/table/math库、pcall或元表，不能嵌套run_program。"
                     + "code最多16384字节；timeout_seconds默认300最多900，max_calls默认128最多256；"
+                    + "max_calls同时约束mc.call次数和嵌套内部的原子调用总数，gather一次会消耗多次扫描/移动/挖掘/背包调用；"
+                    + "不要按Lua里的mc.call行数给嵌套采集设置很小的预算，通常省略沿用默认值。查询大表留在局部变量，只返回所需事实。"
                     + "计算/表/字符串/输出都有独立预算，动作仍走任务权限、身体互斥与真实终态。"
                     + "return/print只报告阶段结果，不代表主人整项任务完成；用新鲜状态验证",
                     "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16384},"
@@ -116,10 +118,12 @@ public final class ClientToolDefs {
                             + "\"slot\":{\"type\":\"string\",\"enum\":[\"input\",\"fuel\",\"output\"]},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("break_block", "挖一格干燥方块，需主手有采收资格；先inventory/equip选工具。"
+                    + "expected_block可填写最新观测的完整方块ID，目标被替换则停止；gather自动携带。"
                     + "按真实进度耗时，原版处理破坏/耐久，掉落留在地上，返回掉落实体位置；不会直接入包。"
                     + "走近掉落物会自动拾取，须核对最新背包，挖掉矿块不等于获得物品；失败须核对实际回执。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
-                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
+                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
+                            + "\"expected_block\":{\"type\":\"string\",\"maxLength\":128}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("attack", "原地普通近战，只攻击一个目标，不追击、不自动换工具、不拾取掉落。"
                     + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby选一只可够到的未命名敌对生物。"
                     + "max_hits为挥击上限1-10，默认1，最多20秒；等满冷却与目标受伤恢复后出手。"
@@ -149,12 +153,16 @@ public final class ClientToolDefs {
                             + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。"
                     + "默认到目标相邻一格范围；拾取或精确工作站位用exact=true，要求指定脚格实际站稳。"
+                    + "挖掘站位可带work_target={x,y,z}且exact=true，终态用最新视线/实际距离复核能否挖；到站不等于能工作。"
                     + "若路需要改动世界，先回 NEED_CONFIRM 附具体清单和authorization_id。"
                     + "用ask_owner携带该编号取得主人明确确认，再用move_to携带相同编号重发。"
                     + "may_alter_terrain布尔不能代替主人授权，重规划新增改动须重新确认。"
                     + "搭路仅使用无额外组件的圆石/深板岩圆石/泥土/下界岩，缺料先准备；开路需合适主手工具。"
                     + "回执以 ACCEPTED: 开头表示已受理、人还在走——别重发（会被 BUSY 挡），做完系统会主动报结果",
-                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"exact\":{\"type\":\"boolean\"},\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"旧兼容字段，不授予权限\"},\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
+                    "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},\"exact\":{\"type\":\"boolean\"},"
+                            + "\"work_target\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},"
+                            + "\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false},"
+                            + "\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"旧兼容字段，不授予权限\"},\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("transfer", "与6.5格内未锁定普通容器存取物品：dir=out取出/in存入，item可选过滤；熔炉类机器改用smelt。"
                     + "遵守槽位、接触面与堆叠限制，忙时先等待或取消。可以部分搬运，回执给实际已搬及留在来源的数量；"
                     + "ok=false也可能已搬一部分，先核对inventory和剩余数量再行动",

@@ -5,7 +5,6 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.common.ResourceLocationHelper;
 import com.neko.mcbot.server.ServerTool;
-import com.neko.mcbot.server.BlockAim;
 import com.neko.mcbot.server.WorkPositions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -47,9 +46,10 @@ public final class FindResourceTool implements ServerTool {
                 return chunk.getBlockState(pos);
             }
             @Override public void work(JsonObject target, BlockPos pos) {
-                target.addProperty("can_work_here", BlockAim.mining(BlockAim.forPlayer(companion), pos,
-                        Math.min(5.5, companion.blockInteractionRange())).ok());
-                target.add("stand_positions", WorkPositions.describe(companion, pos));
+                var aim = WorkPositions.miningAim(companion, pos);
+                target.addProperty("can_work_here", aim.ok());
+                if (!aim.ok()) target.addProperty("work_failure", aim.failure());
+                target.add("stand_positions", WorkPositions.describeMining(companion, pos));
             }
         });
     }

@@ -39,6 +39,37 @@ class AgentLoopEarlyDispatchTest {
         return new AssistantTurn(text, List.of(), 0, 0, -1, "stop");
     }
 
+    @Test
+    void earlyBlockedReportKeepsItsActualReceiptAndSuppressesTrailingActions() {
+        for (int readyLimit : List.of(0, -1)) {
+            var turn = new AssistantTurn("", List.of(
+                    new ToolCall("blocked", "report_blocked", "{\"reason\":\"stone remains occluded\"}"),
+                    new ToolCall("later", "break_block", "{\"x\":1,\"y\":64,\"z\":0}")), 0, 0, -1, "tool_calls");
+            var engine = new ScriptedEngine().queue(turn);
+            engine.readyReportLimit = readyLimit;
+            var executed = new ArrayList<String>();
+            var statuses = new ArrayList<AgentLoop.TaskStatus>();
+            var loop = new AgentLoop(engine, List.of(), (name, args) -> {
+                executed.add(name);
+                return CompletableFuture.completedFuture(new ToolExecutor.ToolOutcome(true, "unexpected action"));
+            }, AgentLoop.Config.defaults(), new AgentLoop.Listener() {
+                @Override public void onTaskFinished(long id, AgentLoop.TaskStatus status, String text) {
+                    statuses.add(status);
+                }
+            }, () -> "system", 1_000_000);
+            loop.submit("make a tool");
+            assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+            assertTrue(executed.isEmpty());
+            var receipts = loop.conversation().history().stream()
+                    .filter(Msg.Tool.class::isInstance).map(Msg.Tool.class::cast).toList();
+            assertEquals(List.of("report_blocked", "break_block"), receipts.stream().map(Msg.Tool::name).toList());
+            assertTrue(receipts.getFirst().content().startsWith("BLOCKED:stone remains occluded"));
+            assertTrue(receipts.getLast().content().startsWith("CANCELLED:"));
+            assertEquals(1, engine.calls);
+            loop.close();
+        }
+    }
+
     /** 等到回调条件成立，最多等 5s；避免用 sleep 猜时序。 */
     private static void awaitTrue(String what, java.util.function.BooleanSupplier cond) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);

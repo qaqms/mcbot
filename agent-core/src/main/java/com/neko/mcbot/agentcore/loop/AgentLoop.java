@@ -957,7 +957,8 @@ public final class AgentLoop {
             CompletableFuture<ToolOutcome> started = early.get(i);
             chain = chain.thenCompose(ignored -> {
                 synchronized (AgentLoop.this) {
-                    if (!isCurrent(stepGeneration) || ledger != led || stuckAbort) {
+                    // A stopping tool may already have run during streaming; settle its real receipt.
+                    if (!isCurrent(stepGeneration) || ledger != led || (stuckAbort && started == null)) {
                         return CompletableFuture.completedFuture(ToolOutcome.synthetic(
                                 "CANCELLED:这个操作所属的任务已终止，没有继续执行。"));
                     }

@@ -4,6 +4,13 @@
 
 ## 当前验证安排（2026-10-14）
 
+工作站位/局部恢复优先卡：WorkPositions/移动终态/BlockMining共用BlockAim，
+gather在最多6个站位间本地恢复并保留权限/终态/预算；目标ID变化停止，不挖替换物。
+原版shape/clip在方块表夹具中运行；MoveToWorkTest检查实际终态处理函数，
+AgentRunnerGatherTest执行真实runner/loop的受理等待和本地恢复接线。
+不运行PathTask真实世界寻路、玩家物理/网络画面或模型；具体构建/XML/哈希见STATUS。
+参考参数与计数粒度对照见性能/长任务文档第7节，自动遮挡清理仍待后续卡。
+
 本轮通用组合执行引入上游org.luaj:luaj-jse:3.0.1，未引入参考项目维护的Lua分支。
 依赖由Maven Central解析，版本已固定；新设备先准备该依赖缓存，再运行离线强制构建。
 根mod的include同时嵌入LuaJ，许可在META-INF/LICENSE-luaj.txt，不能只更新agent-core而漏运行库。

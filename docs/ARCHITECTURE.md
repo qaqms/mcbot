@@ -18,6 +18,13 @@ mc.call切回客户端，真实terminalOnly回执才恢复；变量、分支和�
 取消/超时释放子票并中断计算；解释器没有文件/网络/Java或任意命令入口。
 不是新身体控制器；共享追击/跟随与批次放置仍待后续实现，详见TOOLS §1.2。
 
+工作站位本卡统一BlockAim：WorkPositions.describeMining从假想眼睛筛选视线/距离，
+find_resource work=true附当前失败原因及最多6站位；掉落describe不受挖掘筛选影响。
+move_to可带work_target，在PathTask真正结束后重新检查几何工作条件并保留实际移动账。
+BoundedGather在不同站位间有限恢复，移除后重新查询此前受阻目标；
+break_block的expected_block防止旧目标被替换后误挖。仍沿既有坐标A*，
+没有为遮挡清理扩大授权或添加完整工作目标搜索，具体范围见TOOLS §1.1。
+
 ## 1. 三进程拓扑
 
 ```
