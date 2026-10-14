@@ -33,6 +33,12 @@
 - 文档同步AGENTS/README/DEVELOPMENT/HANDOFF/ROADMAP/TOOLS/ARCHITECTURE/PANEL/
   性能评估及补测清单；下方旧检查点保留。tools/list-java.ps1未列Java进程。
   源码提交/推送检查点以Git main为准，常规归档不改标签或发行资产。
+- **实际归档/网络限制**：本体实现与文档提交为7889ade
+  （fix: use physical navigation and avoid redundant compaction），30文件。
+  暂存禁入文件/新增机器绝对路径/凭据样式计数均0，diff --cached --check通过。
+  常规push因本机回环代理不可达失败；仅本次命令禁用代理后直连GitHub 443也失败。
+  未改全局代理、远端或凭据，没有成功推送；本地main领先远端，恢复网络后常规推送即可。
+  本条及HANDOFF以后续文档提交记账，不改已验代码/候选包，不重复运行测试。
 
 ### 上下文整理净节省（2026-10-14 09:35，Asia/Shanghai）
 
