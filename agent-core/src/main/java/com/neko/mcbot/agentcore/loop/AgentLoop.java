@@ -541,8 +541,8 @@ public final class AgentLoop {
                 int tokens = convo.requestTokens(system, tools, history);
                 int reserve = Math.min(2048, contextWindow / 4);
                 boolean tooLarge = tokens > contextWindow - reserve;
-                if (!compactAttempted && convo.canAutoCompact()
-                        && (tooLarge || convo.compactionDue(tokens))) {
+                if (!compactAttempted && convo.canAutoCompact() && convo.hasUsefulCompaction()
+                        && (tooLarge || convo.compactionDue(tokens, system, tools, history))) {
                     listener.onNotice("正在整理任务内历史，目标和实际进度单独保留。");
                     convo.compact((s, h, t) -> summaryRequest(s, h, t)).whenComplete((v, error) -> {
                         synchronized (AgentLoop.this) {
@@ -1025,8 +1025,8 @@ public final class AgentLoop {
 
     /**
      * 链尾（当前指令走完、推进下一条之前）：超水位才压缩。
-     * 关键路径收益：任何一步都不再同步等摘要往返（省 2–5s/次）；摘要请求在
-     * 本链完成后、下一条指令启动前发出——对空转等待队列的宿主而言就是后台。
+     * 任务内只在历史或硬窗口有实际压力且旧段足够大时整理；
+     * 链尾同样检查历史软水位，不因固定工具定义反复整理。
      * 压缩成功后 Conversation 内部已调 noteCompacted（真数归零 + prefix reset），
      * 时机仍在"重写历史"的同一同步块里，R0 回归钉不破。
      */

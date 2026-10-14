@@ -42,6 +42,8 @@ max_blocks默认128、最大256；子调用最多1024，参数最多4096 UTF-8�
 三次操作无入包成果且没有可继续拾取候选时停止；刚挖出的掉落先尝试拾取再判断。
 掉落附近站位仅为已加载/无流体/完整地板/身体无碰撞候选，最多6个，
 路径和实际触碰须子工具验证；复杂半砖站位暂不支持。
+选定站位使用move_to的exact=true，必须在指定脚格实际站稳；
+走近后先尝试collect，无实际拾取时最多等一秒重试，不跳过原版拾取延迟。
 每个子动作沿用任务身份、只读限制、权限、资源锁和真正终态；job_ack不能推进。
 路线NEED_CONFIRM/PARTIAL、缺工具/空间、预算或未知事实返回模型判断，不自行批准开路。
 取消/超时清子票，迟到结果不续跑，保留已完成与在途未知。
@@ -69,7 +71,7 @@ skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包
 | `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；中立/命名目标确认，拒绝玩家/宠物/同队及不安全横扫 |
 | `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
 | `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
-| `move_to` | `x,y,z,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：改动世界先回 `NEED_CONFIRM`+清单与编号，主人确认后携带编号执行；旧布尔不授权。搜索预算 8000 节点/128 挖/放≤背包存量；重规划新改动重新确认 |
+| `move_to` | `x,y,z,exact?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；每刻输入驱动原版travel/跳跃，无路线传送。改动世界先回 `NEED_CONFIRM`+清单与编号，主人确认后携带编号执行；旧布尔不授权。搜索预算 8000 节点/128 挖/放≤背包存量；重规划新改动重新确认 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
@@ -88,8 +90,9 @@ skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包
 遮挡/无可点击轮廓回TARGET_BLOCKED，实际超距回OUT_OF_REACH，未知沿线/失效目标回
 TARGET_LOST；空气本来就拒绝。拒绝不会挖邻格/移动补救，模型须依据回执重新规划。
 扫描是周边采样，不是相机视锥；主人准星只记录提交瞬间，不能证明同伴此刻仍看见。
-轮廓有限采样可能保守拒绝狭缝；既有精确格放置上下文和跨层移动保留，
-不宣称完整原版鼠标点击或物理输入已经实现。新场景见REAL-GAME-RETESTING。
+轮廓有限采样可能保守拒绝狭缝；精确格放置上下文保留，
+路线移动已改原版物理输入，但水中导航/载具/复杂半砖站位不是本轮完整能力。
+不宣称完整原版鼠标点击已实现。新场景见REAL-GAME-RETESTING。
 
 未上（DESIGN §5 规划中）：
 `locate` 等——M5/M8 分批补齐；`navigate` 并入 move_to 升级，`wait_until` 并入 wait。

@@ -150,8 +150,8 @@ public final class LevelDigSampler implements DigSampler {
 
     @Override
     public boolean inBounds(int x, int y, int z) {
-        if (y < minY + 1 || y > maxY - 4) {
-            return false; // 头格之上再留 1 格余量
+        if (y < minY || y >= maxY) {
+            return false; // Queries include the support at the build floor, not just feet cells.
         }
         return Math.abs(x - start.getX()) <= RADIUS_XZ
                 && Math.abs(z - start.getZ()) <= RADIUS_XZ

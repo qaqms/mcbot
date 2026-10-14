@@ -25,6 +25,7 @@ public final class CompanionPlayer extends ServerPlayer {
     private final HealthObservation healthObservation = new HealthObservation();
     private final UUID observationBodyId = UUID.randomUUID();
     private boolean observationWarning;
+    private final MovementInput movementInput = new MovementInput();
     private final CompanionPhysics.Access physics = new CompanionPhysics.Access() {
         @Override public boolean active() {
             return isAlive() && !isRemoved() && !isPassenger() && !isSleeping();
@@ -38,6 +39,10 @@ public final class CompanionPlayer extends ServerPlayer {
             return level().hasChunksAt(from.getX(), from.getZ(), to.getX(), to.getZ());
         }
         @Override public Vec3 position() { return CompanionPlayer.this.position(); }
+        @Override public MovementInput.Frame takeInput() { return movementInput.take(); }
+        @Override public float yaw() { return getYRot(); }
+        @Override public boolean grounded() { return onGround(); }
+        @Override public void jump() { jumpFromGround(); }
         @Override public void updateFluids() { updateInWaterStateAndDoFluidPushing(); }
         @Override public void travel(Vec3 input) { CompanionPlayer.this.travel(input); }
         @Override public void applyBlockEffects() { applyEffectsFromBlocks(); }
@@ -46,6 +51,7 @@ public final class CompanionPlayer extends ServerPlayer {
         }
         @Override public void recordMovement(Vec3 movement) {
             setKnownMovement(movement);
+            calculateEntityAnimation(false);
             if (movement.lengthSqr() > 0) level().getChunkSource().move(CompanionPlayer.this);
         }
     };
@@ -59,6 +65,12 @@ public final class CompanionPlayer extends ServerPlayer {
     public UUID ownerUuid() {
         return ownerUuid;
     }
+
+    public void walkForTick(double x, double z, boolean jump) {
+        movementInput.renew(x, z, jump);
+    }
+
+    public void releaseMovement() { movementInput.clear(); }
 
     public void facePoint(Vec3 point) {
         if (getEyePosition().distanceToSqr(point) < 1e-10) return;

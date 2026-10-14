@@ -71,6 +71,7 @@ public final class PathTask extends TickTask {
     private enum Phase { SEARCH, REPLAN_SEARCH, EXECUTE }
 
     private final BlockPos target;
+    private final boolean exact;
     private final ActionPermissions permissions;
     private final ActionPermissions.Context context;
     private final ActionPermissions.Execution authorization;
@@ -113,18 +114,25 @@ public final class PathTask extends TickTask {
     private int actualPlaces;
     private int leftoverItems;
 
-    // 行走插值子状态（同层 WALK 沿用滑步节奏，视觉与 M4 版一致）
-    private double wx, wy, wz;
+    private PathSteering steering;
+    private CompanionPlayer drivenBody;
 
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
                     ActionPermissions.Context context, ActionPermissions.Scope approved,
                     CompanionScheduler scheduler) {
+        this(level, target, permissions, context, approved, scheduler, false);
+    }
+
+    public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
+                    ActionPermissions.Context context, ActionPermissions.Scope approved,
+                    CompanionScheduler scheduler, boolean exact) {
         this.level = level;
         this.target = target;
         this.permissions = permissions;
         this.context = context;
         this.authorization = new ActionPermissions.Execution(approved);
         this.scheduler = scheduler;
+        this.exact = exact;
     }
 
     @Override
@@ -142,11 +150,15 @@ public final class PathTask extends TickTask {
 
     @Override
     public Progress tick(CompanionPlayer c) {
+        drivenBody = c;
+        c.releaseMovement();
         if (c.level() != level) {
             onAbort();
             return terminal(new Result(false, "TARGET_LOST:身体已换维度，原路线作废。", null));
         }
-        PathGrounding.Decision grounded = grounding.poll(c.onGround(), c.blockPosition().getY());
+        // While steering, the next landing belongs to the route, including its airborne ticks.
+        PathGrounding.Decision grounded = steering == null
+                ? grounding.poll(c.onGround(), c.blockPosition().getY()) : PathGrounding.Decision.READY;
         if (grounded == PathGrounding.Decision.WAIT) {
             clearCrack();
             return running();
@@ -162,11 +174,12 @@ public final class PathTask extends TickTask {
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
         Progress progress = phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
-        grounding.committed(c.blockPosition().getY());
+        if (c.onGround() && steering == null) grounding.committed(c.blockPosition().getY());
         return progress instanceof Progress.Done done ? terminal(done.result()) : progress;
     }
 
     private Progress terminal(Result result) {
+        stopMovement();
         clearCrack();
         if (!result.feedback().startsWith("NEED_CONFIRM:")) dropPlan();
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
@@ -245,7 +258,7 @@ public final class PathTask extends TickTask {
      */
     private Progress afterPlanReady(CompanionPlayer c, List<DigAStar.Step> plan) {
         path = plan;
-        cursor = 0;
+        cursor = path.size() > 1 && path.getFirst().action() == DigAStar.ACT_START ? 1 : 0;
         int digs = planDigs;
         int places = planPlaces;
         rememberPlan(c, plan);
@@ -358,6 +371,7 @@ public final class PathTask extends TickTask {
         if (p == null) {
             return false;
         }
+        if (exact && (p.path.isEmpty() || !atTarget(p.path.getLast()))) return false;
         // 采样器仍要建（执行期 mineOne/placeOne/复核都用它 live 读世界），但**不必重搜**
         sampler = new LevelDigSampler(level, c, c.blockPosition(),
                 LevelDigSampler.countPlaceables(c.getInventory()));
@@ -446,7 +460,7 @@ public final class PathTask extends TickTask {
         }
         DigAStar d = new DigAStar(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(),
-                target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS);
+                target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS, DigAStar.H_WEIGHT, exact ? 0 : 1);
         d.totalBudget(SEARCH_TOTAL_NS);
         if (reusePending != null) {
             d.reuseBias(reusePending);
@@ -581,6 +595,14 @@ public final class PathTask extends TickTask {
 
         // 2) 本节点要放的支撑
         if (!next.place().isEmpty()) {
+            if (next.x() == c.blockPosition().getX() && next.z() == c.blockPosition().getZ()
+                    && next.y() > c.getY() + .02) {
+                if (steering == null) steering = new PathSteering(next.x(), next.y(), next.z());
+                var command = steering.tick(bodyState(c));
+                if (command.stuck()) return stuck(c, next);
+                c.walkForTick(0, 0, c.onGround());
+                return running();
+            }
             long cell = next.place().get(0);
             Progress p = placeOne(c, cell);
             if (p != null) {
@@ -603,30 +625,83 @@ public final class PathTask extends TickTask {
             executed = 0;
             return running();
         }
-        // 3) 落位：同层走路用 0.45/tick 插值（视觉与滑步版一致），其余直接传送
+        // 3) Native travel owns position, collision, jump arc and descent.
         double facingX = next.x() + .5 - c.getX();
         double facingZ = next.z() + .5 - c.getZ();
         if (Math.hypot(facingX, facingZ) > 1e-5) {
             c.facePoint(new net.minecraft.world.phys.Vec3(next.x() + .5, c.getEyeY(), next.z() + .5));
         }
-        if (next.y() == c.blockPosition().getY() && next.action() == DigAStar.ACT_WALK) {
-            double dx = next.x() + 0.5 - c.getX();
-            double dz = next.z() + 0.5 - c.getZ();
-            double dist = Math.hypot(dx, dz);
-            if (dist > 0.45) {
-                c.teleportTo(c.getX() + dx / dist * 0.45, c.getY(),
-                        c.getZ() + dz / dist * 0.45);
-                return running();
-            }
+        if (steering == null) steering = new PathSteering(next.x(), next.y(), next.z());
+        boolean through = canPassStraight();
+        var command = steering.tick(bodyState(c), through);
+        if (command.stuck()) return stuck(c, next);
+        if (!command.arrived()) {
+            c.walkForTick(command.x(), command.z(), command.jump());
+            return running();
         }
-        c.teleportTo(next.x() + 0.5, next.y(), next.z() + 0.5);
+        stopMovement();
+        if (through) {
+            var following = path.get(cursor + 1);
+            c.walkForTick(following.x() - next.x(), following.z() - next.z(), false);
+        }
         cursor++;
         executed++;
         return running();
     }
 
+    private boolean canPassStraight() {
+        if (cursor <= 0 || cursor + 1 >= path.size()) return false;
+        var before = path.get(cursor - 1);
+        var here = path.get(cursor);
+        var after = path.get(cursor + 1);
+        return here.action() == DigAStar.ACT_WALK && after.action() == DigAStar.ACT_WALK
+                && here.dig().isEmpty() && here.place().isEmpty()
+                && after.dig().isEmpty() && after.place().isEmpty()
+                && before.y() == here.y() && here.y() == after.y()
+                && here.x() - before.x() == after.x() - here.x()
+                && here.z() - before.z() == after.z() - here.z();
+    }
+
+    private static PathSteering.Body bodyState(CompanionPlayer c) {
+        var velocity = c.getDeltaMovement();
+        return new PathSteering.Body(c.getX(), c.getY(), c.getZ(), velocity.x, velocity.z, c.onGround());
+    }
+
+    private Progress stuck(CompanionPlayer c, DigAStar.Step next) {
+        stopMovement();
+        if (!c.onGround() || replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
+                "NO_PATH:身体未能实际走到下一落脚点，已释放输入；重新观察地形再选路。", null));
+        replanBadKey = DigAStar.pack(next.x(), next.y(), next.z());
+        replanBadSet = true;
+        beginReplan(c);
+        executed = 0;
+        return running();
+    }
+
+    private boolean atTarget(DigAStar.Step step) {
+        return step.x() == target.getX() && step.y() == target.getY() && step.z() == target.getZ();
+    }
+
+    private void stopMovement() {
+        if (drivenBody != null) drivenBody.releaseMovement();
+        steering = null;
+    }
+
     private Progress arrived(CompanionPlayer c) {
         BlockPos at = c.blockPosition();
+        if (path.isEmpty()) return new Progress.Done(new Result(false, "NO_PATH:没有可执行的实际落点。", null));
+        var end = path.getLast();
+        if (!new PathSteering(end.x(), end.y(), end.z()).settled(bodyState(c))) {
+            return new Progress.Done(new Result(false,
+                    "NO_PATH:路线结束但身体没有在末节点站稳，重新观察当前位置。", null));
+        }
+        int radius = exact ? 0 : 1;
+        if (!c.onGround() || Math.abs(at.getX() - target.getX()) > radius
+                || Math.abs(at.getY() - target.getY()) > radius
+                || Math.abs(at.getZ() - target.getZ()) > radius) {
+            if (!partialTail) return new Progress.Done(new Result(false,
+                    "NO_PATH:路线结束但身体未实际到达目标范围，重新观察当前位置。", null));
+        }
         int need = actualDigs + actualPlaces;
         JsonObject data = new JsonObject();
         data.addProperty("removed_blocks", actualDigs);
@@ -653,6 +728,7 @@ public final class PathTask extends TickTask {
      * 复核认定变了的格周围不入集（§D）——那恰好是不能再信的部分。
      */
     private void beginReplan(CompanionPlayer c) {
+        stopMovement();
         clearCrack();
         BlockPos from = c.blockPosition();
         sampler = new LevelDigSampler(level, c, from,
@@ -787,11 +863,13 @@ public final class PathTask extends TickTask {
 
     @Override
     public void onAbort() {
+        stopMovement();
         clearCrack();
         dropPlan(); // 任务作废了，别把一条已废的路留在缓存里给下一趟复用
     }
 
     @Override public void onFinish() {
+        stopMovement();
         clearCrack();
     }
 

@@ -181,14 +181,9 @@ final class BoundedGather {
             observe();
             return;
         }
-        walk(positions, 0, () -> {
-            var wait = new JsonObject();
-            wait.addProperty("seconds", 1);
-            call("wait", wait, receipt -> {
-                if (!receipt.ok()) finish(false, receipt.feedback());
-                else collect(item, true);
-            });
-        }, () -> { skippedItems.add(itemKey(item)); observe(); });
+        // Walking may already have consumed the pickup delay; the actual receipt decides.
+        walk(positions, 0, () -> collect(item, false),
+                () -> { skippedItems.add(itemKey(item)); observe(); });
     }
 
     private void collect(JsonObject item, boolean waited) {
@@ -265,6 +260,7 @@ final class BoundedGather {
     private void walk(List<JsonObject> positions, int index, Runnable arrived, Runnable unavailable) {
         if (index >= positions.size()) { unavailable.run(); return; }
         JsonObject point = positions.get(index);
+        point.addProperty("exact", true);
         call("move_to", point, receipt -> {
             if (receipt.ok()) { arrived.run(); return; }
             if (receipt.feedback().startsWith("NO_PATH:") || receipt.feedback().startsWith("NO_PROGRESS:")) {

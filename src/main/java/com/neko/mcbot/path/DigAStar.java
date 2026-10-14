@@ -61,6 +61,7 @@ public final class DigAStar {
     private final int maxDigs;
     private final int sx, sy, sz, tx, ty, tz;
     private final double hWeight;
+    private final int goalRadius;
     /** 入目标柱的最小真实代价（脚+头挖价+放价，搜索开始算一次）；全不可行=0。 */
     private final double goalEntryCost;
     /** 起始点到目标体积的 L1（部分提交的推进量基准）。 */
@@ -92,6 +93,11 @@ public final class DigAStar {
 
     public DigAStar(DigSampler sampler, int sx, int sy, int sz, int tx, int ty, int tz,
                     int maxNodes, int maxDigs, double hWeight) {
+        this(sampler, sx, sy, sz, tx, ty, tz, maxNodes, maxDigs, hWeight, 1);
+    }
+
+    public DigAStar(DigSampler sampler, int sx, int sy, int sz, int tx, int ty, int tz,
+                    int maxNodes, int maxDigs, double hWeight, int goalRadius) {
         this.s = sampler;
         this.sx = sx;
         this.sy = sy;
@@ -102,6 +108,8 @@ public final class DigAStar {
         this.maxNodes = maxNodes;
         this.maxDigs = maxDigs;
         this.hWeight = hWeight;
+        if (goalRadius < 0 || goalRadius > 1) throw new IllegalArgumentException("Invalid goal radius");
+        this.goalRadius = goalRadius;
         this.startL1 = l1(sx, sy, sz);
         this.goalEntryCost = computeGoalEntryCost(sampler);
         Node start = new Node(pack(sx, sy, sz), sx, sy, sz, 0, 0, 0, h(sx, sy, sz), 0);
@@ -191,7 +199,7 @@ public final class DigAStar {
         return finished;
     }
 
-    /** 成功时的路径（不含起点）；失败时为 null。 */
+    /** 成功时的路径（含 ACT_START 起点）；失败时为 null。 */
     public List<Step> path() {
         return path;
     }
@@ -222,7 +230,7 @@ public final class DigAStar {
         return startL1 - l1(bestPartial.x, bestPartial.y, bestPartial.z) >= PARTIAL_MIN_GAIN;
     }
 
-    /** 半程路径（不含起点）；仅 {@link #partialAvailable()} 为真时非 null。 */
+    /** 半程路径（含 ACT_START 起点）；仅 {@link #partialAvailable()} 为真时非 null。 */
     public List<Step> partialPath() {
         return partialAvailable() ? reconstruct(bestPartial) : null;
     }
@@ -267,9 +275,10 @@ public final class DigAStar {
         return true;
     }
 
-    /** 终点判据：目标柱 3×3×3 内任一站得住的格（"到附近"语义，与滑步版一致）。 */
+    /** 目标体积默认半径一格；精确站位的半径为零。 */
     private boolean isGoal(int x, int y, int z) {
-        return Math.abs(x - tx) <= 1 && Math.abs(z - tz) <= 1 && Math.abs(y - ty) <= 1;
+        return Math.abs(x - tx) <= goalRadius && Math.abs(z - tz) <= goalRadius
+                && Math.abs(y - ty) <= goalRadius;
     }
 
     private void expand(Node cur) {
@@ -289,6 +298,8 @@ public final class DigAStar {
         if (!s.inBounds(bx, by, bz)) {
             return;
         }
+        // A jump also sweeps the head above the departure column.
+        if (dy > 0 && !s.passable(cur.x, cur.y + 2, cur.z)) return;
         // 斜向：两个共享邻格必须已可通行（不挖角落，斜路只走现成缝）
         if (dx != 0 && dz != 0) {
             if (!s.passable(cur.x + dx, cur.y, cur.z) || !s.passable(cur.x, cur.y, cur.z + dz)
@@ -363,9 +374,9 @@ public final class DigAStar {
 
     /** 到目标体积的 L1（体积内=0）。部分提交用它做"推进量"口径，与 h 同一把尺。 */
     private int l1(int x, int y, int z) {
-        return Math.max(0, Math.abs(x - tx) - 1)
-                + Math.max(0, Math.abs(z - tz) - 1)
-                + Math.max(0, Math.abs(y - ty) - 1);
+        return Math.max(0, Math.abs(x - tx) - goalRadius)
+                + Math.max(0, Math.abs(z - tz) - goalRadius)
+                + Math.max(0, Math.abs(y - ty) - goalRadius);
     }
 
     /**
@@ -375,9 +386,9 @@ public final class DigAStar {
      */
     private double computeGoalEntryCost(DigSampler sampler) {
         double min = Double.MAX_VALUE;
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -goalRadius; dx <= goalRadius; dx++) {
+            for (int dy = -goalRadius; dy <= goalRadius; dy++) {
+                for (int dz = -goalRadius; dz <= goalRadius; dz++) {
                     double c = cellEntryCost(tx + dx, ty + dy, tz + dz);
                     if (c >= 0 && c < min) {
                         min = c;

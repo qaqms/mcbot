@@ -53,9 +53,10 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
   body/              FakeConnection/CompanionPlayer/CompanionRoster/CompanionChunkPads/SummonService/SafeSpawn/SelfTest
-                     CompanionPhysics(原版被动重力/碰撞步进，不依赖任务槽)
+                     CompanionPhysics(原版重力/输入/碰撞步进，不依赖任务槽)/MovementInput(单刻输入)
   path/              DigAStar(纯算法零 MC 依赖,可单测)/DigSampler(契约)/LevelDigSampler(神圣集)
-                     PathTask(搜索→确认→执行)/PathGrounding(落地高度与旧路失效)/PlanCache(lastPlan 复用,纯逻辑可单测)
+                     PathTask(搜索→确认→执行)/PathSteering(真实位置到短效输入)
+                     PathGrounding(落地高度与旧路失效)/PlanCache(lastPlan 复用,纯逻辑可单测)
   server/            ToolRegistry/ServerTool(acceptanceMode/capTicks/acceptSubject)
                      ItemTransfers(实际移动量+组件完整的剩余堆栈、存储槽/容器/接触面约束)
                      BlockMining/BlockPlacement(单格与路径共用原版动作入口)
@@ -87,8 +88,8 @@ BlockMining每拍通过BlockAim检查可见轮廓与原版blockInteractionRange�
 转向后按实际getLookAngle再次确认第一命中为目标，才挥手、推进进度或移除。
 沿射线未加载/越界先拒绝，遮挡/空气/目标与主手变化停止并清裂纹。
 BlockPlacement在原版上下文/消费前检查视线与实际距离，转向后使用既有准确目标上下文。
-这是本体现有坐标工具的守卫补强，不是完整鼠标/物理输入层；
-路径水平插值和跨层传送保留。原生动画/同步/复杂形状须实测，离线边界见STATUS。
+移动路线由短效输入驱动原版travel/jumpFromGround，已移除水平与跨层路线传送；
+完整鼠标点击、水中/载具导航仍未实现。原生动画/同步/复杂形状须实测，离线边界见STATUS。
 
 - 通道就两条：`mcbot:c2s`、`mcbot:s2c`，各携带一个 JSON 信封 `{kind, ...}`；
   语义演进只加 kind 不加密道。闸① 是**显式的字节尺寸闸**（不再是“靠 codec 默认上限”）：
@@ -204,11 +205,14 @@ ID到齐、实际累积参数与检查对象一致后才报告，一槽一次、
 
 护栏数值：每指令 40 步；同一调用连续 3 次 → Nudge 换思路、5 次 → 停链——但只有
 **同调用且同结果**才计数（TIMEOUT 后原参重试是合法恢复，不算打转，M4.5 吸取参考项目实战教训）。
-上下文闸门 M4.5 改真数驱动：每步记 API 回报的 prompt_tokens（无则 CJK 感知估算），
-默认阈值6000、近期预算1500；工具配对完整后的任务内请求边界及正常链尾可自动整理；
-切分铁律：保留段只能从 User/Assistant 起切，绝不拆孤儿 Tool；
+上下文每步记API回报prompt_tokens（无则CJK感知估算），历史软水位扣除
+system/工具/临时观测固定输入，默认6000、近期预算1500；
+工具配对完整的请求边界及链尾只有足量可替换旧段才自动整理，空操作不提示或重复观测。
+完整请求的硬窗口保留，不因软水位改变而省去工具/观测预算。
+切分保留近期预算内最早完整User/Assistant轮次，绝不拆孤儿Tool；
 仅status/inventory的可替代旧查询出站折叠为占位，动作回执不按同名折叠（存储全量）；
-摘要端点连败2次熔断至下个指令边界，空白/带工具/超预算或旧代际摘要不能替换历史。
+摘要端点连败2次熔断至下个指令边界，空白/带工具/超预算或旧代际摘要不能替换历史；
+替换后至少节省32token或旧段20%（取大），拒绝膨胀摘要。
 已有摘要单独累积更新；整理后重新观测身体，原指令和已登记目标事实独立注入。
 完整请求预算含system/工具/历史/临时观测/目标，输出预留min(2048,窗口/4)；
 usage加新增估算和完整本地估算取保守值，摘要输入也限预算，仍装不下则CONTEXT_LIMIT停下。
@@ -218,6 +222,7 @@ usage加新增估算和完整本地估算取保守值，摘要输入也限预算
 ask_owner/workflow/gather/set_goal/report_blocked，后两者由loop本地拦截。
 
 BoundedGather使用任务开始背包基线：状态、匹配掉落、站位/移动/等待/collect，
+选中工作/拾取站位使用exact=true；走近后先collect，无入包才有界等待重试。
 没有待拾取候选才查来源方块、工作站位、move_to、break_block，再刷新状态。
 子调用复用terminalOnly票与原权限/资源锁，每步等真终态；取消/超时清子票且禁止迟到续跑。
 目标固定item/count/mode，按实际背包净新增或总量完成，不累计挖掘格或掉落。
@@ -303,13 +308,17 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
 
 - 被动物理：CompanionPlayer在super.tick及装备/动作计时之后每刻调用CompanionPhysics，
   无任务/任务取消也继续推进。检查身体及速度扫过的邻域区块已加载，再更新原版流体状态、
-  travel(Vec3.ZERO)与方块接触；速度/重力/碰撞由原版负责，不按方块坐标猜落地。
+  travel(本刻输入)与方块接触；空闲为Vec3.ZERO，速度/重力/碰撞由原版负责。
+  MovementInput单刻消费/过期，任务续订世界方向、消费时换算身体朝向的局部输入；
+  只在着地且请求跳跃时调用原版jumpFromGround，按实际位移更新行走动画。
   原版Player仍是client-authoritative，Entity.move不结算其摔落，因此按实际位移调用一次
   doCheckFallDamage；setKnownMovement记录本刻位移，移动后更新区块位置。
   不开启完整doTick/饥饿时钟/自动playerTouch；既有无敌保持，不宣称完整生存物理。
   死亡/移除/睡眠/骑乘跳过；未知邻域等待区块票，不强制读取未加载碰撞格。
-  路径未落地不搜索/执行，清当前裂纹；落地高度偏离此前提交高度时按原上限重规划。
-  原有水平插值/跨层传送仍保留，并非完整键盘驱动寻路。
+  计划外下落不搜索/工作，清裂纹，落地高度偏离则有界重规划；
+  计划内跳/落由PathSteering持续跟踪，终点/工作节点须实际位置/高度/近静止且着地；
+  无挖放的同层直线中间节点保持运动通过，不逐格刹停。
+  路径传送已移除，取消/终态/重规划清输入，不删除速度或冻结重力。
 - 身份：`offlineUuid(name)`（OfflinePlayer 公式）→ 名册（`<世界目录>/mcbot/companions.json`）记归属；
   背包/坐标在原版 `playerdata/<uuid>.dat`，名册不备份身体数据。
   **1.21.11 的 `placeNewPlayer` 不负责加载存档**：SummonService 先调用
@@ -383,8 +392,11 @@ mcbot 提供任务桥及 MC agent 执行能力；连接器负责宿主侧任务�
   约束全在 LevelDigSampler：神圣集（容器/工作台/床/机关本体与其支撑+任意方块实体）、
   岩浆邻接否决、起点脚下不挖、单格挖>20s 不值、搜索盒水平 64/垂直 32。
   要改世界先回 NEED_CONFIRM+具体清单，主人确认后模型带 authorization_id 重发；
-  执行期每 20 节点复核未来 5 节点，变了就地重规划（≤2 次）；同层走路保持 0.45 格/tick
-  滑步节奏（M4 行为视觉回归）。搜索分帧：每 tick 最多展开 300 节点，主线程永不卡崩。
+  执行期每20节点复核未来5节点，变了就地重规划（≤2次）；
+  每刻按测得的位置/速度选择方向/跳跃输入，卡住约60刻或单步超120刻有界重规划/失败，
+  不传送兜底。默认相邻一格终点，exact=true为精确脚格；精确模式不复用附近终点缓存。
+  多节点路线跳过ACT_START；同格路线仍需实际站稳。支撑查询包含世界底层minY。
+  搜索分帧每tick最多300节点/6ms，累计8000节点/400ms，不能保证重节点无单拍尖峰。
   C2 的 PathMaterials 统一规划预算与执行选料，只用存储槽四种无组件补丁垫料；
   放置确认后必须复核支撑，路径终态按实际挖/放/留地量汇报，失败/重规划清旧裂纹。
   DigSampler.feasibleDig 在搜索/memo/执行共用，拒绝 Double.MAX_VALUE 哨兵及无效代价；

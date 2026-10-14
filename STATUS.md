@@ -3,7 +3,77 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-13）：本体与日志文档已归档推送；采集/拾取/数量校验有正证，路径受阻待修
+## 当前状态（2026-10-14）：连续物理移动、上下文整理与拾取等待修复，699项离线通过
+
+### 移动与效率最终交付（2026-10-14 09:49，Asia/Shanghai）
+
+- 日志总览及参考机制核对见docs/real-game-log-review-2026-10-14.md。
+  实例仍为e800942旧包，本轮未安装、启动游戏/模型或修改玩家配置/世界。
+  参考只读，宿主/协作者连接器未改，外部桥v1.0兼容。
+- 最终生产路线无teleportTo/setPos；逐刻原版travel与jumpFromGround，
+  精确站位、实际落点和终点站稳核验。无挖放的同层直线中间节点保持运动通过，
+  不逐格刹停；工作/转弯/跨层节点保守站稳。输入过期/取消/终态/重规划释放，
+  不清速度或冻结重力；原搜索/权限/材料/重规划预算保留。
+  世界minY支撑可查询，多节点跳过ACT_START，同格路线仍须实际站稳。
+- 历史软水位与完整请求硬窗口分开，足量旧段才提示/请求摘要/重新观测，
+  近期工具组完整保留，摘要必须有净节省，独立目标/数量和取消/失败保留。
+  gather精确走近后先collect，无实际拾取才一次等待重试；
+  原地已知延迟仍等待，原版触碰/归属/延迟与背包余量不绕过。
+- build/movement-context-delivery-build-20261014.log：34s成功，20任务全部执行。
+  最终XML核心246/根95/客户端358共699项，失败/错误/跳过全0，
+  比10/13新增18项：摘要经济性/实际loop6、精确搜索2、身体输入/运动9、拾取等待1。
+  最后补低空中加速度及斜跳、直路保留动量后重跑完整构建；
+  此前697/698项全量与移动专项日志仅为中间检查点。
+- 最新build/libs/mcbot-0.1.0.jar SHA256：
+  `c2b07c633207db98b27c957e641c0f57f4b885eae7a31c9f7ceb16572c14b886`。
+  原版Shapes碰撞实际运行，运动/世界/模型输入为受控夹具；
+  未运行原生ServerPlayer.travel/多人动画/真实模型，不能宣称现场移动或提速已验。
+  小范围补测已更新REAL-GAME-RETESTING；工具/技能懒加载、
+  自主探索/补给/目标持久化/跟随护卫仍未实现。
+- 文档同步AGENTS/README/DEVELOPMENT/HANDOFF/ROADMAP/TOOLS/ARCHITECTURE/PANEL/
+  性能评估及补测清单；下方旧检查点保留。tools/list-java.ps1未列Java进程。
+  源码提交/推送检查点以Git main为准，常规归档不改标签或发行资产。
+
+### 上下文整理净节省（2026-10-14 09:35，Asia/Shanghai）
+
+- 最新日志15次任务内整理提示，实际3次摘要前缀重置；09:10:51摘要13s，
+  09:11:06摘要17s，09:11:47摘要20s。第一轮摘要后普通请求24788B→26542B，
+  有真实摘要成功证据，也有小前缀整理反而膨胀与连续触发问题。
+- 软水位改为历史体量，扣除system/工具/临时观测固定输入，API真实用量仍为保守下限。
+  完整请求含固定输入的硬窗口/输出预留不变。只有可替换新旧段足够大才自动整理、
+  显示提示和二次观测；近期内最早完整User/Assistant边界切分，不优先留下整条长任务，
+  不拆工具组。现有摘要单独更新；替换必须节省至少32token或旧段20%（取大）。
+  不节省/空/带工具/超限/过期结果保留原历史，失败2次熔断与取消隔离保留。
+- 首次build新增回归有1项因同调用5次无进展护栏触发而失败；调整测试的查询参数
+  以隔离摘要行为，没有修改该护栏。随后build/context-economy-final-build-20261014.log
+  17s成功，3任务执行/17缓存；XML核心246/根95/客户端354共695项，
+  失败/错误/跳过全0。本卡新增6项，覆盖固定定义压力、不重复观测/提示、
+  单指令工具组切分、拒绝膨胀摘要及摘要独占旧段；真实模型时延仍待复测。
+
+### 连续物理移动（2026-10-14 09:27，Asia/Shanghai）
+
+- latest.log快照88673字节、末写09:13:02，及上一归档只读核对。
+  09:12:50确认后挖1格并在1110ms结束跨层路线，源码确实对跨层直接teleportTo，
+  同层也用小步传送；旧09:10多次nodes=1原地成功。没有mcbot运行异常证据。
+- PathTask已移除路线传送，每刻续订世界方向输入；CompanionPhysics只消费一次，
+  原版travel负责位置/碰撞，落地时原版jumpFromGround起跳，动画按实际位移更新。
+  计划内跳落持续转向，实际落点/高度/接近静止才认步；取消、终态、重规划清输入，
+  丢失续订、未加载或非活动身体不保留旧输入，被动重力继续独立运行。
+  卡住60刻或单步120刻后有界重规划/失败，原两次重规划、权限和资源锁保留。
+- ACT_START不再被当成待进入格，底层支撑查询允许世界minY；
+  起跳检查出发格上方头部空间。move_to增加exact布尔，默认原相邻一格范围兼容，
+  gather站位固定exact=true，精确模式不复用只到附近的旧缓存。
+- build/movement-build-20261014.log：43s成功，10任务执行/10缓存。
+  XML核心240（本卡缓存）/根95/客户端354，共689项，失败/错误/跳过全0；
+  新增搜索2项、物理输入/控制/原版Shapes碰撞6项。
+  受控加速/重力与原版碰撞形状验证，未运行真实ServerPlayer.travel或客户端画面。
+  本卡JAR哈希b9dff97648cfbfc341366cc8f34d7a65061468a8cb7caf0e1dd4aeb49c6b3289，
+  尚未安装或发布；接下来处理摘要触发/实际净节省，不把离线通过当原生移动已验。
+- 本地1.21.11官方映射javap确认LivingEntity.jumpFromGround为public，
+  calculateEntityAnimation(boolean)可用；Player.getSpeed读取MOVEMENT_SPEED属性，
+  travel仍走原版空气/流体分派。不启用完整doTick或自动playerTouch。
+
+以下2026-10-13各段保留当时检查点；当前产物与最终全量证据以本轮收尾节为准。
 
 维护者新日志确认P0早派发已生效，但workflow每批后仍等待模型查找/生成下一批。
 维护者要求修复挖掘直接入包，并继续学习参考机制处理执行粒度、长期目标及上下文。
@@ -3336,6 +3406,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 连续运动输入（10-14 javap/编译/受控动力与原版体素，未运行身体） | LivingEntity.jumpFromGround():void为public，使用原版跳跃属性并设置needsSync；不自动清onGround，后续move更新实际接触。calculateEntityAnimation(boolean):void为public，从实际位移推进行走动画。Player.getSpeed():float读取MOVEMENT_SPEED属性；LivingEntity.getFlyingSpeed在普通未骑乘分支为0.02。输入在消费时按yaw换算局部坐标，再调用travel；不是完整doTick，不以受控动力测试宣称原生速度/网络画面已验 |
 | 被动重力/落地（10-13 javap/编译/离线体素，未运行身体） | Player.travel(Vec3)公开，经LivingEntity.travelInAir/travelInFluid与Entity.move处理原版重力/碰撞。Entity.updateInWaterStateAndDoFluidPushing/applyEffectsFromBlocks为protected；doCheckFallDamage(double,double,double,boolean)公开final。Player.isClientAuthoritative恒true，Entity.move仅local-instance-authoritative自动checkFallDamage，因此玩家须额外结算一次实际位移。LevelReader.hasChunksAt(int,int,int,int)是水平块坐标范围，不检查Y，不生成区块；ServerPlayer.setKnownMovement(Vec3)与ServerChunkCache.move(ServerPlayer)公开。ServerLevel.tickNonPassenger在实体tick前设置旧位置并推进tickCount。本轮不调用完整doTick，不以编译/体素测试推定原生下落已验 |
 | 动作朝向/可见性（10-13 javap/编译/离线clip，未运行身体） | Entity.lookAt(EYES,Vec3)设置pitch/yaw/headYaw；ServerPlayer覆写另向自身连接发look包，不设置bodyYaw，因此同伴另调用setYBodyRot。ServerEntity根据yaw/headYaw向观察者同步。LivingEntity.updateSwingTime为protected，可直接复用推进/收尾swing；ServerPlayer.tick不执行它。Player.blockInteractionRange公开。BlockState.getShape(BlockGetter,BlockPos,CollisionContext)、VoxelShape.toAabbs、BlockGetter.clip(ClipContext)/traverseBlocks公开；OUTLINE/NONE可用。ServerPlayer.teleportTo(double,double,double)带Relative.ROTATION保留当前旋转。未启用完整doTick，不以编译/字节码推定原生画面已验 |
 | 身体生命观测（RG6，10-13 javap/编译，未运行身体） | ServerPlayer.hurtServer(ServerLevel,DamageSource,float):boolean可覆写；getHealth/getMaxHealth/getAbsorptionAmount、Entity.isInvulnerable/onGround及公开double fallDistance可读。DamageSource.typeHolder().unwrapKey()返回注册ResourceKey，ResourceKey.identifier()返回Identifier。字节码调用一次原版hurtServer、保留super.tick，无doTick/setHealth；不以此推定现场伤因或原版损伤已运行 |

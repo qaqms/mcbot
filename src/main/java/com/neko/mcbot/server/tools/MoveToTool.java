@@ -14,7 +14,7 @@ import java.util.concurrent.CompletableFuture;
  * move_to（M8 版）：DigAStar 寻路——会走、会跳、会落，也会挖穿/垫脚/搭桥，
  * 改动世界的路须经主人批准服务端具体清单，旧 may_alter_terrain 布尔不授予许可。
  * 被挡不再一律举白旗：绕得开就绕，绕不开要挖则先报清单征求确认。
- * 同层直路仍按 0.45 格/tick 滑步节奏，与 M4 行为视觉一致（回归不破）。
+ * 路线逐刻续订行走/跳跃输入，位置与碰撞由原版 travel 推进。
  */
 public final class MoveToTool implements ServerTool {
 
@@ -61,6 +61,10 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(
                     new Result(false, "DENIED:需要整数坐标 x/y/z。", null));
         }
+        if (args.has("exact") && (!args.get("exact").isJsonPrimitive()
+                || !args.get("exact").getAsJsonPrimitive().isBoolean())) {
+            return CompletableFuture.completedFuture(new Result(false, "DENIED:exact 须为布尔。", null));
+        }
         if (args.has("may_alter_terrain") && (!args.get("may_alter_terrain").isJsonPrimitive()
                 || !args.get("may_alter_terrain").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:may_alter_terrain 须为布尔。", null));
@@ -86,7 +90,8 @@ public final class MoveToTool implements ServerTool {
                     null));
         }
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
-        if (!sched.submit(c, new PathTask(level, to, permissions, context, scope, sched), f, capTicks(args))) {
+        if (!sched.submit(c, new PathTask(level, to, permissions, context, scope, sched,
+                args.has("exact") && args.get("exact").getAsBoolean()), f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }

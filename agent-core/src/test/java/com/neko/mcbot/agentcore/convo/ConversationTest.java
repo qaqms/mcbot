@@ -37,14 +37,13 @@ class ConversationTest {
     }
 
     @Test
-    void cutNeverLandsOnToolAndPrefersUserBoundary() {
-        // [U, A, T, A(带call), T, U, A, T] 近段预算只够后段时，切点必须落在 U（优先）
+    void cutNeverLandsOnToolAndKeepsTheEarliestCompleteRecentRound() {
         List<Msg> hist = List.of(
                 user(2000), asst(), tool("status", 200),
                 asst(), tool("scan", 200), user(200), asst(), tool("status", 5));
         int cut = Conversation.findCutIndex(hist, 1500);
-        assertTrue(hist.get(cut) instanceof Msg.User, "切点必须是 User，实际 index=" + cut);
-        assertEquals(5, cut);
+        assertTrue(hist.get(cut) instanceof Msg.Assistant, "近期工具轮次应完整保留");
+        assertEquals(3, cut);
     }
 
     @Test
@@ -88,8 +87,9 @@ class ConversationTest {
     @Test
     void realPromptTokensFromUsageDriveTheGate() {
         var c = new Conversation(1000);
+        c.configure(1000, 100, true);
         for (int i = 0; i < 9; i++) {
-            c.add(user(50)); // 估算很小（9*~21 token）
+            c.add(user(400)); // Local history fits; reported history pressure still matters.
         }
         assertFalse(c.needsCompaction(), "估算未超水位");
         c.noteUsage(new AssistantTurn("t", List.of(), 5000, 10, 4000, "stop"));
@@ -135,8 +135,8 @@ class ConversationTest {
         conv.compact(ok).join();
         // R0 回归钉：真数若不随压缩作废，max(旧 9000, 新估算 1500) 会下一步又真 → 白打端点的连发压缩
         assertFalse(conv.needsCompaction(), "压缩成功后闸门必须立即熄火");
-        // 下一次 API 真数回来照常驱动
+        // Fresh usage cannot justify re-summarizing a tiny prefix.
         conv.noteUsage(new AssistantTurn("t", List.of(), 9000, 10, 0, "stop"));
-        assertTrue(conv.needsCompaction());
+        assertFalse(conv.needsCompaction());
     }
 }

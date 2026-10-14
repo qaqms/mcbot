@@ -12,10 +12,10 @@ import java.util.function.Consumer;
 /**
  * 对话窗口：全量存储 + 出站视图 + 摘要前缀。上下文经济学三件套：
  *
- * 1) 触发用真数：闸门比较 max(API 回报的 prompt_tokens, 本地 CJK 感知估算)——
- *    估算只当兜底（不少中转站不回 usage 帧）。
+ * 1) 软水位只比较可整理的历史；完整请求的硬窗口另由 loop 检查。
+ *    API 用量扣除固定输入后作为历史估算下限，避免工具定义反复触发摘要。
  * 2) 压缩切分守铁律：新摘要只替换"旧段"；近段按 token 预算原文保留，
- *    切点只允许落在 User（优先）或 Assistant 边界——**绝不从 Tool 消息下刀**，
+ *    切点只允许落在 User 或 Assistant 边界——**绝不从 Tool 消息下刀**，
  *    否则孤儿工具回执会让下一请求直接 400。预算内找不到合法切点就整段总结。
  * 3) 过期回执折叠（R2-B 后：检查点 + 冻结决定）：折叠只发生在 foldCheckpoint 之前
  *    的"冻结区"，且每条消息折/不折在一次步边界算定后永不重算——同历史多次
@@ -48,6 +48,8 @@ public final class Conversation {
     private int compactFailures;
     private long revision;
     private int lastRequestEstimate;
+    private int lastRequestFixedTokens;
+    private int lastRequestHistoryTokens;
 
     /** 折叠检查点：index < cp 的消息进入冻结区；同一条指令内单调不回退，
      *  只在两类合法 prefix reset 事件（压缩/指令边界归零）时归零。 */
@@ -81,6 +83,9 @@ public final class Conversation {
         revision++;
         msgs.clear();
         realPromptTokens = 0;
+        lastRequestEstimate = 0;
+        lastRequestFixedTokens = 0;
+        lastRequestHistoryTokens = 0;
         compactFailures = 0;
         resetFoldState();
         firePrefixReset("context-clear");
@@ -186,32 +191,39 @@ public final class Conversation {
      * 本地估算作为下限哨兵。压缩失败熔断期内一律 false。
      */
     public boolean needsCompaction() {
-        if (!autoCompact || compactFailures >= COMPACT_FAILURES_MAX) {
-            return false;
-        }
-        return Math.max(realPromptTokens, approxTokens()) > compactAtTokens && msgs.size() > 8;
+        int local = outboundTokens();
+        long measured = realPromptTokens > 0 ? (long) realPromptTokens - lastRequestFixedTokens
+                + Math.max(0, local - lastRequestHistoryTokens) : 0;
+        return canAutoCompact() && Math.max(local, measured) > compactAtTokens && hasUsefulCompaction();
     }
 
     public boolean canAutoCompact() { return autoCompact && compactFailures < COMPACT_FAILURES_MAX; }
-    public boolean compactionDue(int requestTokens) {
-        return canAutoCompact() && requestTokens > compactAtTokens && msgs.size() > 8;
+    public boolean compactionDue(int requestTokens, String system,
+            List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
+        int localHistory = outboundTokens();
+        int fixed = Math.max(0, localRequestTokens(system, tools, history) - localHistory);
+        return canAutoCompact() && Math.max(localHistory, (long) requestTokens - fixed) > compactAtTokens
+                && hasUsefulCompaction();
     }
 
-    public int requestTokens(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
+    private int localRequestTokens(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
         long estimate = estimateTokens(system) + 32L;
         for (var spec : tools) estimate += estimateTokens(spec.name()) + estimateTokens(spec.description())
                 + estimateTokens(spec.paramsJsonSchema()) + 32L;
         for (Msg message : history) estimate += estimateTokens(textOf(message));
-        int local = (int) Math.min(Integer.MAX_VALUE, estimate);
+        return (int) Math.min(Integer.MAX_VALUE, estimate);
+    }
+
+    public int requestTokens(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
+        int local = localRequestTokens(system, tools, history);
         long measured = realPromptTokens > 0 ? realPromptTokens + Math.max(0L, (long) local - lastRequestEstimate) : 0;
         return (int) Math.min(Integer.MAX_VALUE, Math.max(local, measured));
     }
 
     public void noteRequest(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
-        int real = realPromptTokens;
-        realPromptTokens = 0;
-        lastRequestEstimate = requestTokens(system, tools, history);
-        realPromptTokens = real;
+        lastRequestEstimate = localRequestTokens(system, tools, history);
+        lastRequestHistoryTokens = outboundTokens();
+        lastRequestFixedTokens = Math.max(0, lastRequestEstimate - lastRequestHistoryTokens);
     }
 
     /** 每条新指令的边界：恢复压缩尝试资格（熔断只惩罚同一条链内的连续失败）。 */
@@ -233,6 +245,8 @@ public final class Conversation {
         compactFailures = 0;
         realPromptTokens = 0;
         lastRequestEstimate = 0;
+        lastRequestFixedTokens = 0;
+        lastRequestHistoryTokens = 0;
         // 折叠坐标同步作废：msgs 被重写（摘要插 index 0），旧 index 的冻结决定已无指代对象；
         // 这也是两类合法 prefix reset 之一。
         resetFoldState();
@@ -256,20 +270,25 @@ public final class Conversation {
     }
 
     public int approxTokens() {
+        return tokensOf(msgs);
+    }
+
+    private int outboundTokens() { return tokensOf(outboundHistory()); }
+
+    private static int tokensOf(List<Msg> history) {
         long sum = 0;
-        for (Msg m : msgs) {
+        for (Msg m : history) {
             sum += estimateTokens(textOf(m));
         }
         return (int) Math.min(Integer.MAX_VALUE, sum);
     }
 
     /**
-     * 压缩切分：从最新往回攒到 KEEP_BUDGET_TOKENS，取预算内**最早**的合法切点
-     * （User 优先，Assistant 次选；Tool 永不可切）。整段都在预算内则不压缩。
+     * 压缩切分：近期预算内最早的完整轮次边界。摘要前缀不优先于近期工具轮次。
+     * 整段都在预算内则不整理；巨型工具组整体进入旧段，不能拆出孤儿回执。
      */
     public static int findCutIndex(List<Msg> history, int keepBudgetTokens) {
-        int firstUser = -1;
-        int firstAssistant = -1;
+        int firstBoundary = history.size();
         long acc = 0;
         for (int i = history.size() - 1; i >= 0; i--) {
             acc += estimateTokens(textOf(history.get(i)));
@@ -277,19 +296,23 @@ public final class Conversation {
                 break; // 预算用尽：此位置之前的都归旧段
             }
             Msg m = history.get(i);
-            if (m instanceof Msg.User) {
-                firstUser = i;
-            } else if (m instanceof Msg.Assistant) {
-                firstAssistant = i;
-            }
+            if (m instanceof Msg.User || m instanceof Msg.Assistant) firstBoundary = i;
         }
-        if (firstUser >= 0) {
-            return firstUser;
-        }
-        if (firstAssistant >= 0) {
-            return firstAssistant;
-        }
-        return history.size(); // 预算内没有合法切点（极端：一条消息就超预算）
+        return acc <= keepBudgetTokens ? 0 : firstBoundary;
+    }
+
+    /** Do not spend a model round trip on an empty or tiny replaceable prefix. */
+    public boolean hasUsefulCompaction() {
+        if (msgs.size() <= 8) return false;
+        int cut = findCutIndex(msgs, keepBudgetTokens);
+        if (cut <= 0) return false;
+        var old = outboundHistory().subList(0, cut);
+        int fresh = tokensOf(old.stream().filter(m -> !isSummary(m)).toList());
+        return fresh >= Math.max(128, Math.min(1024, compactAtTokens / 4));
+    }
+
+    private static boolean isSummary(Msg m) {
+        return m instanceof Msg.User u && u.text().startsWith(SUMMARY_PREFIX);
     }
 
     /**
@@ -306,10 +329,16 @@ public final class Conversation {
         }
         long expectedRevision = revision;
         List<Msg> snapshot = List.copyOf(msgs);
+        int replacedTokens = tokensOf(outboundHistory().subList(0, cut));
+        int minimumSaving = Math.max(32, replacedTokens / 5);
+        int summaryLimit = Math.min(2048, Math.max(64, compactAtTokens / 2));
+        if (replacedTokens <= minimumSaving + estimateTokens(SUMMARY_PREFIX)) {
+            return CompletableFuture.completedFuture(null);
+        }
         StringBuilder old = new StringBuilder();
         String previous = summary();
         for (Msg m : snapshot.subList(0, cut)) {
-            if (m instanceof Msg.User u && u.text().startsWith(SUMMARY_PREFIX)) continue;
+            if (isSummary(m)) continue;
             old.append(m.getClass().getSimpleName()).append(": ")
                     .append(textOf(m)).append('\n');
         }
@@ -317,13 +346,15 @@ public final class Conversation {
                 new Msg.User("更新一份简洁的工作记录，保留任务约束、实际数量、关键位置、失败原因及下一步。"
                         + "下方既有记录是累积事实，请根据新事件更新，保留仍有效的事实；不要把旧记录再次缩写。"
                         + "未核实的成果不能写成完成，不包含工具调用；只输出工作记录，控制在"
-                        + Math.min(2048, Math.max(64, compactAtTokens / 2)) + "个token内。"
+                        + Math.min(summaryLimit, replacedTokens - minimumSaving - estimateTokens(SUMMARY_PREFIX))
+                        + "个token内。"
                         + "\n既有记录：\n" + previous + "\n新事件：\n" + old));
         return engine.chat("你是对话压缩器。", prompt, List.of())
                 .thenAccept(turn -> {
                     if (revision != expectedRevision) return;
                     if (turn == null || turn.hasToolCalls() || turn.text() == null || turn.text().isBlank()
-                            || estimateTokens(turn.text()) > Math.min(2048, Math.max(64, compactAtTokens / 2))) {
+                            || estimateTokens(turn.text()) > summaryLimit
+                            || estimateTokens(SUMMARY_PREFIX + turn.text()) > replacedTokens - minimumSaving) {
                         compactFailures++;
                         return;
                     }

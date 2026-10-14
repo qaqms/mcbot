@@ -46,6 +46,8 @@ class BoundedGatherTest {
         int yieldAfter;
         boolean needConfirm;
         boolean full;
+        boolean pickupStillDelayed;
+        int pickupAttempts;
         CompletableFuture<ToolOutcome> mining;
         final BoundedGather gather;
         Fixture(int requested, int baseline) {
@@ -90,11 +92,18 @@ class BoundedGatherTest {
                     data.addProperty("remaining_count", 1);
                 }
                 case "move_to" -> {
+                    assertTrue(JsonParser.parseString(json).getAsJsonObject().get("exact").getAsBoolean(),
+                            "a selected work/pickup stance must not finish in an adjacent cell");
                     moved++;
                     if (needConfirm) return CompletableFuture.completedFuture(new ToolOutcome(false, "NEED_CONFIRM:route", data));
                 }
                 case "collect" -> {
                     if (full) return CompletableFuture.completedFuture(new ToolOutcome(false, "INVENTORY_FULL:drop remains", data));
+                    pickupAttempts++;
+                    if (pickupStillDelayed && pickupAttempts == 1) {
+                        data.addProperty("collected_count", 0);
+                        return CompletableFuture.completedFuture(new ToolOutcome(true, "still delayed", data));
+                    }
                     int pickup = ground ? 1 : 0;
                     count += pickup;
                     ground = false;
@@ -126,9 +135,21 @@ class BoundedGatherTest {
         assertEquals(64, f.count);
         assertEquals(64, f.dug);
         assertEquals(64, f.moved, "must walk to the real drops before pickup");
+        assertFalse(f.calls.contains("wait"), "successful pickup after walking needs no extra fixed delay");
         assertTrue(result.data().get("goal_satisfied").getAsBoolean());
         assertEquals(64, result.data().get("actual_progress").getAsInt());
         assertEquals(0, f.cancelled);
+    }
+
+    @Test void aRemainingPickupDelayGetsOneBoundedWaitAndRetainsTheGroundItemUntilPickup() {
+        var f = new Fixture(1, 0);
+        f.pickupStillDelayed = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(2, f.pickupAttempts);
+        assertEquals(1, f.calls.stream().filter("wait"::equals).count());
+        assertEquals(1, f.count);
+        assertFalse(f.ground);
     }
 
     @Test void additionalQuantityUsesTaskStartBaselineRatherThanExistingInventory() {

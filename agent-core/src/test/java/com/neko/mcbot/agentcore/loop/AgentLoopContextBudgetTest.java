@@ -10,6 +10,37 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentLoopContextBudgetTest {
+    @Test void definitionPressureDoesNotEmitNoOpNoticesOrDuplicateObservations() {
+        int[] observations = {0};
+        var notices = new ArrayList<String>();
+        var responses = new ArrayList<CompletableFuture<AssistantTurn>>();
+        var loop = new AgentLoop((s, h, t) -> {
+            assertFalse(t.isEmpty(), "short history must never request a summary");
+            var response = new CompletableFuture<AssistantTurn>();
+            responses.add(response);
+            return response;
+        }, List.of(ToolSpec.of("status", "界".repeat(7000), "{}")), new ToolExecutor() {
+            @Override public CompletableFuture<ToolOutcome> execute(String n, String a) {
+                return CompletableFuture.completedFuture(new ToolOutcome(true, "fact"));
+            }
+            @Override public CompletableFuture<ToolOutcome> observe(long taskId) {
+                observations[0]++;
+                return CompletableFuture.completedFuture(new ToolOutcome(true, "current body"));
+            }
+        }, AgentLoop.Config.defaults(), new AgentLoop.Listener() {
+            @Override public void onNotice(String text) { notices.add(text); }
+        }, () -> "system", 6000);
+        for (int i = 0; i < 12; i++) loop.conversation().add(new Msg.User("old short event"));
+        loop.submit(1, "work");
+        for (int i = 0; i < 5; i++) responses.getLast().complete(new AssistantTurn("", List.of(
+                new ToolCall("c" + i, "status", "{\"details\":" + (i % 2 == 0) + "}")),
+                0, 0, -1, "tool_calls"));
+        assertEquals(6, responses.size());
+        assertEquals(6, observations[0]);
+        assertTrue(notices.isEmpty());
+        loop.close();
+    }
+
     @Test void taskCompactsAtASettledToolBoundaryAndThenResumesWithoutEndingTheTask() {
         var definitions = new ArrayList<List<ToolSpec>>();
         var requests = new ArrayList<CompletableFuture<AssistantTurn>>();
