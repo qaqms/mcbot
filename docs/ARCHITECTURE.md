@@ -8,7 +8,9 @@
 活动只读任务及身份/维度失配时禁用；非活动、骑乘/睡眠/旁观和未知邻域跳过。
 gather现在只走近/有界等待并重新核对实际背包，不调用collect。
 HandSnapshot容许原活堆栈的合法同组件拾取增量，避免误停挖掘/攻击。
-下文未更新的“无自动拾取”“挖后collect”等为旧卡背景；最新范围以本段与STATUS为准。
+gather的scope=task默认保留整项数量目标，scope=subtask只结算本次材料条件，
+从第一份新鲜完整背包建立基线，不覆盖AgentLoop独立保存的最终目标。
+最新范围与离线/实机边界以STATUS为准。
 
 ## 1. 三进程拓扑
 
@@ -54,7 +56,7 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
                      StreamingTurnReader(聚合+闭合判定)/ToolArgsScanner(配平+required 齐=可派发)
   convo/             Conversation：软水位压缩（"[对话前情提要]"前缀，保尾部）
   loop/              AgentLoop 状态机（含 Ledger 保序落账 + PARK）/ToolExecutor 契约
-                     ItemGoal(任务开始背包基线、当前真实数量与结束校验)
+                     ItemGoal(任务/材料子任务作用域、各自背包基线、当前数量与结束校验)
                      PendingJobs(两段式等待: seq→终局 / 受理后 jobId→事件 + 超时口径)
   prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
@@ -90,7 +92,8 @@ src/client/          客户端
 
 身体转向统一由CompanionPlayer.facePoint复用原版EYES lookAt并同步bodyYaw，
 移动、挖掘、放置、攻击使用同一入口。身体tick补原版updateSwingTime，
-不启用完整Player.doTick或被动自动拾取；显式gather按任务权限组合挖掘/触碰拾取。
+不启用完整Player.doTick；BodyPickup在物理步进后自动触碰拾取，活动只读时抑制。
+显式gather按任务权限组合移动/挖掘，拾取由身体自然执行。
 BlockMining每拍通过BlockAim检查可见轮廓与原版blockInteractionRange，
 转向后按实际getLookAngle再次确认第一命中为目标，才挥手、推进进度或移除。
 沿射线未加载/越界先拒绝，遮挡/空气/目标与主手变化停止并清裂纹。
@@ -228,8 +231,10 @@ usage加新增估算和完整本地估算取保守值，摘要输入也限预算
 长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。本地工具为
 ask_owner/workflow/gather/set_goal/report_blocked，后两者由loop本地拦截。
 
-BoundedGather使用任务开始背包基线：状态、匹配掉落、站位/移动/等待/collect，
-选中工作/拾取站位使用exact=true；走近后先collect，无入包才有界等待重试。
+BoundedGather默认scope=task使用任务开始背包基线并登记固定最终条件；
+scope=subtask从本次第一份完整状态建立局部基线，不登记/修改最终条件。
+状态、匹配掉落、站位/移动/有界等待由本地循环推进，不调用collect；
+选中工作/拾取站位使用exact=true，走近后按新鲜背包核验自动拾取。
 没有待拾取候选才查来源方块、工作站位、move_to、break_block，再刷新状态。
 子调用复用terminalOnly票与原权限/资源锁，每步等真终态；取消/超时清子票且禁止迟到续跑。
 目标固定item/count/mode，按实际背包净新增或总量完成，不累计挖掘格或掉落。
@@ -279,7 +284,9 @@ McbotClient 的 JOIN/DISCONNECT/S2C 交由 ClientSession 持有当前 runner：
 ### 5.2 长任务能力边界（2026-10-13实现）
 
 LT1物品目标校验/任务内请求预算与有界LT2采集已接线，40模型轮数和原权限护栏保留。
-数量条件需模型set_goal或gather登记，原始指令与目标事实独立保留，不能降低既有条件。
+最终数量条件需模型set_goal或默认gather登记，原始指令与目标事实独立保留，不能降低既有条件。
+材料gather用scope=subtask，可先后处理不同物品，成功不代表整项完成；
+additional按本次新鲜基线计，total按真实总量计，结束校验仍只认最终物品。
 没有登记条件的普通文字结束仍按COMPLETED；没有任意自然语言/建筑/交付通用验证器。
 gather减少逐格模型安排，在本段起点附近按真实回执选下一步；固定workflow保持12步。
 探索/补给/目标跨退出恢复、跟随护卫和技能按需读取尚未实现，技能正文仍全量注入system。
@@ -519,7 +526,7 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 | AgentLoop | 固定40步/指令、nudge@3、abort@5（同调用**且同结果**才累计）；压缩阈值默认6000、近段预算默认1500 token（可配置，CJK估算兜底）；熔断2次 |
 | 面板偏好/档案(R3) | 窗口默认64000（4096..2000000）、阈值≥2048且<窗口、近期≥256且<阈值；auto_compact/fold_tools/show_hud=true、dark=false；会话内20任务/2000记录，不跨退出/重启 |
 | 流程(C6) | 本地1-12步、默认180/最多300秒；请求量合计≤128（不等于材料/产量）；明确挖放≤12；参数≤16384B；累计反馈12000B停后续、结果全文展示预算24000B；任务空搜索3次停 |
-| 目标/采集(LT1/LT2) | item/count/mode固定；count1-4096，36槽任务开始基线；结束前三次无进展回复FAILED；gather起点附近r默认8/最大16，默认600/最大900秒，默认128/最大256挖，子调用≤1024，参数≤4096B/子反馈≤24000B，候选站位≤6；三次操作无入包且无可拾取候选停 |
+| 目标/采集(LT1/LT2) | 最终item/count/mode固定；count1-4096，36槽完整基线；gather默认task用整任务基线，subtask用本次第一份状态且不改最终条件；结束前三次无进展回复FAILED；gather起点附近r默认8/最大16，默认600/最大900秒，默认128/最大256挖，子调用≤1024，参数≤4096B/子反馈≤24000B，候选站位≤6；三次操作无入包且无可拾取候选停 |
 | 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |
 | 信封 | 上限按 **UTF-8 字节**：32768（含前缀）/ 体 32765；超限入站丢弃、出站换瘦身回执 |

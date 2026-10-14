@@ -13,7 +13,9 @@ public final class ClientToolDefs {
     public static final List<ToolSpec> SPECS = List.of(
             new ToolSpec("gather", "优先用于连续采集数量型物品：一轮调用本地扫描、选工作站位、移动、挖掘、走近拾取并核对背包，"
                     + "无需模型逐格列坐标/每12格重新规划。item是期望入包物品，targets是来源方块ID/#标签（泥土含grass_block/dirt），"
-                    + "count和mode沿用主人原目标，additional是任务开始背包净新增、total是总量，自动登记不可降低的完成条件。"
+                    + "scope默认task，沿用主人原目标/count/mode，自动登记不可降低的完成条件。"
+                    + "为制作/建造等准备材料须scope=subtask，不改最终目标；additional按本次采集开始背包净新增，total是总量。"
+                    + "短长任务都可复用同一采集能力；子任务成功不表示整项完成。"
                     + "应先据最新背包装备合适工具；r默认8、最大16，限定本段起点附近目标，不挖勘探洞。"
                     + "本地复用真实终态/权限，路线需确认、缺工具/空间、无进展或未知状态即交回模型决策。"
                     + "timeout_seconds默认600、最大900，max_blocks默认128、最大256，子调用最多1024。"
@@ -22,6 +24,7 @@ public final class ClientToolDefs {
                             + "\"targets\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"string\",\"maxLength\":128}},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4096},"
                             + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]},"
+                            + "\"scope\":{\"type\":\"string\",\"enum\":[\"task\",\"subtask\"]},"
                             + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
                             + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"

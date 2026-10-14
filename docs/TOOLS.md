@@ -40,7 +40,8 @@ additional默认按任务开始完整36槽背包的净新增计算，total按当
 {"item":"dirt","targets":["dirt","grass_block"],"count":64,"mode":"additional","r":8}
 ```
 
-以上为gather参数。gather自动登记同一目标，本地优先拾取匹配掉落；否则查来源方块、
+以上为gather参数。gather默认scope=task，自动登记同一最终目标，additional沿用任务开始基线；
+本地优先走近匹配掉落；否则查来源方块、
 选可工作站位、移动后挖掘、走近拾取、更新实际背包，直到满足或受阻。
 应先用本轮最新完整装备事实选好工具；本地循环不自动合成镐或处理补给。
 targets为1-8个方块ID/#标签，不是物品ID；item为期望入包的物品，count为1-4096。
@@ -50,13 +51,27 @@ max_blocks默认128、最大256；子调用最多1024，参数最多4096 UTF-8�
 掉落附近站位仅为已加载/无流体/完整地板/身体无碰撞候选，最多6个，
 路径和实际触碰须子工具验证；复杂半砖站位暂不支持。
 选定站位使用move_to的exact=true，必须在指定脚格实际站稳；
-走近后先尝试collect，无实际拾取时最多等一秒重试，不跳过原版拾取延迟。
+走近后核对自动拾取，无实际入包且候选可触碰时最多等一秒再观测，不跳过原版拾取延迟。
 每个子动作沿用任务身份、只读限制、权限、资源锁和真正终态；job_ack不能推进。
 路线NEED_CONFIRM/PARTIAL、缺工具/空间、预算或未知事实返回模型判断，不自行批准开路。
 取消/超时清子票，迟到结果不续跑，保留已完成与在途未知。
 data给goal_satisfied、mined_blocks、actual_progress、primitive_calls、
 skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包核对。
 当前没有自行探索/勘探洞、补给、危险响应或跟随护卫，不保证自然世界找到64颗钻石。
+
+多阶段任务先用set_goal登记最终物品，再复用同一个gather采集材料：
+
+```json
+{"item":"oak_log","targets":["oak_log"],"count":4,"scope":"subtask"}
+```
+
+scope=subtask只建立局部材料条件，不登记/覆盖/降低最终目标。
+additional从本次gather的第一份新鲜完整36槽状态起算；total表示当前总量足够，
+因此已有足量材料时宜用total，避免重复采集。不同材料可先后调用，
+配方、工具和后续阶段仍据实际结果选择，没有成品专用流程。
+子任务成功不等于主人任务完成，最终结束仍重新核验set_goal；
+取消/超时发生在第一份状态前时明确无局部基线，不能编造进度。
+scope只接受task/subtask，省略兼容旧行为；重复task段不重置任务开始基线。
 
 ## 2. 在册工具（15 服务端 + 5 本地，真实行为仍待验）
 
@@ -83,7 +98,7 @@ skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
 | `workflow` | `steps,timeout_seconds?` | **本地** | 明确近身清单，1-12步/默认180最多300秒/请求量合计≤128；逐步等终态，失败/空搜索/缺条件/需确认即停 |
-| `gather` | `item,targets,count,mode?,r?,timeout_seconds?,max_blocks?` | **本地** | 数量型有界连续采集；本地扫描、站位、移动、挖掘、走近拾取并核对背包，每个子动作仍走原权限/真实终态 |
+| `gather` | `item,targets,count,mode?,scope?,r?,timeout_seconds?,max_blocks?` | **本地** | 共用数量型采集；scope默认task登记最终目标，subtask从本次新鲜基线结算材料且不改最终目标；子动作仍走原权限/真实终态 |
 | `set_goal` | `item,count,mode?` | **本地** | 固定本任务物品完成条件，additional净新增或total总量；结束前重新观测背包，未满足不发完成done |
 | `report_blocked` | `reason` | **本地** | 1-512字符实际障碍，以FAILED结束并保留成果/目标事实；不能把受阻说成完成 |
 

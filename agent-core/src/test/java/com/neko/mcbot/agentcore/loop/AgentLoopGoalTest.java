@@ -32,8 +32,10 @@ class AgentLoopGoalTest {
         final List<CompletableFuture<AssistantTurn>> requests = new ArrayList<>();
         final List<List<Msg>> histories = new ArrayList<>();
         final List<AgentLoop.TaskStatus> statuses = new ArrayList<>();
+        final List<String> executed = new ArrayList<>();
         final AgentLoop loop = new AgentLoop(this,
-                List.of(ToolSpec.of("set_goal", "", "{}"), ToolSpec.of("report_blocked", "", "{}")),
+                List.of(ToolSpec.of("set_goal", "", "{}"), ToolSpec.of("report_blocked", "", "{}"),
+                        ToolSpec.of("gather", "", "{}")),
                 this, AgentLoop.Config.defaults(), new AgentLoop.Listener() {
                     @Override public void onTaskFinished(long id, AgentLoop.TaskStatus status, String text) {
                         statuses.add(status);
@@ -49,7 +51,12 @@ class AgentLoopGoalTest {
             return CompletableFuture.completedFuture(new ToolOutcome(true, "fresh", state(count)));
         }
         @Override public CompletableFuture<ToolOutcome> execute(String name, String args) {
+            executed.add(name + ":" + args);
             return CompletableFuture.completedFuture(new ToolOutcome(true, "world receipt"));
+        }
+        void tool(String id, String name, String args) {
+            requests.getLast().complete(new AssistantTurn("", List.of(
+                    new ToolCall(id, name, args)), 0, 0, -1, "tool_calls"));
         }
         void goal() {
             requests.getLast().complete(new AssistantTurn("", List.of(
@@ -126,5 +133,62 @@ class AgentLoopGoalTest {
         var duplicate = state(5);
         duplicate.getAsJsonObject("inventory").getAsJsonArray("slots").get(35).getAsJsonObject().addProperty("slot", 0);
         assertThrows(IllegalArgumentException.class, () -> ItemGoal.count(duplicate, "minecraft:diamond"));
+    }
+
+    @Test void differentMaterialSubtasksReuseGatherWithoutReplacingTheFinalItemGoal() {
+        var f = new Fixture();
+        f.loop.submit(10, "collect final diamonds after preparing materials");
+        f.goal();
+        for (String item : List.of("oak_log", "cobblestone", "raw_iron")) {
+            f.tool(item, "gather", "{\"item\":\"" + item
+                    + "\",\"targets\":[\"" + item + "\"],\"count\":4,\"scope\":\"subtask\"}");
+            var receipt = (Msg.Tool) f.loop.conversation().history().getLast();
+            assertTrue(receipt.ok(), receipt.content());
+        }
+        assertEquals(3, f.executed.size());
+        f.reply();
+        assertTrue(f.statuses.isEmpty());
+        assertTrue(f.histories.getLast().stream().anyMatch(m -> m instanceof Msg.Nudge n
+                && n.text().contains("物品目标=minecraft:diamond") && n.text().contains("目标=3")));
+        f.count = 8;
+        f.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.COMPLETED), f.statuses);
+        f.loop.close();
+    }
+
+    @Test void aSubtaskDoesNotUnlockReplacementOrReductionOfTheFinalGoal() {
+        var f = new Fixture();
+        f.loop.submit(11, "collect diamonds");
+        f.goal();
+        f.tool("wood", "gather", "{\"item\":\"oak_log\",\"targets\":[\"oak_log\"],\"count\":2,\"scope\":\"subtask\"}");
+        f.tool("replace", "set_goal", "{\"item\":\"oak_log\",\"count\":1}");
+        assertFalse(((Msg.Tool) f.loop.conversation().history().getLast()).ok());
+        f.tool("lower", "gather", "{\"item\":\"diamond\",\"targets\":[\"diamond_ore\"],\"count\":1}");
+        assertFalse(((Msg.Tool) f.loop.conversation().history().getLast()).ok());
+        assertEquals(1, f.executed.size());
+        f.loop.close();
+    }
+
+    @Test void defaultGatherStillRegistersAndVerifiesAnIndependentCollectionGoal() {
+        var f = new Fixture();
+        f.loop.submit(12, "collect 3 diamonds");
+        f.tool("collect", "gather", "{\"item\":\"diamond\",\"targets\":[\"diamond_ore\"],\"count\":3}");
+        assertEquals(1, f.executed.size());
+        f.reply();
+        assertTrue(f.statuses.isEmpty());
+        f.count = 8;
+        f.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.COMPLETED), f.statuses);
+    }
+
+    @Test void malformedScopeCannotBypassGoalRegistrationAndDispatch() {
+        var f = new Fixture();
+        f.loop.submit(13, "collect diamonds");
+        for (String scope : List.of("\"other\"", "null", "1", "true", "[]", "{}")) {
+            f.tool("scope" + scope, "gather", "{\"item\":\"diamond\",\"targets\":[\"diamond_ore\"],\"count\":3,\"scope\":" + scope + "}");
+            assertFalse(((Msg.Tool) f.loop.conversation().history().getLast()).ok());
+        }
+        assertTrue(f.executed.isEmpty());
+        f.loop.close();
     }
 }

@@ -16,13 +16,14 @@ import java.util.function.LongSupplier;
 
 /** Domain-specific continuation using fresh receipts. Each primitive retains the normal server gate. */
 final class BoundedGather {
-    record Plan(ItemGoal.Target goal, List<String> targets, int radius, int seconds, int maxBlocks) { }
+    record Plan(ItemGoal.Target goal, List<String> targets, int radius, int seconds, int maxBlocks,
+                ItemGoal.Scope scope) { }
 
     static Plan parse(String json) {
         if (json == null || json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 4096)
             throw new IllegalArgumentException();
         var args = JsonParser.parseString(json).getAsJsonObject();
-        if (!Set.of("item", "count", "mode", "targets", "r", "timeout_seconds", "max_blocks")
+        if (!Set.of("item", "count", "mode", "targets", "r", "timeout_seconds", "max_blocks", "scope")
                 .containsAll(args.keySet())) throw new IllegalArgumentException();
         var goal = new JsonObject();
         for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
@@ -38,7 +39,8 @@ final class BoundedGather {
             names.add(value.getAsString());
         }
         return new Plan(target, List.copyOf(names), integer(args, "r", 8, 1, 16),
-                integer(args, "timeout_seconds", 600, 1, 900), integer(args, "max_blocks", 128, 1, 256));
+                integer(args, "timeout_seconds", 600, 1, 900), integer(args, "max_blocks", 128, 1, 256),
+                ItemGoal.Scope.parse(args));
     }
 
     private static int integer(JsonObject args, String key, int fallback, int min, int max) {
@@ -51,7 +53,7 @@ final class BoundedGather {
     }
 
     private final Plan plan;
-    private final ItemGoal goal;
+    private ItemGoal goal;
     private final LongSupplier clock;
     private final BiFunction<String, String, CompletableFuture<ToolOutcome>> remote;
     private final Consumer<Runnable> dispatch;
@@ -77,7 +79,8 @@ final class BoundedGather {
                   BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
                   Consumer<Runnable> dispatch, Runnable cancelChild, Consumer<String> progress) {
         this.plan = plan;
-        goal = new ItemGoal(plan.goal(), baseline);
+        // Material subtasks count from their own fresh start, rather than the owner's directive start.
+        if (plan.scope() == ItemGoal.Scope.TASK) goal = new ItemGoal(plan.goal(), baseline);
         this.clock = clock;
         this.remote = remote;
         this.dispatch = dispatch;
@@ -126,6 +129,7 @@ final class BoundedGather {
         call("status", args, receipt -> {
             if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
             JsonObject state = receipt.data();
+            if (goal == null) goal = new ItemGoal(plan.goal(), state, plan.scope());
             goal.observe(state);
             double x = finite(state, "x"), y = finite(state, "y"), z = finite(state, "z");
             String nowDimension = state.get("dimension").getAsString();
@@ -306,14 +310,17 @@ final class BoundedGather {
     private void finish(boolean ok, String reason) {
         if (done()) return;
         var data = new JsonObject();
-        data.addProperty("goal_satisfied", ok && goal.satisfied());
+        data.addProperty("goal_satisfied", ok && goal != null && goal.satisfied());
+        data.addProperty("scope", plan.scope() == ItemGoal.Scope.TASK ? "task" : "subtask");
         data.addProperty("mined_blocks", dug);
-        data.addProperty("actual_progress", goal.progress());
+        data.addProperty("actual_progress", goal == null ? 0 : goal.progress());
         data.addProperty("primitive_calls", calls);
         data.addProperty("skipped_blocks", skippedBlocks.size());
         data.addProperty("skipped_items", skippedItems.size());
         data.add("last_observation", lastData);
-        result.complete(new ToolOutcome(ok, reason + "\n" + goal.facts()
+        result.complete(new ToolOutcome(ok, reason + "\n"
+                + (goal == null ? "尚未取得本次采集的完整背包基线。" : goal.facts())
+                + (plan.scope() == ItemGoal.Scope.SUBTASK ? "\n此回执只结算材料子任务，不代表主人的整项目标完成。" : "")
                 + "\n本段实际挖掘=" + dug + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
                 + "，未拾取候选=" + skippedItems.size() + "；请按实际回执决定后续。", data));
     }

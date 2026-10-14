@@ -94,4 +94,50 @@ class AgentRunnerGatherTest {
         assertEquals(modelCalls, client.engine().responses.size());
         assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("pending_tools").getAsInt());
     }
+
+    @Test void aMaterialGatherUsesFreshStartAndCannotCompleteTheFinalCraftedItemGoal() {
+        client.liveObservation = true;
+        runner.start();
+        runner.submitTask("制作一把钻石剑");
+        client.drain();
+        reply(BoundedGatherTest.state(0));
+        client.engine().tools(0, new ToolCall("final", "set_goal",
+                "{\"item\":\"diamond_sword\",\"count\":1}"));
+        client.drain();
+        reply(BoundedGatherTest.state(5));
+        client.engine().tools(1, new ToolCall("material", "gather",
+                "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"scope\":\"subtask\"}"));
+        client.drain();
+        assertEquals("status", client.lastTool().str("tool"));
+        reply(BoundedGatherTest.state(5));
+        assertEquals("scan_area", client.lastTool().str("tool"), "old acquired materials must not satisfy this subtask");
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        var targets = new JsonArray();
+        targets.add(BoundedGatherTest.block(true));
+        var data = new JsonObject();
+        data.add("targets", targets);
+        reply(data);
+        assertEquals("break_block", client.lastTool().str("tool"));
+        reply(JsonParser.parseString("{\"removed\":true}").getAsJsonObject());
+        reply(BoundedGatherTest.state(6));
+        reply(BoundedGatherTest.state(6));
+        assertEquals(3, client.engine().responses.size());
+        client.engine().reply(2, "finished");
+        client.drain();
+        reply(BoundedGatherTest.state(6));
+        assertEquals("status", client.lastTool().str("tool"), "continuation reobserves the current body");
+        reply(BoundedGatherTest.state(6));
+        assertEquals(4, client.engine().responses.size(), "material success must continue the owner's final goal");
+        assertNotEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m ->
+                m instanceof com.neko.mcbot.agentcore.llm.Msg.Nudge n && n.text().contains("minecraft:diamond_sword")));
+        client.engine().reply(3, "finished");
+        client.drain();
+        var completed = BoundedGatherTest.state(6);
+        var sword = completed.getAsJsonObject("inventory").getAsJsonArray("slots").get(1).getAsJsonObject();
+        sword.addProperty("item", "minecraft:diamond_sword");
+        sword.addProperty("count", 1);
+        reply(completed);
+        assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
+    }
 }

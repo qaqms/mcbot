@@ -54,9 +54,12 @@ class BoundedGatherTest {
         CompletableFuture<ToolOutcome> mining;
         final BoundedGather gather;
         Fixture(int requested, int baseline) {
+            this(requested, baseline, "task");
+        }
+        Fixture(int requested, int baseline, String scope) {
             count = baseline;
             gather = new BoundedGather(BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":"
-                    + requested + "}"), state(baseline), () -> now, this::remote,
+                    + requested + ",\"scope\":\"" + scope + "\"}"), state(baseline), () -> now, this::remote,
                     queue::addLast, () -> cancelled++, text -> { });
         }
         CompletableFuture<ToolOutcome> remote(String tool, String json) {
@@ -273,5 +276,60 @@ class BoundedGatherTest {
         assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
         assertEquals(0, result.data().get("actual_progress").getAsInt());
         assertEquals(3, f.dug);
+    }
+
+    @Test void materialSubtaskCountsOnlyWhatIsAddedAfterItsOwnFreshStart() {
+        var f = new Fixture(2, 5, "subtask");
+        f.count = 8;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(10, f.count);
+        assertEquals(2, f.dug);
+        assertEquals(2, result.data().get("actual_progress").getAsInt());
+        assertEquals("subtask", result.data().get("scope").getAsString());
+        assertTrue(result.feedback().contains("本次采集开始基线=8"));
+        assertTrue(result.feedback().contains("不代表主人的整项目标完成"));
+    }
+
+    @Test void defaultTaskScopeRetainsTheOriginalDirectiveBaselineAcrossGatherSegments() {
+        var f = new Fixture(3, 5);
+        f.count = 8;
+        var result = f.run();
+        assertTrue(result.ok());
+        assertEquals(0, f.dug);
+        assertEquals("task", result.data().get("scope").getAsString());
+        assertTrue(result.feedback().contains("任务开始基线=5"));
+    }
+
+    @Test void subtaskCancelledBeforeFirstObservationDoesNotInventABaselineOrContinue() {
+        var f = new Fixture(1, 5, "subtask");
+        var result = f.gather.start();
+        f.gather.stop("CANCELLED:before first state");
+        f.drain();
+        assertFalse(result.join().ok());
+        assertEquals(0, result.join().data().get("actual_progress").getAsInt());
+        assertTrue(result.join().feedback().contains("尚未取得"));
+        assertTrue(f.calls.isEmpty());
+    }
+
+    @Test void invalidSubtaskScopesAreRejectedBeforeWorldActions() {
+        for (String scope : List.of("\"step\"", "null", "1", "true", "[]", "{}")) {
+            assertThrows(RuntimeException.class, () -> BoundedGather.parse(
+                    "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"scope\":" + scope + "}"));
+        }
+    }
+
+    @Test void subtaskTotalUsesCurrentInventoryWithoutRequiringAdditionalItems() {
+        var plan = BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":3,"
+                + "\"mode\":\"total\",\"scope\":\"subtask\"}");
+        var calls = new java.util.ArrayList<String>();
+        var gather = new BoundedGather(plan, null, () -> 0L, (name, json) -> {
+            calls.add(name);
+            return CompletableFuture.completedFuture(new ToolOutcome(true, "fresh", state(5)));
+        }, Runnable::run, () -> fail("no child should need cancellation"), text -> { });
+        var result = gather.start().join();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(5, result.data().get("actual_progress").getAsInt());
+        assertEquals(List.of("status"), calls);
     }
 }

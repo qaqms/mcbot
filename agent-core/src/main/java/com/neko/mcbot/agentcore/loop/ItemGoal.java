@@ -7,6 +7,22 @@ import java.util.Set;
 
 /** A task-local inventory condition. World receipts, never assistant prose, supply its facts. */
 public final class ItemGoal {
+    public enum Scope {
+        TASK, SUBTASK;
+
+        public static Scope parse(JsonObject args) {
+            if (!args.has("scope")) return TASK;
+            var value = args.get("scope");
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString())
+                throw new IllegalArgumentException("Invalid goal scope");
+            return switch (value.getAsString()) {
+                case "task" -> TASK;
+                case "subtask" -> SUBTASK;
+                default -> throw new IllegalArgumentException("Invalid goal scope");
+            };
+        }
+    }
+
     public record Target(String item, int count, boolean additional) {
         public static Target parse(String json) {
             JsonObject args = JsonParser.parseString(json).getAsJsonObject();
@@ -33,10 +49,16 @@ public final class ItemGoal {
 
     private final Target target;
     private final int baseline;
+    private final Scope scope;
     private int current;
 
     public ItemGoal(Target target, JsonObject initial) {
+        this(target, initial, Scope.TASK);
+    }
+
+    public ItemGoal(Target target, JsonObject initial, Scope scope) {
         this.target = target;
+        this.scope = scope;
         baseline = count(initial, target.item());
         current = baseline;
     }
@@ -46,8 +68,10 @@ public final class ItemGoal {
     public int progress() { return target.additional() ? Math.max(0, current - baseline) : current; }
     public boolean satisfied() { return progress() >= target.count(); }
     public String facts() {
-        return "物品目标=" + target.item() + "，口径=" + (target.additional() ? "背包净新增" : "背包总量")
-                + "，目标=" + target.count() + "，任务开始基线=" + baseline + "，当前总量=" + current
+        return (scope == Scope.SUBTASK ? "采集子目标=" : "物品目标=") + target.item()
+                + "，口径=" + (target.additional() ? "背包净新增" : "背包总量")
+                + "，目标=" + target.count() + (scope == Scope.SUBTASK ? "，本次采集开始基线=" : "，任务开始基线=")
+                + baseline + "，当前总量=" + current
                 + "，实际进度=" + progress() + "，尚缺=" + Math.max(0, target.count() - progress())
                 + "。挖掘格数和地上掉落不计入背包成果；交付目标不由此校验。";
     }

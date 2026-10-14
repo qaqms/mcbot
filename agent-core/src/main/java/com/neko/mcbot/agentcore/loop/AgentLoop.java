@@ -776,10 +776,18 @@ public final class AgentLoop {
             }
             if ("gather".equals(call.name())) {
                 var args = com.google.gson.JsonParser.parseString(call.argsJson()).getAsJsonObject();
-                var goal = new com.google.gson.JsonObject();
-                for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
-                var receipt = setGoal(goal.toString());
-                if (!receipt.ok()) return CompletableFuture.completedFuture(receipt);
+                ItemGoal.Scope scope;
+                try { scope = ItemGoal.Scope.parse(args); }
+                catch (RuntimeException invalid) {
+                    return CompletableFuture.completedFuture(new ToolOutcome(false,
+                            "DENIED:gather scope须为task或subtask，未派发采集。"));
+                }
+                if (scope == ItemGoal.Scope.TASK) {
+                    var goal = new com.google.gson.JsonObject();
+                    for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
+                    var receipt = setGoal(goal.toString());
+                    if (!receipt.ok()) return CompletableFuture.completedFuture(receipt);
+                }
             }
             return java.util.Objects.requireNonNull(executor.execute(call.name(), call.argsJson()))
                     .handle((outcome, failure) -> failure == null && outcome != null
