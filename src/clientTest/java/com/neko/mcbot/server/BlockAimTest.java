@@ -171,4 +171,47 @@ class BlockAimTest {
         assertTrue(BlockAim.placement(grid, TARGET, point, 1).failure().startsWith("OUT_OF_REACH:"));
         assertEquals(0, grid.traces);
     }
+
+    @Test void descendingClearanceOrderOpensSightBeforeMiningTheLowerCells() {
+        Grid grid = new Grid();
+        grid.blocks.clear();
+        grid.eye = new Vec3(87.5, 67.62, -11.5);
+        var cells = com.neko.mcbot.path.DigAStar.clearanceCells(66, 88, 65, -12);
+        for (long cell : cells) {
+            grid.blocks.put(pathPos(cell), Blocks.DIRT.defaultBlockState());
+        }
+        grid.blocks.put(new BlockPos(87, 65, -12), Blocks.DIRT.defaultBlockState());
+        BlockPos foot = new BlockPos(88, 65, -12);
+        assertTrue(BlockAim.mining(grid, foot, 4.5).failure().startsWith("TARGET_BLOCKED:"),
+                "the old bottom-first order is occluded by its own planned column");
+        for (long cell : cells) {
+            BlockPos pos = pathPos(cell);
+            assertTrue(BlockAim.mining(grid, pos, 4.5).ok(), "each planned removal must be visible: " + pos);
+            grid.blocks.remove(pos);
+        }
+        assertEquals(Set.of(new BlockPos(87, 65, -12)), grid.blocks.keySet(),
+                "departure support stays intact");
+    }
+
+    @Test void aBlockOutsideTheRouteIsNeverSilentlyIncludedInClearance() {
+        Grid grid = new Grid();
+        grid.blocks.clear();
+        grid.eye = new Vec3(.5, 4.62, .5);
+        var cells = com.neko.mcbot.path.DigAStar.clearanceCells(3, 2, 2, 0);
+        for (long cell : cells) grid.blocks.put(pathPos(cell), Blocks.STONE.defaultBlockState());
+        for (int y = 0; y <= 6; y++) {
+            for (int z = -1; z <= 1; z++) {
+                grid.blocks.put(new BlockPos(1, y, z), Blocks.STONE.defaultBlockState());
+            }
+        }
+        assertTrue(BlockAim.mining(grid, pathPos(cells.getFirst()), 4.5).failure()
+                .startsWith("TARGET_BLOCKED:"));
+        assertEquals(3, cells.size());
+        assertTrue(cells.stream().noneMatch(cell -> pathPos(cell).getX() == 1));
+    }
+
+    private static BlockPos pathPos(long cell) {
+        return new BlockPos(com.neko.mcbot.path.DigAStar.unpackX(cell),
+                com.neko.mcbot.path.DigAStar.unpackY(cell), com.neko.mcbot.path.DigAStar.unpackZ(cell));
+    }
 }

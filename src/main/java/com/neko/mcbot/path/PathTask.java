@@ -339,7 +339,9 @@ public final class PathTask extends TickTask {
     private Progress checkChange(String op, BlockPos pos) {
         var change = new ActionPermissions.Change(op, pos.asLong(), level.getBlockState(pos));
         if (permissions.allowsChange(context, authorization, change)) return null;
-        return needConfirmation(changes(liveify(path.subList(cursor, path.size()))), planDigs, planPlaces);
+        int fromY = path.get(Math.max(0, cursor - 1)).y();
+        return needConfirmation(changes(liveify(path.subList(cursor, path.size()), fromY)),
+                planDigs, planPlaces);
     }
 
     // ---- lastPlan 缓存（R2-S4）----
@@ -475,19 +477,31 @@ public final class PathTask extends TickTask {
      * 动作字节不重分类（仅播报语义）；执行期 mineOne/placeOne 本就逐格 live 判定，双层自晦。
      */
     private List<DigAStar.Step> liveify(List<DigAStar.Step> plan) {
+        return liveify(plan, plan.isEmpty() ? 0 : plan.getFirst().y());
+    }
+
+    private List<DigAStar.Step> liveify(List<DigAStar.Step> plan, int fromY) {
         long t0 = System.nanoTime();
+        List<DigAStar.Step> out = liveSteps(plan, fromY, sampler);
+        planDigs = out.stream().mapToInt(st -> st.dig().size()).sum();
+        planPlaces = out.stream().mapToInt(st -> st.place().size()).sum();
+        McbotMod.LOG.info("[brain] liveify nodes={} {}ms", plan.size(),
+                (System.nanoTime() - t0) / 1_000_000L);
+        return out;
+    }
+
+    static List<DigAStar.Step> liveSteps(List<DigAStar.Step> plan, int fromY, DigSampler sampler) {
         ArrayList<DigAStar.Step> out = new ArrayList<>(plan.size());
-        planDigs = 0;
-        planPlaces = 0;
         for (DigAStar.Step st : plan) {
             if (st.action() == DigAStar.ACT_START) {
                 out.add(st);
                 continue;
             }
-            ArrayList<Long> dig = new ArrayList<>(2);
-            for (int cy = st.y(); cy <= st.y() + 1; cy++) {
+            ArrayList<Long> dig = new ArrayList<>(3);
+            for (long cell : DigAStar.clearanceCells(fromY, st.x(), st.y(), st.z())) {
+                int cy = DigAStar.unpackY(cell);
                 if (!sampler.passable(st.x(), cy, st.z())) {
-                    dig.add(DigAStar.pack(st.x(), cy, st.z()));
+                    dig.add(cell);
                 }
             }
             ArrayList<Long> place = new ArrayList<>(1);
@@ -495,15 +509,9 @@ public final class PathTask extends TickTask {
                     && sampler.placeable(st.x(), st.y() - 1, st.z())) {
                 place.add(DigAStar.pack(st.x(), st.y() - 1, st.z()));
             }
-            planDigs += dig.size();
-            planPlaces += place.size();
             out.add(new DigAStar.Step(st.x(), st.y(), st.z(), dig, place, st.action()));
+            fromY = st.y();
         }
-        // 效率评估 §3.1：这一步是**单拍、无分帧、无预算**的全路径活体重扫，
-        // 且紧跟在"搜索刚花掉最多 400ms CPU"之后（尖峰叠加）。给它单独计时，
-        // 才能判定要不要把它也改成按拍切片——量级此前只能靠猜。
-        McbotMod.LOG.info("[brain] liveify nodes={} {}ms", plan.size(),
-                (System.nanoTime() - t0) / 1_000_000L);
         return out;
     }
 
@@ -614,8 +622,10 @@ public final class PathTask extends TickTask {
         }
 
         // Newly blocked cells must replan before the body enters them.
-        if (!sampler.passable(next.x(), next.y(), next.z())
-                || !sampler.passable(next.x(), next.y() + 1, next.z())
+        if (DigAStar.clearanceCells(path.get(Math.max(0, cursor - 1)).y(),
+                next.x(), next.y(), next.z()).stream()
+                .anyMatch(cell -> !sampler.passable(DigAStar.unpackX(cell),
+                        DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
                 || !sampler.support(next.x(), next.y() - 1, next.z())) {
             if (replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
                     "NO_PATH:下一落脚格已变化，重规划上限已到；已停止移动。", null));

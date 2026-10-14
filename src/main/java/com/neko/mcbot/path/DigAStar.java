@@ -9,7 +9,7 @@ import java.util.PriorityQueue;
 
 /**
  * 可挖通道 A*（DESIGN §8，M8）：节点=落脚点（脚格+头格可通行、下格有支撑），
- * 动作边统一建模为"清除目标两格（挖）+ 补支撑（放）+ 移动"，
+ * 动作边统一建模为"清除经过的目标柱空间（挖）+ 补支撑（放）+ 移动"，
  * 由此派生 走/跳/落/下挖/向前挖/垫脚/搭桥 全套动作。
  *
  * 三条工程保险丝（搜索跑在服务器主线程，必须预算化）：
@@ -309,15 +309,14 @@ public final class DigAStar {
             }
         }
 
-        // 1) 脚格+头格：不通就要挖（本步 ≤2 挖），挖不动/不许挖则边无效
+        // Descending sweeps the destination column before the feet reach its lower landing.
         long destKey = pack(bx, by, bz);
-        List<Long> dig = new ArrayList<>(2);
         // 抑抖（R1-S3）：旧路线上的落脚格本步基础价先打折，后面逐项再打
         double cost = (MOVE_BASE + (dx != 0 && dz != 0 ? MOVE_DIAG : 0))
                 * (reuse != null && reuse.contains(destKey) ? BIAS_REUSE : 1.0);
         int newDigs = 0;
         int places;
-        for (int cy = by; cy <= by + 1; cy++) {
+        for (int cy = clearanceTop(cur.y, by); cy >= by; cy--) {
             if (s.passable(bx, cy, bz)) {
                 continue;
             }
@@ -331,7 +330,6 @@ public final class DigAStar {
             }
             long dc = pack(bx, cy, bz);
             cost += (sec + DIG_OVERHEAD) * (reuse != null && reuse.contains(dc) ? BIAS_REUSE : 1.0);
-            dig.add(dc);
         }
         // 2) 支撑：没有现成实心就放一块（PILLAR=直上、BRIDGE=横移补脚 都由此派生），
         //    放格同挖格一样累计预算（=背包存量），不够就无效——防"规划靠 0 库存的路"
@@ -437,11 +435,12 @@ public final class DigAStar {
                 steps.add(new Step(n.x, n.y, n.z, List.of(), List.of(), ACT_START));
                 continue;
             }
-            List<Long> dig = new ArrayList<>(2);
+            List<Long> dig = new ArrayList<>(3);
             List<Long> place = new ArrayList<>(1);
-            for (int cy = n.y; cy <= n.y + 1; cy++) {
+            for (long cell : clearanceCells(chain.get(i - 1).y, n.x, n.y, n.z)) {
+                int cy = unpackY(cell);
                 if (!s.passable(n.x, cy, n.z)) {
-                    dig.add(pack(n.x, cy, n.z));
+                    dig.add(cell);
                 }
             }
             if (!s.support(n.x, n.y - 1, n.z) && s.placeable(n.x, n.y - 1, n.z)) {
@@ -451,6 +450,19 @@ public final class DigAStar {
                     classify(chain.get(i - 1), n, dig, place)));
         }
         return steps;
+    }
+
+    /** Upper cells open sight to the lower ones; descent also needs clearance at departure height. */
+    public static List<Long> clearanceCells(int fromY, int x, int y, int z) {
+        List<Long> cells = new ArrayList<>(3);
+        for (int cy = clearanceTop(fromY, y); cy >= y; cy--) {
+            cells.add(pack(x, cy, z));
+        }
+        return cells;
+    }
+
+    private static int clearanceTop(int fromY, int toY) {
+        return Math.max(fromY, toY) + 1;
     }
 
     private byte classify(Node from, Node to, List<Long> dig, List<Long> place) {
