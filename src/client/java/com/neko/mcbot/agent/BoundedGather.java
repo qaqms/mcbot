@@ -60,6 +60,8 @@ final class BoundedGather {
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final Set<String> skippedBlocks = new HashSet<>();
     private final Set<String> skippedItems = new HashSet<>();
+    private final Set<String> approachedItems = new HashSet<>();
+    private final Set<String> waitedItems = new HashSet<>();
     private double originX, originY, originZ;
     private String dimension;
     private boolean anchored;
@@ -153,7 +155,7 @@ final class BoundedGather {
                 JsonObject item = entry.getAsJsonObject();
                 if (!plan.goal().item().equals(item.get("item").getAsString()) || !within(item)
                         || !flag(item, "pickup_allowed") || skippedItems.contains(itemKey(item))) continue;
-                pickup(item, false);
+                pickup(item);
                 return;
             }
             if (stalls >= 3) { finish(false, "NO_PROGRESS:三次采集/拾取未增加实际背包数量。" + lastProblem); return; }
@@ -162,16 +164,28 @@ final class BoundedGather {
         });
     }
 
-    private void pickup(JsonObject item, boolean waited) {
+    private void pickup(JsonObject item) {
+        String key = itemKey(item);
         if (flag(item, "can_touch_here")) {
-            if (flag(item, "pickup_delayed") && !waited) {
-                var wait = new JsonObject();
-                wait.addProperty("seconds", 1);
-                call("wait", wait, receipt -> {
-                    if (!receipt.ok()) finish(false, receipt.feedback());
-                    else collect(item, true);
-                });
-            } else collect(item, waited);
+            if (!waitedItems.add(key)) {
+                finish(false, "PICKUP_BLOCKED:走近并等待后物品仍在触碰范围内，实际背包未满足目标；"
+                        + "检查背包空间、拾取延迟或现场限制，未把物品消失当作入包。");
+                return;
+            }
+            // Give the server body tick time to touch a newly created or delayed item.
+            var wait = new JsonObject();
+            wait.addProperty("seconds", 1);
+            call("wait", wait, receipt -> {
+                if (!receipt.ok()) finish(false, receipt.feedback());
+                else observe();
+            });
+            return;
+        }
+        if (!approachedItems.add(key)) {
+            skippedItems.add(key);
+            stalls++;
+            lastProblem = "已到候选站位但最新物品仍未进入身体触碰范围。";
+            observe();
             return;
         }
         var positions = positions(item);
@@ -181,33 +195,9 @@ final class BoundedGather {
             observe();
             return;
         }
-        // Walking may already have consumed the pickup delay; the actual receipt decides.
-        walk(positions, 0, () -> collect(item, false),
+        // Movement ticks may already have picked it up. Only a fresh inventory proves progress.
+        walk(positions, 0, this::observe,
                 () -> { skippedItems.add(itemKey(item)); observe(); });
-    }
-
-    private void collect(JsonObject item, boolean waited) {
-        var args = new JsonObject();
-        args.addProperty("item", plan.goal().item());
-        call("collect", args, receipt -> {
-            if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
-            int collected = integer(receipt.data(), "collected_count", 0, 0, Integer.MAX_VALUE);
-            if (collected == 0) {
-                if (!waited) {
-                    var wait = new JsonObject();
-                    wait.addProperty("seconds", 1);
-                    call("wait", wait, receiptAfterWait -> {
-                        if (!receiptAfterWait.ok()) finish(false, receiptAfterWait.feedback());
-                        else collect(item, true);
-                    });
-                    return;
-                }
-                stalls++;
-                skippedItems.add(itemKey(item));
-                lastProblem = "走近后未实际拾取，可能仍有延迟、归属/碰撞限制或掉落已变化。";
-            }
-            observe();
-        });
     }
 
     private void findBlocks() {

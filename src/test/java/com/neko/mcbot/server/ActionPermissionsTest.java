@@ -124,4 +124,25 @@ class ActionPermissionsTest {
         permissions.end(task.owner(), 7);
         assertNull(permissions.body(task.owner()));
     }
+
+    @Test void passivePickupWorksWhileIdleOrWorkingButReadOnlyTemporarilySuppressesIt() {
+        Object body = new Object();
+        assertTrue(permissions.passivePickupAllowed(task.owner(), task.companion(), task.dimension(), body));
+        permissions.begin(task, body);
+        assertTrue(permissions.passivePickupAllowed(task.owner(), task.companion(), task.dimension(), body));
+        var read = new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 8, true);
+        permissions.begin(read, body);
+        assertFalse(permissions.passivePickupAllowed(task.owner(), task.companion(), task.dimension(), body));
+        permissions.end(task.owner(), 8);
+        assertTrue(permissions.passivePickupAllowed(task.owner(), task.companion(), task.dimension(), body));
+    }
+
+    @Test void passivePickupDoesNotInheritAnotherBodyOrDimensionTask() {
+        Object body = new Object();
+        permissions.begin(task, body);
+        assertFalse(permissions.passivePickupAllowed(null, task.companion(), task.dimension(), body));
+        assertFalse(permissions.passivePickupAllowed(task.owner(), UUID.randomUUID(), task.dimension(), body));
+        assertFalse(permissions.passivePickupAllowed(task.owner(), task.companion(), "nether", body));
+        assertFalse(permissions.passivePickupAllowed(task.owner(), task.companion(), task.dimension(), new Object()));
+    }
 }

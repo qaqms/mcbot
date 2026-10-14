@@ -100,7 +100,7 @@ public final class ClientToolDefs {
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("break_block", "挖一格干燥方块，需主手有采收资格；先inventory/equip选工具。"
                     + "按真实进度耗时，原版处理破坏/耐久，掉落留在地上，返回掉落实体位置；不会直接入包。"
-                    + "需要物品须走近后collect并核对最新背包，挖掉矿块不等于获得物品；失败须核对实际回执。"
+                    + "走近掉落物会自动拾取，须核对最新背包，挖掉矿块不等于获得物品；失败须核对实际回执。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("attack", "原地普通近战，只攻击一个目标，不追击、不自动换工具、不拾取掉落。"
@@ -117,7 +117,8 @@ public final class ClientToolDefs {
                             + "\"max_hits\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10},"
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},"
                             + "\"required\":[\"entity_id\"],\"additionalProperties\":false}"),
-            new ToolSpec("collect", "原版拾取当前身体触碰范围内地上物品；先move_to走近，r只限查询范围，不能隔空吸取。"
+            new ToolSpec("collect", "兼容工具：立即尝试原版触碰拾取；身体平时会自动拾取，无需挖后逐次调用。"
+                    + "远处物品先move_to走近，r只限查询范围，不能隔空吸取。"
                     + "坐标全部省略则以自己脚下为中心，item可过滤物品ID。r为1-12，默认3，遵守拾取延迟和归属。"
                     + "忙时先等待或取消。空间不足会部分拾取，回执给已捡数量和仍在地上的数量，"
                     + "ok=false不代表完全没捡到；核对inventory后处理剩余物品",

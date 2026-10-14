@@ -141,6 +141,19 @@ class BlockMiningTest {
         }
     }
 
+    @Test void mergingAPickedUpStackIntoTheHandDoesNotInterruptOtherwiseValidMining() {
+        Mining access = new Mining();
+        access.inventory.setItem(0, new ItemStack(Items.DIRT, 3));
+        BlockMining mining = new BlockMining(access);
+        assertNull(mining.tick());
+        access.held().grow(1);
+        assertNull(mining.tick());
+        assertNull(mining.tick());
+        assertTrue(mining.tick().ok());
+        assertEquals(1, access.destroys);
+        assertEquals(4, access.held().getCount());
+    }
+
     @Test void preflightAndTicksUseDifferentReachAndLiveProgress() {
         Mining access = new Mining();
         BlockMining mining = new BlockMining(access);

@@ -47,6 +47,9 @@ class BoundedGatherTest {
         boolean needConfirm;
         boolean full;
         boolean pickupStillDelayed;
+        boolean touching;
+        boolean pickupDuringMining;
+        boolean stolen;
         int pickupAttempts;
         CompletableFuture<ToolOutcome> mining;
         final BoundedGather gather;
@@ -69,7 +72,7 @@ class BoundedGatherTest {
                         item.addProperty("item", "minecraft:dirt");
                         item.addProperty("target_uuid", "drop-" + dug);
                         item.addProperty("count", 1);
-                        item.addProperty("can_touch_here", false);
+                        item.addProperty("can_touch_here", touching);
                         item.addProperty("pickup_allowed", true);
                         item.addProperty("pickup_delayed", true);
                         items.add(item);
@@ -90,29 +93,28 @@ class BoundedGatherTest {
                     data.addProperty("removed", true);
                     data.addProperty("collected_count", 0);
                     data.addProperty("remaining_count", 1);
+                    if (pickupDuringMining) automaticPickup(true);
                 }
                 case "move_to" -> {
                     assertTrue(JsonParser.parseString(json).getAsJsonObject().get("exact").getAsBoolean(),
                             "a selected work/pickup stance must not finish in an adjacent cell");
                     moved++;
                     if (needConfirm) return CompletableFuture.completedFuture(new ToolOutcome(false, "NEED_CONFIRM:route", data));
+                    touching = true;
+                    automaticPickup(false);
                 }
-                case "collect" -> {
-                    if (full) return CompletableFuture.completedFuture(new ToolOutcome(false, "INVENTORY_FULL:drop remains", data));
-                    pickupAttempts++;
-                    if (pickupStillDelayed && pickupAttempts == 1) {
-                        data.addProperty("collected_count", 0);
-                        return CompletableFuture.completedFuture(new ToolOutcome(true, "still delayed", data));
-                    }
-                    int pickup = ground ? 1 : 0;
-                    count += pickup;
-                    ground = false;
-                    data.addProperty("collected_count", pickup);
-                }
-                case "wait" -> { }
+                case "wait" -> automaticPickup(true);
                 default -> fail(tool);
             }
             return CompletableFuture.completedFuture(new ToolOutcome(true, "receipt", data));
+        }
+        void automaticPickup(boolean waited) {
+            if (!ground) return;
+            pickupAttempts++;
+            if (full || pickupStillDelayed && !waited) return;
+            if (!stolen) count++;
+            ground = false;
+            touching = false;
         }
         void drain() {
             int budget = 10000;
@@ -136,6 +138,7 @@ class BoundedGatherTest {
         assertEquals(64, f.dug);
         assertEquals(64, f.moved, "must walk to the real drops before pickup");
         assertFalse(f.calls.contains("wait"), "successful pickup after walking needs no extra fixed delay");
+        assertFalse(f.calls.contains("collect"), "walking triggers body pickup without a tool");
         assertTrue(result.data().get("goal_satisfied").getAsBoolean());
         assertEquals(64, result.data().get("actual_progress").getAsInt());
         assertEquals(0, f.cancelled);
@@ -150,6 +153,7 @@ class BoundedGatherTest {
         assertEquals(1, f.calls.stream().filter("wait"::equals).count());
         assertEquals(1, f.count);
         assertFalse(f.ground);
+        assertFalse(f.calls.contains("collect"));
     }
 
     @Test void additionalQuantityUsesTaskStartBaselineRatherThanExistingInventory() {
@@ -186,7 +190,8 @@ class BoundedGatherTest {
         assertTrue(result.ok(), result.feedback());
         assertEquals(3, f.dug);
         assertEquals(1, f.count);
-        assertTrue(f.calls.contains("collect"));
+        assertTrue(f.moved > 0);
+        assertFalse(f.calls.contains("collect"));
     }
 
     @Test void routeConsentAndFullInventoryStopAndPreserveGroundItems() {
@@ -196,7 +201,7 @@ class BoundedGatherTest {
             f.full = !confirmation;
             var result = f.run();
             assertFalse(result.ok());
-            assertTrue(result.feedback().startsWith(confirmation ? "NEED_CONFIRM:" : "INVENTORY_FULL:"));
+            assertTrue(result.feedback().startsWith(confirmation ? "NEED_CONFIRM:" : "PICKUP_BLOCKED:"));
             assertEquals(1, f.dug);
             assertTrue(f.ground);
             assertEquals(0, f.count);
@@ -236,5 +241,37 @@ class BoundedGatherTest {
                 "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"r\":17}",
                 "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"unexpected\":true}"))
             assertThrows(RuntimeException.class, () -> BoundedGather.parse(json));
+    }
+
+    @Test void pickupDuringMiningUsesFreshInventoryAndSkipsTheEntirePickupSequence() {
+        var f = new Fixture(3, 5);
+        f.pickupDuringMining = true;
+        assertTrue(f.run().ok());
+        assertEquals(8, f.count);
+        assertEquals(3, f.dug);
+        assertEquals(0, f.moved);
+        assertFalse(f.calls.contains("wait"));
+        assertFalse(f.calls.contains("collect"));
+    }
+
+    @Test void anAlreadyTouchableDropNeedsOnlyOneLocalWaitAndNoMiningOrCollect() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.touching = true;
+        assertTrue(f.run().ok());
+        assertEquals(0, f.dug);
+        assertEquals(0, f.moved);
+        assertEquals(1, f.calls.stream().filter("wait"::equals).count());
+        assertFalse(f.calls.contains("collect"));
+    }
+
+    @Test void disappearanceWithoutInventoryIncreaseNeverCountsAsGoalProgress() {
+        var f = new Fixture(1, 0);
+        f.stolen = true;
+        var result = f.run();
+        assertFalse(result.ok());
+        assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+        assertEquals(3, f.dug);
     }
 }

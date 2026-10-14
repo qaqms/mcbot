@@ -44,8 +44,7 @@ public final class BlockMining {
 
     private final Access access;
     private BlockState target;
-    private ItemStack tool;
-    private int selected;
+    private HandSnapshot tool;
     private float progress;
     private int stage = -1;
     private int stalled;
@@ -68,7 +67,7 @@ public final class BlockMining {
         return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable()));
     }
 
-    /** A successful preflight freezes the target and complete main-hand stack, not the mining speed. */
+    /** Freeze the target and hand identity; native pickup growth and live mining speed remain valid. */
     public ServerTool.Result preflight(double reach) {
         ServerTool.Result failure = access.guard(reach);
         if (failure != null) return failure;
@@ -85,9 +84,8 @@ public final class BlockMining {
         if (failure != null) return failure;
         if (target == null) {
             target = current;
-            selected = access.selectedSlot();
-            tool = access.held().copy();
-        } else if (selected != access.selectedSlot() || !ItemStack.matches(tool, access.held())) {
+            tool = new HandSnapshot(access.selectedSlot(), access.held());
+        } else if (!tool.matches(access.selectedSlot(), access.held())) {
             return failure("WRONG_TOOL:挖掘期间主手已改变，已停手；重新选择工具后再调用。");
         }
         return null;
@@ -146,7 +144,7 @@ public final class BlockMining {
         data.add("drops", drops);
         String feedback = "已移除目标方块，挖掘不直接入包；移除时观测到本次地上掉落 " + remaining
                 + " 个，明细（最多32组）：" + left + "；掉落位置：" + drops
-                + "。需要物品时走近后collect，遵守原版拾取延迟；实际入包量须重新查看背包。"
+                + "。走近后身体自动拾取，遵守原版拾取延迟；实际入包量须重新查看背包。"
                 + "主手耐久由原版破坏流程处理。";
         if (!reported) feedback = "BREAK_FAILED:原版未报告成功，但已观察到目标移除。" + feedback + "先核对现场，勿自动重试。";
         return finish(new ServerTool.Result(reported, feedback, data));

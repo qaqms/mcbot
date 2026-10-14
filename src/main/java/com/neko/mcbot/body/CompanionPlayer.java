@@ -55,6 +55,24 @@ public final class CompanionPlayer extends ServerPlayer {
             if (movement.lengthSqr() > 0) level().getChunkSource().move(CompanionPlayer.this);
         }
     };
+    private final BodyPickup.Access pickup = new BodyPickup.Access() {
+        @Override public boolean active() {
+            return isAlive() && !isRemoved() && !isSpectator() && !isPassenger() && !isSleeping();
+        }
+        @Override public boolean allowed() {
+            var dispatcher = McbotMod.dispatcher();
+            return dispatcher != null && dispatcher.belongsTo(level().getServer())
+                    && dispatcher.passivePickupAllowed(CompanionPlayer.this);
+        }
+        @Override public AABB bounds() { return getBoundingBox(); }
+        @Override public boolean loaded(AABB region) { return physics.loaded(region); }
+        @Override public java.util.List<? extends BodyPickup.Item> items(AABB region) {
+            return level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, region,
+                    item -> item.isAlive()).stream()
+                    .<BodyPickup.Item>map(item -> () -> com.neko.mcbot.server.GroundItems.pickup(
+                            CompanionPlayer.this, item)).toList();
+        }
+    };
 
     public CompanionPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
                            ClientInformation clientInformation, UUID ownerUuid) {
@@ -91,6 +109,7 @@ public final class CompanionPlayer extends ServerPlayer {
         attackStrengthTicker = state.attackTicks();
         itemSwapTicker = state.swapTicks();
         CompanionPhysics.tick(physics);
+        BodyPickup.tick(pickup);
         observeHealth(HealthObservation.Phase.AFTER_TICK);
     }
 

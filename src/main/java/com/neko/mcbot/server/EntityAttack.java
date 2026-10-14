@@ -27,8 +27,7 @@ public final class EntityAttack {
     private final Access access;
     private final int maxHits;
     private Target target;
-    private ItemStack held;
-    private int selected;
+    private HandSnapshot held;
     private int strikes;
     private float healthLoss, absorptionLoss;
     private boolean observationKnown = true;
@@ -65,9 +64,8 @@ public final class EntityAttack {
         failure = access.permission(fresh, maxHits);
         if (failure != null) return finish(false, failure.feedback(), failure.data());
         if (held == null) {
-            held = access.held().copy();
-            selected = access.selectedSlot();
-        } else if (selected != access.selectedSlot() || !ItemStack.matches(held, access.held())) {
+            held = new HandSnapshot(access.selectedSlot(), access.held());
+        } else if (!held.matches(access.selectedSlot(), access.held())) {
             return finish(false, "WRONG_TOOL:攻击期间主手或选中槽改变，已停手；核对 inventory/equip。", null);
         }
         if (!access.reserve()) return finish(false, "BUSY:目标实体或附近区域已被其他动作占用，已停手。", null);
@@ -91,8 +89,7 @@ public final class EntityAttack {
         absorptionLoss += Math.max(0, before.absorption() - after.absorption());
         observationKnown = true;
         // Native durability/breakage is accepted only after our own strike.
-        held = access.held().copy();
-        selected = access.selectedSlot();
+        held = new HandSnapshot(access.selectedSlot(), access.held());
         target = after;
         if (!after.alive()) return finish(true, "目标已观察为死亡，本次停止。", null);
         if (before.health() <= after.health() && before.absorption() <= after.absorption()) {

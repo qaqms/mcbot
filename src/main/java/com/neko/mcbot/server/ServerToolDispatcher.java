@@ -77,6 +77,11 @@ public final class ServerToolDispatcher {
         return server == candidate;
     }
 
+    public boolean passivePickupAllowed(CompanionPlayer companion) {
+        return permissions.passivePickupAllowed(companion.ownerUuid(), companion.getUUID(),
+                companion.level().dimension().identifier().toString(), companion);
+    }
+
     public record ReadOnlyVerification(String status, long taskId, String tool, String feedback) {
     }
 

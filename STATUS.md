@@ -3,7 +3,39 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 当前状态（2026-10-14）：连续物理移动、上下文整理与拾取等待修复，699项离线通过
+## 当前状态（2026-10-14）：身体自动拾取与通用任务能力整改
+
+### 身体自动触碰拾取（2026-10-14，Asia/Shanghai）
+
+- 维护者安装c2b07c6候选后反馈整体正常，要求触碰拾取由身体自然执行，
+  并强调长短任务都应复用同一能力、按真实条件推进，不能固化单一路线。
+  新latest.log只读快照154443字节、末写10:07:53，实例哈希与699项候选一致。
+  10:04至10:06仍多次逐格break/place/move及模型往返约3–6秒；
+  10:05:45至10:06:10摘要后普通请求46384B→26959B，有净缩减正证，
+  无同条件速度基准，不能把已有物理移动直接认作完整基础链路已验。
+- 参考只读核对身体Physics/玩家tick与work模块：自然触碰归身体，
+  远处拾取是走到掉落物的本地组合。未复制代码/注释/提示词或技能。
+  本体BodyPickup每刻在物理步进后只查询当前body.inflate(1,.5,1)里的ItemEntity，
+  空闲/移动/挖掘/等待均生效，不开完整doTick，不重复运行travel。
+  GroundItems.pickup统一被动/显式collect入口，原版playerTouch决定延迟、
+  target、空间、组件及实际实体移除；不远程吸取，不直接生成物品。
+- 活动只读任务抑制被动拾取，身体/维度失配也拒绝；任务结束后恢复自然触碰。
+  非活动/骑乘/睡眠/旁观身体及未加载触碰邻域跳过；不新增世界强载。
+  被动触碰不抢任务槽或调用模型，最新完整背包提供成果事实。
+  gather走近后重新观测，已经入包则跳过拾取阶段；仍在触碰范围的候选
+  最多等待一秒再核对，仍未满足明确PICKUP_BLOCKED，不调用collect或假定掉落消失=入包。
+  兼容collect保留原权限/参数与真实计数。挖/攻HandSnapshot允许原活堆栈合法增长，
+  不放宽物品/组件/耐久/选槽改变、减少或越堆叠上限。
+- 10:36核对build/passive-pickup-build-20261014.log：33s成功，20/20任务执行。
+  XML核心246/根97/客户端370，共713项，失败/错误/跳过全0，新增14项：
+  身体触碰调度5、权限2、主手合并4、采集自动拾取/消失核对3。
+  前置专项build/passive-pickup-focused-20261014.log为26s成功。
+  本卡JAR SHA256=e4dec9f511815e91d4fb0728631023c2b567a309ba2170551da295d5cbe31866。
+  未创建真实玩家/实体/世界，未启动模型或安装实例。原生拾取/多人效果仍待补测。
+  下一卡修正gather的子目标/最终目标混用；通用组合、感知、规划、战斗、
+  建造与长期目标差距见AGENT-PERFORMANCE-AND-LONG-TASKS第7节。
+
+以下699项、旧包及未自动拾取描述为此前检查点。
 
 ### 移动与效率最终交付（2026-10-14 09:49，Asia/Shanghai）
 
@@ -3412,6 +3444,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 自动触碰拾取（10-14后续javap/编译，未运行玩家） | Player.aiStep在非骑乘分支按body.inflate(1,.5,1)查询接触实体，非经验球经私有touch调用Entity.playerTouch；ItemEntity.playerTouch要求pickupDelay==0及target匹配，调用原版Inventory.add，discard后恢复原count用于包。ServerPlayer.tick不自动提供这段。本体单独补物品触碰，不调用aiStep/doTick而重复travel/时钟，不自动收经验，活动只读暂禁 |
 | 连续运动输入（10-14 javap/编译/受控动力与原版体素，未运行身体） | LivingEntity.jumpFromGround():void为public，使用原版跳跃属性并设置needsSync；不自动清onGround，后续move更新实际接触。calculateEntityAnimation(boolean):void为public，从实际位移推进行走动画。Player.getSpeed():float读取MOVEMENT_SPEED属性；LivingEntity.getFlyingSpeed在普通未骑乘分支为0.02。输入在消费时按yaw换算局部坐标，再调用travel；不是完整doTick，不以受控动力测试宣称原生速度/网络画面已验 |
 | 被动重力/落地（10-13 javap/编译/离线体素，未运行身体） | Player.travel(Vec3)公开，经LivingEntity.travelInAir/travelInFluid与Entity.move处理原版重力/碰撞。Entity.updateInWaterStateAndDoFluidPushing/applyEffectsFromBlocks为protected；doCheckFallDamage(double,double,double,boolean)公开final。Player.isClientAuthoritative恒true，Entity.move仅local-instance-authoritative自动checkFallDamage，因此玩家须额外结算一次实际位移。LevelReader.hasChunksAt(int,int,int,int)是水平块坐标范围，不检查Y，不生成区块；ServerPlayer.setKnownMovement(Vec3)与ServerChunkCache.move(ServerPlayer)公开。ServerLevel.tickNonPassenger在实体tick前设置旧位置并推进tickCount。本轮不调用完整doTick，不以编译/体素测试推定原生下落已验 |
 | 动作朝向/可见性（10-13 javap/编译/离线clip，未运行身体） | Entity.lookAt(EYES,Vec3)设置pitch/yaw/headYaw；ServerPlayer覆写另向自身连接发look包，不设置bodyYaw，因此同伴另调用setYBodyRot。ServerEntity根据yaw/headYaw向观察者同步。LivingEntity.updateSwingTime为protected，可直接复用推进/收尾swing；ServerPlayer.tick不执行它。Player.blockInteractionRange公开。BlockState.getShape(BlockGetter,BlockPos,CollisionContext)、VoxelShape.toAabbs、BlockGetter.clip(ClipContext)/traverseBlocks公开；OUTLINE/NONE可用。ServerPlayer.teleportTo(double,double,double)带Relative.ROTATION保留当前旋转。未启用完整doTick，不以编译/字节码推定原生画面已验 |

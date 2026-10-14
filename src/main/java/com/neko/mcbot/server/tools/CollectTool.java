@@ -76,11 +76,7 @@ public final class CollectTool implements ServerTool {
         }
         @Override public ItemStack stack() { return entity.getItem(); }
         @Override public int pickup(Container inventory) {
-            int before = entity.getItem().getCount();
-            entity.playerTouch(companion);
-            // Vanilla restores a discarded stack's count for its pickup packet.
-            int left = entity.isRemoved() ? 0 : entity.getItem().getCount();
-            return Math.max(0, before - left);
+            return GroundItems.pickup(companion, entity);
         }
         @Override public void settle(ItemStack remainder) {
             if (remainder.isEmpty()) entity.discard();
