@@ -26,6 +26,8 @@ class ServerToolDispatcherTest {
     private final List<String> effects = new ArrayList<>();
     private final ToolRegistry registry = new ToolRegistry();
     private CompletableFuture<ServerTool.Result> nextResult;
+    private ActionPermissions.Context receivedContext;
+    private ActionPermissions receivedPermissions;
     private final ServerToolDispatcher dispatcher;
     private final ServerToolDispatcher.Sender sender =
             new ServerToolDispatcher.Sender(owner, null, json -> receipts.add(Envelope.decode(json)));
@@ -49,6 +51,8 @@ class ServerToolDispatcherTest {
                             ServerToolDispatcher.Body body, JsonObject args, ActionPermissions permissions,
                             ActionPermissions.Context context) {
                         effects.add(tool.name());
+                        receivedContext = context;
+                        receivedPermissions = permissions;
                         return nextResult == null ? CompletableFuture.completedFuture(
                                 new ServerTool.Result(true, "effect", null)) : nextResult;
                     }
@@ -98,6 +102,46 @@ class ServerToolDispatcherTest {
         assertEquals("server_action", detail.get("gate").getAsString());
         assertEquals(reason, detail.get("reason").getAsString());
         return detail;
+    }
+
+    @Test void autonomyComesFromOwnerTaskControlAndNotToolArguments() {
+        begin(sender, 60, false);
+        assertTrue(call(60, "move_to", "{\"x\":2,\"y\":90,\"z\":0,\"autonomous\":true}").bool("ok"));
+        var change = new ActionPermissions.Change("dig", 123, "stone");
+        assertFalse(receivedContext.autonomous());
+        assertFalse(receivedPermissions.allowsChange(receivedContext, new ActionPermissions.Execution(null), change));
+        send(sender, "task_begin", json("{\"task_id\":61,\"read_only\":false,\"autonomous\":true}"));
+        assertTrue(call(61, "move_to", "{\"x\":2,\"y\":90,\"z\":0}").bool("ok"));
+        assertTrue(receivedContext.autonomous());
+        assertTrue(receivedPermissions.allowsChange(receivedContext, new ActionPermissions.Execution(null), change));
+        var previous = receivedContext;
+        send(sender, "task_end", json("{\"task_id\":61}"));
+        assertFalse(receivedPermissions.allowsChange(previous, null, change));
+    }
+
+    @Test void readOnlyTaskAlwaysOverridesAutonomyAndOtherOwnerCannotUseIt() {
+        send(sender, "task_begin", json("{\"task_id\":62,\"read_only\":true,\"autonomous\":true}"));
+        denied(call(62, "break_block", "{\"x\":2,\"y\":90,\"z\":0,\"read_only\":false}"), "READ_ONLY");
+        assertTrue(effects.isEmpty());
+        assertTrue(call(62, "status", "{}").bool("ok"));
+        assertEquals("read_only", receivedContext.mode());
+        assertFalse(receivedContext.autonomous());
+        var stranger = new ServerToolDispatcher.Sender(UUID.randomUUID(), null,
+                text -> receipts.add(Envelope.decode(text)));
+        send(stranger, "task_begin", json("{\"task_id\":62,\"read_only\":false,\"autonomous\":true}"));
+        assertFalse(call(stranger, 62, "wait", json("{\"seconds\":1}")).bool("ok"));
+        assertEquals(List.of("status"), effects);
+    }
+
+    @Test void malformedAutonomyIsRejectedWithoutChangingAnExistingTask() {
+        for (String value : List.of("\"true\"", "1", "null", "{}", "[]")) {
+            send(sender, "task_begin", json("{\"task_id\":63,\"read_only\":false,\"autonomous\":" + value + "}"));
+            denied(call(63, "wait", "{\"seconds\":1}"), "TASK_REQUIRED");
+        }
+        begin(sender, 64, true);
+        send(sender, "task_begin", json("{\"task_id\":64,\"read_only\":false,\"autonomous\":\"true\"}"));
+        denied(call(64, "wait", "{\"seconds\":1}"), "READ_ONLY");
+        assertTrue(effects.isEmpty());
     }
 
     @Test void allMutatorsReachReadOnlyGateWithoutCallingEffectsOrAcknowledgingJobs() {

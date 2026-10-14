@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.server.ServerTool;
+import com.neko.mcbot.server.ActionPermissions;
 import com.neko.mcbot.task.CompanionScheduler;
 import net.minecraft.world.entity.player.Inventory;
 
@@ -31,6 +32,22 @@ public final class StatusTool implements ServerTool {
                         companion.level().dimension().identifier().toString(), companion.getHealth(),
                         companion.getFoodData().getFoodLevel(), companion.isOnFire(), companion.level().getGameTime()),
                 companion.getInventory(), scheduler.observation(companion.getUUID())));
+    }
+
+    @Override public java.util.concurrent.CompletableFuture<Result> runAuthorized(
+            CompanionPlayer companion, JsonObject args, CompanionScheduler scheduler,
+            ActionPermissions permissions, ActionPermissions.Context context) {
+        return runAsync(companion, args, scheduler).thenApply(result -> permissionReport(result, context));
+    }
+
+    static Result permissionReport(Result result, ActionPermissions.Context context) {
+        if (!result.ok()) return result;
+        var data = result.data().deepCopy();
+        data.addProperty("permission_mode", context == null ? "none" : context.mode());
+        String mode = context == null ? "未建立动作任务"
+                : context.readOnly() ? "只读"
+                : context.autonomous() ? "自主执行，动作无需主人逐次批准" : "逐次确认，需批准的动作按服务端清单询问";
+        return new Result(true, result.feedback() + "\n服务端任务权限：" + mode + "。", data);
     }
 
     static Result report(JsonObject args, Body body, Inventory inventory, JsonObject task) {

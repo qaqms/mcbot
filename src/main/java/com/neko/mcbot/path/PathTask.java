@@ -20,7 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 路径任务（M8）：SEARCH（分帧 A*）→ 需要点头的世界 → NEED_CONFIRM 出结果
+ * 路径任务（M8）：SEARCH（分帧 A*）→ 按服务端任务模式确认改动或直接执行
  * → EXECUTE（逐节点：挖（真计时）→ 放（消耗背包）→ 落位）→ 到达。
  *
  * 执行期复核（DESIGN §8）：每提交 20 个节点，重验接下来 5 个节点的状态
@@ -282,7 +282,7 @@ public final class PathTask extends TickTask {
             if (changes.values().stream().anyMatch(change -> change.expectedState() == null)) {
                 return new Progress.Done(new Result(false, "TARGET_LOST:路线改动格未加载，已停止。", null));
             }
-            if (!authorization.covers(changes)) {
+            if (!permissions.allowsChanges(context, authorization, changes)) {
                 return needConfirmation(changes, digs, places);
             }
             List<Region> regions = changes.values().stream().map(change -> {
@@ -338,7 +338,7 @@ public final class PathTask extends TickTask {
 
     private Progress checkChange(String op, BlockPos pos) {
         var change = new ActionPermissions.Change(op, pos.asLong(), level.getBlockState(pos));
-        if (authorization.allows(change)) return null;
+        if (permissions.allowsChange(context, authorization, change)) return null;
         return needConfirmation(changes(liveify(path.subList(cursor, path.size()))), planDigs, planPlaces);
     }
 

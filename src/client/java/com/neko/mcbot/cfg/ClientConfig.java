@@ -38,9 +38,20 @@ public final class ClientConfig {
     public final Set<String> environmentOverrides;
 
     public record Preferences(int contextWindow, int compactThreshold, int recentBudget,
-                              boolean autoCompact, boolean foldTools, boolean dark, boolean showHud) {
+                              boolean autoCompact, boolean foldTools, boolean dark, boolean showHud,
+                              boolean autonomousActions) {
+        public Preferences(int contextWindow, int compactThreshold, int recentBudget,
+                           boolean autoCompact, boolean foldTools, boolean dark, boolean showHud) {
+            this(contextWindow, compactThreshold, recentBudget, autoCompact, foldTools, dark, showHud, false);
+        }
+
         public static Preferences defaults() {
-            return new Preferences(64000, 6000, 1500, true, true, false, true);
+            return new Preferences(64000, 6000, 1500, true, true, false, true, false);
+        }
+
+        public Preferences withAutonomousActions(boolean enabled) {
+            return new Preferences(contextWindow, compactThreshold, recentBudget, autoCompact,
+                    foldTools, dark, showHud, enabled);
         }
 
         public Preferences {
@@ -122,7 +133,8 @@ public final class ClientConfig {
             LoggerFactory.getLogger("mcbot").warn("client.json 上下文设置无效，使用默认值。");
         }
         return new ClientConfig(values[0], values[1], values[2], string(json, "persona", ""),
-                bool(json, "accept_mode", true), p, overrides);
+                bool(json, "accept_mode", true),
+                p.withAutonomousActions(bool(json, "autonomous_actions", false)), overrides);
     }
 
     public static JsonObject toJson(ClientConfig cfg) {
@@ -140,6 +152,7 @@ public final class ClientConfig {
         json.addProperty("fold_tools", p.foldTools());
         json.addProperty("dark", p.dark());
         json.addProperty("show_hud", p.showHud());
+        json.addProperty("autonomous_actions", p.autonomousActions());
         return json;
     }
 

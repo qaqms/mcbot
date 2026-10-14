@@ -303,6 +303,12 @@ C3 在内部 C2S 增加 task_begin/task_end/authorize 与 tool_call.task_id，
 模型的 may_alter_terrain 不能批准改动。客户端与服务端须一起更新，旧客户端仅可查询。
 外部 REST/MCP/SSE 的字段、事件、回答与终态契约不变；连接器仍只转发 question_id/text，
 路线批准 question 的 text 由完整服务端清单生成，主人回答「确认」才请求许可。
+2026-10-14自主执行补充：主人在G面板设置/通用选择autonomous_actions，默认关闭；
+内部task_begin增加可选布尔autonomous，服务端统一判定路线/攻击是否需批准，
+只读任务优先，模型参数不能更改。此偏好同样适用于现有REST/MCP投令，
+不新增外部模式接口或修改v1.0字段/鉴权/事件。切换并保存模式取消旧任务和问题，
+旧question_id不能批准或续跑新任务。新任务未从服务端观测确认自主模式时，
+以固定MODE_UNAVAILABLE失败，连接器仍按现有done.reason展示；不自动重发。
 需要明确只读边界时，将 `[只读]` 放入现有 task/ask 的 text，不新增权限接口或字段；
 任意自然语言限制的理解、物理停止与连接器联合验收仍不能由本轮离线测试证明。
 

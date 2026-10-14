@@ -15,8 +15,8 @@ import java.util.function.Supplier;
 
 /**
  * move_to（M8 版）：DigAStar 寻路——会走、会跳、会落，也会挖穿/垫脚/搭桥，
- * 改动世界的路须经主人批准服务端具体清单，旧 may_alter_terrain 布尔不授予许可。
- * 被挡不再一律举白旗：绕得开就绕，绕不开要挖则先报清单征求确认。
+ * 逐次确认模式的地形改动须批准服务端具体清单，主人选择自主模式则免动作批准。
+ * 两模式都保留规划/执行复核，旧 may_alter_terrain 布尔不切换模式或授予许可。
  * 路线逐刻续订行走/跳跃输入，位置与碰撞由原版 travel 推进。
  */
 public final class MoveToTool implements ServerTool {

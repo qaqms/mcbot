@@ -523,7 +523,14 @@ public final class AgentLoop {
                 if (!isCurrent(stepGeneration) || activeReactor != reactor) return;
                 if (failure != null || state == null || !state.ok() || state.accepted()
                         || state.feedback() == null || state.feedback().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 16384) {
-                    finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:没有取得有效的最新身体状态，任务已停止；不能猜测完成。");
+                    var unavailable = state == null ? null : state.data().get("execution_mode_unavailable");
+                    boolean modeUnavailable = unavailable != null && unavailable.isJsonPrimitive()
+                            && unavailable.getAsJsonPrimitive().isBoolean() && unavailable.getAsBoolean();
+                    // Keep one fixed capability diagnosis without forwarding arbitrary failure text.
+                    finishCurrent(TaskStatus.FAILED, modeUnavailable
+                            ? "MODE_UNAVAILABLE:服务端未确认所选执行模式。请同步更新客户端与服务端，"
+                            + "或恢复逐次确认后重新提交。"
+                            : "STATE_UNAVAILABLE:没有取得有效的最新身体状态，任务已停止；不能猜测完成。");
                     return;
                 }
                 latestObservation = state.data();

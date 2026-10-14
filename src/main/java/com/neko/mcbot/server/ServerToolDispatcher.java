@@ -186,11 +186,15 @@ public final class ServerToolDispatcher {
                 Body cp = companionOfSender(sender);
                 Long taskId = taskId(env);
                 var mode = env.body().get("read_only");
+                var autonomous = env.body().get("autonomous");
                 if (cp == null || taskId == null || taskId <= 0 || mode == null
                         || !mode.isJsonPrimitive() || !mode.getAsJsonPrimitive().isBoolean()) return;
+                if (autonomous != null && (!autonomous.isJsonPrimitive()
+                        || !autonomous.getAsJsonPrimitive().isBoolean())) return;
                 scheduler.cancel(cp.id(), "新任务替换原任务。");
                 permissions.begin(new ActionPermissions.Context(sender.owner(), cp.id(),
-                        cp.dimension(), taskId, mode.getAsBoolean()), cp.identity());
+                        cp.dimension(), taskId, mode.getAsBoolean(),
+                        autonomous != null && autonomous.getAsBoolean()), cp.identity());
             }
             case "task_end" -> {
                 Long taskId = taskId(env);

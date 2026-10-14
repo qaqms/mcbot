@@ -56,6 +56,131 @@ class AgentRunnerPermissionsTest {
         return task;
     }
 
+    private void autonomous(boolean enabled) {
+        runner.reconfigure(runner.config().withPreferences(
+                runner.config().preferences.withAutonomousActions(enabled)));
+        client.drain();
+    }
+
+    private void observation(String mode) {
+        var data = BoundedGatherTest.state(0);
+        if (mode != null) data.addProperty("permission_mode", mode);
+        receipt(client.lastTool().num("seq", -1), true, "server body mode", data);
+    }
+
+    @Test void autonomousTaskIsConfirmedByServerBeforeModelAndMovementNeedsNoApprovalRound() {
+        autonomous(true);
+        client.liveObservation = true;
+        runner.start();
+        long task = runner.submitTask("move through a permitted route");
+        client.drain();
+        var begin = client.sent.stream().filter(e -> e.kind().equals("task_begin")).findFirst().orElseThrow();
+        assertTrue(begin.bool("autonomous"));
+        assertFalse(begin.bool("read_only"));
+        assertEquals(task, begin.num("task_id", -1));
+        assertTrue(client.engine().responses.isEmpty());
+        observation("autonomous");
+        call(0, "move_to", POS);
+        assertFalse(client.lastTool().obj("args").has("authorization_id"));
+        long seq = client.lastTool().num("seq", -1);
+        runner.handleS2c(AgentRunnerLifecycleTest.ack(seq));
+        client.drain();
+        assertEquals(1, client.engine().responses.size());
+        runner.handleS2c(AgentRunnerLifecycleTest.job(seq, "done"));
+        client.drain();
+        observation("autonomous");
+        assertEquals(2, client.engine().responses.size());
+        assertNull(runner.questionSnapshot());
+        assertTrue(client.sent.stream().noneMatch(e -> e.kind().equals("authorize")));
+    }
+
+    @Test void autonomousModeFailsClearlyBeforeModelWhenServerDoesNotConfirmIt() {
+        autonomous(true);
+        client.liveObservation = true;
+        runner.start();
+        for (String mode : new String[]{null, "confirm"}) {
+            long task = runner.submitTask("work with autonomy");
+            client.drain();
+            observation(mode);
+            assertTrue(client.engine().responses.isEmpty());
+            assertEquals(0, runner.currentTaskId());
+            assertTrue(runner.panelHistory().entries(task).stream().anyMatch(
+                    entry -> entry.text().contains("MODE_UNAVAILABLE:")));
+        }
+        assertTrue(client.sent.stream().filter(e -> e.kind().equals("tool_call"))
+                .allMatch(e -> e.str("tool").equals("status")));
+    }
+
+    @Test void explicitReadonlyDirectiveRetainsBothClientAndServerReadonlyInAutonomousPreference() {
+        autonomous(true);
+        client.liveObservation = true;
+        runner.start();
+        runner.submitTask("[只读] inspect");
+        client.drain();
+        var begin = client.sent.stream().filter(e -> e.kind().equals("task_begin")).findFirst().orElseThrow();
+        assertTrue(begin.bool("read_only"));
+        assertFalse(begin.bool("autonomous"));
+        observation("read_only");
+        call(0, "break_block", POS);
+        assertTrue(client.sent.stream().noneMatch(e -> e.kind().equals("tool_call") && e.str("tool").equals("break_block")));
+        observation("read_only");
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m -> m instanceof Msg.Tool t
+                && t.content().startsWith("DENIED:")));
+    }
+
+    @Test void changingModeStopsPendingConfirmationAndQueuedTasksWithoutGrantingOldScope() {
+        long task = propose();
+        var old = runner.questionSnapshot();
+        long queued = runner.submitTask("queued work");
+        client.drain();
+        autonomous(true);
+        assertNull(runner.questionSnapshot());
+        assertEquals(0, runner.currentTaskId());
+        assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("queued_tasks").getAsInt());
+        assertFalse(runner.answerQuestion(old.id(), "确认"));
+        assertTrue(client.sent.stream().noneMatch(e -> e.kind().equals("authorize")));
+        assertEquals(1, client.engines.size(), "mode changes retain the existing engine/history");
+        for (long id : new long[]{task, queued})
+            assertTrue(runner.panelHistory().tasks().stream().anyMatch(t -> t.id() == id && t.status().equals("cancelled")));
+        runner.submitTask("fresh autonomous work");
+        client.drain();
+        assertTrue(client.sent.stream().filter(e -> e.kind().equals("task_begin")).toList().getLast().bool("autonomous"));
+    }
+
+    @Test void disablingAutonomyCancelsAcceptedWorkAndLateJobCannotContinueIt() {
+        autonomous(true);
+        runner.start();
+        runner.submitTask("move then work");
+        call(0, "move_to", POS);
+        long seq = client.lastTool().num("seq", -1);
+        runner.handleS2c(AgentRunnerLifecycleTest.ack(seq));
+        client.drain();
+        autonomous(false);
+        long tools = client.toolCount();
+        runner.handleS2c(AgentRunnerLifecycleTest.job(seq, "done"));
+        client.drain();
+        assertEquals(tools, client.toolCount());
+        assertEquals(0, runner.currentTaskId());
+        assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("pending_jobs").getAsInt());
+        runner.submitTask("fresh confirmation-mode work");
+        client.drain();
+        assertFalse(client.sent.stream().filter(e -> e.kind().equals("task_begin")).toList().getLast().bool("autonomous"));
+    }
+
+    @Test void failedModeSaveKeepsTheOldPolicyAndPendingQuestionIntact() {
+        long task = propose();
+        var question = runner.questionSnapshot();
+        long cancellations = client.cancelCount();
+        client.failSave = true;
+        assertThrows(java.io.UncheckedIOException.class, () -> runner.reconfigure(
+                runner.config().withPreferences(runner.config().preferences.withAutonomousActions(true))));
+        client.drain();
+        assertFalse(runner.config().preferences.autonomousActions());
+        assertEquals(task, runner.currentTaskId());
+        assertEquals(question.id(), runner.questionSnapshot().id());
+        assertEquals(cancellations, client.cancelCount());
+    }
+
     @Test void readonlyNoTargetsCannotTriggerMovementOrWorldChanges() {
         runner.start();
         long task = runner.submitTask("[只读]仅扫描附近，未发现目标就汇报，不要移动");

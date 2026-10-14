@@ -325,7 +325,7 @@ public final class AttackTool implements ServerTool {
         if (target.protectedTarget()) return failed("DENIED:不攻击玩家、同伴、宠物或同队目标。");
         if (target.hostile() && !target.named()) return null;
         var change = EntityAttack.change(target, maxHits);
-        if (execution.allows(change)) return null;
+        if (permissions != null && permissions.allowsChange(context, execution, change)) return null;
         String summary = "确认对实体 " + target.type() + "（entity_id=" + target.id() + "，target_uuid="
                 + target.uuid() + "）在当前位置执行原版近战，最多挥击 " + maxHits
                 + " 次、最多20秒；可能伤害或杀死该目标，已完成攻击不能撤销。";

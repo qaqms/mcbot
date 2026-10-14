@@ -140,6 +140,29 @@ data包含api_calls、terminal_calls、primitive_calls、last_tool、last_receip
 returned及真实数量汇总；模型反馈保留阶段实际回执，不靠打印文本判成品完成。
 21个工具仍全量下发，技能/帮助按需读取留给下一卡。
 
+### 1.3 主人选择的自主执行
+
+G面板设置/通用的“自主执行（免确认）”对应客户端autonomous_actions，默认false。
+开启后新任务的路线开路/搭路及未受保护的中立/命名实体攻击免逐次批准，
+不再走NEED_CONFIRM→ask_owner→重发动作的批准轮次；普通澄清问题仍可出现。
+既有逐次确认模式不变，没有新增模型工具用来切换权限。
+
+模式由主人客户端通过内部task_begin.autonomous布尔值传给服务端，
+旧客户端缺字段为false，非法类型拒绝建立新任务。ActionPermissions.Context保存有效模式，
+read_only始终优先；只读上下文不能携带有效自主动作许可。
+PathTask计划清单及逐格执行、AttackTool目标批准共用ActionPermissions.allowsChange(s)，
+自主许可仅对当前任务有效，终止/换任务后失效，工具args里的自主/许可布尔不授予权限。
+原白名单、owner/身体/维度身份、保护规则、资源互斥、真实终态及有限动作预算保留。
+
+status的实际服务端回执包含permission_mode=confirm/autonomous/read_only/none，
+并在feedback说明当前任务模式；scan_area的攻击需确认提示同步使用有效模式，
+受保护目标仍显示保护。自主新任务首次及后续轮次的观测须确认autonomous，
+旧服务端/模式不符时在模型请求前停止，固定MODE_UNAVAILABLE原因保留到任务终态；
+不自动批准旧方案、不降级为反复询问或回显任意失败原文。
+保存模式变更停止当前与排队任务/待答批准，保留显示历史；下一条指令按新模式执行。
+字段存在本实例客户端配置，对之后的桥接和面板任务一致生效，未提供世界级规则记忆。
+外部桥v1.0字段、鉴权和事件不变；客户端/服务端须一起更新，本卡不自动安装或改实例。
+
 ## 2. 在册工具（15 服务端 + 6 本地，真实行为仍待验）
 
 > 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 15 个），
@@ -157,10 +180,10 @@ returned及真实数量汇总；模型反馈保留阶段实际回执，不靠打
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
 | `scan_area` | `r`(1-32，默认16),`items_only?,item?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落。不保证候选可达，泥土/沙用find_resource定向查 |
 | `break_block` | `x,y,z,expected_block?` | 异步(≤60s) | 可核对观测的完整方块ID；每拍核验目标/主手、原版距离与视线，转向后确认实际命中再挥手；原版破坏处理耐久/地上掉落，不直接入包；回执给移除、留地量和实体位置，原生视觉待测 |
-| `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；中立/命名目标确认，拒绝玩家/宠物/同队及不安全横扫 |
+| `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；逐次确认模式的中立/命名目标需批准，自主模式免批准，仍拒绝玩家/宠物/同队及不安全横扫 |
 | `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
 | `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
-| `move_to` | `x,y,z,exact?,work_target?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；work_target={x,y,z}要求exact=true，移动终态按最新视线/距离验证可挖性，失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。改动世界先回 `NEED_CONFIRM`+清单与编号，主人确认后携带编号执行；旧布尔不授权。搜索预算 8000 节点/128 挖/放≤背包存量；重规划新改动重新确认 |
+| `move_to` | `x,y,z,exact?,work_target?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；work_target={x,y,z}要求exact=true，移动终态按最新视线/距离验证可挖性，失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。逐次确认模式改世界先回 `NEED_CONFIRM`+清单与编号，主人确认后携带编号执行；自主模式免批准，旧模型布尔不授权。搜索预算 8000 节点/128 挖/放≤背包存量；确认模式重规划新改动重新确认 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
@@ -419,7 +442,7 @@ RG2游戏聊天命令 `/mcbot verify_readonly` 固定尝试wait(1)，保留真�
 只接受当前任务/工具/维度匹配的只读拒绝；空闲前置和补测判据见REAL-GAME-RETESTING，
 17项dispatcher离线回归及网络/模型未覆盖边界见DEVELOPMENT §3.11。
 
-路线确认流程：move_to → NEED_CONFIRM → ask_owner(text,authorization_id) →
+逐次确认模式的路线流程：move_to → NEED_CONFIRM → ask_owner(text,authorization_id) →
 主人明确回答「确认」→ 服务端批准回执 → move_to(x,y,z,authorization_id)。
 授权一次使用、180s 过期，绑定目的地和每一格的操作/完整 BlockState。
 确认问题展示服务端生成的完整坐标/方块清单，忽略模型替代文案；未明确批准或超时不授权。
@@ -428,6 +451,8 @@ RG2游戏聊天命令 `/mcbot verify_readonly` 固定尝试wait(1)，保留真�
 新增位置、改动类型、原状态变化或已经执行后被补回的格子，都不能借旧许可再次操作。
 逐格挖放前复核，下一落脚格的脚/头/支撑变化先重规划，不直接进入新障碍。
 may_alter_terrain 保留类型兼容，但 true 不能批准世界改动。
+自主模式仅替代上述逐次批准要求，仍通过当前服务端任务上下文判断，
+计划/执行复核与区域锁不跳过；只读任务不会因自主偏好而放行，详见§1.3。
 
 collect 的中心需在身体6.5格内；实际候选同时在请求球体和身体6.5格内、已加载且存活，
 没有拾取延迟，且 target 为空或匹配同伴 UUID。getOwner 是投掷来源，不能代替 target。
@@ -476,7 +501,8 @@ ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发�
 即使当前运动本来可能不会触发横扫，也不冒险扩大本次目标范围。
 
 玩家（含主人/同伴）、非Mob实体、同队、已驯服动物/马或有 owner reference 的生物始终拒绝。
-未命名 Enemy 可直接执行；其余中立或命名Mob先返回 NEED_CONFIRM 和完整服务端清单。
+未命名 Enemy 可直接执行；逐次确认模式的其余中立或命名Mob先返回 NEED_CONFIRM 和完整服务端清单。
+主人选择的自主模式由同一服务端任务判据免去批准，仍先拒绝受保护目标，详见§1.3。
 沿用 ask_owner/authorize，明确批准后重新携带相同编号、UUID、max_hits及authorization_id调用；
 hostile_nearby 不能携带批准编号，不能把具体目标许可改成自动选择许可。
 许可绑定任务/身体/维度、目标编号/UUID/类型、Enemy/命名标志及挥击预算，沿用180s/一次使用。

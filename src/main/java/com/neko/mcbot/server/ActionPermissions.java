@@ -8,9 +8,17 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.LongSupplier;
 
-/** Server-held task identity and one-use approvals. All calls run on the server thread. */
+/** Server-held task identity, owner-selected mode and concrete approvals. Server thread only. */
 public final class ActionPermissions {
-    public record Context(UUID owner, UUID companion, String dimension, long taskId, boolean readOnly) {
+    public record Context(UUID owner, UUID companion, String dimension, long taskId, boolean readOnly,
+                          boolean autonomous) {
+        public Context(UUID owner, UUID companion, String dimension, long taskId, boolean readOnly) {
+            this(owner, companion, dimension, taskId, readOnly, false);
+        }
+        public Context {
+            autonomous = autonomous && !readOnly;
+        }
+        public String mode() { return readOnly ? "read_only" : autonomous ? "autonomous" : "confirm"; }
     }
 
     public record Change(String operation, long position, Object expectedState) {
@@ -100,6 +108,16 @@ public final class ActionPermissions {
         return TaskPolicy.observation(tool, args) || context != null && !context.readOnly()
                 && java.util.Set.of("equip", "craft", "smelt", "move_to", "break_block", "place_block",
                         "collect", "transfer", "wait", "attack").contains(tool);
+    }
+
+    /** Only the current owner task can replace concrete approvals with its chosen execution mode. */
+    public boolean allowsChange(Context context, Execution execution, Change change) {
+        return context != null && !context.readOnly() && context.equals(tasks.get(context.owner()))
+                && (context.autonomous() || execution != null && execution.allows(change));
+    }
+
+    public boolean allowsChanges(Context context, Execution execution, Map<String, Change> changes) {
+        return changes.values().stream().allMatch(change -> allowsChange(context, execution, change));
     }
 
     public String propose(Scope scope) {

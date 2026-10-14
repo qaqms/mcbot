@@ -16,6 +16,30 @@ class ClientConfigTest {
         assertEquals(1500, config.preferences.recentBudget());
         assertFalse(config.acceptMode);
         assertTrue(config.preferences.autoCompact());
+        assertFalse(config.preferences.autonomousActions());
+    }
+
+    @Test void autonomousPreferenceIsPersistedAndSurvivesUnrelatedDraftEdits() {
+        var original = new ClientConfig("http://127.0.0.1", "offline", "synthetic", "persona")
+                .withPreferences(ClientConfig.Preferences.defaults().withAutonomousActions(true));
+        var restored = ClientConfig.fromJson(ClientConfig.toJson(original), Map.of());
+        assertTrue(restored.preferences.autonomousActions());
+        assertEquals(original.preferences, restored.preferences);
+        assertTrue(restored.withConnection("http://127.0.0.1", "other", "synthetic", "updated")
+                .preferences.autonomousActions());
+    }
+
+    @Test void malformedAutonomyNeverEnablesItAndContextFallbackDoesNotChangeItsExplicitValue() {
+        for (String value : new String[]{"\"true\"", "1", "null", "{}", "[]"}) {
+            var json = com.google.gson.JsonParser.parseString("{\"autonomous_actions\":" + value + "}").getAsJsonObject();
+            assertFalse(ClientConfig.fromJson(json, Map.of()).preferences.autonomousActions());
+        }
+        var json = new JsonObject();
+        json.addProperty("autonomous_actions", true);
+        json.addProperty("compact_threshold", -1);
+        var preferences = ClientConfig.fromJson(json, Map.of()).preferences;
+        assertEquals(6000, preferences.compactThreshold());
+        assertTrue(preferences.autonomousActions());
     }
     @Test void preferencesRoundTripWithoutChangingTheConnection() {
         var config = new ClientConfig("http://127.0.0.1", "offline", "synthetic", "persona", false)

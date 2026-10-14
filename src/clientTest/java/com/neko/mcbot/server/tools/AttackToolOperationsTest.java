@@ -133,4 +133,34 @@ class AttackToolOperationsTest {
                 false, false, false, true, 20, 0);
         assertTrue(AttackTool.permission(permission, context, none, target, 1).feedback().startsWith("DENIED:"));
     }
+
+    @Test void autonomousModeAllowsNeutralAndNamedTargetsButCannotApproveProtectedTargets() {
+        var permissions = new ActionPermissions();
+        var context = new ActionPermissions.Context(UUID.randomUUID(), UUID.randomUUID(), "world", 4, false, true);
+        permissions.begin(context);
+        var none = new ActionPermissions.Execution(null);
+        var neutral = new EntityAttack.Target(47, UUID.fromString(uuid), "minecraft:pig",
+                false, true, false, true, 20, 0);
+        assertNull(AttackTool.permission(permissions, context, none, neutral, 2));
+        assertFalse(ScanAreaTool.targetData(neutral, true).get("requires_confirmation").getAsBoolean());
+        assertFalse(ScanAreaTool.targetLine(neutral, true).contains("需确认"));
+        var protectedTarget = new EntityAttack.Target(47, UUID.fromString(uuid), "minecraft:wolf",
+                false, true, true, true, 20, 0);
+        assertTrue(AttackTool.permission(permissions, context, none, protectedTarget, 2).feedback().startsWith("DENIED:"));
+        assertTrue(ScanAreaTool.targetLine(protectedTarget, true).contains("受保护"));
+        assertTrue(ScanAreaTool.targetData(protectedTarget, true).get("protected").getAsBoolean());
+        permissions.end(context.owner(), 4);
+        assertNotNull(AttackTool.permission(permissions, context, none, neutral, 2),
+                "ended autonomous tasks cannot authorize later attacks");
+    }
+
+    @Test void readOnlySelectionDoesNotGrantNeutralAttackEvenWhenAutonomyWasRequested() {
+        var permissions = new ActionPermissions();
+        var context = new ActionPermissions.Context(UUID.randomUUID(), UUID.randomUUID(), "world", 5, true, true);
+        permissions.begin(context);
+        var target = new EntityAttack.Target(47, UUID.fromString(uuid), "minecraft:pig",
+                false, false, false, true, 20, 0);
+        assertNotNull(AttackTool.permission(permissions, context, new ActionPermissions.Execution(null), target, 2));
+        assertFalse(ActionPermissions.allowed(context, "attack", new JsonObject()));
+    }
 }

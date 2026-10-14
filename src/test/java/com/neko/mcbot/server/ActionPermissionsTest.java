@@ -16,6 +16,48 @@ class ActionPermissionsTest {
             UUID.randomUUID(), UUID.randomUUID(), "overworld", 7, false);
     private final ActionPermissions.Change dig = new ActionPermissions.Change("dig", 123, "stone");
 
+    @Test void autonomousTaskUsesTheSameDecisionForPlannedAndLiveChangesWithoutProposals() {
+        var autonomous = new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 7, false, true);
+        permissions.begin(autonomous);
+        var none = new ActionPermissions.Execution(null);
+        var place = new ActionPermissions.Change("place", 456, "air");
+        var changes = Map.of(ActionPermissions.key(dig), dig, ActionPermissions.key(place), place);
+        assertTrue(permissions.allowsChanges(autonomous, none, changes));
+        assertTrue(permissions.allowsChange(autonomous, none, dig));
+        assertTrue(permissions.allowsChange(autonomous, none, new ActionPermissions.Change("dig", 123, "dirt")),
+                "owner-selected autonomy covers fresh replanned changes; action safety still checks them");
+        permissions.end(task.owner(), 7);
+        assertFalse(permissions.allowsChange(autonomous, none, dig));
+    }
+
+    @Test void confirmationModeRetainsExactScopeAndDoesNotAcceptAnAutonomousContextForgery() {
+        String token = propose();
+        var none = new ActionPermissions.Execution(null);
+        assertFalse(permissions.allowsChange(task, none, dig));
+        var forged = new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 7, false, true);
+        assertFalse(permissions.allowsChange(forged, none, dig));
+        permissions.approve(task, token);
+        var approved = new ActionPermissions.Execution(permissions.take(task, token, 999));
+        assertTrue(permissions.allowsChange(task, approved, dig));
+        assertFalse(permissions.allowsChange(task, approved, new ActionPermissions.Change("dig", 123, "dirt")));
+        approved.observed("dig", dig.position());
+        assertFalse(permissions.allowsChange(task, approved, dig));
+    }
+
+    @Test void autonomousSelectionCannotOverrideReadOnlyOrCrossTaskBoundaries() {
+        var read = new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 8, true, true);
+        permissions.begin(read);
+        assertFalse(read.autonomous());
+        assertEquals("read_only", read.mode());
+        assertFalse(permissions.allowsChange(read, new ActionPermissions.Execution(null), dig));
+        assertFalse(ActionPermissions.allowed(read, "break_block", new com.google.gson.JsonObject()));
+        var autonomous = new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 9, false, true);
+        permissions.begin(autonomous);
+        permissions.begin(new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 10, false));
+        assertFalse(permissions.allowsChange(autonomous, null, dig));
+        assertFalse(permissions.allowsChange(null, null, dig));
+    }
+
     private String propose() {
         permissions.begin(task);
         return permissions.propose(new ActionPermissions.Scope(task, 999, Map.of(ActionPermissions.key(dig), dig)));

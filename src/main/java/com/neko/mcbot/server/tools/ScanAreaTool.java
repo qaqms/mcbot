@@ -56,6 +56,18 @@ public final class ScanAreaTool implements ServerTool {
 
     @Override
     public Result run(CompanionPlayer companion, JsonObject args) {
+        return scan(companion, args, false);
+    }
+
+    @Override public java.util.concurrent.CompletableFuture<Result> runAuthorized(
+            CompanionPlayer companion, JsonObject args, com.neko.mcbot.task.CompanionScheduler scheduler,
+            com.neko.mcbot.server.ActionPermissions permissions,
+            com.neko.mcbot.server.ActionPermissions.Context context) {
+        return java.util.concurrent.CompletableFuture.completedFuture(
+                scan(companion, args, context != null && context.autonomous()));
+    }
+
+    private Result scan(CompanionPlayer companion, JsonObject args, boolean autonomous) {
         long t0 = System.nanoTime();
         int r = args.has("r")
                 ? Math.min(MAX_RADIUS, Math.max(1, args.get("r").getAsInt()))
@@ -90,7 +102,7 @@ public final class ScanAreaTool implements ServerTool {
         ScanSummary summary = new ScanSummary(center.getX(), center.getY(), center.getZ(), r);
 
         JsonArray entityTargets = new JsonArray();
-        List<String> entities = scanEntities(companion, center, r, summary, entityTargets);
+        List<String> entities = scanEntities(companion, center, r, summary, entityTargets, autonomous);
 
         ScanPlan.Plan plan = ScanPlan.build(r);
         int cells = 0;
@@ -220,7 +232,7 @@ public final class ScanAreaTool implements ServerTool {
     }
 
     private static List<String> scanEntities(CompanionPlayer companion, BlockPos center, int r,
-                                            ScanSummary summary, JsonArray targets) {
+                                            ScanSummary summary, JsonArray targets, boolean autonomous) {
         var level = companion.level();
         List<String> out = new ArrayList<>();
         for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class,
@@ -241,19 +253,23 @@ public final class ScanAreaTool implements ServerTool {
                 break;
             }
             var target = AttackTool.describe(companion, e);
-            targets.add(targetData(target));
+            targets.add(targetData(target, autonomous));
             out.add(String.format("%s%s @(%d,%d,%d) %s hp=%.0f%s %s",
                     WireSize.truncateToBytes(e.getName().getString(), 80),
                     hostile ? "[敌对]" : "",
                     ep.getX(), ep.getY(), ep.getZ(),
                     ScanFormat.dist(distance(center, ep)),
                     e.getHealth(),
-                    e.isOnFire() ? " [着火]" : "", targetLine(target)));
+                    e.isOnFire() ? " [着火]" : "", targetLine(target, autonomous)));
         }
         return out;
     }
 
     static JsonObject targetData(EntityAttack.Target target) {
+        return targetData(target, false);
+    }
+
+    static JsonObject targetData(EntityAttack.Target target, boolean autonomous) {
         var data = new JsonObject();
         data.addProperty("entity_id", target.id());
         data.addProperty("target_uuid", target.uuid().toString());
@@ -261,13 +277,18 @@ public final class ScanAreaTool implements ServerTool {
         data.addProperty("type_truncated", WireSize.utf8Bytes(target.type()) > 128);
         data.addProperty("hostile", target.hostile());
         data.addProperty("protected", target.protectedTarget());
-        data.addProperty("requires_confirmation", !target.hostile() || target.named());
+        data.addProperty("requires_confirmation", !autonomous && (!target.hostile() || target.named()));
         return data;
     }
 
     static String targetLine(EntityAttack.Target target) {
+        return targetLine(target, false);
+    }
+
+    static String targetLine(EntityAttack.Target target, boolean autonomous) {
         return "entity_id=" + target.id() + " target_uuid=" + target.uuid()
-                + (target.protectedTarget() ? " [攻击受保护]" : !target.hostile() || target.named() ? " [攻击需确认]" : "");
+                + (target.protectedTarget() ? " [攻击受保护]"
+                : !autonomous && (!target.hostile() || target.named()) ? " [攻击需确认]" : "");
     }
 
     private static double distance(BlockPos a, BlockPos b) {

@@ -13,6 +13,7 @@ class AgentLoopObservationTest {
         final List<CompletableFuture<AssistantTurn>> responses = new ArrayList<>();
         final List<CompletableFuture<ToolOutcome>> snapshots = new ArrayList<>();
         final List<AgentLoop.TaskStatus> statuses = new ArrayList<>();
+        final List<String> finishes = new ArrayList<>();
         final AgentLoop loop = new AgentLoop(this, List.of(), this, AgentLoop.Config.defaults(), this, () -> "fixed", 100000);
         @Override public CompletableFuture<ToolOutcome> observe(long taskId) {
             var snapshot = new CompletableFuture<ToolOutcome>();
@@ -29,7 +30,10 @@ class AgentLoopObservationTest {
             responses.add(response);
             return response;
         }
-        @Override public void onTaskFinished(long id, AgentLoop.TaskStatus status, String text) { statuses.add(status); }
+        @Override public void onTaskFinished(long id, AgentLoop.TaskStatus status, String text) {
+            statuses.add(status);
+            finishes.add(text);
+        }
     }
 
     @Test void waitsForFreshSnapshotEachTurnAndNeverAccumulatesItInHistory() {
@@ -87,5 +91,20 @@ class AgentLoopObservationTest {
         assertEquals(1, h.snapshots.size());
         assertTrue(h.responses.isEmpty());
         assertEquals(List.of(AgentLoop.TaskStatus.FAILED), h.statuses);
+    }
+
+    @Test void executionModeFailureUsesOnlyTheStrictBooleanCodeAndAFixedPublicReason() {
+        for (String value : new String[]{"true", "false", "\"true\"", "null", "{}"}) {
+            var h = new Harness();
+            h.loop.submit(1, "work");
+            var data = com.google.gson.JsonParser.parseString(
+                    "{\"execution_mode_unavailable\":" + value + "}").getAsJsonObject();
+            h.snapshots.getFirst().complete(new ToolExecutor.ToolOutcome(false, "private diagnostic text", data));
+            assertTrue(h.responses.isEmpty());
+            assertEquals(List.of(AgentLoop.TaskStatus.FAILED), h.statuses);
+            assertTrue(h.finishes.getFirst().startsWith(value.equals("true") ? "MODE_UNAVAILABLE:" : "STATE_UNAVAILABLE:"));
+            assertFalse(h.finishes.getFirst().contains("private diagnostic text"));
+            h.loop.close();
+        }
     }
 }

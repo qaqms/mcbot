@@ -230,6 +230,8 @@ public final class AgentRunner implements ToolExecutor {
                         JsonObject scope = new JsonObject();
                         scope.addProperty("task_id", taskId);
                         scope.addProperty("read_only", taskPolicies.getOrDefault(taskId, true));
+                        scope.addProperty("autonomous", cfg.preferences.autonomousActions()
+                                && !taskPolicies.getOrDefault(taskId, true));
                         sendTaskControl("task_begin", scope);
                         JsonObject d = new JsonObject();
                         d.addProperty("status", "running");
@@ -337,10 +339,14 @@ public final class AgentRunner implements ToolExecutor {
         LOG.info("大脑已上线：{} / {}", cfg.baseUrl, cfg.model);
     }
 
-    /** Connection changes rebuild the brain; persona/preferences apply without discarding tasks. */
+    /** Mode changes cancel old work; ordinary presentation/context edits retain it. */
     public void reconfigure(ClientConfig newCfg) {
         if (closed) return;
         client.saveConfig(newCfg);
+        if (cfg.preferences.autonomousActions() != newCfg.preferences.autonomousActions()) {
+            cancelTask(0);
+            say("§7[mcbot] 执行模式已切换，旧任务已停止；下一条指令按新模式执行。§r");
+        }
         if (!cfg.connectionChanged(newCfg)) {
             boolean personaChanged = !cfg.persona.equals(newCfg.persona);
             cfg = newCfg;
@@ -903,6 +909,16 @@ public final class AgentRunner implements ToolExecutor {
         long generation = brainGeneration;
         long bodyGeneration = companionGeneration;
         return executeRemote("status", "{\"details\":true}", taskId, loop).thenApply(result -> {
+            var mode = result.data().get("permission_mode");
+            if (!closed && taskId == currentTask && result.ok() && cfg.preferences.autonomousActions()
+                    && !taskPolicies.getOrDefault(taskId, true)
+                    && (mode == null || !mode.isJsonPrimitive() || !mode.getAsJsonPrimitive().isString()
+                    || !"autonomous".equals(mode.getAsString()))) {
+                var data = result.data().deepCopy();
+                data.addProperty("execution_mode_unavailable", true);
+                return new ToolOutcome(false, "MODE_UNAVAILABLE:服务端未确认自主执行模式，任务未继续。"
+                        + "请同步更新客户端与服务端，或关闭自主执行后重新提交。", data);
+            }
             if (!closed && generation == brainGeneration && bodyGeneration == companionGeneration && taskId == currentTask)
                 captureBody(result);
             return result;

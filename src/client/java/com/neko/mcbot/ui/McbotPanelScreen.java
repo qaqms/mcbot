@@ -407,7 +407,12 @@ public final class McbotPanelScreen extends Screen {
         addToggle("游戏内状态提示", 87, preferences::showHud,
                 () -> updatePreferences(preferences.contextWindow(), preferences.compactThreshold(), preferences.recentBudget(),
                         preferences.autoCompact(), preferences.foldTools(), preferences.dark(), !preferences.showHud()));
-        int y = text("本地任务桥", 4, 137, viewport.width() - 12, ink()) + 9;
+        text("执行权限", 4, 137, viewport.width() - 12, ink());
+        addToggle("自主执行（免确认）", 154, preferences::autonomousActions,
+                () -> preferences = preferences.withAutonomousActions(!preferences.autonomousActions()))
+                .setTooltip(Tooltip.create(Component.literal(
+                        "免去动作批准。保存模式变更将停止当前及排队任务；明确只读的任务仍只读。")));
+        int y = text("本地任务桥", 4, 204, viewport.width() - 12, ink()) + 9;
         y = text(BridgeHttp.tokenOrNull() == null ? "未启动" : BridgeHttp.endpoint(), 4, y, viewport.width() - 12, muted()) + 12;
         var copy = formButton("复制连接令牌", y, 104, () -> {
             String token = BridgeHttp.tokenOrNull();
@@ -425,11 +430,12 @@ public final class McbotPanelScreen extends Screen {
         var rect = new PanelLayout.Rect(viewport.x() + 4, viewport.y() + y + 16, w, field.getHeight());
         addRenderableWidget(field); scrolling.add(new Control(field, rect));
     }
-    private void addToggle(String label, int y, java.util.function.BooleanSupplier value, Runnable action) {
+    private PanelToggle addToggle(String label, int y, java.util.function.BooleanSupplier value, Runnable action) {
         text(label, 4, y + 4, viewport.width() - 48, ink());
         var rect = new PanelLayout.Rect(viewport.right() - 38, viewport.y() + y, 32, 20);
         var toggle = addRenderableWidget(new PanelToggle(label, rect, value, () -> { action.run(); rebuildWidgets(); }));
         scrolling.add(new Control(toggle, rect));
+        return toggle;
     }
     private PanelButton formButton(String text, int y, int width, Runnable action) {
         var rect = new PanelLayout.Rect(viewport.x() + 4, viewport.y() + y, Math.min(width, viewport.width() - 8), 20);
@@ -472,7 +478,8 @@ public final class McbotPanelScreen extends Screen {
         catch (java.io.UncheckedIOException failure) { toast("保存失败，请检查本地文件权限"); }
     }
     private void updatePreferences(int window, int threshold, int recent, boolean automatic, boolean folded, boolean dark, boolean hud) {
-        preferences = new ClientConfig.Preferences(window, threshold, recent, automatic, folded, dark, hud);
+        preferences = new ClientConfig.Preferences(window, threshold, recent, automatic, folded, dark, hud,
+                preferences.autonomousActions());
     }
     private void setDark(boolean dark) {
         updatePreferences(preferences.contextWindow(), preferences.compactThreshold(), preferences.recentBudget(),

@@ -168,4 +168,23 @@ class AwarenessToolTest {
         assertFalse(result.data().has("inventory"));
         assertFalse(StatusTool.report(json("{\"details\":\"true\"}"), body, inventory, task).ok());
     }
+
+    @Test void statusReportsTheServerEffectiveModeWithoutMutatingBodyFacts() {
+        var original = new ServerTool.Result(true, "body facts", json("{\"hp\":20}"));
+        var owner = java.util.UUID.randomUUID();
+        var companion = java.util.UUID.randomUUID();
+        for (var context : java.util.List.of(
+                new com.neko.mcbot.server.ActionPermissions.Context(owner, companion, "world", 1, false),
+                new com.neko.mcbot.server.ActionPermissions.Context(owner, companion, "world", 2, false, true),
+                new com.neko.mcbot.server.ActionPermissions.Context(owner, companion, "world", 3, true, true))) {
+            var result = StatusTool.permissionReport(original, context);
+            assertEquals(context.mode(), result.data().get("permission_mode").getAsString());
+            assertTrue(result.feedback().startsWith("body facts"));
+            assertEquals(20, result.data().get("hp").getAsInt());
+        }
+        assertFalse(original.data().has("permission_mode"));
+        assertEquals("none", StatusTool.permissionReport(original, null).data().get("permission_mode").getAsString());
+        var failure = new ServerTool.Result(false, "DENIED:invalid args", null);
+        assertSame(failure, StatusTool.permissionReport(failure, null));
+    }
 }

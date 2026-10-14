@@ -65,6 +65,7 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     volatile long now = 1_700_000_000_000L;
     boolean connected = true;
     boolean liveObservation;
+    boolean failSave;
 
     AgentRunner create() {
         var runner = new AgentRunner(CONFIG, this);
@@ -97,7 +98,10 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
             if (isCurrentRunner(owner) && canSend()) send(new Envelope("cancel", new com.google.gson.JsonObject()));
         });
     }
-    @Override public void saveConfig(ClientConfig cfg) { saved.add(cfg); }
+    @Override public void saveConfig(ClientConfig cfg) {
+        if (failSave) throw new java.io.UncheckedIOException(new java.io.IOException("synthetic save failure"));
+        saved.add(cfg);
+    }
     @Override public long nowMs() { return now; }
     @Override public boolean inGame() { return connected; }
     @Override public void executeOnClient(Runnable action) { queue.addLast(action); }
