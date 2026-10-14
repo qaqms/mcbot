@@ -12,6 +12,12 @@ gather的scope=task默认保留整项数量目标，scope=subtask只结算本次
 从第一份新鲜完整背包建立基线，不覆盖AgentLoop独立保存的最终目标。
 最新范围与离线/实机边界以STATUS为准。
 
+通用run_program已接BoundedProgram（上游LuaJ文本解释器）：独立虚拟线程仅计算/等待，
+mc.call切回客户端，真实terminalOnly回执才恢复；变量、分支和循环由同一语言运行时处理。
+嵌套gather/workflow复用旧执行器，局部材料不改最终目标，原子预算统一，
+取消/超时释放子票并中断计算；解释器没有文件/网络/Java或任意命令入口。
+不是新身体控制器；共享追击/跟随与批次放置仍待后续实现，详见TOOLS §1.2。
+
 ## 1. 三进程拓扑
 
 ```
@@ -40,6 +46,7 @@ gather的scope=task默认保留整项数量目标，scope=subtask只结算本次
 |---|---|---|
 | 服务器主线程 | 三道闸后的一切：工具执行、Scheduler tick、假玩家 | 世界操作只在这条线 |
 | 客户端主线程（渲染） | `AgentRunner.tick()` 超时巡检、面板、聊天注入 | GUI 调用必须 `mc.execute()` 到此线 |
+| 程序虚拟线程 | Lua解释/预算钩子、等真正工具future | 不访问MC；游戏调用排入客户端队列，不能在主线程等待程序 |
 | HttpClient 线程 | HTTP/SSE 传输与解析 | CallbackChatEngine 将流式信号和整轮结果送到客户端主线程 |
 | mcbot-bridge 线程池（8，daemon） | REST/MCP/SSE 处理 | 投令/取消/回答先 hop 客户端主线程；状态可读快照；关闭时关闭线程池 |
 
@@ -59,6 +66,7 @@ agent-core/          纯 JVM（零 MC 依赖，独立构建+单测）
                      ItemGoal(任务/材料子任务作用域、各自背包基线、当前数量与结束校验)
                      PendingJobs(两段式等待: seq→终局 / 受理后 jobId→事件 + 超时口径)
   prompt/            PromptBuilder（基础准则+人设+技能）/SkillLoader(*.md）
+  script/            BoundedProgram（上游LuaJ、变量/条件/循环、纯计算/数据预算与异步调用桥）
   bridge/            BridgeService(REST+MCP 内核)/EventRing/BridgeBackend —— 不碰 HTTP
 src/main/            公共+服务端
   body/              FakeConnection/CompanionPlayer/CompanionRoster/CompanionChunkPads/SummonService/SafeSpawn/SelfTest
@@ -79,7 +87,7 @@ src/main/            公共+服务端
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list|verify_readonly（需 OP，gamemaster 级）
 src/client/          客户端
-  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(20项模型描述)
+  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(21项模型描述)
                      BoundedWorkflow(清单)/BoundedGather(本地有界采集循环)
                      PanelHistory(独立会话显示档案，不随模型压缩/重建删除)
   bridge/            BridgeHttp(JDK HttpServer 适配)/BridgeEvents(生产者总线)
@@ -229,7 +237,12 @@ usage加新增估算和完整本地估算取保守值，摘要输入也限预算
 `ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`
 （或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
 长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。本地工具为
-ask_owner/workflow/gather/set_goal/report_blocked，后两者由loop本地拦截。
+ask_owner/workflow/gather/run_program/set_goal/report_blocked，后两者由loop本地拦截。
+run_program只可调用15个游戏工具及gather/workflow，不可反问/改目标/嵌套程序；
+动态参数复用现有Schema校验（含攻击oneOf），任务只读仍在executeRemote和服务端核对。
+失败/需授权停止程序并保留原回执，不能在程序内批准或捕获失败后继续依赖动作。
+gather/workflow的原子派发统一经executeCompositionRemote，程序活动期间共享max_calls，
+独立gather/workflow仍沿原兼容限额；取消同一任务的组合及terminalOnly子票，不取消其他任务。
 
 BoundedGather默认scope=task使用任务开始背包基线并登记固定最终条件；
 scope=subtask从本次第一份完整状态建立局部基线，不登记/修改最终条件。
@@ -526,6 +539,7 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 | AgentLoop | 固定40步/指令、nudge@3、abort@5（同调用**且同结果**才累计）；压缩阈值默认6000、近段预算默认1500 token（可配置，CJK估算兜底）；熔断2次 |
 | 面板偏好/档案(R3) | 窗口默认64000（4096..2000000）、阈值≥2048且<窗口、近期≥256且<阈值；auto_compact/fold_tools/show_hud=true、dark=false；会话内20任务/2000记录，不跨退出/重启 |
 | 流程(C6) | 本地1-12步、默认180/最多300秒；请求量合计≤128（不等于材料/产量）；明确挖放≤12；参数≤16384B；累计反馈12000B停后续、结果全文展示预算24000B；任务空搜索3次停 |
+| 通用组合 | Lua code≤16384B/参数≤20000B；默认300/最多900秒；API调用和实际原子派发各默认128/最多256（嵌套共享原子预算）；总250000/每两次API间25000指令；48层调用、65536数据单元计费、8MiB字符串累计计费/单值≤65536B；回执/返回共享20000B；不等同OS进程内存隔离 |
 | 目标/采集(LT1/LT2) | 最终item/count/mode固定；count1-4096，36槽完整基线；gather默认task用整任务基线，subtask用本次第一份状态且不改最终条件；结束前三次无进展回复FAILED；gather起点附近r默认8/最大16，默认600/最大900秒，默认128/最大256挖，子调用≤1024，参数≤4096B/子反馈≤24000B，候选站位≤6；三次操作无入包且无可拾取候选停 |
 | 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |

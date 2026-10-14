@@ -989,7 +989,7 @@ public final class AgentLoop {
     /** Count facts before opening the terminal gate, so later calls cannot escape the search bound. */
     private void noteProgress(String name, ToolOutcome r) {
         var data = r.data();
-        boolean search = Set.of("scan_area", "find_resource", "workflow").contains(name);
+        boolean search = Set.of("scan_area", "find_resource", "workflow", "run_program").contains(name);
         var noTargets = data.get("no_targets");
         if (!Set.of("status", "inventory", "inspect_block", "equip", "wait", "scan_area", "find_resource").contains(name)) {
             for (String count : List.of("crafted_count", "consumed_count", "collected_count",

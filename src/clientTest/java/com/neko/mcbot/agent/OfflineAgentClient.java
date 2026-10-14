@@ -11,7 +11,7 @@ import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.cfg.ClientConfig;
 import com.neko.mcbot.common.Envelope;
 
-import java.util.ArrayDeque;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -60,9 +60,9 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     final List<String> chat = new ArrayList<>();
     final List<ClientConfig> saved = new ArrayList<>();
     final List<Envelope> sent = new ArrayList<>();
-    final ArrayDeque<Runnable> queue = new ArrayDeque<>();
+    final ConcurrentLinkedDeque<Runnable> queue = new ConcurrentLinkedDeque<>();
     Supplier<AgentRunner> current;
-    long now = 1_700_000_000_000L;
+    volatile long now = 1_700_000_000_000L;
     boolean connected = true;
     boolean liveObservation;
 

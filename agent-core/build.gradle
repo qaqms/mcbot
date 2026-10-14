@@ -20,6 +20,8 @@ repositories {
 }
 
 dependencies {
+    implementation 'org.luaj:luaj-jse:3.0.1'
+
     // JSON 在 mod 运行时由 Minecraft 自带（版本以宿主为准），独立运行时自备
     compileOnly 'com.google.code.gson:gson:2.11.0'
     runtimeOnly 'com.google.code.gson:gson:2.11.0'

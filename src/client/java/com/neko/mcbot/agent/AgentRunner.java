@@ -12,6 +12,7 @@ import com.neko.mcbot.agentcore.loop.ToolExecutor;
 import com.neko.mcbot.agentcore.loop.TaskPolicy;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.agentcore.prompt.SkillLoader;
+import com.neko.mcbot.agentcore.script.BoundedProgram;
 import com.neko.mcbot.bridge.BridgeEvents;
 import com.neko.mcbot.cfg.ClientConfig;
 import com.neko.mcbot.common.Envelope;
@@ -93,6 +94,10 @@ public final class AgentRunner implements ToolExecutor {
     private long workflowTask;
     private BoundedGather gather;
     private long gatherTask;
+    private BoundedProgram program;
+    private long programTask;
+    private int programPrimitives;
+    private int programPrimitiveLimit;
     private JsonObject taskInitialObservation;
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
@@ -637,6 +642,7 @@ public final class AgentRunner implements ToolExecutor {
         if (closed) return;
         if (workflow != null) workflow.tick();
         if (gather != null) gather.tick();
+        if (program != null) program.tick();
         long now = client.nowMs();
         for (var t : pending.sweepTools(now)) {
             if (t.ticket().owner() != null) sendCancel();
@@ -911,32 +917,35 @@ public final class AgentRunner implements ToolExecutor {
         }
         if ("workflow".equals(name)) return executeWorkflow(argsJson);
         if ("gather".equals(name)) return executeGather(argsJson);
+        if ("run_program".equals(name)) return executeProgram(argsJson);
         return executeRemote(name, argsJson, currentTask, loop);
     }
 
     @Override
     public void stop(long taskId, String reason) {
+        if (program != null && (taskId == 0 || programTask == taskId)) program.stop(reason);
         if (workflow != null && (taskId == 0 || workflowTask == taskId)) workflow.stop(reason);
         if (gather != null && (taskId == 0 || gatherTask == taskId)) gather.stop(reason);
     }
 
     private CompletableFuture<ToolOutcome> executeGather(String argsJson) {
+        return executeGather(argsJson, false);
+    }
+
+    private CompletableFuture<ToolOutcome> executeGather(String argsJson, boolean programChild) {
         if (currentTask == 0 || loop == null || taskPolicies.getOrDefault(currentTask, true))
             return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:连续采集须属于当前非只读任务。"));
-        if (gather != null && !gather.done() || workflow != null && !workflow.done())
+        if (gather != null && !gather.done() || workflow != null && !workflow.done()
+                || !programChild && program != null && !program.done())
             return CompletableFuture.completedFuture(new ToolOutcome(false, "BUSY:已有本地流程等待终态。"));
         long taskId = currentTask;
         AgentLoop owner = loop;
         try {
             var plan = BoundedGather.parse(argsJson);
             var run = new BoundedGather(plan, taskInitialObservation, client::nowMs,
-                    (tool, args) -> executeRemote(tool, args, taskId, owner, true),
+                    (tool, args) -> executeCompositionRemote(tool, args, taskId, owner),
                     client::executeOnClient,
-                    () -> {
-                        var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
-                        if (!tickets.isEmpty()) sendCancel();
-                        tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:连续采集停止，在途效果未知。")));
-                    },
+                    () -> cancelCompositionChildren(taskId),
                     text -> {
                         panelHistory.add(taskId, "gather · " + text);
                         var data = new JsonObject();
@@ -955,12 +964,18 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private CompletableFuture<ToolOutcome> executeWorkflow(String argsJson) {
+        return executeWorkflow(argsJson, false);
+    }
+
+    private CompletableFuture<ToolOutcome> executeWorkflow(String argsJson, boolean programChild) {
         if (currentTask == 0 || loop == null) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "DENIED:流程须属于当前活动任务。"));
         if (workflow != null && !workflow.done()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有流程等待终态，不要重发。"));
         if (gather != null && !gather.done()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有连续采集等待终态，不要重发。"));
+        if (!programChild && program != null && !program.done()) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "BUSY:已有组合执行等待终态，不要重发。"));
         BoundedWorkflow.Plan plan;
         try { plan = BoundedWorkflow.parse(argsJson); }
         catch (RuntimeException invalid) {
@@ -974,14 +989,90 @@ public final class AgentRunner implements ToolExecutor {
             return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:只读任务的流程包含动作，整份未执行。"));
         workflowTask = taskId;
         BoundedWorkflow run = new BoundedWorkflow(plan, client::nowMs,
-                (tool, args) -> executeRemote(tool, args, taskId, owner, true),
-                () -> {
-                    var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
-                    if (!tickets.isEmpty()) sendCancel();
-                    tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:流程停止，在途效果未知。")));
-                });
+                (tool, args) -> executeCompositionRemote(tool, args, taskId, owner),
+                () -> cancelCompositionChildren(taskId));
         workflow = run;
         return run.start();
+    }
+
+    private void cancelCompositionChildren(long taskId) {
+        if (workflow != null && workflowTask == taskId && !workflow.done()) workflow.stop("CANCELLED:组合执行停止。");
+        if (gather != null && gatherTask == taskId && !gather.done()) gather.stop("CANCELLED:组合执行停止。");
+        var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
+        if (!tickets.isEmpty()) sendCancel();
+        tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:组合子步骤停止，在途效果未知。")));
+    }
+
+    private CompletableFuture<ToolOutcome> executeProgram(String argsJson) {
+        if (currentTask == 0 || loop == null) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "DENIED:组合执行须属于当前活动任务。"));
+        if (program != null && !program.done() || workflow != null && !workflow.done()
+                || gather != null && !gather.done()) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "BUSY:已有本地组合等待真正终态。"));
+        BoundedProgram.Plan plan;
+        try { plan = BoundedProgram.Plan.parse(argsJson); }
+        catch (RuntimeException invalid) { return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "DENIED:须提供有效Lua code（最多16384字节）、时限1-900秒、子调用1-256次。")); }
+        long taskId = currentTask;
+        AgentLoop owner = loop;
+        var run = new BoundedProgram(plan, client::nowMs, (tool, args) -> {
+            if (closed || taskId != currentTask || owner != loop)
+                return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:组合所属任务已失效。"));
+            return executeProgramChild(tool, args).thenApply(receipt -> {
+                panelHistory.add(taskId, "run_program · " + tool + " · " + receipt.feedback());
+                var event = new JsonObject();
+                event.addProperty("tool", "run_program");
+                event.addProperty("child_tool", tool);
+                event.addProperty("ok", receipt.ok());
+                event.addProperty("text", receipt.feedback());
+                emit("progress", taskId, event);
+                return receipt;
+            });
+        }, client::executeOnClient, () -> cancelCompositionChildren(taskId));
+        programTask = taskId;
+        programPrimitives = 0;
+        programPrimitiveLimit = plan.maxCalls();
+        program = run;
+        return run.start().thenApply(receipt -> {
+            var data = receipt.data();
+            data.addProperty("primitive_calls", programPrimitives);
+            return new ToolOutcome(receipt.ok(), receipt.feedback() + "\n实际原子调用=" + programPrimitives, data);
+        });
+    }
+
+    private CompletableFuture<ToolOutcome> executeProgramChild(String name, String json) {
+        if ("workflow".equals(name)) return executeWorkflow(json, true);
+        if ("gather".equals(name)) {
+            try {
+                if (BoundedGather.parse(json).scope() != com.neko.mcbot.agentcore.loop.ItemGoal.Scope.SUBTASK)
+                    throw new IllegalArgumentException();
+            } catch (RuntimeException invalid) {
+                return CompletableFuture.completedFuture(new ToolOutcome(false,
+                        "DENIED:组合内gather须为有效scope=subtask；最终条件由模型先用set_goal登记。"));
+            }
+            return executeGather(json, true);
+        }
+        if (!java.util.Set.of("status", "inventory", "equip", "scan_area", "find_resource", "inspect_block",
+                "break_block", "place_block", "craft", "smelt", "wait", "move_to", "attack", "collect", "transfer")
+                .contains(name)) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "DENIED:组合只可调用现有游戏工具/gather/workflow；不能嵌套程序、反问或改最终目标。"));
+        try {
+            var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals(name)).findFirst().orElseThrow();
+            BoundedWorkflow.validate(com.google.gson.JsonParser.parseString(json),
+                    com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:组合子工具参数不符合实际Schema，未派发。"));
+        }
+        return executeCompositionRemote(name, json, currentTask, loop);
+    }
+
+    private CompletableFuture<ToolOutcome> executeCompositionRemote(String name, String args, long taskId, AgentLoop owner) {
+        if (program != null && !program.done() && programTask == taskId) {
+            if (programPrimitives >= programPrimitiveLimit)
+                return CompletableFuture.completedFuture(new ToolOutcome(false, "ACTION_LIMIT:组合的原子调用预算已到，嵌套采集/清单共享此预算。"));
+            programPrimitives++;
+        }
+        return executeRemote(name, args, taskId, owner, true);
     }
 
     private CompletableFuture<ToolOutcome> executeRemote(String name, String argsJson,

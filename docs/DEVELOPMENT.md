@@ -4,6 +4,13 @@
 
 ## 当前验证安排（2026-10-14）
 
+本轮通用组合执行引入上游org.luaj:luaj-jse:3.0.1，未引入参考项目维护的Lua分支。
+依赖由Maven Central解析，版本已固定；新设备先准备该依赖缓存，再运行离线强制构建。
+根mod的include同时嵌入LuaJ，许可在META-INF/LICENSE-luaj.txt，不能只更新agent-core而漏运行库。
+BoundedProgram实际运行Lua解析/解释与预算钩子，AgentRunnerProgramTest运行实际runner及原终态派发，
+游戏/模型/网络仍使用可控边界。详情见TOOLS §1.2、STATUS「通用组合执行层」。
+不启动游戏或真实模型、不自动安装包，不把一次模型夹具推进当作实际提速基准。
+
 维护者随后要求自然自动拾取及可复用任务能力。BodyPickup已经接身体每刻，
 gather不再依赖collect；活动只读仍禁止拾取，原版延迟/归属/容量继续由playerTouch决定。
 新增身体调度/权限、自动入包/他人抢走/满包阻塞及主手合并回归，最终证据以STATUS新节为准。

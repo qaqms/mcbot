@@ -73,10 +73,61 @@ additional从本次gather的第一份新鲜完整36槽状态起算；total表示
 取消/超时发生在第一份状态前时明确无局部基线，不能编造进度。
 scope只接受task/subtask，省略兼容旧行为；重复task段不重置任务开始基线。
 
-## 2. 在册工具（15 服务端 + 5 本地，真实行为仍待验）
+### 1.2 通用组合执行
+
+run_program接收Lua文本code，不解析自定义任务语言，不按成品名选择专用流程。
+变量、局部函数、if/for/while从mc.call的真实回执计算下一步：
+
+```lua
+local q = mc.call("craft", {item="stick", count=4, query=true})
+if not q.data.can_craft then return {blocked=q.feedback} end
+mc.call("craft", {item="stick", count=4})
+local inv = mc.call("inventory", {})
+for _, s in ipairs(inv.data.slots) do
+    if s.item == "minecraft:stick" then
+        return mc.call("equip", {slot=s.slot})
+    end
+end
+error("产物未在最新背包中观察到")
+```
+
+这里只演示真实返回值依赖，同一语言机制可组合其他配方/材料/移动/攻击/放置。
+mc.call返回{ok,feedback,data}；数组从1开始，空Lua表作为JSON对象，
+连续正整数键表作为数组，不能用循环表/函数/混合键/非有限数字作为参数或返回值。
+无观测字段不能当作满足条件；返回阶段阻塞不代表最终目标完成。
+最终物品在程序外先set_goal；程序内gather只允许scope=subtask，total可复用现有材料。
+它共用旧采集实现；workflow也可组合，原子动作仍走旧服务端权限/身体互斥。
+
+允许15个游戏工具和gather/workflow，不允许run_program嵌套、
+ask_owner/set_goal/report_blocked或任意命令。失败、需授权、未知终态立即停，
+保留之前实际回执和本次原因，外层模型按原ask_owner流程处理具体授权。
+job_ack不兑现子future；job_event真终态才恢复程序，取消/超时清子票、中断计算，
+迟到结果不续动作。只读任务逐调用检查，已运行查询不回滚，修改子调用不派发；
+不同于workflow整份静态预检，动态分支只校验实际将调用的参数。
+
+参数：code最多16384 UTF-8字节、完整JSON最多20000字节；
+timeout_seconds默认300/范围1-900，max_calls默认128/范围1-256。
+max_calls同时限制mc.call数量及实际原子派发，嵌套gather/workflow共用后者，
+不存在通过拆分嵌套绕过原子调用帽。时间超限也会停止正在等回执的子任务。
+每次API之间最多25000指令，累计250000，调用深度48；
+数据表/转换累计按65536单元计费，字符串累计8MiB计费、单值65536字节。
+拼接前检查操作数及中间分配，避免指数增长；打印/返回/子步骤反馈共享20000字节，
+返回值另限12000字节，JSON转换最多8192节点/16层。
+三次空搜索（状态查询不清零）、五次无成果的同调用同回执停止；
+真实制作/采集计数进展可清除打转计数。
+
+只保留assert/error/ipairs/pairs/next/tonumber/tostring/type/print及语言算术/表/局部函数。
+没有io/os/luajava/package/require/load/debug/coroutine/string/table/math库、
+pcall/xpcall、元表或动态加载；字符串方法也不借用其他mod装入的LuaJ全局元表。
+这些是本地受限解释器的资源/能力限制，不是独立OS进程或精确堆内存隔离。
+data包含api_calls、terminal_calls、primitive_calls、last_tool、last_receipt、
+returned及真实数量汇总；模型反馈保留阶段实际回执，不靠打印文本判成品完成。
+21个工具仍全量下发，技能/帮助按需读取留给下一卡。
+
+## 2. 在册工具（15 服务端 + 6 本地，真实行为仍待验）
 
 > 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 15 个），
-> 本表就是那15个与本地 `ask_owner` / `workflow` / `gather` / `set_goal` / `report_blocked`。
+> 本表就是那15个与本地 `ask_owner` / `workflow` / `gather` / `run_program` / `set_goal` / `report_blocked`。
 > set_goal/report_blocked由AgentLoop拦截，其余本地工具由AgentRunner编排，不发服务端同名工具。
 
 | 工具 | 参数 | 型 | 说明 |
@@ -98,6 +149,7 @@ scope只接受task/subtask，省略兼容旧行为；重复task段不重置任�
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
 | `workflow` | `steps,timeout_seconds?` | **本地** | 明确近身清单，1-12步/默认180最多300秒/请求量合计≤128；逐步等终态，失败/空搜索/缺条件/需确认即停 |
+| `run_program` | `code,timeout_seconds?,max_calls?` | **本地** | 通用Lua变量/条件/循环组合；mc.call只读实际data并等真终态；共用原动作/权限/取消和嵌套原子预算，详见§1.2 |
 | `gather` | `item,targets,count,mode?,scope?,r?,timeout_seconds?,max_blocks?` | **本地** | 共用数量型采集；scope默认task登记最终目标，subtask从本次新鲜基线结算材料且不改最终目标；子动作仍走原权限/真实终态 |
 | `set_goal` | `item,count,mode?` | **本地** | 固定本任务物品完成条件，additional净新增或total总量；结束前重新观测背包，未满足不发完成done |
 | `report_blocked` | `reason` | **本地** | 1-512字符实际障碍，以FAILED结束并保留成果/目标事实；不能把受阻说成完成 |

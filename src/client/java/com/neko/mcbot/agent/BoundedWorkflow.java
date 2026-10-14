@@ -103,7 +103,16 @@ final class BoundedWorkflow {
         return value.getAsString();
     }
 
-    private static void validate(JsonElement value, JsonObject schema) {
+    static void validate(JsonElement value, JsonObject schema) {
+        if (schema.has("oneOf")) {
+            int matches = 0;
+            for (var alternative : schema.getAsJsonArray("oneOf")) {
+                try { validate(value, alternative.getAsJsonObject()); matches++; }
+                catch (RuntimeException invalid) { /* A different declared type may match. */ }
+            }
+            if (matches != 1) throw new IllegalArgumentException("参数不符合唯一声明类型");
+            return;
+        }
         switch (schema.get("type").getAsString()) {
             case "object" -> {
                 JsonObject object = value.getAsJsonObject();
@@ -121,6 +130,8 @@ final class BoundedWorkflow {
             }
             case "string" -> {
                 string(value, schema.has("maxLength") ? schema.get("maxLength").getAsInt() : 128);
+                if (schema.has("minLength") && value.getAsString().length() < schema.get("minLength").getAsInt())
+                    throw new IllegalArgumentException("字符串过短");
                 if (schema.has("enum") && !schema.getAsJsonArray("enum").contains(value))
                     throw new IllegalArgumentException("枚举参数无效");
             }

@@ -11,6 +11,20 @@ public final class ClientToolDefs {
     }
 
     public static final List<ToolSpec> SPECS = List.of(
+            new ToolSpec("run_program", "优先组合有结果依赖的阶段：Lua局部变量/函数/if/for/while从真实回执选下一步，减少逐动作模型往返。"
+                    + "通过mc.call('工具名',{参数})顺序执行现有游戏工具及gather/workflow；返回表含ok/feedback/data，数组从1开始。"
+                    + "查询配方缺口、inventory槽位、工作站位均据data，不猜坐标/槽；缺字段或条件不够则return说明阻塞，核验后才继续。"
+                    + "最终物品先在外层set_goal登记；组合内gather必须scope='subtask'，已有足量材料宜mode='total'。"
+                    + "失败/需确认立即停止并保留回执，交回外层ask_owner；不在程序内重试或自动批准。"
+                    + "支持算术、表、局部函数、assert/error/ipairs/pairs/next/tonumber/tostring/type/print；"
+                    + "不提供文件/网络/Java/require/load/debug/coroutine/string/table/math库、pcall或元表，不能嵌套run_program。"
+                    + "code最多16384字节；timeout_seconds默认300最多900，max_calls默认128最多256；"
+                    + "计算/表/字符串/输出都有独立预算，动作仍走任务权限、身体互斥与真实终态。"
+                    + "return/print只报告阶段结果，不代表主人整项任务完成；用新鲜状态验证",
+                    "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16384},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
+                            + "\"max_calls\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
+                            + "\"required\":[\"code\"],\"additionalProperties\":false}"),
             new ToolSpec("gather", "优先用于连续采集数量型物品：一轮调用本地扫描、选工作站位、移动、挖掘、走近拾取并核对背包，"
                     + "无需模型逐格列坐标/每12格重新规划。item是期望入包物品，targets是来源方块ID/#标签（泥土含grass_block/dirt），"
                     + "scope默认task，沿用主人原目标/count/mode，自动登记不可降低的完成条件。"
