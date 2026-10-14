@@ -39,6 +39,18 @@ StatusTool回传实际permission_mode，ScanAreaTool按有效模式输出攻击�
 不透传任意错误正文。保存模式变化先取消旧任务/排队/问题，保留大脑与显示历史。
 外部桥v1.0不变，详细范围与兼容性见TOOLS §1.3/PANEL。
 
+通用探索由客户端ExplorationRoute保存任务内起点、维度、已查位置、尝试目的地和预算。
+独立BoundedExplore执行status → scan_area(frontiers) → move_to(walk_only) → 新鲜status，
+只报告一段经实际位移核验的观察推进，发现条件由run_program/模型调用方决定。
+BoundedGather复用同一路线逻辑，先补查find_resource同中心分页，耗尽候选后再换区，
+原最终/材料目标、背包基线和总预算不重置。独立explore的路线状态跨同任务调用保留，
+新任务才清空，参数不能中途扩大；取消清待核验位移，不接纳迟到结果。
+ExplorationPoints共用WorkPositions.standable并排除已知危险落脚格，样本不证明路线可达。
+PathTask.walkOnly从搜索预算、缓存、活体计划及执行入口共同禁用挖放，仍走原物理移动。
+范围约束目的地/新鲜观测和采集目标，不约束路线每个中间节点；无完整索引或地下勘探。
+工具现22项（15服务端+7本地）；只有成功且严格布尔exploration_advanced=true重置
+原地空查询计数，普通move_to文案不重置。详细参数与边界见TOOLS §1.1。
+
 ## 1. 三进程拓扑
 
 ```
@@ -108,8 +120,9 @@ src/main/            公共+服务端
   common/            Envelope/McbotPayloads（两通道各一条）
   command/           /mcbot ping|summon|dismiss|list|verify_readonly（需 OP，gamemaster 级）
 src/client/          客户端
-  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(21项模型描述)
+  agent/             AgentRunner(大脑宿主+事件生产者)/ClientToolDefs(22项模型描述)
                      BoundedWorkflow(清单)/BoundedGather(本地有界采集循环)
+                     BoundedExplore(独立换区观察)/ExplorationRoute(任务内探索证据与预算)
                      PanelHistory(独立会话显示档案，不随模型压缩/重建删除)
   bridge/            BridgeHttp(JDK HttpServer 适配)/BridgeEvents(生产者总线)
   cfg/               ClientConfig（client.json + MCBOT_* 环境变量覆盖）
@@ -258,12 +271,12 @@ usage加新增估算和完整本地估算取保守值，摘要输入也限预算
 `ToolExecutor` 在 mod 侧的实现 = AgentRunner：发 `tool_call{seq}`，等对应 `tool_result`
 （或先来的 `job_ack` → 转等 `job_event`）；普通工具 90 秒无回执 → 回 TIMEOUT 教学文本，
 长活按服务端报的 `cap_ticks` 算上限（见 §5.1）。本地工具为
-ask_owner/workflow/gather/run_program/set_goal/report_blocked，后两者由loop本地拦截。
-run_program只可调用15个游戏工具及gather/workflow，不可反问/改目标/嵌套程序；
+ask_owner/workflow/gather/explore/run_program/set_goal/report_blocked，后两者由loop本地拦截。
+run_program只可调用15个游戏工具及gather/workflow/explore，不可反问/改目标/嵌套程序；
 动态参数复用现有Schema校验（含攻击oneOf），任务只读仍在executeRemote和服务端核对。
 失败/需授权停止程序并保留原回执，不能在程序内批准或捕获失败后继续依赖动作。
-gather/workflow的原子派发统一经executeCompositionRemote，程序活动期间共享max_calls，
-独立gather/workflow仍沿原兼容限额；取消同一任务的组合及terminalOnly子票，不取消其他任务。
+gather/workflow/explore的原子派发统一经executeCompositionRemote，程序活动期间共享max_calls，
+独立调用各沿本地限额；取消同一任务的组合及terminalOnly子票，不取消其他任务。
 
 BoundedGather默认scope=task使用任务开始背包基线并登记固定最终条件；
 scope=subtask从本次第一份完整状态建立局部基线，不登记/修改最终条件。
@@ -272,7 +285,8 @@ scope=subtask从本次第一份完整状态建立局部基线，不登记/修改
 没有待拾取候选才查来源方块、工作站位、move_to、break_block，再刷新状态。
 子调用复用terminalOnly票与原权限/资源锁，每步等真终态；取消/超时清子票且禁止迟到续跑。
 目标固定item/count/mode，按实际背包净新增或总量完成，不累计挖掘格或掉落。
-作用范围限本段起点附近，不自行探索/补给；需路线授权或缺事实时交回模型，详见TOOLS §1.1。
+局部候选耗尽后可有界步行换区，目的地与工作目标受原起点探索半径约束；
+不自行补给或挖掘勘探，需授权或缺事实时交回模型，详见TOOLS §1.1。
 
 C6流程不占服务端外层槽：BoundedWorkflow逐步调用原子工具，子票terminalOnly=true时，
 job_ack只搬PendingJobs、不兑现future；实际job_event兑现子票，不送入AgentLoop的普通job账本。
@@ -322,8 +336,9 @@ LT1物品目标校验/任务内请求预算与有界LT2采集已接线，40模�
 材料gather用scope=subtask，可先后处理不同物品，成功不代表整项完成；
 additional按本次新鲜基线计，total按真实总量计，结束校验仍只认最终物品。
 没有登记条件的普通文字结束仍按COMPLETED；没有任意自然语言/建筑/交付通用验证器。
-gather减少逐格模型安排，在本段起点附近按真实回执选下一步；固定workflow保持12步。
-探索/补给/目标跨退出恢复、跟随护卫和技能按需读取尚未实现，技能正文仍全量注入system。
+gather减少逐格模型安排，按真实回执查资源及有界换区；固定workflow保持12步。
+独立explore可供非采集观测复用；补给/地下勘探/目标跨退出恢复、跟随护卫和技能
+按需读取尚未实现，技能正文仍全量注入system。
 实现与离线证据见STATUS，机制对照及剩余卡见 `AGENT-PERFORMANCE-AND-LONG-TASKS.md`。
 64份离线回执测试不替代自然世界自主采集钻石或真实模型速度测量。
 
@@ -566,6 +581,7 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 | 面板偏好/档案(R3) | 窗口默认64000（4096..2000000）、阈值≥2048且<窗口、近期≥256且<阈值；auto_compact/fold_tools/show_hud=true、dark=false；会话内20任务/2000记录，不跨退出/重启 |
 | 流程(C6) | 本地1-12步、默认180/最多300秒；请求量合计≤128（不等于材料/产量）；明确挖放≤12；参数≤16384B；累计反馈12000B停后续、结果全文展示预算24000B；任务空搜索3次停 |
 | 通用组合 | Lua code≤16384B/参数≤20000B；默认300/最多900秒；API调用和实际原子派发各默认128/最多256（嵌套共享原子预算）；总250000/每两次API间25000指令；48层调用、65536数据单元计费、8MiB字符串累计计费/单值≤65536B；回执/返回共享20000B；不等同OS进程内存隔离 |
+| 换区探索 | 独立explore每次一段、默认/最多180秒、≤52子调用；同任务默认8/最多16次移动、半径16-64默认64，参数固定；gather默认8/最多16次（0关闭），步行样本约8格、最多8方向/200探针，实际位移≥4格计区域；分页4096格、r16最多5页 |
 | 目标/采集(LT1/LT2) | 最终item/count/mode固定；count1-4096，36槽完整基线；gather默认task用整任务基线，subtask用本次第一份状态且不改最终条件；结束前三次无进展回复FAILED；gather起点附近r默认8/最大16，默认600/最大900秒，默认128/最大256挖，子调用≤1024，参数≤4096B/子反馈≤24000B，候选站位≤6；三次操作无入包且无可拾取候选停 |
 | 超时 | LLM 连接 15s、任务请求 180s、模型页连接测试请求 30s（连接限制不等于所有响应头等待上限）；工具回执 90s；**长活**按服务端 `cap_ticks`×50ms+15s（move 3min⇒195s）；ask_owner **120s**；桥 ask **135s**（必须 > 反问 120s）；task 窗口 ≤120s |
 | 闸② 速率 | 容量 60、补充 20/s（按玩家） |

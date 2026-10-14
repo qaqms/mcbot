@@ -76,7 +76,45 @@ break_block可带expected_block完整ID；不匹配则TARGET_LOST，不能挖新
 data给goal_satisfied、mined_blocks、cleared_blocks、actual_progress、primitive_calls、
 skipped_blocks/skipped_items及last_observation；真实进度仍按完整背包核对。
 另给work_position_attempts，统计实际派发的工作换位次数，便于区分恢复与模型等待。
-当前没有自行探索/勘探洞、补给、危险响应或跟随护卫，不保证自然世界找到64颗钻石。
+当前没有地下勘探、补给、危险响应或跟随护卫，不保证自然世界找到64颗钻石。
+
+2026-10-14换区更新：gather先用同中心/半径分页查询
+剩余采样格，每页仍4096格/16结果/24工作评估/2048射线；最多5页覆盖r=16的17077格。
+分页中心与当前身体不符时拒绝，不把不同中心的页拼成完整区域。
+仍没有可工作候选时复用ExplorationRoute，从服务端已加载落脚样本选择新区域，
+探索move_to固定walk_only=true，不挖路/搭路；真实status至少4格位移后才更新采集区域。
+探索不是木材专用，targets/item/作用域/原背包基线不变，可供任意来源方块的数量任务复用。
+explore_steps默认8、0关闭、最多16次移动尝试；explore_radius默认64、16-64，
+限制相对本段初始位置的目的地及采集区域，保留整个工作区域的半径余量。
+这里约束目的地/新鲜观测及工作目标，不是每个导航节点都受球体约束的路线沙盒。
+总时限、1024原子调用、挖掘/清理预算和三次无入包进展不因换区重置。
+NO_PATH/NO_PROGRESS/TARGET_LOST和PARTIAL探索回执后先刷新位置，可能已实质移动；
+原地成功文案不计新区域，试过的目的地不重复；NEED_CONFIRM/权限/未知效果仍交回模型。
+预算耗尽、样本不可达或没有新落脚点明确停止，不宣称资源不存在。
+data增加exploration_attempts、explored_regions、search_pages；实际背包仍唯一数量成果。
+未实现任意远程定位、完整地形索引、地下挖掘勘探、补给与危险响应。
+
+独立`explore {}`不绑定采集/配方/物品目标，每次完成一段真实换区并回传data.state和movement。
+同任务多次调用共用ExplorationRoute的起点/已查点/失败点/步数；
+max_steps默认8、1-16，radius默认64、16-64，建立后参数保持一致，重复调用不重置预算。
+timeout_seconds仅限制本次段，默认180、1-180；只读拒绝、原权限/终态等待与取消机制共用。
+exploration_advanced只证明新鲜位置确实变化，不等于任何发现/采集/建筑/战斗目标完成。
+run_program可组合任意现有观测，以调用方自己的条件决定停止，例如寻找实体：
+
+```lua
+for i=1,5 do
+    local s=mc.call("scan_area",{r=8})
+    if #s.data.entity_targets>0 then return s.data.entity_targets[1] end
+    if i<5 then mc.call("explore",{}) end
+end
+return {blocked="bounded observations ended without a target"}
+```
+
+这不是内置特定目标流程；同一入口可配find_resource寻找工作台/建筑方块，
+或按状态/实体/掉落等已有观测决定下一阶段。模型负责选择条件，实际动作复用原入口。
+仅已核验成功的explore可以重置“原地三次空查询”计数，普通移动文案不能重置；
+程序总时间/计算/输出及API/嵌套原子预算不变。查询分页主要由gather本地执行，
+外层直接连续空查询仍受原护栏，不能把任意r=16手写分页当成无限查询许可。
 
 多阶段任务先用set_goal登记最终物品，再复用同一个gather采集材料：
 
@@ -117,7 +155,7 @@ mc.call返回{ok,feedback,data}；数组从1开始，空Lua表作为JSON对象�
 最终物品在程序外先set_goal；程序内gather只允许scope=subtask，total可复用现有材料。
 它共用旧采集实现；workflow也可组合，原子动作仍走旧服务端权限/身体互斥。
 
-允许15个游戏工具和gather/workflow，不允许run_program嵌套、
+允许15个游戏工具和gather/workflow/explore，不允许run_program嵌套、
 ask_owner/set_goal/report_blocked或任意命令。失败、需授权、未知终态立即停，
 保留之前实际回执和本次原因，外层模型按原ask_owner流程处理具体授权。
 job_ack不兑现子future；job_event真终态才恢复程序，取消/超时清子票、中断计算，
@@ -144,7 +182,7 @@ pcall/xpcall、元表或动态加载；字符串方法也不借用其他mod装�
 这些是本地受限解释器的资源/能力限制，不是独立OS进程或精确堆内存隔离。
 data包含api_calls、terminal_calls、primitive_calls、last_tool、last_receipt、
 returned及真实数量汇总；模型反馈保留阶段实际回执，不靠打印文本判成品完成。
-21个工具仍全量下发，技能/帮助按需读取留给下一卡。
+22个工具仍全量下发，技能/帮助按需读取留给下一卡。
 
 ### 1.3 主人选择的自主执行
 
@@ -169,33 +207,34 @@ status的实际服务端回执包含permission_mode=confirm/autonomous/read_only
 字段存在本实例客户端配置，对之后的桥接和面板任务一致生效，未提供世界级规则记忆。
 外部桥v1.0字段、鉴权和事件不变；客户端/服务端须一起更新，本卡不自动安装或改实例。
 
-## 2. 在册工具（15 服务端 + 6 本地，真实行为仍待验）
+## 2. 在册工具（15 服务端 + 7 本地，真实行为仍待验）
 
 > 条数以 `McbotMod` 里 `tools.register(...)` 的**实际注册数**为准（现 15 个），
-> 本表就是那15个与本地 `ask_owner` / `workflow` / `gather` / `run_program` / `set_goal` / `report_blocked`。
+> 本表就是那15个与本地 `ask_owner` / `workflow` / `gather` / `explore` / `run_program` / `set_goal` / `report_blocked`。
 > set_goal/report_blocked由AgentLoop拦截，其余本地工具由AgentRunner编排，不发服务端同名工具。
 
 | 工具 | 参数 | 型 | 说明 |
 |---|---|---|---|
 | `status` | `details?` | 同步 | 最新位置/生命/饥饿/背包占用/主手及实际任务计数；details=true包含背包/装备逐槽明细 |
-| `find_resource` | `targets,r?,work?` | 同步 | 方块ID/#标签定向搜索；4096格采样/16输出；work=true先露出筛选再工作排序，最多24目标/共享2048射线，附直接工作/清理可行性与最多6站位；未知/撞帽明确报告 |
+| `find_resource` | `targets,r?,work?,offset?,scan_center?,frontiers?` | 同步 | 每页4096格/16输出；续页用next_offset与原中心/r/targets，中心变化拒绝；末页可给探索落脚样本；work评估/未知口径保留 |
 | `inspect_block` | `x,y,z,offset?` | 同步 | 6.5格内完整加载方块/本体容器明细，每页24槽；拒锁/未展开战利品，不打开GUI |
 | `inventory` | — | 同步 | 完整 36 格背包的槽位/物品 ID/数量/耐久、选中主手槽及 7 个装备映射槽；只读，忙时也能查看 |
 | `equip` | `slot`(0-35 整数) | 同步 | 仅切换主手：快捷栏 0-8 直接选中；背包 9-35 与当前主手槽交换整个物品堆栈；忙时拒绝 |
 | `craft` | `item,count?,query?,recipe?` | 同步 | 实际普通合成配方；count 是至少所需成品数 1-64，query 只读；2×2 随身，3×3 需 5.5 格内工作台；整批预检，失败不改背包 |
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
-| `scan_area` | `r`(1-32，默认16),`items_only?,item?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落。不保证候选可达，泥土/沙用find_resource定向查 |
+| `scan_area` | `r`(1-32，默认16),`items_only?,item?,frontiers?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落，frontiers=true另给最多8个探索落脚样本。不保证候选可达，泥土/沙用find_resource定向查 |
 | `break_block` | `x,y,z,expected_block?,clear_obstructions?,clear_limit?,authorization_id?` | 异步(≤60s) | 默认单格；可选射线安全清理≤3格，走原批准/自主模式与实际BlockMining；目标移除和遮挡清理分列，不直接入包；每拍核验目标/主手/距离/视线，原生视觉待测 |
 | `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；逐次确认模式的中立/命名目标需批准，自主模式免批准，仍拒绝玩家/宠物/同队及不安全横扫 |
 | `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
 | `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
-| `move_to` | `x,y,z,exact?,work_target?,clear_obstructions?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；work_target={x,y,z}要求exact=true，终态按最新视线/距离验工作，clear_obstructions=true允许按安全清理计划评估，不额外执行目标清理；失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。确认模式改世界先给具体批准方案；自主模式由主人任务放行。搜索预算8000节点/128挖/放≤背包存量；新增改动复核许可 |
+| `move_to` | `x,y,z,exact?,walk_only?,work_target?,clear_obstructions?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；walk_only=true从搜索/缓存/活体计划/执行共同禁用挖放。work_target={x,y,z}要求exact=true，终态按最新视线/距离验工作，clear_obstructions=true允许按安全清理计划评估，不额外执行目标清理；失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。确认模式改世界先给具体批准方案；自主模式由主人任务放行。搜索预算8000节点/128挖/放≤背包存量；新增改动复核许可 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
 | `workflow` | `steps,timeout_seconds?` | **本地** | 明确近身清单，1-12步/默认180最多300秒/请求量合计≤128；逐步等终态，失败/空搜索/缺条件/需确认即停 |
 | `run_program` | `code,timeout_seconds?,max_calls?` | **本地** | 通用Lua变量/条件/循环组合；mc.call只读实际data并等真终态；共用原动作/权限/取消和嵌套原子预算，详见§1.2 |
-| `gather` | `item,targets,count,mode?,scope?,r?,timeout_seconds?,max_blocks?` | **本地** | 共用数量型采集；scope默认task登记最终目标，subtask从本次新鲜基线结算材料且不改最终目标；子动作仍走原权限/真实终态 |
+| `gather` | `item,targets,count,mode?,scope?,r?,timeout_seconds?,max_blocks?,explore_steps?,explore_radius?` | **本地** | 共用数量采集及有界换区探索，材料subtask保留最终目标；各区域分页后真实移动/再查，成果按原背包基线 |
+| `explore` | `max_steps?,radius?,timeout_seconds?` | **本地** | 通用一段换区观察；同任务共享步数/范围/访问记录，支持run_program任意已有观测条件；不采集或验证目标 |
 | `set_goal` | `item,count,mode?` | **本地** | 固定本任务物品完成条件，additional净新增或total总量；结束前重新观测背包，未满足不发完成done |
 | `report_blocked` | `reason` | **本地** | 1-512字符实际障碍，以FAILED结束并保留成果/目标事实；不能把受阻说成完成 |
 
@@ -568,6 +607,11 @@ find_resource的targets须1-8个实际方块ID或已加载非空#方块标签，
 不是物品ID或自然语言。r为1-16整数，默认8；查询以身体为中心，最近优先采样最多4096格，
 最多返回16个绝对坐标。仅getChunkNow取得的完整区块可读，未知/界外不读，不加载或生成。
 data同时给samples_planned/samples_examined/cells_read/unknown/truncated/results_truncated/no_targets。
+分页另给offset/next_offset/scan_center/radius；按原targets/r及回执中心续页，
+offset为0或4096的倍数、最大16384，非零须scan_center，身体中心变化在读取前拒绝。
+next_offset=-1仅表示该中心/半径采样页结束，不证明未知格可读或全部匹配已输出；
+truncated在非首/非末页仍为true，不能把单页当完整范围。frontiers=true只在末页给
+exploration_points；scan_area可直接给同类样本，实际路线与发现仍由移动/新观测核验。
 work=true保留全部已读匹配，用已读邻格的非实心/未知/封闭分层预筛，
 不额外读邻格或把未知当露出；最多24目标、整次查询共享2048次原版轮廓射线，
 每个工作计划最多64射线/3遮挡。先评当前眼睛，再评站位，最终将已核对直接工作、

@@ -9,6 +9,26 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PathClearanceTest {
+    @Test void theProductionWalkOnlySearchCannotDigThroughACorridor() {
+        DigSampler corridor = new DigSampler() {
+            @Override public boolean passable(int x, int y, int z) { return inBounds(x, y, z) && x != 1; }
+            @Override public double digSeconds(int x, int y, int z) { return 1; }
+            @Override public boolean support(int x, int y, int z) { return x >= 0 && x <= 2 && y == 63 && z == 0; }
+            @Override public boolean placeable(int x, int y, int z) { return false; }
+            @Override public double placeCost(int x, int y, int z) { return 1; }
+            @Override public boolean inBounds(int x, int y, int z) { return x >= 0 && x <= 2 && y >= 63 && y <= 65 && z == 0; }
+            @Override public int maxPlaces() { return 0; }
+        };
+        var start = new net.minecraft.core.BlockPos(0, 64, 0);
+        var target = new net.minecraft.core.BlockPos(2, 64, 0);
+        var walking = PathTask.searchFor(corridor, start, target, true, true);
+        assertTrue(walking.advance(8000, Long.MAX_VALUE));
+        assertNotNull(walking.failure());
+        var working = PathTask.searchFor(corridor, start, target, true, false);
+        assertTrue(working.advance(8000, Long.MAX_VALUE));
+        assertNull(working.failure());
+        assertTrue(working.path().stream().anyMatch(step -> !step.dig().isEmpty()));
+    }
     private static final class Cells implements DigSampler {
         final Set<Long> blocked = new HashSet<>();
         @Override public boolean passable(int x, int y, int z) {

@@ -4,6 +4,18 @@
 
 ## 当前验证安排（2026-10-14）
 
+通用换区观察与采集探索：独立explore与gather共用ExplorationRoute，调用方决定
+完成条件，不新增木材/配方专用流程。BoundedExplorationTest检查本地分页、真实位移、
+不可达换方向、PARTIAL重观测、范围/维度/步数、取消/超时及禁用探索。
+AgentRunnerProgramTest执行实际Lua/runner/终态接线，以多次空实体观测后换区发现
+验证非采集复用；AgentRunnerGatherTest验证同模型轮推进、任务预算固定及迟到隔离。
+AwarenessToolTest验证r=16五页17077格及旧中心拒绝；ExplorationPointsTest用受控
+可站谓词检查下坡样本、最多8落脚样本/200探针，不运行原版碰撞或真实世界导航。
+PathClearanceTest执行生产walk_only搜索工厂和实际A*，证明唯一挖路通道被拒绝；
+只读和嵌套原子预算继续保留。最终强制全量日志/XML/产物见STATUS最新节。
+不运行游戏或真实模型、不替换实例；真实换区发现率、路线和速度仍待维护者补测。
+下方各卡为历史检查点，不能把离线受控发现写成真实自主探索已验。
+
 资源/清理/掉落事实卡：find_resource先露出预筛再分配工作/输出名额，
 整查询共享2048射线、24目标；MiningWork连接站位/移动终态/ClearingMining，
 最多3个实际遮挡，原权限/安全/区域锁/主手/取消及采集预算保留。

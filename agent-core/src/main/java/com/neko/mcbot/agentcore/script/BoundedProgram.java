@@ -224,6 +224,9 @@ public final class BoundedProgram {
         if (name.equals("gather") && gathered != null && gathered.isJsonPrimitive()
                 && gathered.getAsJsonPrimitive().isNumber() && gathered.getAsDouble() > 0) progress = true;
         if (progress) emptySearches = 0;
+        var explored = data.get("exploration_advanced");
+        if (name.equals("explore") && explored != null && explored.isJsonPrimitive()
+                && explored.getAsJsonPrimitive().isBoolean() && explored.getAsBoolean()) emptySearches = 0;
         if (Set.of("scan_area", "find_resource").contains(name) && data.has("no_targets")) {
             emptySearches = data.get("no_targets").getAsBoolean() ? emptySearches + 1 : 0;
             if (emptySearches >= 3) throw new Halt("NO_TARGETS:三次搜索未取得目标，停止组合执行。");

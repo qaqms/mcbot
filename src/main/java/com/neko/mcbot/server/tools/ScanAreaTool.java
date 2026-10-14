@@ -77,6 +77,10 @@ public final class ScanAreaTool implements ServerTool {
         if (args.has("items_only") && (!args.get("items_only").isJsonPrimitive()
                 || !args.get("items_only").getAsJsonPrimitive().isBoolean()))
             return new Result(false, "DENIED:items_only须为布尔。", null);
+        if (args.has("frontiers") && (!args.get("frontiers").isJsonPrimitive()
+                || !args.get("frontiers").getAsJsonPrimitive().isBoolean()))
+            return new Result(false, "DENIED:frontiers须为布尔。", null);
+        boolean frontiers = args.has("frontiers") && args.get("frontiers").getAsBoolean();
         String wantedItem = null;
         if (args.has("item")) {
             try {
@@ -94,6 +98,8 @@ public final class ScanAreaTool implements ServerTool {
                 var data = new JsonObject();
                 data.add("item_targets", items);
                 data.addProperty("no_targets", items.isEmpty());
+                if (frontiers) data.add("exploration_points",
+                        com.neko.mcbot.server.ExplorationPoints.describe(companion));
                 return new Result(true, "地上掉落观测（最多16实体，未加载不读）：" + items
                         + "；站位仅是候选，路径可达性/拾取延迟仍须实际检查。", data);
             }
@@ -156,6 +162,7 @@ public final class ScanAreaTool implements ServerTool {
         data.addProperty("truncated", plan.truncated());
         data.addProperty("unloaded", unloaded);
         data.addProperty("no_targets", summary.total() == 0 && entities.isEmpty() && items.isEmpty());
+        if (frontiers) data.add("exploration_points", com.neko.mcbot.server.ExplorationPoints.describe(companion));
 
         StringBuilder fb = new StringBuilder();
         // 首行：模型每轮都要知道"我在哪、朝哪"，否则绝对坐标和它的意图对不上（R2-D）

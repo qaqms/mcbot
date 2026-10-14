@@ -999,6 +999,9 @@ public final class AgentLoop {
         var data = r.data();
         boolean search = Set.of("scan_area", "find_resource", "workflow", "run_program").contains(name);
         var noTargets = data.get("no_targets");
+        var explored = data.get("exploration_advanced");
+        if ("explore".equals(name) && r.ok() && explored != null && explored.isJsonPrimitive()
+                && explored.getAsJsonPrimitive().isBoolean() && explored.getAsBoolean()) emptySearches = 0;
         if (!Set.of("status", "inventory", "inspect_block", "equip", "wait", "scan_area", "find_resource").contains(name)) {
             for (String count : List.of("crafted_count", "consumed_count", "collected_count",
                     "loaded_input_count", "loaded_fuel_count", "taken_count")) {

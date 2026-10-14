@@ -108,6 +108,30 @@ class AgentLoopSearchGuardTest {
         assertTrue(responses.getLast().isCancelled());
     }
 
+    @Test void onlySuccessfulVerifiedExplorationAllowsSearchingAnotherRegion() {
+        var loop = create();
+        loop.submit(1, "find a place");
+        call("scan_area", "{}");
+        call("find_resource", "{}");
+        next = new ToolOutcome(true, "move says okay", new JsonObject());
+        call("move_to", "{}");
+        var advanced = new JsonObject();
+        advanced.addProperty("exploration_advanced", true);
+        next = new ToolOutcome(true, "fresh position advanced", advanced);
+        call("explore", "{}");
+        next = new ToolOutcome(true, "empty again", empty);
+        call("find_resource", "{}");
+        call("scan_area", "{}");
+        assertTrue(statuses.isEmpty());
+        var misleading = new JsonObject();
+        misleading.addProperty("exploration_advanced", "true");
+        next = new ToolOutcome(true, "unverified", misleading);
+        call("explore", "{}");
+        next = new ToolOutcome(true, "empty again", empty);
+        call("find_resource", "{}");
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+    }
+
     @Test void outcomeDataIsCopiedAtBothBoundaries() {
         var data = new JsonObject();
         data.addProperty("no_targets", true);

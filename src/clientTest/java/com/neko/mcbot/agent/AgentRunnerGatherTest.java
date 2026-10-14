@@ -91,6 +91,68 @@ class AgentRunnerGatherTest {
         assertEquals(2, client.engine().responses.size());
     }
 
+    @Test void missingLocalMaterialExploresAndResumesGatherWithinOneModelTurn() {
+        start();
+        reply(BoundedGatherTest.state(0));
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        reply(JsonParser.parseString("{\"targets\":[],\"next_offset\":-1,"
+                + "\"exploration_points\":[{\"x\":8,\"y\":90,\"z\":0}]}").getAsJsonObject());
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertTrue(client.lastTool().obj("args").get("walk_only").getAsBoolean());
+        reply(JsonParser.parseString("{\"arrived\":true}").getAsJsonObject());
+        var actual = BoundedGatherTest.state(0);
+        actual.addProperty("x", 8);
+        reply(actual);
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        var target = BoundedGatherTest.block(true);
+        target.addProperty("x", 10);
+        var found = new JsonObject();
+        var targets = new JsonArray(); targets.add(target); found.add("targets", targets);
+        reply(found);
+        assertEquals("break_block", client.lastTool().str("tool"));
+        assertEquals(1, client.engine().responses.size());
+        reply(JsonParser.parseString("{\"removed\":true}").getAsJsonObject());
+        actual = BoundedGatherTest.state(1); actual.addProperty("x", 8);
+        reply(actual);
+        reply(actual);
+        assertEquals(2, client.engine().responses.size());
+    }
+
+    @Test void independentExplorationKeepsTaskBudgetAndCancellationDiscardsLateMovement() {
+        runner.start();
+        runner.submitTask("寻找新的观察区域");
+        client.drain();
+        var first = runner.execute("explore", "{\"max_steps\":1}");
+        client.drain();
+        reply(BoundedGatherTest.state(0));
+        reply(JsonParser.parseString("{\"exploration_points\":[{\"x\":8,\"y\":90,\"z\":0}]}").getAsJsonObject());
+        reply(new JsonObject());
+        var atEight = BoundedGatherTest.state(0); atEight.addProperty("x", 8);
+        reply(atEight);
+        assertTrue(first.join().ok());
+        assertTrue(runner.execute("explore", "{}").join().feedback().startsWith("DENIED:"),
+                "default parameters cannot widen the established task budget");
+        var exhausted = runner.execute("explore", "{\"max_steps\":1}");
+        client.drain(); reply(atEight);
+        assertTrue(exhausted.join().feedback().startsWith("EXPLORATION_LIMIT:"));
+        runner.cancelTask(0); client.drain();
+        runner.submitTask("另一个寻找任务"); client.drain();
+        var next = runner.execute("explore", "{\"max_steps\":1}");
+        client.drain(); reply(atEight);
+        reply(JsonParser.parseString("{\"exploration_points\":[{\"x\":16,\"y\":90,\"z\":0}]}").getAsJsonObject());
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertFalse(next.isDone());
+        long seq = client.lastTool().num("seq", -1);
+        runner.cancelTask(0); client.drain();
+        long calls = client.toolCount();
+        var late = new JsonObject();
+        late.addProperty("seq", seq); late.addProperty("ok", true); late.addProperty("feedback", "late");
+        late.add("data", new JsonObject());
+        runner.handleS2c(new Envelope("tool_result", late)); client.drain();
+        assertFalse(next.join().ok());
+        assertEquals(calls, client.toolCount());
+    }
+
     @Test void childAcceptanceWaitsForRealTerminalAndCompletionWaitsForGoalVerification() {
         reachMining();
         var ack = new JsonObject();

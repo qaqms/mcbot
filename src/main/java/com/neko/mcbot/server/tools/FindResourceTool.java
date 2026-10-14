@@ -8,6 +8,7 @@ import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.WorkPositions;
 import com.neko.mcbot.server.MiningWork;
 import com.neko.mcbot.server.BlockAim;
+import com.neko.mcbot.server.ExplorationPoints;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -28,7 +29,7 @@ public final class FindResourceTool implements ServerTool {
     public static final int MAX_WORK_CHECKS = 24;
     public static final int MAX_WORK_TRACES = 2048;
     private static final List<BlockPos> OFFSETS = offsets();
-    record Input(int radius, List<String> targets, Predicate<BlockState> matches) {
+    record Input(int radius, int offset, BlockPos expectedCenter, List<String> targets, Predicate<BlockState> matches) {
     }
     interface Access {
         BlockPos center();
@@ -37,6 +38,7 @@ public final class FindResourceTool implements ServerTool {
         default void work(JsonObject target, BlockPos pos) { }
         default void work(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { work(target, pos); }
         default void stands(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { }
+        default JsonArray frontiers() { return new JsonArray(); }
     }
     @Override public String name() { return "find_resource"; }
     @Override public Result run(CompanionPlayer companion, JsonObject args) {
@@ -63,16 +65,32 @@ public final class FindResourceTool implements ServerTool {
             @Override public void stands(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) {
                 target.add("stand_positions", WorkPositions.describeMining(companion, pos, budget));
             }
+            @Override public JsonArray frontiers() { return ExplorationPoints.describe(companion); }
         });
     }
 
     static Input arguments(JsonObject args) {
         try {
-            for (String key : args.keySet()) if (!List.of("targets", "r", "work").contains(key)) return null;
+            for (String key : args.keySet())
+                if (!List.of("targets", "r", "work", "offset", "frontiers", "scan_center").contains(key)) return null;
             if (args.has("work") && (!args.get("work").isJsonPrimitive()
                     || !args.get("work").getAsJsonPrimitive().isBoolean())) return null;
+            if (args.has("frontiers") && (!args.get("frontiers").isJsonPrimitive()
+                    || !args.get("frontiers").getAsJsonPrimitive().isBoolean())) return null;
             int radius = args.has("r") ? integer(args.get("r")) : 8;
             if (radius < 1 || radius > 16 || !args.has("targets") || !args.get("targets").isJsonArray()) return null;
+            int offset = args.has("offset") ? integer(args.get("offset")) : 0;
+            if (offset < 0 || offset > 16384 || offset % MAX_SAMPLES != 0) return null;
+            if (offset > 0 && OFFSETS.stream().filter(p -> p.distSqr(BlockPos.ZERO) <= radius * radius).count() <= offset)
+                return null;
+            BlockPos expectedCenter = null;
+            if (args.has("scan_center")) {
+                var center = args.getAsJsonObject("scan_center");
+                if (!center.keySet().equals(java.util.Set.of("x", "y", "z"))) return null;
+                expectedCenter = BreakBlockTool.readPos(center);
+                if (expectedCenter == null) return null;
+            }
+            if (offset > 0 && expectedCenter == null) return null;
             var values = args.getAsJsonArray("targets");
             if (values.isEmpty() || values.size() > 8) return null;
             List<String> names = new ArrayList<>();
@@ -92,7 +110,8 @@ public final class FindResourceTool implements ServerTool {
                 }
                 names.add(name);
             }
-            return new Input(radius, List.copyOf(names), state -> predicates.stream().anyMatch(p -> p.test(state)));
+            return new Input(radius, offset, expectedCenter, List.copyOf(names),
+                    state -> predicates.stream().anyMatch(p -> p.test(state)));
         } catch (RuntimeException invalid) {
             return null;
         }
@@ -106,8 +125,11 @@ public final class FindResourceTool implements ServerTool {
     static Result execute(JsonObject args, Access access) {
         Input input = arguments(args);
         if (input == null) return new Result(false,
-                "DENIED:targets 为1-8个有效方块ID或非空方块#标签，r为1-16整数；如 oak_log 或 #minecraft:logs。", null);
+                "DENIED:targets 为1-8个有效方块ID或非空方块#标签，r为1-16整数；"
+                        + "offset须使用同中心/半径回执的next_offset，frontiers须为布尔。", null);
         BlockPos center = access.center();
+        if (input.expectedCenter() != null && !center.equals(input.expectedCenter()))
+            return new Result(false, "TARGET_LOST:身体已离开分页查询中心；用offset=0从最新位置重查。", null);
         boolean work = args.has("work") && args.get("work").getAsBoolean();
         int planned = 0, sampled = 0, read = 0, unknown = 0, matches = 0;
         var results = new JsonArray();
@@ -118,6 +140,7 @@ public final class FindResourceTool implements ServerTool {
             int distance = offset.getX() * offset.getX() + offset.getY() * offset.getY() + offset.getZ() * offset.getZ();
             if (distance > input.radius() * input.radius()) break;
             planned++;
+            if (planned <= input.offset()) continue;
             if (sampled >= MAX_SAMPLES) continue;
             sampled++;
             BlockPos pos = center.offset(offset);
@@ -191,7 +214,19 @@ public final class FindResourceTool implements ServerTool {
         data.addProperty("samples_examined", sampled);
         data.addProperty("cells_read", read);
         data.addProperty("unknown", unknown);
-        data.addProperty("truncated", sampled < planned);
+        int end = input.offset() + sampled;
+        int nextOffset = end < planned ? end : -1;
+        data.addProperty("truncated", input.offset() > 0 || nextOffset >= 0);
+        data.addProperty("offset", input.offset());
+        data.addProperty("next_offset", nextOffset);
+        var scanCenter = new JsonObject();
+        scanCenter.addProperty("x", center.getX());
+        scanCenter.addProperty("y", center.getY());
+        scanCenter.addProperty("z", center.getZ());
+        data.add("scan_center", scanCenter);
+        data.addProperty("radius", input.radius());
+        if (args.has("frontiers") && args.get("frontiers").getAsBoolean())
+            data.add("exploration_points", nextOffset == -1 ? access.frontiers() : new JsonArray());
         data.addProperty("results_truncated", matches > results.size());
         data.addProperty("no_targets", results.isEmpty());
         data.addProperty("work_checks", workChecks);
@@ -202,8 +237,11 @@ public final class FindResourceTool implements ServerTool {
                 + "；列出 " + results.size() + " 个候选（最多16）。" + lines
                 + (work ? "\n优先露出候选，再按已核对的直接工作/局部清理/站位排序；几何评估最多24个，未检查为未知。" : "")
                 + "\n这是已读格的方块观测，不证明路径可达或掉落数量；未找到不等于周边没有资源。"
-                + (sampled < planned ? "采样撞帽，远处未看全。" : "")
-                + "不要靠挖掘探查或连续改变半径空转；受阻时说明已查范围。";
+                + " 本页offset=" + input.offset() + "，next_offset=" + nextOffset + "。"
+                + (nextOffset >= 0 ? "同中心/半径可续查下一页，当前未看全。" : "")
+                + "不要靠挖掘探查或原地反复改变半径；采集可用gather有界换区寻找，空结果不代表整项任务受阻。"
+                + (args.has("frontiers") && args.get("frontiers").getAsBoolean()
+                ? " exploration_points只是已加载落脚样本，不证明路径可达；探索须walk_only=true实际移动后重查。" : "");
         return new Result(true, feedback, data);
     }
 

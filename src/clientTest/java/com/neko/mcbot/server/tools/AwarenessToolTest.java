@@ -86,6 +86,41 @@ class AwarenessToolTest {
         assertTrue(FindResourceTool.execute(args, scan).data().get("no_targets").getAsBoolean());
     }
 
+    @Test void pagesCoverOuterResourcesWithoutRaisingThePerQueryReadBudget() {
+        var scan = new Scan();
+        scan.cells.put(scan.center().offset(15, 0, 0), Blocks.BIRCH_LOG.defaultBlockState());
+        var args = json("{\"targets\":[\"birch_log\"],\"r\":16,\"frontiers\":true}");
+        int total = 0, pages = 0, hits = 0;
+        do {
+            int before = scan.reads;
+            var result = FindResourceTool.execute(args, scan);
+            assertTrue(result.ok(), result.feedback());
+            assertTrue(scan.reads - before <= 4096);
+            total += scan.reads - before;
+            pages++;
+            hits += result.data().getAsJsonArray("targets").size();
+            int next = result.data().get("next_offset").getAsInt();
+            if (next < 0) break;
+            args.addProperty("offset", next);
+            args.add("scan_center", result.data().get("scan_center"));
+        } while (pages < 6);
+        assertEquals(5, pages);
+        assertEquals(17077, total);
+        assertEquals(1, hits);
+    }
+
+    @Test void pagingRejectsMovedCentersAndMalformedOffsetsBeforeWorldReads() {
+        var scan = new Scan();
+        for (String text : new String[]{
+                "{\"targets\":[\"oak_log\"],\"r\":16,\"offset\":4096}",
+                "{\"targets\":[\"oak_log\"],\"r\":16,\"offset\":1}",
+                "{\"targets\":[\"oak_log\"],\"r\":16,\"frontiers\":\"true\"}",
+                "{\"targets\":[\"oak_log\"],\"r\":16,\"offset\":4096,\"scan_center\":{\"x\":0,\"y\":80,\"z\":-6}}",
+                "{\"targets\":[\"oak_log\"],\"r\":8,\"offset\":4096,\"scan_center\":{\"x\":12,\"y\":80,\"z\":-6}}"})
+            assertFalse(FindResourceTool.execute(json(text), scan).ok(), text);
+        assertEquals(0, scan.reads);
+    }
+
     @Test void exposedWorkableResourceBeyondSixteenBuriedHitsGetsAnOutputSlot() {
         var scan = new Scan() {
             int checked;

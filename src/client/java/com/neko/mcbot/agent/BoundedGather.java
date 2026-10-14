@@ -17,13 +17,14 @@ import java.util.function.LongSupplier;
 /** Domain-specific continuation using fresh receipts. Each primitive retains the normal server gate. */
 final class BoundedGather {
     record Plan(ItemGoal.Target goal, List<String> targets, int radius, int seconds, int maxBlocks,
-                ItemGoal.Scope scope) { }
+                ItemGoal.Scope scope, int exploreSteps, int exploreRadius) { }
 
     static Plan parse(String json) {
         if (json == null || json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 4096)
             throw new IllegalArgumentException();
         var args = JsonParser.parseString(json).getAsJsonObject();
-        if (!Set.of("item", "count", "mode", "targets", "r", "timeout_seconds", "max_blocks", "scope")
+        if (!Set.of("item", "count", "mode", "targets", "r", "timeout_seconds", "max_blocks", "scope",
+                        "explore_steps", "explore_radius")
                 .containsAll(args.keySet())) throw new IllegalArgumentException();
         var goal = new JsonObject();
         for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
@@ -40,7 +41,8 @@ final class BoundedGather {
         }
         return new Plan(target, List.copyOf(names), integer(args, "r", 8, 1, 16),
                 integer(args, "timeout_seconds", 600, 1, 900), integer(args, "max_blocks", 128, 1, 256),
-                ItemGoal.Scope.parse(args));
+                ItemGoal.Scope.parse(args), integer(args, "explore_steps", 8, 0, 16),
+                integer(args, "explore_radius", 64, 16, 64));
     }
 
     private static int integer(JsonObject args, String key, int fallback, int min, int max) {
@@ -65,6 +67,11 @@ final class BoundedGather {
     private final Set<String> approachedItems = new HashSet<>();
     private final Set<String> waitedItems = new HashSet<>();
     private double originX, originY, originZ;
+    private final ExplorationRoute exploration;
+    private boolean exploring;
+    private int searchPages, sampleOffset;
+    private String pageCenter;
+    private JsonObject scanCenter;
     private String dimension;
     private boolean anchored;
     private long started;
@@ -82,6 +89,7 @@ final class BoundedGather {
                   BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
                   Consumer<Runnable> dispatch, Runnable cancelChild, Consumer<String> progress) {
         this.plan = plan;
+        exploration = new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius());
         // Material subtasks count from their own fresh start, rather than the owner's directive start.
         if (plan.scope() == ItemGoal.Scope.TASK) goal = new ItemGoal(plan.goal(), baseline);
         this.clock = clock;
@@ -142,10 +150,33 @@ final class BoundedGather {
             if (!anchored) {
                 originX = x; originY = y; originZ = z; dimension = nowDimension; anchored = true;
             }
-            if (!dimension.equals(nowDimension) || distance(x, y, z) > (plan.radius() + 2d) * (plan.radius() + 2d)) {
+            if (!dimension.equals(nowDimension)) {
+                finish(false, "SCOPE_CHANGED:身体换维度，已停止。"); return;
+            }
+            boolean explored;
+            try { explored = exploration.observe(state); }
+            catch (IllegalArgumentException changed) {
+                finish(false, "SCOPE_CHANGED:身体离开有界探索范围或状态无效，已停止。"); return;
+            }
+            if (exploring) {
+                exploring = false;
+                if (explored) {
+                    originX = x; originY = y; originZ = z;
+                    // Only real position observations can establish another collection region.
+                    sampleOffset = 0;
+                    skippedBlocks.clear();
+                    skippedItems.clear();
+                    approachedItems.clear();
+                    waitedItems.clear();
+                } else lastProblem = "探索移动未产生至少4格的实际位移，未计为新区域。";
+            }
+            if (distance(x, y, z) > (plan.radius() + 2d) * (plan.radius() + 2d)
+                    || plan.exploreSteps() > 0 && !exploration.within(state)) {
                 finish(false, "SCOPE_CHANGED:身体离开原采集区域或换维度，已停止。"); return;
             }
-            progress.accept(goal.facts() + " 本段已挖=" + dug);
+            String center = (int) Math.floor(x) + ":" + (int) Math.floor(y) + ":" + (int) Math.floor(z);
+            if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; }
+            progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
             if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
             if (goal.progress() > lastProgress) { stalls = 0; lastProgress = goal.progress(); }
             scanDrops();
@@ -217,9 +248,15 @@ final class BoundedGather {
         args.add("targets", targets);
         args.addProperty("r", plan.radius());
         args.addProperty("work", true);
+        args.addProperty("offset", sampleOffset);
+        if (sampleOffset > 0) args.add("scan_center", scanCenter.deepCopy());
+        if (plan.exploreSteps() > 0) args.addProperty("frontiers", true);
         call("find_resource", args, receipt -> {
             if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
             lastData = receipt.data();
+            if (lastData.has("scan_center")) scanCenter = lastData.getAsJsonObject("scan_center").deepCopy();
+            searchPages++;
+            if (sampleOffset == 0) exploration.searchedHere();
             var blocks = lastData.getAsJsonArray("targets");
             if (blocks == null) throw new IllegalArgumentException();
             for (var entry : blocks) {
@@ -239,9 +276,54 @@ final class BoundedGather {
                 approachBlock(block, positions, 0, tried);
                 return;
             }
-            finish(false, "RESOURCE_BLOCKED:当前有界区域没有可继续采集的已观测候选；"
+            if (lastData.has("next_offset")) {
+                int nextOffset = exact(lastData, "next_offset");
+                if (nextOffset != -1) {
+                    if (nextOffset != sampleOffset + 4096 || nextOffset > 16384 || scanCenter == null)
+                        throw new IllegalArgumentException();
+                    sampleOffset = nextOffset;
+                    findBlocks();
+                    return;
+                }
+            }
+            explore();
+        });
+    }
+
+    private void resourceBlocked(String lead) {
+        finish(false, lead + " 当前有界区域没有可继续采集的已观测候选；"
                     + "站位已筛选实际视线/距离及有界安全清理；超出预算或保护条件的埋藏目标须另行规划。"
-                    + "未加载/撞帽范围不证明无资源，不扩大范围或挖掘探查。" + lastProblem);
+                    + "未加载/撞帽范围不证明无资源；未进行挖掘勘探。" + lastProblem);
+    }
+
+    private void explore() {
+        if (plan.exploreSteps() == 0) { resourceBlocked("RESOURCE_BLOCKED:本段未启用换区探索。"); return; }
+        if (exploration.exhausted()) {
+            resourceBlocked("EXPLORATION_LIMIT:本段探索步数预算已到。"); return;
+        }
+        var points = lastData.getAsJsonArray("exploration_points");
+        if (points == null) { resourceBlocked("RESOURCE_BLOCKED:服务端未提供探索落脚样本。"); return; }
+        JsonObject chosen = exploration.choose(points, plan.radius());
+        if (chosen == null) { resourceBlocked("RESOURCE_BLOCKED:没有预算内尚未检查的已加载落脚样本。"); return; }
+        var move = new JsonObject();
+        for (String key : List.of("x", "y", "z")) move.addProperty(key, exact(chosen, key));
+        exploration.attempt(chosen);
+        move.addProperty("exact", true);
+        move.addProperty("walk_only", true);
+        progress.accept("本区域未找到可工作资源，正进行第" + exploration.attempts() + "/" + plan.exploreSteps()
+                + "段只行走探索；到达后重新查询，物品目标保持不变。");
+        call("move_to", move, receipt -> {
+            if (receipt.ok() || receipt.feedback().startsWith("NO_PATH:")
+                    || receipt.feedback().startsWith("NO_PROGRESS:") || receipt.feedback().startsWith("PARTIAL:")
+                    || receipt.feedback().startsWith("TARGET_LOST:")) {
+                lastProblem = receipt.ok() ? "" : receipt.feedback();
+                exploring = true;
+                // A failed/partial route may have moved. Always inspect before selecting again.
+                observe();
+            } else {
+                lastData = receipt.data();
+                finish(false, receipt.feedback());
+            }
         });
     }
 
@@ -348,7 +430,8 @@ final class BoundedGather {
 
     private boolean within(JsonObject target) {
         return distance(finite(target, "x"), finite(target, "y"), finite(target, "z"))
-                <= plan.radius() * (double) plan.radius();
+                <= plan.radius() * (double) plan.radius()
+                && (plan.exploreSteps() == 0 || exploration.within(target));
     }
     private double distance(double x, double y, double z) {
         return (x - originX) * (x - originX) + (y - originY) * (y - originY) + (z - originZ) * (z - originZ);
@@ -382,6 +465,9 @@ final class BoundedGather {
         data.addProperty("actual_progress", goal == null ? 0 : goal.progress());
         data.addProperty("primitive_calls", calls);
         data.addProperty("work_position_attempts", workPositionAttempts);
+        data.addProperty("exploration_attempts", exploration.attempts());
+        data.addProperty("explored_regions", exploration.regions());
+        data.addProperty("search_pages", searchPages);
         data.addProperty("skipped_blocks", skippedBlocks.size());
         data.addProperty("skipped_items", skippedItems.size());
         data.add("last_observation", lastData);

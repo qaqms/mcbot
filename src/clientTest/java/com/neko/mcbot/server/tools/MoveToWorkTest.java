@@ -13,6 +13,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MoveToWorkTest {
+    @Test void walkOnlyUsesStrictBooleansAndRejectsMalformedModeBeforeBodyAccess() {
+        assertFalse(MoveToTool.walkOnly(new JsonObject()));
+        assertTrue(MoveToTool.walkOnly(JsonParser.parseString("{\"walk_only\":true}").getAsJsonObject()));
+        for (String value : java.util.List.of("\"true\"", "1", "null")) {
+            var args = JsonParser.parseString("{\"x\":1,\"y\":64,\"z\":2,\"walk_only\":" + value + "}").getAsJsonObject();
+            assertTrue(new MoveToTool().runAsync(null, args, null).join().feedback().startsWith("DENIED:"));
+        }
+    }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
 
     @Test void workTargetRequiresExactMovementAndStrictCoordinatesBeforeWorldAccess() {

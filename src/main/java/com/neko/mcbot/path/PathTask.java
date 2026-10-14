@@ -107,6 +107,7 @@ public final class PathTask extends TickTask {
     private int replans;
     private int tickWarmup;        // 进场让世界加载/防抖的缓冲拍
     private final PathGrounding grounding = new PathGrounding();
+    private final boolean walkOnly;
 
     // 挖掘子状态
     private BlockPos digPos;
@@ -127,6 +128,12 @@ public final class PathTask extends TickTask {
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
                     ActionPermissions.Context context, ActionPermissions.Scope approved,
                     CompanionScheduler scheduler, boolean exact) {
+        this(level, target, permissions, context, approved, scheduler, exact, false);
+    }
+
+    public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
+                    ActionPermissions.Context context, ActionPermissions.Scope approved,
+                    CompanionScheduler scheduler, boolean exact, boolean walkOnly) {
         this.level = level;
         this.target = target;
         this.permissions = permissions;
@@ -134,12 +141,14 @@ public final class PathTask extends TickTask {
         this.authorization = new ActionPermissions.Execution(approved);
         this.scheduler = scheduler;
         this.exact = exact;
+        this.walkOnly = walkOnly;
     }
 
     @Override
     public JsonObject observation() {
         var data = new JsonObject();
         data.addProperty("action", "move_to");
+        data.addProperty("walk_only", walkOnly);
         data.addProperty("phase", phase.name());
         data.addProperty("committed_nodes", executed);
         data.addProperty("removed_blocks", actualDigs);
@@ -206,7 +215,7 @@ public final class PathTask extends TickTask {
     private Progress searchTick(CompanionPlayer c) {
         // 先看有没有"确认前刚算好的那条路"可用（R2-S4 lastPlan）：省掉一整次重搜。
         // 只在首搜阶段尝试；重规划（REPLAN_SEARCH）是"世界变了"的产物，必须重新搜。
-        if (search == null && phase == Phase.SEARCH && !wasReplan) {
+        if (search == null && phase == Phase.SEARCH && !wasReplan && !walkOnly) {
             if (tryReusePlan(c)) {
                 return afterPlanReady(c, path); // tryReusePlan 已把 path/planDigs/planPlaces 装好
             }
@@ -217,7 +226,7 @@ public final class PathTask extends TickTask {
         if (search == null) {
             BlockPos from = c.blockPosition();
             sampler = new LevelDigSampler(level, c, from,
-                    LevelDigSampler.countPlaceables(c.getInventory()));
+                    walkOnly ? 0 : LevelDigSampler.countPlaceables(c.getInventory()));
             search = newSearch(from);
         }
         if (!search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS)) {
@@ -268,6 +277,9 @@ public final class PathTask extends TickTask {
         cursor = path.size() > 1 && path.getFirst().action() == DigAStar.ACT_START ? 1 : 0;
         int digs = planDigs;
         int places = planPlaces;
+        if (walkOnly && (digs > 0 || places > 0))
+            return new Progress.Done(new Result(false,
+                    "NO_PATH:只行走路线已出现需要挖放的变化，未修改世界；重新观察后换方向。", null));
         rememberPlan(c, plan);
         McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
@@ -467,13 +479,19 @@ public final class PathTask extends TickTask {
         } else {
             memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
         }
-        DigAStar d = new DigAStar(memo != null ? memo : sampler,
-                from.getX(), from.getY(), from.getZ(),
-                target.getX(), target.getY(), target.getZ(), MAX_NODES, MAX_DIGS, DigAStar.H_WEIGHT, exact ? 0 : 1);
-        d.totalBudget(SEARCH_TOTAL_NS);
+        DigAStar d = searchFor(memo != null ? memo : sampler, from, target, exact, walkOnly);
         if (reusePending != null) {
             d.reuseBias(reusePending);
         }
+        return d;
+    }
+
+    static DigAStar searchFor(DigSampler sampler, BlockPos from, BlockPos target, boolean exact, boolean walkOnly) {
+        DigAStar d = new DigAStar(sampler,
+                from.getX(), from.getY(), from.getZ(),
+                target.getX(), target.getY(), target.getZ(), MAX_NODES, walkOnly ? 0 : MAX_DIGS,
+                DigAStar.H_WEIGHT, exact ? 0 : 1);
+        d.totalBudget(SEARCH_TOTAL_NS);
         return d;
     }
 
@@ -599,6 +617,7 @@ public final class PathTask extends TickTask {
 
         // 1) 本节点要挖的格：逐拍真计时（mineOne 完成/已清返回 null，推进清单）
         if (!next.dig().isEmpty()) {
+            if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不挖掘。", null));
             Progress p = mineOne(c, next.dig().get(0));
             if (p != null) {
                 return p; // 还在挖或终局失败
@@ -610,6 +629,7 @@ public final class PathTask extends TickTask {
 
         // 2) 本节点要放的支撑
         if (!next.place().isEmpty()) {
+            if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不放置。", null));
             if (next.x() == c.blockPosition().getX() && next.z() == c.blockPosition().getZ()
                     && next.y() > c.getY() + .02) {
                 if (steering == null) steering = new PathSteering(next.x(), next.y(), next.z());
@@ -746,7 +766,7 @@ public final class PathTask extends TickTask {
         clearCrack();
         BlockPos from = c.blockPosition();
         sampler = new LevelDigSampler(level, c, from,
-                LevelDigSampler.countPlaceables(c.getInventory()));
+                walkOnly ? 0 : LevelDigSampler.countPlaceables(c.getInventory()));
         replans++;
         wasReplan = true;
         partialTail = false;

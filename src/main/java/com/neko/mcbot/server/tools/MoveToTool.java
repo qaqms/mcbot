@@ -80,6 +80,11 @@ public final class MoveToTool implements ServerTool {
                 || !args.get("exact").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:exact 须为布尔。", null));
         }
+        boolean walkOnly;
+        try { walkOnly = walkOnly(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false, "DENIED:walk_only须为布尔。", null));
+        }
         if (args.has("may_alter_terrain") && (!args.get("may_alter_terrain").isJsonPrimitive()
                 || !args.get("may_alter_terrain").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:may_alter_terrain 须为布尔。", null));
@@ -106,12 +111,19 @@ public final class MoveToTool implements ServerTool {
         }
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         if (!sched.submit(c, new PathTask(level, to, permissions, context, scope, sched,
-                args.has("exact") && args.get("exact").getAsBoolean()), f, capTicks(args))) {
+                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly), f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
         return f.thenApply(moved -> finishWork(moved, workTarget == null ? null
                 : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget)));
+    }
+
+    static boolean walkOnly(JsonObject args) {
+        if (!args.has("walk_only")) return false;
+        var value = args.get("walk_only");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) throw new IllegalArgumentException();
+        return value.getAsBoolean();
     }
 
     static BlockPos workTarget(JsonObject args) {

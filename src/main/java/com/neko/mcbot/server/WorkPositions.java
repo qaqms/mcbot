@@ -16,6 +16,19 @@ public final class WorkPositions {
     public static final int MAX_POSITIONS = 6;
     public static final int MAX_MINING_CHECKS = 24;
     private WorkPositions() { }
+    public static boolean standable(CompanionPlayer player, BlockPos pos) {
+        var level = player.level();
+        for (BlockPos cell : List.of(pos.below(), pos, pos.above())) {
+            if (!level.isInWorldBounds(cell) || !level.getWorldBorder().isWithinBounds(cell)
+                    || level.getChunkSource().getChunkNow(cell.getX() >> 4, cell.getZ() >> 4) == null)
+                return false;
+            if (!level.getBlockState(cell).getFluidState().isEmpty()) return false;
+        }
+        if (!level.getBlockState(pos.below()).isFaceSturdy(level, pos.below(), Direction.UP)) return false;
+        var box = player.getBoundingBox().move(pos.getX() + .5 - player.getX(),
+                pos.getY() - player.getY(), pos.getZ() + .5 - player.getZ());
+        return level.noCollision(player, box);
+    }
     public interface Access {
         boolean standable(BlockPos pos);
         double distanceSquared(BlockPos pos);
@@ -75,20 +88,10 @@ public final class WorkPositions {
 
     private static JsonArray describe(CompanionPlayer player, BlockPos target, boolean mining,
                                       BlockAim.TraceBudget budget) {
-        var level = player.level();
         double eyeHeight = player.getEyePosition().y - player.getY();
         var access = new Access() {
             @Override public boolean standable(BlockPos pos) {
-                for (BlockPos cell : List.of(pos.below(), pos, pos.above())) {
-                    if (!level.isInWorldBounds(cell) || !level.getWorldBorder().isWithinBounds(cell)
-                            || level.getChunkSource().getChunkNow(cell.getX() >> 4, cell.getZ() >> 4) == null)
-                        return false;
-                    if (!level.getBlockState(cell).getFluidState().isEmpty()) return false;
-                }
-                if (!level.getBlockState(pos.below()).isFaceSturdy(level, pos.below(), Direction.UP)) return false;
-                var box = player.getBoundingBox().move(pos.getX() + .5 - player.getX(),
-                        pos.getY() - player.getY(), pos.getZ() + .5 - player.getZ());
-                return level.noCollision(player, box);
+                return WorkPositions.standable(player, pos);
             }
             @Override public double distanceSquared(BlockPos pos) {
                 return player.distanceToSqr(pos.getX() + .5, pos.getY(), pos.getZ() + .5);

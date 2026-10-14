@@ -12,7 +12,7 @@ public final class ClientToolDefs {
 
     public static final List<ToolSpec> SPECS = List.of(
             new ToolSpec("run_program", "优先组合有结果依赖的阶段：Lua局部变量/函数/if/for/while从真实回执选下一步，减少逐动作模型往返。"
-                    + "通过mc.call('工具名',{参数})顺序执行现有游戏工具及gather/workflow；返回表含ok/feedback/data，数组从1开始。"
+                    + "通过mc.call('工具名',{参数})顺序执行现有游戏工具及gather/workflow/explore；返回表含ok/feedback/data，数组从1开始。"
                     + "查询配方缺口、inventory槽位、工作站位均据data，不猜坐标/槽；缺字段或条件不够则return说明阻塞，核验后才继续。"
                     + "最终物品先在外层set_goal登记；组合内gather必须scope='subtask'，已有足量材料宜mode='total'。"
                     + "失败/需确认立即停止并保留回执，交回外层ask_owner；不在程序内重试或自动批准。"
@@ -27,12 +27,24 @@ public final class ClientToolDefs {
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
                             + "\"max_calls\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
                             + "\"required\":[\"code\"],\"additionalProperties\":false}"),
+            new ToolSpec("explore", "独立、通用的换区观察能力：从已加载安全落脚样本选择新方向，只行走一段并用新鲜status核验实际位移。"
+                    + "不依赖木头/矿物、配方或数量目标，不挖路/搭路，不会把移动成功当任务完成。"
+                    + "调用后按任务需要scan_area/find_resource/inspect等核对；run_program可用自己的条件/有界循环决定继续探索或结束。"
+                    + "max_steps默认8、1-16，radius默认64、16-64；首次调用建立本任务探索会话，重复调用共用预算/已查点并保持相同参数。"
+                    + "timeout_seconds为本次一段的时限，默认180、1-180；失败/权限/未知状态/耗尽即停止，取消迟到不续跑。"
+                    + "data.state是本段终态新鲜身体/背包，exploration_advanced仅表示实际换区，不证明找到任务目标",
+                    "{\"type\":\"object\",\"properties\":{\"max_steps\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
+                            + "\"radius\":{\"type\":\"integer\",\"minimum\":16,\"maximum\":64},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":180}},\"additionalProperties\":false}"),
             new ToolSpec("gather", "优先用于连续采集数量型物品：一轮调用本地扫描、选工作站位、移动、挖掘、走近拾取并核对背包，"
                     + "无需模型逐格列坐标/每12格重新规划。item是期望入包物品，targets是来源方块ID/#标签（泥土含grass_block/dirt），"
                     + "scope默认task，沿用主人原目标/count/mode，自动登记不可降低的完成条件。"
                     + "为制作/建造等准备材料须scope=subtask，不改最终目标；additional按本次采集开始背包净新增，total是总量。"
                     + "短长任务都可复用同一采集能力；子任务成功不表示整项完成。"
-                    + "应先据最新背包装备合适工具；r默认8、最大16，限定本段起点附近目标，不挖勘探洞。"
+                    + "应先据最新背包装备合适工具；r默认8、最大16，为每个采集区域半径，不挖勘探洞。"
+                    + "未找到可工作资源会分页查完，再从已加载落脚样本只行走换区寻找，实际到达后重查继续采集。"
+                    + "explore_steps默认8、0关闭、最多16次探索移动；explore_radius默认64、16-64，为起点周围的目的地/采集范围。"
+                    + "原地空查询或移动回执本身不算发现资源/入包成果，有限探索耗尽才说明范围与障碍。"
                     + "本地复用真实终态/权限，路线需确认、缺工具/空间、无进展或未知状态即交回模型决策。"
                     + "timeout_seconds默认600、最大900，max_blocks默认128、最大256，子调用最多1024。"
                     + "掉落必须走近拾取；矿格数不是成果。返回实际物品进度及阻塞，不保证自然世界已找到钻石",
@@ -42,6 +54,8 @@ public final class ClientToolDefs {
                             + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]},"
                             + "\"scope\":{\"type\":\"string\",\"enum\":[\"task\",\"subtask\"]},"
                             + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
+                            + "\"explore_steps\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":16},"
+                            + "\"explore_radius\":{\"type\":\"integer\",\"minimum\":16,\"maximum\":64},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
                             + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
                             + "\"required\":[\"item\",\"targets\",\"count\"],\"additionalProperties\":false}"),
@@ -73,11 +87,17 @@ public final class ClientToolDefs {
             new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
             new ToolSpec("find_resource", "只读定向查找材料方块：targets为方块ID或#方块标签，如#minecraft:logs、oak_log、iron_ore。"
-                    + "r默认8、最多16；采样4096格、最多16候选，work=true在预算内优先露出/可工作资源，返回绝对坐标及未加载/撞帽信息。"
-                    + "不强制加载、不证明可达/可挖/实际掉落；空结果不等于没有资源，勿改变参数连续空转或挖掘探查",
+                    + "r默认8、最多16；每页采样4096格、最多16候选，work=true在预算内优先露出/可工作资源。"
+                    + "offset默认0；续页须用next_offset并携带原scan_center、同一targets/r，-1为页末；身体移动后从0重查。"
+                    + "frontiers=true在末页给exploration_points已加载落脚样本，路径仍须move_to walk_only=true核验。"
+                    + "不强制加载、不证明可达/可挖/实际掉落；空结果不等于没有资源，采集宜gather本地分页/有界探索",
                     "{\"type\":\"object\",\"properties\":{\"targets\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,"
                             + "\"items\":{\"type\":\"string\",\"maxLength\":128}},\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
-                            + "\"work\":{\"type\":\"boolean\",\"description\":\"附直接工作/有界清理可行性及安全站位，路径可达性仍需move_to\"}},"
+                            + "\"work\":{\"type\":\"boolean\",\"description\":\"附直接工作/有界清理可行性及安全站位，路径可达性仍需move_to\"},"
+                            + "\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":16384,\"multipleOf\":4096},"
+                            + "\"scan_center\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},"
+                            + "\"z\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false},"
+                            + "\"frontiers\":{\"type\":\"boolean\"}},"
                             + "\"required\":[\"targets\"],\"additionalProperties\":false}"),
             new ToolSpec("inspect_block", "只读查看6.5格内已加载方块及本体容器逐槽ID/数量/耐久。"
                     + "offset默认0，每页24槽，next_offset=-1表示末页；拒绝锁定/未展开战利品容器。"
@@ -94,7 +114,8 @@ public final class ClientToolDefs {
             new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块分层摘要，绝对坐标；entity_id/target_uuid供attack，不可猜编号。"
                     + "另含地上item_targets数量/延迟/站位；item可过滤掉落物品，items_only=true只查掉落，不扫方块，实际拾取仍需走近",
                     "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"},"
-                            + "\"items_only\":{\"type\":\"boolean\"},\"item\":{\"type\":\"string\",\"maxLength\":128}}}"),
+                            + "\"items_only\":{\"type\":\"boolean\"},\"item\":{\"type\":\"string\",\"maxLength\":128},"
+                            + "\"frontiers\":{\"type\":\"boolean\",\"description\":\"附已加载探索落脚样本，不证明可达或目标存在\"}}}"),
             new ToolSpec("craft", "按服务器实际普通合成配方制作背包材料。item 是产物注册ID，"
                     + "count 是至少需要的成品数1-64（默认1），按整次配方可能多产。"
                     + "query=true仅查询配方/材料/整批能否完成，recipe可指定配方ID；不自动递归制作缺料。"
@@ -157,6 +178,7 @@ public final class ClientToolDefs {
                             + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"face\":{\"type\":\"string\","
                             + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。"
+                    + "walk_only=true只走路/跳跃/下落，规划/重规划与执行均不挖放，探索使用此模式。"
                     + "默认到目标相邻一格范围；拾取或精确工作站位用exact=true，要求指定脚格实际站稳。"
                     + "挖掘站位可带work_target={x,y,z}且exact=true，终态用最新视线/实际距离复核能否挖；到站不等于能工作。"
                     + "clear_obstructions=true时可按有界安全清理评估工作站位，移动本身不会额外清理目标射线。"
@@ -170,6 +192,7 @@ public final class ClientToolDefs {
                             + "\"work_target\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},"
                             + "\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false},"
                             + "\"clear_obstructions\":{\"type\":\"boolean\"},"
+                            + "\"walk_only\":{\"type\":\"boolean\"},"
                             + "\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"旧兼容字段，不授予权限\"},\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("transfer", "与6.5格内未锁定普通容器存取物品：dir=out取出/in存入，item可选过滤；熔炉类机器改用smelt。"
                     + "遵守槽位、接触面与堆叠限制，忙时先等待或取消。可以部分搬运，回执给实际已搬及留在来源的数量；"

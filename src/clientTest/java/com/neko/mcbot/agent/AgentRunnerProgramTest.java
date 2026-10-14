@@ -104,6 +104,64 @@ class AgentRunnerProgramTest {
         assertTrue(client.sent.stream().noneMatch(e -> e.kind().contains("program")));
     }
 
+    @Test void genericEntityDiscoveryControlsExplorationLocallyWithoutACollectionGoal() {
+        start("find an observed entity", """
+                for i=1,4 do
+                    local s=mc.call("scan_area",{r=8})
+                    if #s.data.entity_targets>0 then return s.data.entity_targets[1] end
+                    if i<4 then mc.call("explore",{}) end
+                end
+                return {blocked="bounded observation ended"}
+                """);
+        for (int i = 0; i < 3; i++) {
+            long offset = i * 5L;
+            tool("scan_area", offset + 1);
+            receipt(true, "no observed entity", "{\"entity_targets\":[],\"no_targets\":true}");
+            tool("status", offset + 2);
+            var here = BoundedGatherTest.state(0);
+            here.addProperty("x", i * 8);
+            receipt(true, "actual departure", here.toString());
+            tool("scan_area", offset + 3);
+            assertTrue(client.lastTool().obj("args").get("frontiers").getAsBoolean());
+            receipt(true, "standing sample", "{\"exploration_points\":[{\"x\":" + ((i + 1) * 8)
+                    + ",\"y\":90,\"z\":0}]}");
+            tool("move_to", offset + 4);
+            assertTrue(client.lastTool().obj("args").get("walk_only").getAsBoolean());
+            long seq = client.lastTool().num("seq", -1);
+            ack("explore-" + i);
+            assertEquals(offset + 4, client.toolCount(), "acceptance must not trigger another scan");
+            terminal(seq, "explore-" + i, "{\"arrived\":true}");
+            tool("status", offset + 5);
+            here.addProperty("x", (i + 1) * 8);
+            receipt(true, "actual new observation region", here.toString());
+            assertEquals(1, client.engine().responses.size());
+        }
+        tool("scan_area", 16);
+        receipt(true, "entity at the new region", "{\"entity_targets\":[{\"entity_id\":47}],\"no_targets\":false}");
+        assertTrue(outcome().ok(), outcome().content());
+        assertEquals(16, client.toolCount());
+        assertTrue(outcome().content().contains("entity_id"));
+        assertFalse(client.sent.stream().anyMatch(e -> e.kind().equals("tool_call")
+                && java.util.Set.of("gather", "break_block", "craft").contains(e.str("tool"))));
+    }
+
+    @Test void readonlyAndNestedPrimitiveBudgetStillApplyToGenericExploration() {
+        start("[只读] find a place", "return mc.call('explore',{})");
+        assertFalse(outcome().ok());
+        assertEquals(0, client.toolCount());
+    }
+
+    @Test void nestedExplorationCannotBypassTheProgramAtomicCallLimit() {
+        start("inspect elsewhere", "return mc.call('explore',{})", 2);
+        tool("status", 1);
+        receipt(true, "departure", BoundedGatherTest.state(0).toString());
+        tool("scan_area", 2);
+        receipt(true, "sample", "{\"exploration_points\":[{\"x\":8,\"y\":90,\"z\":0}]}");
+        assertFalse(outcome().ok());
+        assertTrue(outcome().content().contains("ACTION_LIMIT"));
+        assertEquals(2, client.toolCount());
+    }
+
     @Test void freshScanCoordinatesAndMovementTerminalDriveTheNextAction() {
         start("work at the actual target", """
                 local scan=mc.call("find_resource",{targets={"dirt"},work=true})
