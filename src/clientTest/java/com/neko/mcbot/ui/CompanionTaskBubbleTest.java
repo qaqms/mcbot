@@ -5,10 +5,12 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.neko.mcbot.agent.TaskBubbleState;
+import com.neko.mcbot.agentcore.loop.ItemGoal;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
 import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
@@ -24,17 +26,15 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class CompanionTaskBubbleTest {
     private record Geometry(PoseStack.Pose pose, RenderType type, SubmitNodeCollector.CustomGeometryRenderer draw) {}
-    private record Text(Matrix4f pose, Font.DisplayMode mode, int color) {}
     private static final class Capture {
         final List<Geometry> geometry = new ArrayList<>();
-        final List<Text> texts = new ArrayList<>();
+        final SubmitNodeStorage storage = new SubmitNodeStorage();
         final OrderedSubmitNodeCollector queue = (OrderedSubmitNodeCollector) Proxy.newProxyInstance(
                 getClass().getClassLoader(), new Class<?>[]{OrderedSubmitNodeCollector.class}, (proxy, method, args) -> {
                     switch (method.getName()) {
                         case "submitCustomGeometry" -> geometry.add(new Geometry(((PoseStack) args[0]).last().copy(),
                                 (RenderType) args[1], (SubmitNodeCollector.CustomGeometryRenderer) args[2]));
-                        case "submitText" -> texts.add(new Text(new Matrix4f(((PoseStack) args[0]).last().pose()),
-                                (Font.DisplayMode) args[5], (int) args[6]));
+                        case "submitText" -> method.invoke(storage, args);
                         default -> fail("unexpected submission: " + method.getName());
                     }
                     return null;
@@ -54,9 +54,12 @@ class CompanionTaskBubbleTest {
         var geometry = capture.geometry.getFirst();
         assertSame(DefaultVertexFormat.POSITION_COLOR_LIGHTMAP, geometry.type.format());
         assertNotEquals(DepthTestFunction.NO_DEPTH_TEST, geometry.type.pipeline().getDepthTestFunction());
-        assertFalse(capture.texts.isEmpty());
-        assertTrue(capture.texts.stream().allMatch(text -> text.mode == Font.DisplayMode.NORMAL));
-        assertTrue(capture.texts.stream().allMatch(text -> (text.color >>> 24) == 128));
+        var texts = capture.storage.order(0).getTextSubmits();
+        assertFalse(texts.isEmpty());
+        assertTrue(texts.stream().allMatch(text -> text.displayMode() == Font.DisplayMode.NORMAL));
+        assertTrue(texts.stream().allMatch(text -> (text.color() >>> 24) == 128));
+        assertTrue(texts.stream().allMatch(text -> text.lightCoords() == LightTexture.FULL_BRIGHT));
+        assertTrue(texts.stream().allMatch(text -> text.backgroundColor() == 0 && text.outlineColor() == 0));
         int[] positions = {0}, colors = {0}, lights = {0};
         VertexConsumer sink = (VertexConsumer) Proxy.newProxyInstance(getClass().getClassLoader(),
                 new Class<?>[]{VertexConsumer.class}, (proxy, method, args) -> {
@@ -84,6 +87,48 @@ class CompanionTaskBubbleTest {
         assertEquals(0, positions[0] % 4);
         assertEquals(positions[0], colors[0]);
         assertEquals(positions[0], lights[0]);
+    }
+    @Test void nativeTextQueueRetainsVisibleContentColorsAndLightingAcrossStatesAndFade() {
+        for (var tone : TaskBubbleState.Tone.values()) {
+            var progress = new ItemGoal.Progress("minecraft:cobblestone", 3, 12, true, ItemGoal.Scope.SUBTASK, false);
+            var state = new TaskBubbleState.Snapshot(1, "收集材料", tone, "正在挖掘",
+                    "等待实际入包", progress, 7800);
+            var layout = TaskBubbleLayout.create(state, "Bot", "圆石", s -> s.length() * 9);
+            for (var palette : List.of(
+                    new CompanionTaskBubble.Palette(0xEDF8EE, 0xA3B9A9, 0x243B2D, 0x536B5A, 0x356F52),
+                    new CompanionTaskBubble.Palette(0x222C28, 0x66786B, 0xF1F6F2, 0xC2CEC5, 0xA8D9B8))) {
+                for (float opacity : new float[]{1, .5f, .1f}) {
+                    var frame = new CompanionTaskBubble.Frame(new Vec3(0, 0, -5), .012f, opacity, layout, palette);
+                    var storage = new SubmitNodeStorage();
+                    CompanionTaskBubble.submit(new PoseStack(), storage, Vec3.ZERO, new Quaternionf(), frame);
+                    var texts = storage.order(0).getTextSubmits();
+                    assertEquals(layout.lines().size(), texts.size());
+                    for (int i = 0; i < texts.size(); i++) {
+                        var text = texts.get(i);
+                        var line = layout.lines().get(i);
+                        assertEquals(LightTexture.FULL_BRIGHT, text.lightCoords());
+                        int rgb = switch (line.ink()) {
+                            case PRIMARY -> palette.text();
+                            case SECONDARY -> palette.muted();
+                            case ACCENT -> palette.accent();
+                        };
+                        assertEquals(Math.round(255 * opacity) << 24 | rgb, text.color());
+                        assertEquals(0, text.backgroundColor());
+                        assertEquals(0, text.outlineColor());
+                        assertEquals(Font.DisplayMode.NORMAL, text.displayMode());
+                        assertFalse(text.dropShadow());
+                        assertEquals(line.x(), text.x());
+                        assertEquals(line.y(), text.y());
+                        var content = new StringBuilder();
+                        text.string().accept((index, style, codePoint) -> {
+                            content.appendCodePoint(codePoint);
+                            return true;
+                        });
+                        assertEquals(line.text(), content.toString());
+                    }
+                }
+            }
+        }
     }
     @Test void billboardUsesCameraRelativeAnchorRestoresPoseAndFollowsMovement() {
         var pose = new PoseStack();

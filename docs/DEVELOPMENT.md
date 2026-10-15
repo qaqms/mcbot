@@ -4,6 +4,12 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-15气泡文字修复：维护者截图背景已出现但文字全空，确认submitText参数错位，
+真实顺序为DisplayMode后lightCoords/color/backgroundColor/outlineColor。
+文字提交回归改用真实SubmitNodeStorage/TextSubmit字段；旧生产代码先复现2项失败，
+修复后检查各状态/浅深色/淡出下的实际内容、位置、亮度和颜色，不再由代理假定颜色槽位。
+强制全量961项及新候选见STATUS；这不是GPU画面通过，待维护者用新包复测文字恢复。
+
 2026-10-15头顶气泡：TaskBubbleStateTest与实际AgentRunnerTaskBubbleTest验证活动seq、
 受理不清除、实际终态/超时/取消及迟到隔离、问题优先、数量净增/材料scope、
 终态期限与隐藏期间过期、配置保存失败及身份替换。原GoalSurvey测试补长期检查点、

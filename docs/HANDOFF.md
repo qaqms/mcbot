@@ -1,5 +1,11 @@
 # 换设备开发交接（2026-10-14）
 
+2026-10-15 15:09新增气泡文字修复见STATUS顶部：维护者已测到背景出现而文字全空，
+根因是submitText的lightCoords/color/backgroundColor/outlineColor错位，已修。
+原代理文字测试也误认参数，现改真实SubmitNodeStorage/TextSubmit字段回归，
+旧代码先复现失败，修复后强制全量961项通过，新候选82d8f28d。
+未安装实例或启动游戏/模型，文字恢复实机仍待复测；下段b14ef2cc为已知有缺陷的旧候选。
+
 2026-10-15最新读STATUS「Bot头顶任务气泡实现与测试包」。
 原生气泡按主人Bot的companion_uuid绑定，世界提取状态/深度测试billboard替换底部HUD；
 沿用show_hud，G通用设置可开关，不影响任务/权限。数量只来自背包，长期检查点不完成，

@@ -11,6 +11,10 @@
 
 ## 当前阶段（2026-10-14，维护者确认）
 
+- 2026-10-15维护者实测气泡背景出现但文字透明，已修submitText的int参数错位。
+  真实顺序lightCoords/color/backgroundColor/outlineColor；旧代理也沿用错误顺序而漏检，
+  现改用真实SubmitNodeStorage/TextSubmit回归，旧代码先复现2项失败，修复后强制全量961项通过。
+  新候选82d8f28d及证据见STATUS顶部；未安装实例或启动游戏/模型，文字实机恢复仍待复测。
 - 2026-10-15维护者批准Bot头顶任务气泡后原生实现/离线构建已完成。
   CompanionTaskBubble替换底部HUD，UUID只绑定主人Bot，插值/相机朝向/射线及深度遮挡，
   show_hud沿用旧配置并改名“Bot头顶任务气泡”；关闭不取消任务/问题或重建大脑。

@@ -90,8 +90,9 @@ public final class CompanionTaskBubble {
                 case SECONDARY -> frame.palette.muted;
                 case ACCENT -> frame.palette.accent;
             };
+            // Unlike Font.drawInBatch, the submit queue takes packed light before text color.
             queue.submitText(pose, line.x(), line.y(), Component.literal(line.text()).getVisualOrderText(),
-                    false, Font.DisplayMode.NORMAL, alpha(color, frame.opacity), 0, LightTexture.FULL_BRIGHT, 0);
+                    false, Font.DisplayMode.NORMAL, LightTexture.FULL_BRIGHT, alpha(color, frame.opacity), 0, 0);
         }
         pose.popPose();
     }

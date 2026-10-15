@@ -3,6 +3,35 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## Bot头顶气泡文字透明修复（2026-10-15 15:09，Asia/Shanghai）
+
+- 维护者实测截图已有浅色背景、尾巴和数量底线，但全部文字缺失。
+  已只读核对实例安装包SHA256为上一候选b14ef2cc，非误装旧包。
+  latest.log末写15:02:23，SHA256为
+  `e728b4f749e170322d83f384d3179b9a7ae6fde291ffe574fa6ad9c755426305`；
+  15:01:48至15:02:20有任务/采集及主人取消记录，没有本次气泡绘制异常。
+  截图证明背景实际出现，不代表文字、走跳或遮挡已经通过。
+- 根因是submitText四个int同类型参数错位：真实顺序为lightCoords/color/backgroundColor/
+  outlineColor，旧调用却沿用Font.drawInBatch的颜色优先习惯，把实际color传成0（透明），
+  把亮度常量传入backgroundColor。以本地官方映射JAR的SubmitNodeCollection、
+  TextSubmit构造器和TextFeatureRenderer字节码逐项核实，已修正调用顺序。
+  原测试代理也误把第一个int当颜色，漏检了此问题，本节纠正上一节验证结论。
+- CompanionTaskBubbleTest文字改走真实SubmitNodeStorage，读取TextSubmit字段核对，
+  不再由代理自行解释参数。旧生产代码先复现3项中2项失败，
+  日志build/task-bubble-text-reproduce-20261015.log；修复后覆盖五种终态/活动色调、
+  两组浅深配色和三档透明度的实际文字内容、位置、光照、颜色及无额外文字底框。
+  背景几何/字体测宽仍为受控边界，未运行GPU或启动游戏/真实模型。
+- 强制全量`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`
+  32秒成功，20/20任务执行，日志build/task-bubble-text-fix-20261015.log。
+  XML共123 suites、**961项**（agent-core 290/根105/客户端566），
+  failures/errors/skipped全0；list-java无残留。仅修显示调用及回归，不改变任务规划。
+- 新候选build/libs/mcbot-0.1.0.jar，**1,165,869 bytes**，末写15:09:05，
+  SHA256 `82d8f28d050071cd8c33ae7423a7e83074b5c0ca7ff15d5ca8ac3892fdd19a59`。
+  已核气泡类、内嵌agent-core/LuaJ及许可存在；同文件名/同大小须按哈希区分候选。
+  未安装实例、修改配置/存档、宿主、连接器或参考副本；文字实机恢复继续待维护者复测。
+- 日志另有多次run_program的PROGRAM_ERROR且子调用为0，本次未把该独立任务执行问题
+  归因于气泡或修成固定任务模板；缺少实际脚本，不能仅凭汇总回执判定具体语法根因。
+
 ## Bot头顶任务气泡实现与测试包（2026-10-15 14:54，Asia/Shanghai）
 
 - 维护者批准头顶方案后已完成原生接线：CompanionTaskBubble替换固定底部CompanionHud，
@@ -4304,7 +4333,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
-| 世界任务气泡（10-15缓存Fabric源/Javap/编译及离线提交，未运行GPU） | Fabric事件位于`client.rendering.v1.world`：`END_EXTRACTION`读world/camera/frustum/tickCounter，`BEFORE_ENTITIES`可用matrices/commandQueue；LevelRenderState可setData/getData(RenderStateDataKey)。实体`getPosition(float)`、`getBbHeight/getEyeHeight`公开，Camera为`position()/rotation()/forwardVector()`。世界PoseStack基础为identity；按相机相对位置、cameraRenderState.orientation及正/负/正缩放提交billboard。`submitCustomGeometry(PoseStack,RenderType,CustomGeometryRenderer)`和`submitText`可用；`rendertype.RenderTypes.textBackground()`为POSITION_COLOR_LIGHTMAP/QUADS且有深度测试，顶点必须setColor/setLight；文字用Font.DisplayMode.NORMAL。原版NameTagFeatureRenderer的Storage使用同一旋转/缩放约定；不使用SEE_THROUGH，不把离线管线/矩阵断言写成实机画面通过 |
+| 世界任务气泡（10-15缓存Fabric源/Javap/编译及离线提交，未运行GPU） | Fabric事件位于`client.rendering.v1.world`：`END_EXTRACTION`读world/camera/frustum/tickCounter，`BEFORE_ENTITIES`可用matrices/commandQueue；LevelRenderState可setData/getData(RenderStateDataKey)。实体`getPosition(float)`、`getBbHeight/getEyeHeight`公开，Camera为`position()/rotation()/forwardVector()`。世界PoseStack基础为identity；按相机相对位置、cameraRenderState.orientation及正/负/正缩放提交billboard。`submitCustomGeometry(PoseStack,RenderType,CustomGeometryRenderer)`和`submitText`可用；**submitText在DisplayMode后的四个int依次为lightCoords/color/backgroundColor/outlineColor**，不能照搬Font.drawInBatch颜色在先的顺序；15:09已用TextSubmit真实队列字段及构造/消费字节码复核。`rendertype.RenderTypes.textBackground()`为POSITION_COLOR_LIGHTMAP/QUADS且有深度测试，顶点必须setColor/setLight；文字用Font.DisplayMode.NORMAL。原版NameTagFeatureRenderer的Storage使用同一旋转/缩放约定；不使用SEE_THROUGH，不把离线管线/矩阵断言写成实机画面通过 |
 | 单输入烹饪事实（10-15 javap/编译/原版配方离线执行，未运行世界） | `AbstractCookingRecipe`继承`SingleItemRecipe`，公开`input():Ingredient`、`assemble(SingleRecipeInput,HolderLookup.Provider):ItemStack`，`cookingTime():int`；`RecipeHolder(ResourceKey<Recipe<?>>,T)`可构造供既有SmeltTool.cooking复用。仅确切SmeltingRecipe/BlastingRecipe/SmokingRecipe类进入支持范围，真实配方assemble已离线运行，不等于RecipeManager世界查询/机器tick已运行 |
 | 配方替代来源（10-15 javap/编译/离线注册表，未运行世界） | `Ingredient.items():Stream<Holder<Item>>`、`Ingredient.test(ItemStack):boolean`、`BlockItem.getBlock():Block`公开；`Item.getCraftingRemainder():ItemStack`公开final，不是Item。来源筛选只读这些事实，实际加载RecipeManager与原版世界采收仍待实测 |
 | 工作候选距离（10-14本地映射javap/编译） | Vec3i.distSqr(Vec3i):double公开，BlockPos继承可用；仅候选排序测试使用，生产假想眼睛沿用已核对的BlockAim原版shape/clip，不新增移动身体或世界读取API |
