@@ -93,8 +93,11 @@ public final class AgentRunner implements ToolExecutor {
     private BoundedWorkflow workflow;
     private long workflowTask;
     private BoundedGather gather;
+    private BoundedSearch searching;
+    private long searchTask;
     private long gatherTask;
     private BoundedExplore exploring;
+    private BoundedSurvey survey;
     private ExplorationRoute explorationRoute;
     private long explorationTask;
     private BoundedProgram program;
@@ -278,6 +281,16 @@ public final class AgentRunner implements ToolExecutor {
                     }
 
                     @Override
+                    public void onGoalCheckpoint(long taskId, String facts) {
+                        LOG.info("[brain] goal checkpoint task={} {}", taskId, facts);
+                        var data = new JsonObject();
+                        data.addProperty("text", "阶段已核对，继续长期目标。\n" + facts);
+                        data.addProperty("goal_checkpoint", true);
+                        emit("progress", taskId, data);
+                        record("§7[mcbot] 阶段已核对，继续长期目标。§r");
+                    }
+
+                    @Override
                     public void onNotice(String text) {
                         LOG.info("loop notice: {}", text);
                         record("§7（护栏）" + text + "§r");
@@ -428,6 +441,7 @@ public final class AgentRunner implements ToolExecutor {
         if (loop != null && loop.compacting()) return "正在整理上下文";
         if (currentTask != 0) {
             if (gather != null && !gather.done()) return "正在采集 · " + gather.activity();
+            if (surveyActive()) return "正在地下勘探或沿路标返回";
             if (parked) return "等待游戏操作完成";
             if (loop != null && loop.awaitingModel()) return "等待模型规划下一步";
             return "正在处理工具和状态";
@@ -658,7 +672,9 @@ public final class AgentRunner implements ToolExecutor {
         if (closed) return;
         if (workflow != null) workflow.tick();
         if (gather != null) gather.tick();
+        if (searching != null) searching.tick();
         if (exploring != null) exploring.tick();
+        if (survey != null) survey.tick();
         if (program != null) program.tick();
         long now = client.nowMs();
         for (var t : pending.sweepTools(now)) {
@@ -946,6 +962,7 @@ public final class AgentRunner implements ToolExecutor {
         }
         if ("workflow".equals(name)) return executeWorkflow(argsJson);
         if ("gather".equals(name)) return executeGather(argsJson);
+        if ("search_resource".equals(name)) return executeSearch(argsJson, false);
         if ("explore".equals(name)) return executeExplore(argsJson, false);
         if ("run_program".equals(name)) return executeProgram(argsJson);
         return executeRemote(name, argsJson, currentTask, loop);
@@ -956,28 +973,49 @@ public final class AgentRunner implements ToolExecutor {
         if (program != null && (taskId == 0 || programTask == taskId)) program.stop(reason);
         if (workflow != null && (taskId == 0 || workflowTask == taskId)) workflow.stop(reason);
         if (gather != null && (taskId == 0 || gatherTask == taskId)) gather.stop(reason);
+        if (searching != null && (taskId == 0 || searchTask == taskId)) searching.stop(reason);
         if (exploring != null && (taskId == 0 || explorationTask == taskId)) exploring.stop(reason);
+        if (survey != null && (taskId == 0 || explorationTask == taskId)) survey.stop(reason);
     }
+
+    private boolean surveyActive() { return survey != null && !survey.done(); }
 
     private CompletableFuture<ToolOutcome> executeExplore(String argsJson, boolean programChild) {
         if (currentTask == 0 || loop == null || taskPolicies.getOrDefault(currentTask, true))
             return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:探索须属于当前非只读任务。"));
-        if (gather != null && !gather.done() || workflow != null && !workflow.done()
-                || exploring != null && !exploring.done() || !programChild && program != null && !program.done())
+        if (searching != null && !searching.done() || gather != null && !gather.done() || workflow != null && !workflow.done()
+                || exploring != null && !exploring.done() || surveyActive() || !programChild && program != null && !program.done())
             return CompletableFuture.completedFuture(new ToolOutcome(false, "BUSY:已有本地流程等待终态。"));
         try {
             var args = com.google.gson.JsonParser.parseString(argsJson).getAsJsonObject();
             var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("explore")).findFirst().orElseThrow();
             BoundedWorkflow.validate(args, com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
-            int steps = args.has("max_steps") ? ExplorationRoute.integer(args, "max_steps") : 8;
-            int radius = args.has("radius") ? ExplorationRoute.integer(args, "radius") : 64;
+            String mode = args.has("mode") ? args.get("mode").getAsString() : "surface";
+            if (mode.equals("underground") && (!args.has("direction") || !args.has("target_y") || !args.has("targets")))
+                throw new IllegalArgumentException();
+            int steps = args.has("max_steps") ? ExplorationRoute.integer(args, "max_steps")
+                    : explorationRoute == null ? 8 : explorationRoute.maxSteps;
+            int radius = args.has("radius") ? ExplorationRoute.integer(args, "radius")
+                    : explorationRoute == null ? 64 : explorationRoute.radius;
             int seconds = args.has("timeout_seconds") ? ExplorationRoute.integer(args, "timeout_seconds") : 180;
             if (explorationRoute == null) explorationRoute = new ExplorationRoute(steps, radius);
             else if (explorationRoute.maxSteps != steps || explorationRoute.radius != radius)
-                return CompletableFuture.completedFuture(new ToolOutcome(false,
-                        "DENIED:同任务explore须保持首次max_steps/radius，不能用重复调用重置探索范围或预算。"));
+                return CompletableFuture.completedFuture(explorationRoute.configurationMismatch());
             long taskId = currentTask;
             AgentLoop owner = loop;
+            if (!mode.equals("surface")) {
+                var run = new BoundedSurvey(explorationRoute, args, client::nowMs,
+                        (tool, json) -> executeCompositionRemote(tool, json, taskId, owner),
+                        client::executeOnClient, () -> cancelCompositionChildren(taskId),
+                        proposal -> {
+                            var question = new JsonObject();
+                            question.addProperty("text", "地下路线需要确认具体改动");
+                            question.add("authorization_id", proposal.data().get("authorization_id"));
+                            return askOwner(question.toString(), true);
+                        });
+                explorationTask = taskId; survey = run;
+                return run.start();
+            }
             var run = new BoundedExplore(explorationRoute, seconds, client::nowMs,
                     (tool, json) -> executeCompositionRemote(tool, json, taskId, owner),
                     client::executeOnClient, () -> cancelCompositionChildren(taskId));
@@ -986,7 +1024,29 @@ public final class AgentRunner implements ToolExecutor {
             return run.start();
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
-                    "DENIED:explore参数须max_steps=1-16、radius=16-64、timeout_seconds=1-180。"));
+                    "DENIED:explore须有效模式/范围/时限；underground须方向、target_y及targets。"));
+        }
+    }
+
+    private CompletableFuture<ToolOutcome> executeSearch(String json, boolean programChild) {
+        if (currentTask == 0 || loop == null)
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:搜索须属于当前活动任务。"));
+        if (surveyActive() || searching != null && !searching.done() || gather != null && !gather.done()
+                || exploring != null && !exploring.done() || workflow != null && !workflow.done()
+                || !programChild && program != null && !program.done())
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "BUSY:已有本地流程等待终态。"));
+        try {
+            var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("search_resource")).findFirst().orElseThrow();
+            BoundedWorkflow.validate(args, com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
+            long taskId = currentTask;
+            AgentLoop owner = loop;
+            searching = new BoundedSearch(args, (tool, text) -> executeCompositionRemote(tool, text, taskId, owner),
+                    client::executeOnClient, client::nowMs, () -> cancelCompositionChildren(taskId));
+            searchTask = taskId;
+            return searching.start();
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:完整搜索须1-8个targets，r=1-16。"));
         }
     }
 
@@ -997,15 +1057,25 @@ public final class AgentRunner implements ToolExecutor {
     private CompletableFuture<ToolOutcome> executeGather(String argsJson, boolean programChild) {
         if (currentTask == 0 || loop == null || taskPolicies.getOrDefault(currentTask, true))
             return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:连续采集须属于当前非只读任务。"));
-        if (gather != null && !gather.done() || exploring != null && !exploring.done() || workflow != null && !workflow.done()
+        if (surveyActive() || searching != null && !searching.done() || gather != null && !gather.done() || exploring != null && !exploring.done() || workflow != null && !workflow.done()
                 || !programChild && program != null && !program.done())
             return CompletableFuture.completedFuture(new ToolOutcome(false, "BUSY:已有本地流程等待终态。"));
         long taskId = currentTask;
         AgentLoop owner = loop;
         try {
             var plan = BoundedGather.parse(argsJson);
+            var args = com.google.gson.JsonParser.parseString(argsJson).getAsJsonObject();
+            ExplorationRoute route = null;
+            if (plan.exploreSteps() > 0) {
+                if (explorationRoute == null)
+                    explorationRoute = new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius());
+                else if (args.has("explore_steps") && plan.exploreSteps() != explorationRoute.maxSteps
+                        || args.has("explore_radius") && plan.exploreRadius() != explorationRoute.radius)
+                    return CompletableFuture.completedFuture(explorationRoute.configurationMismatch());
+                route = explorationRoute;
+            }
             var run = new BoundedGather(plan, taskInitialObservation, client::nowMs,
-                    (tool, args) -> executeCompositionRemote(tool, args, taskId, owner),
+                    (tool, json) -> executeCompositionRemote(tool, json, taskId, owner),
                     client::executeOnClient,
                     () -> cancelCompositionChildren(taskId),
                     text -> {
@@ -1019,7 +1089,7 @@ public final class AgentRunner implements ToolExecutor {
                         questionArgs.addProperty("text", "采集需要确认具体改动");
                         questionArgs.add("authorization_id", proposal.data().get("authorization_id"));
                         return askOwner(questionArgs.toString(), true);
-                    });
+                    }, route);
             gatherTask = taskId;
             gather = run;
             return run.start();
@@ -1039,7 +1109,7 @@ public final class AgentRunner implements ToolExecutor {
                 new ToolOutcome(false, "DENIED:流程须属于当前活动任务。"));
         if (workflow != null && !workflow.done()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有流程等待终态，不要重发。"));
-        if (gather != null && !gather.done() || exploring != null && !exploring.done()) return CompletableFuture.completedFuture(
+        if (surveyActive() || searching != null && !searching.done() || gather != null && !gather.done() || exploring != null && !exploring.done()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有连续采集等待终态，不要重发。"));
         if (!programChild && program != null && !program.done()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有组合执行等待终态，不要重发。"));
@@ -1063,9 +1133,11 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void cancelCompositionChildren(long taskId) {
+        if (searching != null && searchTask == taskId && !searching.done()) searching.stop("CANCELLED:组合搜索停止。");
         if (workflow != null && workflowTask == taskId && !workflow.done()) workflow.stop("CANCELLED:组合执行停止。");
         if (gather != null && gatherTask == taskId && !gather.done()) gather.stop("CANCELLED:组合执行停止。");
         if (exploring != null && explorationTask == taskId && !exploring.done()) exploring.stop("CANCELLED:组合执行停止。");
+        if (survey != null && explorationTask == taskId && !survey.done()) survey.stop("CANCELLED:组合执行停止。");
         var tickets = pending.drain(t -> t.taskId() == taskId && t.terminalOnly());
         if (!tickets.isEmpty()) sendCancel();
         tickets.forEach(t -> t.complete(ToolOutcome.synthetic("CANCELLED:组合子步骤停止，在途效果未知。")));
@@ -1082,8 +1154,8 @@ public final class AgentRunner implements ToolExecutor {
     private CompletableFuture<ToolOutcome> executeProgram(String argsJson) {
         if (currentTask == 0 || loop == null) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "DENIED:组合执行须属于当前活动任务。"));
-        if (program != null && !program.done() || workflow != null && !workflow.done()
-                || gather != null && !gather.done() || exploring != null && !exploring.done()) return CompletableFuture.completedFuture(
+        if (searching != null && !searching.done() || program != null && !program.done() || workflow != null && !workflow.done()
+                || gather != null && !gather.done() || exploring != null && !exploring.done() || surveyActive()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "BUSY:已有本地组合等待真正终态。"));
         BoundedProgram.Plan plan;
         try { plan = BoundedProgram.Plan.parse(argsJson); }
@@ -1117,6 +1189,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private CompletableFuture<ToolOutcome> executeProgramChild(String name, String json) {
+        if ("search_resource".equals(name)) return executeSearch(json, true);
         if ("explore".equals(name)) return executeExplore(json, true);
         if ("workflow".equals(name)) return executeWorkflow(json, true);
         if ("gather".equals(name)) {

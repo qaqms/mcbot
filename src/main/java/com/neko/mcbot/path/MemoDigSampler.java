@@ -152,6 +152,14 @@ public final class MemoDigSampler implements DigSampler {
         return base.maxPlaces();
     }
 
+    @Override public boolean canClear(int x, int y, int z, List<Long> cells) {
+        return base.canClear(x, y, z, cells);
+    }
+
+    @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+        return base.allowsStep(fx, fy, fz, x, y, z);
+    }
+
     @Override
     public boolean inBounds(int x, int y, int z) {
         return base.inBounds(x, y, z); // 纯算术，不 memo

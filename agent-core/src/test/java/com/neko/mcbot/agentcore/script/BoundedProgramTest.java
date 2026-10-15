@@ -252,6 +252,36 @@ class BoundedProgramTest {
         }
     }
 
+    @Test void actualPageProgressAllowsAllFivePagesWithoutForgivingARepeatedFirstPage() throws Exception {
+        String code = """
+                local offset=0
+                for i=1,5 do
+                    local r=mc.call('find_resource',{targets={'oak_log'},r=16,offset=offset,
+                        scan_center={x=0,y=80,z=0}})
+                    offset=r.data.next_offset
+                end
+                return offset
+                """;
+        try (var f = new Fixture(code)) {
+            f.host = (name, text) -> {
+                var args = com.google.gson.JsonParser.parseString(text).getAsJsonObject();
+                int offset = args.get("offset").getAsInt();
+                var data = new com.google.gson.JsonObject();
+                data.addProperty("offset", offset);
+                data.addProperty("radius", 16);
+                data.add("scan_center", args.get("scan_center"));
+                data.addProperty("samples_planned", 17077);
+                data.addProperty("samples_examined", Math.min(4096, 17077 - offset));
+                data.addProperty("next_offset", offset == 16384 ? -1 : offset + 4096);
+                data.addProperty("no_targets", true);
+                return CompletableFuture.completedFuture(new ToolOutcome(true, "page", data));
+            };
+            assertTrue(f.outcome().ok(), f.result.join().feedback());
+            assertEquals(5, f.calls.size());
+            assertEquals(-1, f.result.join().data().get("returned").getAsInt());
+        }
+    }
+
     @Test void repeatedCraftsWithRealProgressAreNotMistakenForAPollingLoop() throws Exception {
         try (var f = new Fixture("for i=1,8 do mc.call('craft',{item='stick',count=4}) end")) {
             f.host = (name, args) -> CompletableFuture.completedFuture(actual("{\"crafted_count\":4}"));

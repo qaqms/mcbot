@@ -36,7 +36,7 @@ public final class CraftTool implements ServerTool {
     private static final int MAX_SCAN = 4096;
     private static final int MAX_CANDIDATES = 32;
 
-    record Arguments(Identifier item, int count, boolean query, Identifier recipe) {
+    record Arguments(Identifier item, int count, boolean query, Identifier recipe, Integer materialIndex) {
     }
 
     private record Candidate(RecipeHolder<?> holder, CraftingRecipe recipe, ItemStack output,
@@ -87,7 +87,16 @@ public final class CraftTool implements ServerTool {
             if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) return null;
             query = value.getAsBoolean();
         }
-        return new Arguments(item, count, query, recipe);
+        Integer materialIndex = null;
+        if (args.has("material_index")) {
+            try {
+                var value = args.get("material_index");
+                if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return null;
+                materialIndex = value.getAsBigDecimal().intValueExact();
+                if (!query || materialIndex < 0 || materialIndex > 8) return null;
+            } catch (RuntimeException invalid) { return null; }
+        }
+        return new Arguments(item, count, query, recipe, materialIndex);
     }
 
     private static Identifier identifier(JsonObject args, String key) {
@@ -158,6 +167,34 @@ public final class CraftTool implements ServerTool {
         data.addProperty("can_craft", possible);
         data.addProperty("query", args.query());
         data.addProperty("crafted_count", possible && !args.query() ? produced : 0);
+        if (args.materialIndex() != null) {
+            var ingredients = new ArrayList<>(grouped(selected).keySet());
+            if (args.materialIndex() >= ingredients.size())
+                return new Result(false, "DENIED:material_index超出本次配方分组材料范围。", null);
+            var loaded = manager.getRecipes();
+            if (loaded.size() > MAX_SCAN)
+                return new Result(false, "DENIED:配方超过材料来源探查上限。", null);
+            var conversions = new ArrayList<RecipeMaterials.Conversion>();
+            for (var holder : loaded) {
+                Candidate source = candidate(companion, holder, null);
+                if (source == null) {
+                    var cooking = RecipeMaterials.cooking(holder, companion.level().registryAccess(),
+                            companion.level().enabledFeatures());
+                    if (cooking != null) conversions.add(cooking);
+                    continue;
+                }
+                if (source.ingredients().size() != 1
+                        || source.placement().stream().filter(i -> i >= 0).count() != 1) continue;
+                conversions.add(new RecipeMaterials.Conversion(holder.id().identifier().toString(),
+                        source.output(), source.ingredients().getFirst(), RecipeMaterials.Process.CRAFTING,
+                        source.needsTable() ? "minecraft:crafting_table" : "inventory", 0));
+            }
+            conversions.sort(Comparator.comparing(RecipeMaterials.Conversion::recipe));
+            var material = RecipeMaterials.describe(ingredients.get(args.materialIndex()), conversions);
+            material.addProperty("index", args.materialIndex());
+            material.addProperty("recipe", selected.holder().id().identifier().toString());
+            data.add("material", material);
+        }
         String summary = "配方 " + displayId(selected.holder().id().identifier())
                 + "；请求至少 " + args.count() + " 个，计划 " + batches + " 次产出 " + produced + " 个 "
                 + InventoryTool.stackData(selected.output()).get("item").getAsString()
@@ -165,6 +202,10 @@ public final class CraftTool implements ServerTool {
         if (selected.needsTable() && table != null) summary += "工作台 @(" + table.toShortString() + ")。";
         if (args.query()) {
             return new Result(true, "仅查询，未改背包。" + summary
+                    + (data.has("material") ? "材料候选及单输入工艺事实=" + data.get("material")
+                    + "；sources仅为普通合成转换输入，processes另列支持的烧制工位/原料/时长。"
+                    + "配方不证明世界中存在这些方块或其采收掉落，也不证明当前工具、工位、燃料已满足；"
+                    + "来源件数不是合成产量，须选择实际可取得的途径，执行后重新核对。" : "")
                     + (possible ? "当前可合成；需要执行时用 query=false。"
                     : selectedPlan.failure()), data);
         }
@@ -192,7 +233,7 @@ public final class CraftTool implements ServerTool {
         if (value.getClass() != ShapedRecipe.class && value.getClass() != ShapelessRecipe.class) return null;
         CraftingRecipe recipe = (CraftingRecipe) value;
         ItemStack output = recipe.assemble(CraftingInput.EMPTY, companion.level().registryAccess());
-        if (output.isEmpty() || output.getItem() != target
+        if (output.isEmpty() || target != null && output.getItem() != target
                 || !output.isItemEnabled(companion.level().enabledFeatures())
                 || output.getCount() > output.getMaxStackSize()) return null;
         var info = recipe.placementInfo();

@@ -41,6 +41,14 @@ class BoundedGatherTest {
         final List<JsonObject> moves = new ArrayList<>();
         final ArrayDeque<String> breakFailures = new ArrayDeque<>();
         final ArrayDeque<String> moveFailures = new ArrayDeque<>();
+        int[] dropStances = {1};
+        boolean pickupOnFailedMove, leaveScopeOnFailedMove;
+        double stateX;
+        Double stateXAfterFirstMining;
+        boolean trackRemovedTargets;
+        final java.util.Set<Integer> removedTargets = new java.util.HashSet<>();
+        String failureAfterFirstMining;
+        int pendingDrops;
         List<JsonObject> blockTargets;
         long now;
         int count, dug, moved, cancelled, breakAttempts;
@@ -74,11 +82,14 @@ class BoundedGatherTest {
             now++;
             var data = new JsonObject();
             switch (tool) {
-                case "status" -> data = state(count);
+                case "status" -> {
+                    data = state(count);
+                    data.addProperty("x", stateX);
+                }
                 case "scan_area" -> {
                     var items = new JsonArray();
                     if (ground) {
-                        var item = block(false);
+                        var item = withStances(false, dropStances);
                         item.addProperty("item", "minecraft:dirt");
                         item.addProperty("target_uuid", "drop-" + dug);
                         item.addProperty("count", 1);
@@ -93,7 +104,8 @@ class BoundedGatherTest {
                     var targets = new JsonArray();
                     if (!missing) {
                         if (blockTargets == null) targets.add(block(true));
-                        else blockTargets.forEach(targets::add);
+                        else blockTargets.stream().filter(target -> !trackRemovedTargets
+                                || !removedTargets.contains(target.get("x").getAsInt())).forEach(targets::add);
                     }
                     data.add("targets", targets);
                     data.addProperty("unknown", 12);
@@ -107,10 +119,14 @@ class BoundedGatherTest {
                     assertEquals("minecraft:dirt", JsonParser.parseString(json).getAsJsonObject()
                             .get("expected_block").getAsString());
                     if (mining != null) return mining;
+                    if (dug > 0 && failureAfterFirstMining != null) return CompletableFuture.completedFuture(
+                            new ToolOutcome(false, failureAfterFirstMining, data));
                     if (!breakFailures.isEmpty()) return CompletableFuture.completedFuture(
                             new ToolOutcome(false, breakFailures.removeFirst(), data));
                     dug++;
-                    ground = !noYield && dug > yieldAfter;
+                    removedTargets.add(args.get("x").getAsInt());
+                    if (stateXAfterFirstMining != null && dug == 1) stateX = stateXAfterFirstMining;
+                    if (!noYield && dug > yieldAfter) { ground = true; pendingDrops++; }
                     data.addProperty("removed", true);
                     data.addProperty("collected_count", 0);
                     data.addProperty("remaining_count", 1);
@@ -124,8 +140,12 @@ class BoundedGatherTest {
                     moves.add(args);
                     moved++;
                     if (movement != null) return movement;
-                    if (!moveFailures.isEmpty()) return CompletableFuture.completedFuture(
-                            new ToolOutcome(false, moveFailures.removeFirst(), data));
+                    if (!moveFailures.isEmpty()) {
+                        if (pickupOnFailedMove) automaticPickup(true);
+                        if (leaveScopeOnFailedMove) stateX = 999;
+                        return CompletableFuture.completedFuture(
+                                new ToolOutcome(false, moveFailures.removeFirst(), data));
+                    }
                     if (needConfirm) return CompletableFuture.completedFuture(new ToolOutcome(false, "NEED_CONFIRM:route", data));
                     touching = true;
                     automaticPickup(false);
@@ -139,7 +159,8 @@ class BoundedGatherTest {
             if (!ground) return;
             pickupAttempts++;
             if (full || pickupStillDelayed && !waited) return;
-            if (!stolen) count++;
+            if (!stolen) count += Math.max(1, pendingDrops);
+            pendingDrops = 0;
             ground = false;
             touching = false;
         }
@@ -164,6 +185,8 @@ class BoundedGatherTest {
         assertEquals(64, f.count);
         assertEquals(64, f.dug);
         assertEquals(64, f.moved, "must walk to the real drops before pickup");
+        assertEquals(1 + f.dug + f.moved, f.calls.stream().filter("status"::equals).count(),
+                "each movement needs one fresh observation, not duplicate inventory polling");
         assertFalse(f.calls.contains("wait"), "successful pickup after walking needs no extra fixed delay");
         assertFalse(f.calls.contains("collect"), "walking triggers body pickup without a tool");
         assertTrue(result.data().get("goal_satisfied").getAsBoolean());
@@ -198,6 +221,75 @@ class BoundedGatherTest {
         assertEquals(3, f.breakArgs.getLast().get("clear_limit").getAsInt());
     }
 
+    private static List<JsonObject> nearbyBatch(int size) {
+        var targets = new ArrayList<JsonObject>();
+        for (int i = 0; i < size; i++) {
+            var target = block(true);
+            target.addProperty("x", i + 1);
+            targets.add(target);
+        }
+        return targets;
+    }
+
+    @Test void sameStanceUsesEightTargetBatchesWithoutPerBlockScanningWhenPickupKeepsUp() {
+        for (String scope : List.of("task", "subtask")) {
+            var f = new Fixture(16, 0, scope);
+            f.blockTargets = nearbyBatch(16);
+            f.trackRemovedTargets = true;
+            f.pickupDuringMining = true;
+            var result = f.run();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(16, f.dug);
+            assertEquals(2, f.calls.stream().filter("find_resource"::equals).count());
+            assertEquals(2, f.calls.stream().filter("scan_area"::equals).count());
+            assertEquals(14, result.data().get("batch_continuations").getAsInt());
+            assertEquals(0, f.moved);
+            assertEquals(16, f.calls.stream().filter("break_block"::equals).count());
+        }
+    }
+
+    @Test void outstandingSmallQuantityEndsTheBatchBeforeChasingDropsAndDoesNotMineTheWholePage() {
+        var f = new Fixture(2, 0);
+        f.blockTargets = nearbyBatch(8);
+        f.trackRemovedTargets = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(2, f.dug);
+        assertEquals(1, f.moved);
+        assertEquals(1, f.calls.stream().filter("find_resource"::equals).count());
+        int firstMining = f.calls.indexOf("break_block");
+        assertEquals(List.of("break_block", "status", "break_block", "status", "scan_area"),
+                f.calls.subList(firstMining, firstMining + 5));
+    }
+
+    @Test void batchDoesNotBypassNoProgressOrLiveToolFailures() {
+        var noYield = new Fixture(64, 0);
+        noYield.blockTargets = nearbyBatch(8);
+        noYield.noYield = true;
+        assertTrue(noYield.run().feedback().startsWith("NO_PROGRESS:"));
+        assertEquals(3, noYield.dug);
+
+        var changedTool = new Fixture(8, 0);
+        changedTool.blockTargets = nearbyBatch(8);
+        changedTool.pickupDuringMining = true;
+        changedTool.failureAfterFirstMining = "WRONG_TOOL:hand changed";
+        assertTrue(changedTool.run().feedback().startsWith("WRONG_TOOL:"));
+        assertEquals(1, changedTool.dug);
+        assertEquals(2, changedTool.breakAttempts);
+    }
+
+    @Test void actualDisplacementDiscardsTheOldStanceBatchAndQueriesFreshTargets() {
+        var f = new Fixture(2, 0);
+        f.blockTargets = nearbyBatch(4);
+        f.trackRemovedTargets = true;
+        f.pickupDuringMining = true;
+        f.stateXAfterFirstMining = 1d;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(2, f.calls.stream().filter("find_resource"::equals).count());
+        assertEquals(0, result.data().get("batch_continuations").getAsInt());
+    }
+
     private static JsonObject withStances(boolean here, int... xs) {
         var target = block(here);
         var points = new JsonArray();
@@ -218,6 +310,59 @@ class BoundedGatherTest {
         assertEquals(2, result.data().get("work_position_attempts").getAsInt());
         assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
         assertTrue(f.moves.stream().allMatch(p -> p.getAsJsonObject("work_target").get("x").getAsInt() == 2));
+    }
+
+    @Test void blockedDropApproachRecoversLocallyAndRechecksInventoryBetweenStances() {
+        for (String failure : List.of("TARGET_BLOCKED:cover", "OUT_OF_REACH:changed",
+                "PARTIAL:made progress", "NO_PATH:blocked")) {
+            var f = new Fixture(1, 0);
+            f.ground = true;
+            f.dropStances = new int[]{1, 3};
+            f.moveFailures.add(failure);
+            var result = f.run();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+            assertEquals(0, f.dug);
+            int firstMove = f.calls.indexOf("move_to");
+            assertEquals("status", f.calls.get(firstMove + 1));
+            assertEquals("move_to", f.calls.get(firstMove + 2));
+        }
+    }
+
+    @Test void failedMovementThatAlreadyPickedUpTheGoalDoesNotDispatchAnotherMoveOrMine() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3};
+        f.pickupOnFailedMove = true;
+        f.moveFailures.add("TARGET_BLOCKED:after movement");
+        assertTrue(f.run().ok());
+        assertEquals(1, f.moved);
+        assertEquals(0, f.dug);
+        assertEquals("status", f.calls.getLast());
+    }
+
+    @Test void recoveryDoesNotContinueAfterActualMovementLeavesTheCollectionScope() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3};
+        f.leaveScopeOnFailedMove = true;
+        f.moveFailures.add("PARTIAL:displaced");
+        assertTrue(f.run().feedback().startsWith("SCOPE_CHANGED:"));
+        assertEquals(1, f.moved);
+        assertEquals(0, f.dug);
+    }
+
+    @Test void exhaustingUnreachableDropStancesStillAllowsOtherResourcesToMakeProgress() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3};
+        f.moveFailures.addAll(List.of("TARGET_BLOCKED:first", "NO_PROGRESS:second"));
+        f.pickupDuringMining = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(2, f.moved);
+        assertEquals(1, f.dug);
+        assertEquals(1, result.data().get("skipped_items").getAsInt());
     }
 
     @Test void changedSightAtMiningRetriesOtherStancesOnceAndDeduplicatesCandidates() {
@@ -280,16 +425,30 @@ class BoundedGatherTest {
         assertEquals(0, f.dug);
     }
 
-    @Test void fullyOccludedCandidatesReturnTheObservedReasonWithoutMovementOrMining() {
+    @Test void buriedCandidatesUseOneWorkSemanticRouteBeforeBeingRuledOut() {
         var f = new Fixture(1, 0);
         var buried = withStances(false);
         buried.addProperty("work_failure", "TARGET_BLOCKED:buried stone");
         f.blockTargets = List.of(buried);
         var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(1, f.moved);
+        assertEquals("work", f.moves.getFirst().get("arrival").getAsString());
+        assertEquals(2, f.moves.getFirst().get("x").getAsInt());
+        assertEquals(1, f.breakAttempts);
+    }
+
+    @Test void anUnreachableBuriedCandidateIsNotRetriedOrMined() {
+        var f = new Fixture(1, 0);
+        f.blockTargets = List.of(withStances(false));
+        f.moveFailures.add("NO_PATH:protected wall");
+        var result = f.run();
         assertFalse(result.ok());
-        assertTrue(result.feedback().contains("TARGET_BLOCKED:buried stone"));
-        assertEquals(0, f.moved);
+        assertTrue(result.feedback().contains("NO_PATH:protected wall"));
+        assertEquals(1, f.moved);
         assertEquals(0, f.breakAttempts);
+        int move = f.calls.indexOf("move_to");
+        assertEquals("status", f.calls.get(move + 1));
     }
 
     @Test void cancellingRecoveryIgnoresLateMovementAndDoesNotStartMining() {

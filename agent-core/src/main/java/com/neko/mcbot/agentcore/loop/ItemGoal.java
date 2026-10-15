@@ -51,32 +51,47 @@ public final class ItemGoal {
     private final int baseline;
     private final Scope scope;
     private int current;
+    private final Set<String> accepted;
 
     public ItemGoal(Target target, JsonObject initial) {
         this(target, initial, Scope.TASK);
     }
 
     public ItemGoal(Target target, JsonObject initial, Scope scope) {
+        this(target, initial, scope, Set.of(target.item()));
+    }
+
+    public ItemGoal(Target target, JsonObject initial, Scope scope, Set<String> accepted) {
+        if (accepted == null || accepted.isEmpty() || accepted.size() > 64
+                || scope != Scope.SUBTASK && !accepted.equals(Set.of(target.item())))
+            throw new IllegalArgumentException("Alternatives require a material subtask");
         this.target = target;
         this.scope = scope;
-        baseline = count(initial, target.item());
+        this.accepted = Set.copyOf(accepted);
+        baseline = count(initial, this.accepted);
         current = baseline;
     }
 
     public Target target() { return target; }
-    public void observe(JsonObject state) { current = count(state, target.item()); }
+    public void observe(JsonObject state) { current = count(state, accepted); }
     public int progress() { return target.additional() ? Math.max(0, current - baseline) : current; }
     public boolean satisfied() { return progress() >= target.count(); }
     public String facts() {
-        return (scope == Scope.SUBTASK ? "采集子目标=" : "物品目标=") + target.item()
+        return (scope == Scope.SUBTASK ? "采集子目标=" : "物品目标=")
+                + (accepted.equals(Set.of(target.item())) ? target.item() : "配方候选来源" + accepted)
                 + "，口径=" + (target.additional() ? "背包净新增" : "背包总量")
                 + "，目标=" + target.count() + (scope == Scope.SUBTASK ? "，本次采集开始基线=" : "，任务开始基线=")
                 + baseline + "，当前总量=" + current
                 + "，实际进度=" + progress() + "，尚缺=" + Math.max(0, target.count() - progress())
+                + (accepted.equals(Set.of(target.item())) ? "" : "，实际按配方候选来源件数合计=" + accepted
+                + "；不代表转换后的材料单位或整批配方已满足")
                 + "。挖掘格数和地上掉落不计入背包成果；交付目标不由此校验。";
     }
 
     public static int count(JsonObject state, String item) {
+        return count(state, Set.of(item));
+    }
+    private static int count(JsonObject state, Set<String> items) {
         if (state == null) throw new IllegalArgumentException("Missing inventory");
         JsonObject inventory = state.has("inventory") && state.get("inventory").isJsonObject()
                 ? state.getAsJsonObject("inventory") : state;
@@ -96,7 +111,7 @@ public final class ItemGoal {
                     || !slot.get("item").getAsJsonPrimitive().isString()) throw new IllegalArgumentException();
             if (slot.has("item_id_truncated") && slot.get("item_id_truncated").getAsBoolean())
                 throw new IllegalArgumentException("Incomplete item id");
-            if (item.equals(slot.get("item").getAsString())) total = Math.addExact(total, quantity);
+            if (items.contains(slot.get("item").getAsString())) total = Math.addExact(total, quantity);
         }
         return total;
     }

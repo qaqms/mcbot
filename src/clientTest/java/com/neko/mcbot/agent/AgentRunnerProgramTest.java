@@ -41,7 +41,7 @@ class AgentRunnerProgramTest {
         client.drain();
     }
     private void tool(String expected, long count) {
-        until(() -> client.toolCount() >= count || client.engine().responses.size() > 1);
+        until(() -> client.toolCount() >= count);
         assertEquals(count, client.toolCount());
         assertEquals(expected, client.lastTool().str("tool"));
     }
@@ -151,6 +151,36 @@ class AgentRunnerProgramTest {
         assertEquals(0, client.toolCount());
     }
 
+    @Test void paginatedEmptyResourceSearchReachesTheFifthPageThroughActualRunnerAndLua() {
+        start("check the whole observed neighborhood", """
+                local offset=0
+                for i=1,5 do
+                    local page=mc.call("find_resource",{targets={"oak_log"},r=16,offset=offset,
+                        scan_center={x=0,y=90,z=0}})
+                    offset=page.data.next_offset
+                end
+                return offset
+                """);
+        for (int i = 0; i < 5; i++) {
+            int offset = i * 4096;
+            tool("find_resource", i + 1);
+            assertEquals(offset, client.lastTool().obj("args").get("offset").getAsInt());
+            var data = new JsonObject();
+            data.addProperty("offset", offset);
+            data.addProperty("radius", 16);
+            data.addProperty("samples_planned", 17077);
+            data.addProperty("samples_examined", Math.min(4096, 17077 - offset));
+            data.addProperty("next_offset", i == 4 ? -1 : offset + 4096);
+            data.add("scan_center", JsonParser.parseString("{\"x\":0,\"y\":90,\"z\":0}"));
+            data.addProperty("no_targets", true);
+            receipt(true, "actual empty page " + i, data.toString());
+        }
+        assertTrue(outcome().ok(), outcome().content());
+        assertEquals(5, client.toolCount());
+        assertEquals(1, client.engine().histories.getLast().stream().filter(Msg.Tool.class::isInstance)
+                .map(Msg.Tool.class::cast).filter(t -> t.callId().equals("program")).count());
+    }
+
     @Test void nestedExplorationCannotBypassTheProgramAtomicCallLimit() {
         start("inspect elsewhere", "return mc.call('explore',{})", 2);
         tool("status", 1);
@@ -160,6 +190,58 @@ class AgentRunnerProgramTest {
         assertFalse(outcome().ok());
         assertTrue(outcome().content().contains("ACTION_LIMIT"));
         assertEquals(2, client.toolCount());
+    }
+
+    @Test void undergroundSurveyChargesEachSearchPageToTheSameProgramBudget() {
+        start("bounded underground survey",
+                "return mc.call('explore',{mode='underground',direction='east',target_y=40,targets={'copper_ore'},r=16})", 3);
+        tool("status", 1);
+        receipt(true, "actual supplies", new BoundedSurveyTest.World().state().toString());
+        for (int page = 0; page < 2; page++) {
+            tool("find_resource", page + 2);
+            receipt(true, "actual page", BoundedSearchTest.page(page * 4096, false).toString());
+        }
+        assertFalse(outcome().ok());
+        assertTrue(outcome().content().contains("ACTION_LIMIT"));
+        assertEquals(3, client.toolCount());
+        assertTrue(client.sent.stream().noneMatch(e -> "move_to".equals(e.str("tool"))));
+    }
+
+    @Test void completeSearchWithinProgramCountsEveryPageAndStopsLaterActionsAtTheLimit() {
+        start("search then inspect", """
+                mc.call("search_resource",{targets={"oak_log"}})
+                return mc.call("inventory",{})
+                """, 5);
+        for (int page = 0; page < 5; page++) {
+            tool("find_resource", page + 1);
+            receipt(true, "actual page", BoundedSearchTest.page(page * 4096, page == 4).toString());
+        }
+        assertFalse(outcome().ok());
+        assertTrue(outcome().content().contains("ACTION_LIMIT"));
+        assertTrue(outcome().content().contains("实际原子调用=5"));
+        assertEquals(5, client.toolCount());
+    }
+
+    @Test void completeSearchCannotSendItsThirdPageWhenOnlyTwoPrimitivesRemain() {
+        start("bounded search", "return mc.call('search_resource',{targets={'oak_log'}})", 2);
+        for (int page = 0; page < 2; page++) {
+            tool("find_resource", page + 1);
+            receipt(true, "actual empty page", BoundedSearchTest.page(page * 4096, false).toString());
+        }
+        assertFalse(outcome().ok());
+        assertTrue(outcome().content().contains("ACTION_LIMIT"));
+        assertEquals(2, client.toolCount());
+    }
+
+    @Test void readonlyProgramCanCompleteAFullSearchLocally() {
+        start("[只读] query nearby resources", "return mc.call('search_resource',{targets={'oak_log'}})");
+        for (int page = 0; page < 5; page++) {
+            tool("find_resource", page + 1);
+            receipt(true, "actual page", BoundedSearchTest.page(page * 4096, page == 4).toString());
+        }
+        assertTrue(outcome().ok(), outcome().content());
+        assertTrue(outcome().content().contains("minecraft:oak_log"));
+        assertEquals(5, client.toolCount());
     }
 
     @Test void freshScanCoordinatesAndMovementTerminalDriveTheNextAction() {
@@ -367,6 +449,54 @@ class AgentRunnerProgramTest {
         item.addProperty("item", "minecraft:wooden_pickaxe");
         item.addProperty("count", 1);
         receipt(true, "actual final item", finalState.toString());
+        assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
+    }
+
+    @Test void recipeBackedAlternateWoodSubtaskCannotCompleteTheFinalIronPickaxeGoal() {
+        client.liveObservation = true;
+        runner.start();
+        runner.submitTask("制作一把铁镐");
+        client.drain();
+        receipt(true, "baseline", BoundedGatherTest.state(0).toString());
+        client.engine().tools(0, new ToolCall("goal", "set_goal",
+                "{\"item\":\"iron_pickaxe\",\"count\":1,\"mode\":\"total\"}"));
+        client.drain();
+        receipt(true, "fresh before program", BoundedGatherTest.state(0).toString());
+        program(1, """
+                return mc.call("gather",{count=2,scope="subtask",mode="total",
+                    material_for={item="crafting_table",ingredient=0,sources=true}})
+                """, 128);
+        tool("craft", 3);
+        assertTrue(client.lastTool().obj("args").get("query").getAsBoolean());
+        receipt(true, "actual recipe alternatives", """
+                {"material":{"truncated":false,"sources":[
+                    {"item":"minecraft:oak_log","block":"minecraft:oak_log"},
+                    {"item":"minecraft:birch_log","block":"minecraft:birch_log"}]}}
+                """);
+        tool("status", 4);
+        var wood = BoundedGatherTest.state(0);
+        var slot = wood.getAsJsonObject("inventory").getAsJsonArray("slots").get(1).getAsJsonObject();
+        slot.addProperty("item", "minecraft:birch_log");
+        slot.addProperty("count", 2);
+        receipt(true, "existing alternate material", wood.toString());
+        until(() -> client.toolCount() == 5);
+        receipt(true, "materials observed", wood.toString());
+        assertTrue(outcome().ok(), outcome().content());
+        assertEquals(3, client.engine().responses.size());
+        client.engine().reply(2, "finished");
+        client.drain();
+        receipt(true, "final item still missing", wood.toString());
+        receipt(true, "fresh continuation", wood.toString());
+        assertEquals(4, client.engine().responses.size());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m ->
+                m instanceof Msg.Nudge n && n.text().contains("minecraft:iron_pickaxe")));
+        client.engine().reply(3, "finished");
+        client.drain();
+        var actualFinal = wood.deepCopy();
+        var finalSlot = actualFinal.getAsJsonObject("inventory").getAsJsonArray("slots").get(2).getAsJsonObject();
+        finalSlot.addProperty("item", "minecraft:iron_pickaxe");
+        finalSlot.addProperty("count", 1);
+        receipt(true, "actual final item", actualFinal.toString());
         assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
     }
 }

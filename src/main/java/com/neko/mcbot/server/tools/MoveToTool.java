@@ -71,6 +71,12 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:work_target须为仅含整数x/y/z的目标对象，并使用exact=true。", null));
         }
+        com.neko.mcbot.path.PathSpec spec;
+        try { spec = com.neko.mcbot.path.PathSpec.parse(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:arrival仅支持work并需要work_target；地下/范围/挖掘参数无效。", null));
+        }
         boolean clear;
         try { clear = BreakBlockTool.clearObstructions(args); }
         catch (RuntimeException invalid) {
@@ -103,6 +109,9 @@ public final class MoveToTool implements ServerTool {
                     "PATH_BLOCKED:目标超出我一次能规划的盒子（水平 64 格/垂直 32 格）。"
                             + "分几段走过来。", null));
         }
+        if (!spec.contains(to.getX(), to.getY(), to.getZ())
+                || !spec.contains(c.blockPosition().getX(), c.blockPosition().getY(), c.blockPosition().getZ()))
+            return CompletableFuture.completedFuture(new Result(false, "SCOPE_CHANGED:起点或目的地超出路线范围。", null));
         var level = c.level();
         if (!level.hasChunkAt(to) || !level.isLoaded(to)) {
             return CompletableFuture.completedFuture(new Result(false,
@@ -111,7 +120,7 @@ public final class MoveToTool implements ServerTool {
         }
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         if (!sched.submit(c, new PathTask(level, to, permissions, context, scope, sched,
-                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly), f, capTicks(args))) {
+                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec), f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }

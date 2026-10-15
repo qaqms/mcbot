@@ -4,6 +4,44 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-15导航/地下/生命周期卡：NavigationWorkTest执行原版BlockAim/clip及实际A*，
+检查绕墙工作终点、有序清理、未知/占位拒绝；石块夹具逐格应用阶梯计划后零挖放反搜返程。
+这不是ServerLevel/玩家travel/PathTask完整实机执行。PathSpecTest验证严格类型与范围。
+BoundedSurvey/实际runner验证完整分页、补给停止、真实落点/部分效果、预留返程、后续工作位移、
+无路标拒绝、双阶段许可与真终态、取消迟到；Lua验证每页占同一程序原子预算。
+AgentLoopLongGoalTest验证中间材料与实际最终数量分离、阶段/模型预算累计、固定生命周期、
+重复状态/循环/时钟/换槽/耐久、受阻/模型失败、检查点取消及独立事实账；
+实际runner另验单task_begin/task_end和阶段切换不重建探索账。
+普通短任务守卫保留。会话外持久化、建筑/交付条件、天然洞穴/照明/水下及真实模型策略
+不在已通过范围；最终强制全量/XML/候选证据见STATUS，未自动安装或启动游戏/模型。
+
+2026-10-15参考职责对齐修复：WorksiteProtectionTest执行真实注册表的普通工位判定，
+并以实际A*检查目标保留/邻近站位和缓存清单复核；未创建ServerLevel或运行完整PathTask。
+BoundedGather/实际runner验证工作/拾取恢复前的新鲜状态、途中入包即停、越界不续发、
+同站位有界批次、非矿石及长短任务作用域、每格真终态、缺工具/无进展和取消。
+RecipeMaterialsTest使用实际三类原版烹饪配方assemble及smelt共同准入判据，验证原料、
+工位、产量和时长与普通转换分开、非铁/食物复用、多件/动态子类拒绝、截断显式。
+没有启动真实世界、服务器、模型或安装实例；提示精简不等于真实模型阶段选择已验。
+最终强制全量命令、实际XML计数和新候选哈希统一见STATUS顶部。
+
+2026-10-15四项优化卡：BoundedSearch/AgentRunnerSearch/Program测试验证完整五页、
+末页候选、只读、逐页原子预算、取消及迟到不续跑；三次独立完整空搜仍停止。
+ExplorationRoute/Points验证半径与步距联动、严格完整已知分页才记覆盖、过期/挖清失效；
+覆盖估计只是选点评分，世界与落脚谓词仍用受控边界。
+RecipeMaterialsTest执行实际Ingredient/ItemStack，验证异种材料及转换出处；
+GatherMaterialTest验证非候选物品不计数、超8来源分批查完、截断停止，
+AgentRunnerProgramTest验证替代原木材料成功仍保留铁镐最终背包守卫。
+CraftToolArgumentsTest覆盖material_index仅查询及分组数值边界。
+最终强制全量命令、实际XML统计/JAR哈希见STATUS；不启动游戏/模型或自动安装。
+
+2026-10-15维护者探索日志优先卡：日志判读见real-game-log-review-2026-10-15.md。
+AgentRunnerGatherTest验证explore→材料gather→重复gather共用预算/访问记录及新任务隔离；
+ExplorationRouteTest验证到达记忆、水平去重、方向持续/换向、取消和长步爬升。
+ExplorationPointsTest验证16格优先/8格回退及200探针帽，仍为可站谓词夹具。
+SearchPagesTest及实际loop/Lua/runner测试验证五页续查、重复/跳页/换查询拒绝豁免；
+已有只读、取消/迟到、终态、嵌套原子预算回归保持。完整构建/XML/哈希见STATUS，
+不启动真实游戏/模型、不自动安装，不把离线发现写成自然世界发现率已验。
+
 晚间卡聚焦采集授权续跑与工作事实反馈，不改长期目标调度或权限策略。
 AgentRunnerGatherTest/ProgramTest通过实际runner/loop与可控回执验证完整清单、真人/
 服务端双阶段批准、原参数单次续发、变化方案交回、拒绝/取消/迟到/超时/总时限，

@@ -95,12 +95,16 @@ final class BoundedExplore {
         var data = new JsonObject();
         data.addProperty("exploration_advanced", ok);
         data.addProperty("exploration_attempts", route.attempts());
+        data.addProperty("exploration_max_steps", route.maxSteps);
+        data.addProperty("exploration_radius", route.radius);
         data.addProperty("explored_regions", route.regions());
         data.addProperty("primitive_calls", calls);
         data.add("state", latest);
         data.add("movement", movement);
         for (String key : java.util.List.of("authorization_id", "authorization_summary"))
             if (latest.has(key)) data.add(key, latest.get(key).deepCopy());
-        result.complete(new ToolOutcome(ok, reason + " 已完成移动保留；取消或未知结果不证明目标达成。", data));
+        result.complete(new ToolOutcome(ok, reason + " 探索移动=" + route.attempts() + "/" + route.maxSteps
+                + "，共享范围半径=" + route.radius + "，新增观察区域=" + route.regions()
+                + "。已完成移动保留；取消或未知结果不证明目标达成。", data));
     }
 }

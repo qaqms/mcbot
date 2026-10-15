@@ -28,6 +28,7 @@ public final class LevelDigSampler implements DigSampler {
     /** 注册路径名命中即神圣（BlockEntity 检查兜不住的装饰性/机关方块在这里补）。 */
     private static final Set<String> SACRED_NAMES = Set.of(
             "chest", "trapped_chest", "barrel", "ender_chest", "shulker_box",
+            "crafting_table", "cartography_table", "fletching_table", "smithing_table", "loom",
             "anvil", "chipped_anvil", "damaged_anvil", "grindstone", "stonecutter",
             "jukebox", "bell", "beacon", "enchanting_table", "brewing_stand",
             "cauldron", "lectern", "composter", "cake", "observer", "target",
@@ -39,13 +40,27 @@ public final class LevelDigSampler implements DigSampler {
     private final int minY;
     private final int maxY;
     private final int placeStock;
+    private final BlockPos workTarget;
+    private final PathSpec spec;
 
     public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
                            int placeStock) {
+        this(level, companion, start, placeStock, null);
+    }
+
+    public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
+                           int placeStock, BlockPos workTarget) {
+        this(level, companion, start, placeStock, workTarget, PathSpec.DEFAULT);
+    }
+
+    public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
+                           int placeStock, BlockPos workTarget, PathSpec spec) {
         this.level = level;
         this.companion = companion;
         this.start = start;
         this.placeStock = placeStock;
+        this.workTarget = workTarget == null ? null : workTarget.immutable();
+        this.spec = spec;
         var dt = level.dimensionType();
         this.minY = dt.minY();
         this.maxY = dt.minY() + dt.height();
@@ -65,7 +80,7 @@ public final class LevelDigSampler implements DigSampler {
             return false;
         }
         var st = level.getBlockState(p);
-        return !st.blocksMotion() && st.getFluidState().isEmpty();
+        return st.getCollisionShape(level, p).isEmpty() && st.getFluidState().isEmpty();
     }
 
     @Override
@@ -74,6 +89,7 @@ public final class LevelDigSampler implements DigSampler {
         if (!inBounds(x, y, z) || !level.isLoaded(p)) {
             return INFEASIBLE;
         }
+        if (preserved(workTarget, p)) return INFEASIBLE;
         // 起点脚下不挖：不从自己站的地方开始掘坟
         if (x == start.getX() && z == start.getZ() && y == start.getY() - 1) {
             return INFEASIBLE;
@@ -91,6 +107,16 @@ public final class LevelDigSampler implements DigSampler {
         }
         if (lavaAdjacent(p)) {
             return INFEASIBLE; // HAZARD：旁边是岩浆，不送
+        }
+        if (spec.underground()) {
+            if (st.getBlock() instanceof net.minecraft.world.level.block.FallingBlock
+                    || level.getBlockState(p.above()).getBlock() instanceof net.minecraft.world.level.block.FallingBlock)
+                return INFEASIBLE;
+            for (var direction : net.minecraft.core.Direction.values()) {
+                BlockPos near = p.relative(direction);
+                if (!level.isInWorldBounds(near) || !level.isLoaded(near)
+                        || !level.getBlockState(near).getFluidState().isEmpty()) return INFEASIBLE;
+            }
         }
         float hardness = st.getDestroySpeed(level, p);
         if (hardness < 0) {
@@ -111,15 +137,17 @@ public final class LevelDigSampler implements DigSampler {
         }
         var st = level.getBlockState(new BlockPos(x, y, z));
         // 支撑允许是神圣方块——我们只站上去，不挖它
-        return st.blocksMotion() && st.getFluidState().isEmpty();
+        return st.isFaceSturdy(level, new BlockPos(x, y, z), net.minecraft.core.Direction.UP)
+                && st.getFluidState().isEmpty();
     }
 
     @Override
     public boolean placeable(int x, int y, int z) {
-        if (!inBounds(x, y, z) || placeStock <= 0) {
+        if (!inBounds(x, y, z) || placeStock <= 0 || spec.underground()) {
             return false;
         }
         BlockPos p = new BlockPos(x, y, z);
+        if (preserved(workTarget, p)) return false;
         if (!level.isLoaded(p)) {
             return false; // 同上：不在未加载区动放置规划
         }
@@ -155,7 +183,20 @@ public final class LevelDigSampler implements DigSampler {
         }
         return Math.abs(x - start.getX()) <= RADIUS_XZ
                 && Math.abs(z - start.getZ()) <= RADIUS_XZ
-                && Math.abs(y - start.getY()) <= RADIUS_Y;
+                && Math.abs(y - start.getY()) <= RADIUS_Y && spec.contains(x, y, z);
+    }
+
+    @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+        // Underground routes keep a full floor and an adjacent horizontal stair for the way back.
+        return spec.allowsStep(fx, fy, fz, x, y, z);
+    }
+
+    @Override public boolean canClear(int x, int y, int z, java.util.List<Long> cells) {
+        if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)) return false;
+        return com.neko.mcbot.server.NavigationWork.canClear(
+                com.neko.mcbot.server.BlockAim.forPlayer(body), new BlockPos(x, y, z),
+                companion.getEyePosition().y - companion.getY(),
+                Math.min(5.5, companion.blockInteractionRange()), cells);
     }
 
     // ---- 供执行器/确认流使用的工具方法 ----
@@ -192,7 +233,11 @@ public final class LevelDigSampler implements DigSampler {
     private static final java.util.Map<Block, Boolean> SACRED_CACHE =
             java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
 
-    private boolean isSacred(BlockState st) {
+    static boolean preserved(BlockPos target, BlockPos cell) {
+        return target != null && (target.equals(cell) || target.below().equals(cell));
+    }
+
+    static boolean isSacred(BlockState st) {
         return SACRED_CACHE.computeIfAbsent(st.getBlock(), b -> {
             String path = BuiltInRegistries.BLOCK.getKey(b).getPath();
             return path.endsWith("_bed")

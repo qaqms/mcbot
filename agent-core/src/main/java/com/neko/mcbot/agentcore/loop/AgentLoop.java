@@ -47,6 +47,9 @@ public final class AgentLoop {
         default void onNotice(String text) {
         }
 
+        default void onGoalCheckpoint(long taskId, String facts) {
+        }
+
         /** 每步模型的 token 真数（cached<0 = 后端没报）。观测用，不影响逻辑。 */
         default void onUsage(long prompt, long completion, long cached) {
         }
@@ -183,6 +186,7 @@ public final class AgentLoop {
     private CompletableFuture<AssistantTurn> activeResponse;
     private boolean compacting;
     private int emptySearches;
+    private final SearchPages searchPages = new SearchPages();
     private boolean running;
     private int steps;
     private String lastCallKey;
@@ -193,6 +197,7 @@ public final class AgentLoop {
     private com.google.gson.JsonObject initialInventory;
     private com.google.gson.JsonObject latestObservation;
     private ItemGoal itemGoal;
+    private GoalContinuation goalContinuation;
     private int rejectedFinishes;
     private int lastFinishProgress = -1;
     /** 本步工具调用的落账账本；非 null = "这一步的工具还没全部写进对话"。 */
@@ -481,9 +486,11 @@ public final class AgentLoop {
         stuckAbort = false;
         noTargetsAbort = false;
         emptySearches = 0;
+        searchPages.reset();
         initialInventory = null;
         latestObservation = null;
         itemGoal = null;
+        goalContinuation = null;
         rejectedFinishes = 0;
         lastFinishProgress = -1;
         blockReason = null;
@@ -586,7 +593,8 @@ public final class AgentLoop {
         if (itemGoal != null || history.stream().noneMatch(m -> m instanceof Msg.User u
                 && u.text().equals(activeDirective.text())))
             history.add(new Msg.Nudge("[当前任务的独立事实账]\n原始指令："
-                    + activeDirective.text() + (itemGoal == null ? "" : "\n" + itemGoal.facts())));
+                    + activeDirective.text() + (itemGoal == null ? "" : "\n" + itemGoal.facts())
+                    + (goalContinuation == null ? "" : "\n" + goalContinuation.facts())));
         if (!state.feedback().isBlank()) history.add(new Msg.Nudge(
                 "[本轮服务端身体观测 task_id=" + activeDirective.id() + " step=" + steps
                         + "，仅对本次请求有效]\n" + state.feedback()));
@@ -667,12 +675,33 @@ public final class AgentLoop {
                     if (failure != null || state == null || !state.ok() || state.accepted())
                         throw new IllegalArgumentException();
                     itemGoal.observe(state.data());
+                    latestObservation = state.data();
                 } catch (RuntimeException unavailable) {
                     finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:结束前没有有效背包事实，未判目标完成。");
                     return;
                 }
                 if (itemGoal.satisfied()) {
                     finishCurrent(TaskStatus.COMPLETED, text);
+                    return;
+                }
+                if (goalContinuation != null) {
+                    GoalContinuation.Verdict verdict;
+                    try { verdict = goalContinuation.checkpoint(latestObservation); }
+                    catch (RuntimeException invalid) {
+                        finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:阶段结束时缺少完整身体事实，未续跑。");
+                        return;
+                    }
+                    String facts = itemGoal.facts() + "\n" + goalContinuation.facts();
+                    if (verdict != GoalContinuation.Verdict.CONTINUE) {
+                        finishCurrent(TaskStatus.FAILED, (verdict == GoalContinuation.Verdict.LIMIT
+                                ? "GOAL_RUN_LIMIT:长期目标阶段预算已到，需主人决定后续。"
+                                : "GOAL_NO_PROGRESS:连续阶段重复已见事实，已停止。") + "\n" + facts);
+                        return;
+                    }
+                    convo.add(new Msg.Nudge("[长期目标阶段检查点]\n" + facts
+                            + "\n本阶段回复不代表整项完成。根据最新条件选择下一有限阶段；确实受阻用report_blocked。"));
+                    listener.onGoalCheckpoint(activeDirective.id(), facts);
+                    step();
                     return;
                 }
                 int progress = itemGoal.progress();
@@ -826,15 +855,38 @@ public final class AgentLoop {
 
     private ToolOutcome setGoal(String json) {
         try {
-            ItemGoal.Target target = ItemGoal.Target.parse(json);
+            var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            if (!Set.of("item", "count", "mode", "lifecycle", "max_runs").containsAll(args.keySet()))
+                throw new IllegalArgumentException();
+            String lifecycle = null;
+            if (args.has("lifecycle")) {
+                var value = args.get("lifecycle");
+                if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                        || !Set.of("task", "long_term").contains(value.getAsString())) throw new IllegalArgumentException();
+                lifecycle = value.getAsString();
+            }
+            boolean longTerm = lifecycle == null ? goalContinuation != null : lifecycle.equals("long_term");
+            if (!longTerm && args.has("max_runs")) throw new IllegalArgumentException();
+            if (itemGoal != null && (longTerm != (goalContinuation != null)
+                    || goalContinuation != null && !goalContinuation.matches(args)))
+                return new ToolOutcome(false, "DENIED:当前目标的生命周期与阶段预算已固定，不能重开或增加。");
+            int maxRuns = longTerm ? GoalContinuation.limit(args) : 0;
+            args.remove("lifecycle");
+            args.remove("max_runs");
+            ItemGoal.Target target = ItemGoal.Target.parse(args.toString());
             if (itemGoal != null && !itemGoal.target().equals(target))
                 return new ToolOutcome(false, "DENIED:当前任务的物品目标已固定，不能降低数量/更换物品/改口径。");
             ItemGoal candidate = itemGoal == null ? new ItemGoal(target, initialInventory) : itemGoal;
             candidate.observe(latestObservation);
+            GoalContinuation continuation = longTerm && goalContinuation == null
+                    ? new GoalContinuation(maxRuns, initialInventory) : goalContinuation;
             itemGoal = candidate;
-            return new ToolOutcome(true, itemGoal.facts());
+            goalContinuation = continuation;
+            return new ToolOutcome(true, itemGoal.facts()
+                    + (goalContinuation == null ? "" : "\n" + goalContinuation.facts()));
         } catch (RuntimeException invalid) {
-            return new ToolOutcome(false, "DENIED:目标须为有效物品ID、1-4096整数count、additional或total口径，且有任务开始的完整背包事实。");
+            return new ToolOutcome(false, "DENIED:目标须为有效物品ID、1-4096整数count、additional或total口径；"
+                    + "lifecycle可为task/long_term，长期max_runs为1-16；须有任务开始的完整背包，长期还须有效位置/维度。");
         }
     }
 
@@ -882,7 +934,7 @@ public final class AgentLoop {
             if (outcomes[idx] == null) {
                 outcomes[idx] = r;
                 ToolCall call = calls.get(idx);
-                noteProgress(call.name(), r);
+                noteProgress(call.name(), call.argsJson(), r);
                 terminalGates.get(idx).complete(null);
             }
         }
@@ -1013,9 +1065,10 @@ public final class AgentLoop {
     }
 
     /** Count facts before opening the terminal gate, so later calls cannot escape the search bound. */
-    private void noteProgress(String name, ToolOutcome r) {
+    private void noteProgress(String name, String args, ToolOutcome r) {
         var data = r.data();
-        boolean search = Set.of("scan_area", "find_resource", "workflow", "run_program").contains(name);
+        boolean continuation = searchPages.continues(name, args, r);
+        boolean search = Set.of("scan_area", "find_resource", "search_resource", "workflow", "run_program").contains(name);
         var noTargets = data.get("no_targets");
         var explored = data.get("exploration_advanced");
         if ("explore".equals(name) && r.ok() && explored != null && explored.isJsonPrimitive()
@@ -1030,13 +1083,13 @@ public final class AgentLoop {
         }
         if (search && noTargets != null && noTargets.isJsonPrimitive()
                 && noTargets.getAsJsonPrimitive().isBoolean()) {
-            if (noTargets.getAsBoolean()) {
+            if (noTargets.getAsBoolean() && !continuation) {
                 if (++emptySearches >= 3) {
                     stuckAbort = true;
                     noTargetsAbort = true;
                     listener.onNotice("NO_TARGETS:累计三次无目标查询，停止；改变参数或穿插状态查询不会重置。");
                 }
-            } else emptySearches = 0;
+            } else if (!noTargets.getAsBoolean()) emptySearches = 0;
         }
     }
 

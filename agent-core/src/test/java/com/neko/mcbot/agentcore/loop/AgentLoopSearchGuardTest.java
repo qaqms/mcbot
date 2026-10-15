@@ -140,4 +140,33 @@ class AgentLoopSearchGuardTest {
         receipt.data().addProperty("no_targets", false);
         assertTrue(receipt.data().get("no_targets").getAsBoolean());
     }
+
+    @Test void threeIndependentCompleteSearchesStillStopAndDoNotAllowLaterActions() {
+        var loop = create();
+        loop.submit(1, "search complete neighborhoods");
+        call("search_resource", "{\"targets\":[\"oak_log\"]}");
+        call("status", "{}");
+        call("search_resource", "{\"targets\":[\"birch_log\"]}");
+        var calls = List.of(new ToolCall("last-search", "search_resource", "{\"targets\":[\"spruce_log\"]}"),
+                new ToolCall("later", "break_block", "{}"));
+        responses.getLast().complete(new AssistantTurn("", calls, 0, 0, -1, "tool_calls"));
+        assertEquals(List.of("search_resource", "status", "search_resource", "search_resource"), executed);
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+    }
+
+    @Test void allFivePagesCanFinishButRepeatingTheSearchStillReachesTheEmptyLimit() {
+        var loop = create();
+        loop.submit(1, "search all pages");
+        for (int offset = 0; offset <= 16384; offset += 4096) {
+            next = new ToolOutcome(true, "page", SearchPagesTest.page(offset));
+            call("find_resource", SearchPagesTest.args(offset));
+        }
+        assertTrue(statuses.isEmpty());
+        assertEquals(5, executed.size());
+        next = new ToolOutcome(true, "page", SearchPagesTest.page(0));
+        call("find_resource", SearchPagesTest.args(0));
+        call("find_resource", SearchPagesTest.args(0));
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+        assertEquals(7, executed.size());
+    }
 }

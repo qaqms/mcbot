@@ -29,6 +29,26 @@ class CraftToolArgumentsTest {
     }
 
     @Test
+    void materialDetailsRequireAReadOnlyQueryAndABoundedGroupIndex() {
+        for (int index = 0; index <= 8; index++) {
+            var parsed = CraftTool.arguments(JsonParser.parseString(
+                    "{\"item\":\"crafting_table\",\"query\":true,\"material_index\":" + index + "}")
+                    .getAsJsonObject());
+            assertNotNull(parsed);
+            assertEquals(index, parsed.materialIndex());
+        }
+        for (String value : new String[]{"null", "\"0\"", "false", "-1", "9", "0.5", "[]", "{}"}) {
+            assertNull(CraftTool.arguments(JsonParser.parseString(
+                    "{\"item\":\"stick\",\"query\":true,\"material_index\":" + value + "}")
+                    .getAsJsonObject()));
+        }
+        assertNull(CraftTool.arguments(JsonParser.parseString(
+                "{\"item\":\"stick\",\"material_index\":0}").getAsJsonObject()));
+        assertNull(CraftTool.arguments(JsonParser.parseString(
+                "{\"item\":\"stick\",\"query\":false,\"material_index\":0}").getAsJsonObject()));
+    }
+
+    @Test
     void rejectsMalformedArgumentsWithoutAccessingTheBody() {
         assertNull(CraftTool.arguments(null));
         for (String text : new String[]{"{}", "{\"item\":null}", "{\"item\":false}", "{\"item\":12}",

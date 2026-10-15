@@ -17,21 +17,37 @@ import java.util.function.LongSupplier;
 
 /** Domain-specific continuation using fresh receipts. Each primitive retains the normal server gate. */
 final class BoundedGather {
+    private static final int MAX_BATCH_BLOCKS = 8;
     record Plan(ItemGoal.Target goal, List<String> targets, int radius, int seconds, int maxBlocks,
-                ItemGoal.Scope scope, int exploreSteps, int exploreRadius) { }
+                ItemGoal.Scope scope, int exploreSteps, int exploreRadius, JsonObject materialFor) { }
 
     static Plan parse(String json) {
         if (json == null || json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 4096)
             throw new IllegalArgumentException();
         var args = JsonParser.parseString(json).getAsJsonObject();
         if (!Set.of("item", "count", "mode", "targets", "r", "timeout_seconds", "max_blocks", "scope",
-                        "explore_steps", "explore_radius")
+                        "explore_steps", "explore_radius", "material_for")
                 .containsAll(args.keySet())) throw new IllegalArgumentException();
         var goal = new JsonObject();
         for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
+        JsonObject materialFor = null;
+        if (args.has("material_for")) {
+            materialFor = args.getAsJsonObject("material_for");
+            if (ItemGoal.Scope.parse(args) != ItemGoal.Scope.SUBTASK || args.has("item") || args.has("targets")
+                    || !Set.of("item","ingredient","sources","recipe").containsAll(materialFor.keySet())
+                    || !materialFor.has("item")) throw new IllegalArgumentException();
+            integer(materialFor,"ingredient",0,0,8);
+            if (materialFor.has("sources") && (!materialFor.get("sources").isJsonPrimitive()
+                    || !materialFor.get("sources").getAsJsonPrimitive().isBoolean())) throw new IllegalArgumentException();
+            if (materialFor.has("recipe") && (!materialFor.get("recipe").isJsonPrimitive()
+                    || !materialFor.get("recipe").getAsJsonPrimitive().isString()
+                    || !materialFor.get("recipe").getAsString().matches("(?:[a-z0-9_.-]+:)?[a-z0-9_./-]+")
+                    || materialFor.get("recipe").getAsString().length()>128)) throw new IllegalArgumentException();
+            goal.add("item", materialFor.get("item"));
+        }
         ItemGoal.Target target = ItemGoal.Target.parse(goal.toString());
-        JsonArray targets = args.getAsJsonArray("targets");
-        if (targets == null || targets.isEmpty() || targets.size() > 8) throw new IllegalArgumentException();
+        JsonArray targets = materialFor == null ? args.getAsJsonArray("targets") : new JsonArray();
+        if (targets == null || materialFor == null && targets.isEmpty() || targets.size() > 8) throw new IllegalArgumentException();
         var names = new java.util.ArrayList<String>();
         for (var value : targets) {
             if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
@@ -40,10 +56,10 @@ final class BoundedGather {
                 throw new IllegalArgumentException();
             names.add(value.getAsString());
         }
-        return new Plan(target, List.copyOf(names), integer(args, "r", 8, 1, 16),
+        return new Plan(target, List.copyOf(names), integer(args, "r", 16, 1, 16),
                 integer(args, "timeout_seconds", 600, 1, 900), integer(args, "max_blocks", 128, 1, 256),
                 ItemGoal.Scope.parse(args), integer(args, "explore_steps", 8, 0, 16),
-                integer(args, "explore_radius", 64, 16, 64));
+                integer(args, "explore_radius", 64, 16, 64), materialFor == null ? null : materialFor.deepCopy());
     }
 
     private static int integer(JsonObject args, String key, int fallback, int min, int max) {
@@ -64,6 +80,11 @@ final class BoundedGather {
     private final Consumer<String> progress;
     private final Function<ToolOutcome, CompletableFuture<ToolOutcome>> confirm;
     private String activity = "读取背包进度";
+    private Set<String> acceptedItems;
+    private List<String> sourceTargets;
+    private int targetGroup;
+    private boolean materialResolved;
+    private JsonObject materialEvidence;
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final Set<String> skippedBlocks = new HashSet<>();
     private final Set<String> skippedItems = new HashSet<>();
@@ -85,6 +106,9 @@ final class BoundedGather {
     private int lastProgress;
     private int workPositionAttempts;
     private String currentFeet;
+    private String observedFeet, batchFeet;
+    private final java.util.ArrayDeque<JsonObject> workBatch = new java.util.ArrayDeque<>();
+    private int batchDigs, batchLimit, batchContinuations;
     private String lastProblem = "";
     private JsonObject lastData = new JsonObject();
 
@@ -98,8 +122,17 @@ final class BoundedGather {
                   BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
                   Consumer<Runnable> dispatch, Runnable cancelChild, Consumer<String> progress,
                   Function<ToolOutcome, CompletableFuture<ToolOutcome>> confirm) {
+        this(plan, baseline, clock, remote, dispatch, cancelChild, progress, confirm, null);
+    }
+
+    BoundedGather(Plan plan, JsonObject baseline, LongSupplier clock,
+                  BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
+                  Consumer<Runnable> dispatch, Runnable cancelChild, Consumer<String> progress,
+                  Function<ToolOutcome, CompletableFuture<ToolOutcome>> confirm, ExplorationRoute route) {
         this.plan = plan;
-        exploration = new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius());
+        acceptedItems = Set.of(plan.goal().item());
+        sourceTargets = plan.targets();
+        exploration = route == null ? new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius()) : route;
         // Material subtasks count from their own fresh start, rather than the owner's directive start.
         if (plan.scope() == ItemGoal.Scope.TASK) goal = new ItemGoal(plan.goal(), baseline);
         this.clock = clock;
@@ -112,8 +145,43 @@ final class BoundedGather {
 
     CompletableFuture<ToolOutcome> start() {
         started = clock.getAsLong();
-        dispatch.accept(this::observe);
+        dispatch.accept(plan.materialFor() == null ? this::observe : this::resolveMaterial);
         return result;
+    }
+    private void resolveMaterial() {
+        var query = new JsonObject();
+        query.addProperty("item", plan.goal().item());
+        query.addProperty("query", true);
+        query.addProperty("material_index", integer(plan.materialFor(), "ingredient", 0, 0, 8));
+        if (plan.materialFor().has("recipe")) query.add("recipe", plan.materialFor().get("recipe"));
+        call("craft", query, receipt -> {
+            if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
+            var material = receipt.data().getAsJsonObject("material");
+            if (material == null || flag(material,"truncated")) {
+                finish(false,"MATERIAL_UNAVAILABLE:配方替代材料列表不完整，未猜测来源。"); return;
+            }
+            String kind = plan.materialFor().has("sources") && plan.materialFor().get("sources").getAsBoolean()
+                    ? "sources" : "items";
+            var options = material.getAsJsonArray(kind);
+            if (options == null || options.size() > 64) throw new IllegalArgumentException();
+            var items = new java.util.LinkedHashSet<String>();
+            var blocks = new java.util.LinkedHashSet<String>();
+            for (var option : options) {
+                var entry = option.getAsJsonObject();
+                if (!entry.has("block")) continue;
+                String item = entry.get("item").getAsString(), block = entry.get("block").getAsString();
+                if (!item.matches("[a-z0-9_.-]+:[a-z0-9_./-]+") || item.length()>128
+                        || !block.matches("[a-z0-9_.-]+:[a-z0-9_./-]+") || block.length()>128)
+                    throw new IllegalArgumentException();
+                items.add(item); blocks.add(block);
+            }
+            if (items.isEmpty()) { finish(false,"MATERIAL_UNAVAILABLE:该配方材料没有已验证的方块来源。"); return; }
+            acceptedItems = Set.copyOf(items);
+            sourceTargets = List.copyOf(blocks);
+            materialEvidence = material.deepCopy();
+            materialResolved = true;
+            observe();
+        });
     }
     boolean done() { return result.isDone(); }
     String activity() { return activity; }
@@ -196,14 +264,20 @@ final class BoundedGather {
     }
 
     private void observe() {
+        observe(null);
+    }
+
+    private void observe(Runnable next) {
         var args = new JsonObject();
         args.addProperty("details", true);
         call("status", args, receipt -> {
             if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
             JsonObject state = receipt.data();
-            if (goal == null) goal = new ItemGoal(plan.goal(), state, plan.scope());
+            if (goal == null) goal = new ItemGoal(plan.goal(), state, plan.scope(), acceptedItems);
             goal.observe(state);
             double x = finite(state, "x"), y = finite(state, "y"), z = finite(state, "z");
+            observedFeet = (int) Math.floor(x) + ":" + (int) Math.floor(y) + ":" + (int) Math.floor(z);
+            if (!observedFeet.equals(batchFeet)) workBatch.clear();
             currentFeet = Math.abs(x - Math.floor(x) - .5) <= .1 && Math.abs(y - Math.rint(y)) <= .05
                     && Math.abs(z - Math.floor(z) - .5) <= .1
                     ? (int) Math.floor(x) + ":" + (int) Math.rint(y) + ":" + (int) Math.floor(z) : null;
@@ -225,6 +299,7 @@ final class BoundedGather {
                     originX = x; originY = y; originZ = z;
                     // Only real position observations can establish another collection region.
                     sampleOffset = 0;
+                    targetGroup = 0;
                     skippedBlocks.clear();
                     skippedItems.clear();
                     approachedItems.clear();
@@ -236,26 +311,28 @@ final class BoundedGather {
                 finish(false, "SCOPE_CHANGED:身体离开原采集区域或换维度，已停止。"); return;
             }
             String center = (int) Math.floor(x) + ":" + (int) Math.floor(y) + ":" + (int) Math.floor(z);
-            if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; }
+            if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; targetGroup = 0; }
             progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
             if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
             if (goal.progress() > lastProgress) { stalls = 0; lastProgress = goal.progress(); }
-            scanDrops();
+            if (next != null) next.run();
+            else if (!continueBatch()) scanDrops();
         });
     }
 
     private void scanDrops() {
+        workBatch.clear();
         var args = new JsonObject();
         args.addProperty("r", plan.radius());
         args.addProperty("items_only", true);
-        args.addProperty("item", plan.goal().item());
+        if (acceptedItems.size() == 1) args.addProperty("item", acceptedItems.iterator().next());
         call("scan_area", args, receipt -> {
             if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
             var items = receipt.data().getAsJsonArray("item_targets");
             if (items == null) throw new IllegalArgumentException();
             for (var entry : items) {
                 JsonObject item = entry.getAsJsonObject();
-                if (!plan.goal().item().equals(item.get("item").getAsString()) || !within(item)
+                if (!acceptedItems.contains(item.get("item").getAsString()) || !within(item)
                         || !flag(item, "pickup_allowed") || skippedItems.contains(itemKey(item))) continue;
                 pickup(item);
                 return;
@@ -298,22 +375,23 @@ final class BoundedGather {
             return;
         }
         // Movement ticks may already have picked it up. Only a fresh inventory proves progress.
-        walk(positions, 0, this::observe,
-                () -> { skippedItems.add(itemKey(item)); observe(); });
+        walk(positions, 0, () -> { skippedItems.add(itemKey(item)); scanDrops(); });
     }
 
     private void findBlocks() {
         var args = new JsonObject();
         var targets = new JsonArray();
-        plan.targets().forEach(targets::add);
+        sourceTargets.subList(targetGroup, Math.min(targetGroup + 8, sourceTargets.size())).forEach(targets::add);
         args.add("targets", targets);
         args.addProperty("r", plan.radius());
         args.addProperty("work", true);
         args.addProperty("offset", sampleOffset);
         if (sampleOffset > 0) args.add("scan_center", scanCenter.deepCopy());
         if (plan.exploreSteps() > 0) args.addProperty("frontiers", true);
+        if (plan.exploreSteps() > 0) args.addProperty("frontier_distance", Math.max(4, plan.radius()));
         call("find_resource", args, receipt -> {
             if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
+            exploration.searchPage(args, receipt, clock.getAsLong());
             lastData = receipt.data();
             if (lastData.has("scan_center")) scanCenter = lastData.getAsJsonObject("scan_center").deepCopy();
             searchPages++;
@@ -327,12 +405,15 @@ final class BoundedGather {
                 var tried = new HashSet<String>();
                 tried.add(currentFeet);
                 if (flag(block, "can_work_here") || block.has("can_clear_here") && flag(block, "can_clear_here")) {
+                    beginBatch(blocks, block);
                     mine(block, positions, 0, tried); return;
                 }
                 if (positions.isEmpty()) {
-                    skippedBlocks.add(blockKey(block));
-                    if (block.has("work_failure")) lastProblem = block.get("work_failure").getAsString();
-                    continue;
+                    // Nearby standing samples do not prove a buried object has no working route.
+                    var semantic = new JsonObject();
+                    for (String axis : List.of("x", "y", "z")) semantic.add(axis, block.get(axis));
+                    semantic.addProperty("arrival", "work");
+                    positions = List.of(semantic);
                 }
                 approachBlock(block, positions, 0, tried);
                 return;
@@ -347,8 +428,39 @@ final class BoundedGather {
                     return;
                 }
             }
+            if (targetGroup + 8 < sourceTargets.size()) {
+                targetGroup += 8; sampleOffset = 0; findBlocks(); return;
+            }
             explore();
         });
+    }
+
+    private void beginBatch(JsonArray targets, JsonObject first) {
+        workBatch.clear();
+        batchFeet = observedFeet;
+        batchDigs = 0;
+        batchLimit = Math.min(MAX_BATCH_BLOCKS, Math.max(1, goal.target().count() - goal.progress()));
+        var seen = new HashSet<String>();
+        seen.add(blockKey(first));
+        for (var entry : targets) {
+            var target = entry.getAsJsonObject();
+            if (workBatch.size() >= batchLimit - 1) break;
+            if (!within(target) || skippedBlocks.contains(blockKey(target))
+                    || !flag(target, "can_work_here") || !seen.add(blockKey(target))) continue;
+            workBatch.addLast(target.deepCopy());
+        }
+    }
+
+    private boolean continueBatch() {
+        if (workBatch.isEmpty() || batchDigs == 0 || batchDigs >= batchLimit || stalls >= 3
+                || dug + cleared >= plan.maxBlocks() || !observedFeet.equals(batchFeet)) return false;
+        var next = workBatch.removeFirst();
+        var tried = new HashSet<String>();
+        tried.add(currentFeet);
+        batchContinuations++;
+        // The observation only nominates work. Each primitive rechecks the live target, hand and permission.
+        mine(next, positions(next), 0, tried);
+        return true;
     }
 
     private void resourceBlocked(String lead) {
@@ -360,7 +472,7 @@ final class BoundedGather {
     private void explore() {
         if (plan.exploreSteps() == 0) { resourceBlocked("RESOURCE_BLOCKED:本段未启用换区探索。"); return; }
         if (exploration.exhausted()) {
-            resourceBlocked("EXPLORATION_LIMIT:本段探索步数预算已到。"); return;
+            resourceBlocked("EXPLORATION_LIMIT:本任务共享探索移动预算已到，重复gather/explore不会补充。"); return;
         }
         var points = lastData.getAsJsonArray("exploration_points");
         if (points == null) { resourceBlocked("RESOURCE_BLOCKED:服务端未提供探索落脚样本。"); return; }
@@ -371,8 +483,10 @@ final class BoundedGather {
         exploration.attempt(chosen);
         move.addProperty("exact", true);
         move.addProperty("walk_only", true);
-        progress.accept("本区域未找到可工作资源，正进行第" + exploration.attempts() + "/" + plan.exploreSteps()
-                + "段只行走探索；到达后重新查询，物品目标保持不变。");
+        progress.accept("本区域未找到可工作资源，正进行第" + exploration.attempts() + "/" + exploration.maxSteps
+                + "段只行走探索；搜索半径=" + plan.radius() + "，完整已知查询区域=" + exploration.coverageRegions()
+                + "，预计新增覆盖比例=" + exploration.selectedCoverage()
+                + "；到达后重新查询，物品目标保持不变。");
         call("move_to", move, receipt -> {
             if (receipt.ok() || receipt.feedback().startsWith("NO_PATH:")
                     || receipt.feedback().startsWith("NO_PROGRESS:") || receipt.feedback().startsWith("PARTIAL:")
@@ -395,6 +509,7 @@ final class BoundedGather {
         tried.add(blockKey(point));
         point.addProperty("exact", true);
         point.addProperty("clear_obstructions", true);
+        point.addProperty("max_digs", Math.min(128, Math.max(0, plan.maxBlocks() - dug - cleared - 1)));
         var target = new JsonObject();
         for (String key : List.of("x", "y", "z")) target.addProperty(key, exact(block, key));
         point.add("work_target", target);
@@ -402,12 +517,10 @@ final class BoundedGather {
         workPositionAttempts++;
         call("move_to", point, receipt -> {
             if (receipt.ok()) {
-                currentFeet = blockKey(point);
-                mine(block, positions, next, tried);
-            } else if (localStanceFailure(receipt.feedback()) || receipt.feedback().startsWith("NO_PATH:")
-                    || receipt.feedback().startsWith("NO_PROGRESS:")) {
+                afterMovement(receipt, () -> mine(block, positions, next, tried));
+            } else if (localRouteFailure(receipt.feedback())) {
                 lastProblem = receipt.feedback();
-                approachBlock(block, positions, next, tried);
+                afterMovement(receipt, () -> approachBlock(block, positions, next, tried));
             } else if (receipt.feedback().startsWith("TARGET_LOST:")) {
                 lastProblem = receipt.feedback();
                 blocked(block);
@@ -422,7 +535,26 @@ final class BoundedGather {
         return feedback.startsWith("TARGET_BLOCKED:") || feedback.startsWith("OUT_OF_REACH:");
     }
 
+    private static boolean localRouteFailure(String feedback) {
+        return localStanceFailure(feedback) || feedback.startsWith("NO_PATH:")
+                || feedback.startsWith("NO_PROGRESS:") || feedback.startsWith("PARTIAL:");
+    }
+
+    private void afterMovement(ToolOutcome receipt, Runnable next) {
+        workBatch.clear();
+        for (String key : List.of("removed_blocks", "placed_blocks")) {
+            if (!receipt.data().has(key)) continue;
+            int changes = exact(receipt.data(), key);
+            if (changes < 0) throw new IllegalArgumentException();
+            if (key.equals("removed_blocks")) cleared = Math.addExact(cleared, changes);
+            if (changes > 0) exploration.invalidateCoverage();
+        }
+        // Failed routes can move or collect items too. Recheck scope and quantity before another action.
+        observe(next);
+    }
+
     private void blocked(JsonObject block) {
+        workBatch.clear();
         skippedBlocks.add(blockKey(block));
         stalls++;
         observe();
@@ -440,10 +572,14 @@ final class BoundedGather {
                     ? receipt.data().get("cleared_blocks").getAsInt() : 0;
             if (incidental < 0 || incidental > args.get("clear_limit").getAsInt()) throw new IllegalArgumentException();
             cleared += incidental;
+            if (incidental > 0 || receipt.data().has("removed") && receipt.data().get("removed").getAsBoolean())
+                exploration.invalidateCoverage();
             if (incidental > 0) skippedBlocks.clear();
             if (receipt.data().has("removed") && receipt.data().get("removed").getAsBoolean()) {
                 dug++;
+                batchDigs++;
                 stalls++;
+                sampleOffset = 0; targetGroup = 0;
                 // A real removal can expose a previously blocked target. Query it afresh, with the same caps.
                 skippedBlocks.clear();
                 if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
@@ -458,17 +594,17 @@ final class BoundedGather {
         });
     }
 
-    private void walk(List<JsonObject> positions, int index, Runnable arrived, Runnable unavailable) {
+    private void walk(List<JsonObject> positions, int index, Runnable unavailable) {
         if (index >= positions.size()) { unavailable.run(); return; }
         JsonObject point = positions.get(index);
         point.addProperty("exact", true);
         call("move_to", point, receipt -> {
-            if (receipt.ok()) { arrived.run(); return; }
-            if (receipt.feedback().startsWith("NO_PATH:") || receipt.feedback().startsWith("NO_PROGRESS:")) {
+            if (receipt.ok()) { afterMovement(receipt, null); return; }
+            if (localRouteFailure(receipt.feedback())) {
                 lastProblem = receipt.feedback();
-                walk(positions, index + 1, arrived, unavailable);
+                afterMovement(receipt, () -> walk(positions, index + 1, unavailable));
             } else {
-                // Includes NEED_CONFIRM/PARTIAL/cancellation and uncertain effects: yield to the model.
+                // Permission, cancellation and unknown failures retain their terminal meaning.
                 lastData = receipt.data();
                 finish(false, receipt.feedback());
             }
@@ -518,17 +654,25 @@ final class BoundedGather {
 
     private void finish(boolean ok, String reason) {
         if (done()) return;
+        exploration.abandon();
         var data = new JsonObject();
         data.addProperty("goal_satisfied", ok && goal != null && goal.satisfied());
         data.addProperty("scope", plan.scope() == ItemGoal.Scope.TASK ? "task" : "subtask");
+        if (materialEvidence != null) data.add("material", materialEvidence);
         data.addProperty("mined_blocks", dug);
         data.addProperty("cleared_blocks", cleared);
         data.addProperty("actual_progress", goal == null ? 0 : goal.progress());
         data.addProperty("primitive_calls", calls);
         data.addProperty("work_position_attempts", workPositionAttempts);
+        data.addProperty("batch_continuations", batchContinuations);
         data.addProperty("exploration_attempts", exploration.attempts());
+        data.addProperty("exploration_max_steps", exploration.maxSteps);
+        data.addProperty("exploration_radius", exploration.radius);
         data.addProperty("explored_regions", exploration.regions());
         data.addProperty("search_pages", searchPages);
+        data.addProperty("search_radius", plan.radius());
+        data.addProperty("coverage_regions", exploration.coverageRegions());
+        data.addProperty("estimated_new_coverage", exploration.selectedCoverage());
         data.addProperty("skipped_blocks", skippedBlocks.size());
         data.addProperty("skipped_items", skippedItems.size());
         data.add("last_observation", lastData);
@@ -536,8 +680,12 @@ final class BoundedGather {
             if (lastData.has(key)) data.add(key, lastData.get(key).deepCopy());
         result.complete(new ToolOutcome(ok, reason + "\n"
                 + (goal == null ? "尚未取得本次采集的完整背包基线。" : goal.facts())
+                + (materialResolved ? "\n材料按服务器配方候选来源的实际件数结算；未自动转换，后续合成仍须重新查询及执行。" : "")
                 + (plan.scope() == ItemGoal.Scope.SUBTASK ? "\n此回执只结算材料子任务，不代表主人的整项目标完成。" : "")
                 + "\n本段实际目标挖掘=" + dug + "，另清遮挡=" + cleared + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
-                + "，未拾取候选=" + skippedItems.size() + "；请按实际回执决定后续。", data));
+                + "，未拾取候选=" + skippedItems.size() + "；任务探索移动=" + exploration.attempts() + "/" + exploration.maxSteps
+                + "，共享范围半径=" + exploration.radius + "，新增观察区域=" + exploration.regions()
+                + "，搜索半径=" + plan.radius() + "，本段查询页=" + searchPages
+                + "，完整已知查询区域=" + exploration.coverageRegions() + "；请按实际回执决定后续。", data));
     }
 }

@@ -2,6 +2,7 @@ package com.neko.mcbot.agentcore.script;
 
 import com.google.gson.*;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
+import com.neko.mcbot.agentcore.loop.SearchPages;
 import org.luaj.vm2.*;
 import org.luaj.vm2.compiler.LuaC;
 import org.luaj.vm2.lib.BaseLib;
@@ -69,6 +70,7 @@ public final class BoundedProgram {
     private volatile long started;
     private int instructions, slice, cells, strings, outputBytes, emptySearches, repeats;
     private String signature = "";
+    private final SearchPages searchPages = new SearchPages();
 
     public BoundedProgram(Plan plan, LongSupplier clock,
                           BiFunction<String, String, CompletableFuture<ToolOutcome>> execute,
@@ -227,8 +229,10 @@ public final class BoundedProgram {
         var explored = data.get("exploration_advanced");
         if (name.equals("explore") && explored != null && explored.isJsonPrimitive()
                 && explored.getAsJsonPrimitive().isBoolean() && explored.getAsBoolean()) emptySearches = 0;
-        if (Set.of("scan_area", "find_resource").contains(name) && data.has("no_targets")) {
-            emptySearches = data.get("no_targets").getAsBoolean() ? emptySearches + 1 : 0;
+        if (Set.of("scan_area", "find_resource", "search_resource").contains(name) && data.has("no_targets")) {
+            boolean continuation = searchPages.continues(name, args, receipt);
+            if (!data.get("no_targets").getAsBoolean()) emptySearches = 0;
+            else if (!continuation) emptySearches++;
             if (emptySearches >= 3) throw new Halt("NO_TARGETS:三次搜索未取得目标，停止组合执行。");
         }
         String now = name + "|" + args + "|" + receipt.feedback();

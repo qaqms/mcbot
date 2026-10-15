@@ -111,6 +111,56 @@ class BoundedExplorationTest {
         assertEquals(List.of(0, 4096), w.offsets);
         assertTrue(w.moves.isEmpty());
     }
+    @Test void defaultGatherFindsAndWorksAResourceBeyondTheOldEightBlockRadius() {
+        var queue = new ArrayDeque<Runnable>();
+        var offsets = new ArrayList<Integer>();
+        int[] x = {0}, mined = {0};
+        var gather = new BoundedGather(BoundedGather.parse(
+                "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"scope\":\"subtask\",\"explore_steps\":0}"),
+                state(0,0,0), () -> 0, (name,text) -> {
+            var args = json(text);
+            var data = new JsonObject();
+            switch (name) {
+                case "status" -> data = state(x[0],0,mined[0]);
+                case "scan_area" -> data.add("item_targets",new JsonArray());
+                case "find_resource" -> {
+                    assertEquals(16,args.get("r").getAsInt());
+                    int offset = args.get("offset").getAsInt();
+                    offsets.add(offset);
+                    data = BoundedSearchTest.page(offset,false);
+                    data.getAsJsonObject("scan_center").addProperty("y",90);
+                    if (offset == 16384) {
+                        var block = BoundedGatherTest.block(false);
+                        block.addProperty("x",12);
+                        var stands = new JsonArray();
+                        stands.add(json("{\"x\":11,\"y\":90,\"z\":0}"));
+                        block.add("stand_positions",stands);
+                        data.getAsJsonArray("targets").add(block);
+                    }
+                }
+                case "move_to" -> {
+                    assertEquals(11,args.get("x").getAsInt());
+                    assertEquals(12,args.getAsJsonObject("work_target").get("x").getAsInt());
+                    x[0] = 11;
+                }
+                case "break_block" -> {
+                    assertEquals(12,args.get("x").getAsInt());
+                    mined[0]++;
+                    data.addProperty("removed",true);
+                }
+                default -> fail(name);
+            }
+            return CompletableFuture.completedFuture(new ToolOutcome(true,"actual receipt",data));
+        },queue::addLast,()->fail("unexpected cancellation"),s->{});
+        var result = gather.start();
+        while (!queue.isEmpty()) queue.removeFirst().run();
+        assertTrue(result.join().ok(),result.join().feedback());
+        assertEquals(List.of(0,4096,8192,12288,16384),offsets);
+        assertEquals(1,mined[0]);
+        assertEquals(0,result.join().data().get("exploration_attempts").getAsInt());
+        assertEquals(0,result.join().data().get("coverage_regions").getAsInt(),"removal invalidates coverage");
+        assertEquals(0,result.join().data().get("estimated_new_coverage").getAsDouble());
+    }
     @Test void unreachableExplorationDirectionIsNotRetriedAndNewDirectionUsesFreshStatus() {
         var w = new World(); w.failFirst = true;
         var result = w.gather("").start(); w.drain();

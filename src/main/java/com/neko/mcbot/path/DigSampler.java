@@ -38,4 +38,13 @@ public interface DigSampler {
 
     /** 全程可放的方块总数上限（=背包可用方块存量）：放格与挖格一样要预算化。 */
     int maxPlaces();
+
+    /** Ordered work within one edge, viewed from hypothetical departure feet. */
+    default boolean canClear(int fromX, int fromY, int fromZ, java.util.List<Long> cells) {
+        return true;
+    }
+
+    default boolean allowsStep(int fromX, int fromY, int fromZ, int x, int y, int z) {
+        return true;
+    }
 }

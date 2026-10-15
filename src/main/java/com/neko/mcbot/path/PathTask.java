@@ -108,6 +108,8 @@ public final class PathTask extends TickTask {
     private int tickWarmup;        // 进场让世界加载/防抖的缓冲拍
     private final PathGrounding grounding = new PathGrounding();
     private final boolean walkOnly;
+    private final BlockPos workTarget;
+    private final PathSpec spec;
 
     // 挖掘子状态
     private BlockPos digPos;
@@ -134,6 +136,18 @@ public final class PathTask extends TickTask {
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
                     ActionPermissions.Context context, ActionPermissions.Scope approved,
                     CompanionScheduler scheduler, boolean exact, boolean walkOnly) {
+        this(level, target, permissions, context, approved, scheduler, exact, walkOnly, null);
+    }
+
+    public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
+                    ActionPermissions.Context context, ActionPermissions.Scope approved,
+                    CompanionScheduler scheduler, boolean exact, boolean walkOnly, BlockPos workTarget) {
+        this(level, target, permissions, context, approved, scheduler, exact, walkOnly, workTarget, PathSpec.DEFAULT);
+    }
+
+    public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
+                    ActionPermissions.Context context, ActionPermissions.Scope approved,
+                    CompanionScheduler scheduler, boolean exact, boolean walkOnly, BlockPos workTarget, PathSpec spec) {
         this.level = level;
         this.target = target;
         this.permissions = permissions;
@@ -142,6 +156,8 @@ public final class PathTask extends TickTask {
         this.scheduler = scheduler;
         this.exact = exact;
         this.walkOnly = walkOnly;
+        this.workTarget = workTarget == null ? null : workTarget.immutable();
+        this.spec = spec;
     }
 
     @Override
@@ -166,6 +182,8 @@ public final class PathTask extends TickTask {
             onAbort();
             return terminal(new Result(false, "TARGET_LOST:身体已换维度，原路线作废。", null));
         }
+        if (!spec.contains(c.blockPosition().getX(), c.blockPosition().getY(), c.blockPosition().getZ()))
+            return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
         // While steering, the next landing belongs to the route, including its airborne ticks.
         PathGrounding.Decision grounded = steering == null
                 ? grounding.poll(c.onGround(), c.blockPosition().getY()) : PathGrounding.Decision.READY;
@@ -215,7 +233,7 @@ public final class PathTask extends TickTask {
     private Progress searchTick(CompanionPlayer c) {
         // 先看有没有"确认前刚算好的那条路"可用（R2-S4 lastPlan）：省掉一整次重搜。
         // 只在首搜阶段尝试；重规划（REPLAN_SEARCH）是"世界变了"的产物，必须重新搜。
-        if (search == null && phase == Phase.SEARCH && !wasReplan && !walkOnly) {
+        if (search == null && phase == Phase.SEARCH && !wasReplan && !walkOnly && spec.equals(PathSpec.DEFAULT)) {
             if (tryReusePlan(c)) {
                 return afterPlanReady(c, path); // tryReusePlan 已把 path/planDigs/planPlaces 装好
             }
@@ -225,8 +243,7 @@ public final class PathTask extends TickTask {
         }
         if (search == null) {
             BlockPos from = c.blockPosition();
-            sampler = new LevelDigSampler(level, c, from,
-                    walkOnly ? 0 : LevelDigSampler.countPlaceables(c.getInventory()));
+            sampler = samplerFor(c, from);
             search = newSearch(from);
         }
         if (!search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS)) {
@@ -277,9 +294,14 @@ public final class PathTask extends TickTask {
         cursor = path.size() > 1 && path.getFirst().action() == DigAStar.ACT_START ? 1 : 0;
         int digs = planDigs;
         int places = planPlaces;
+        if (digs > spec.maxDigs() - actualDigs)
+            return new Progress.Done(new Result(false, "ACTION_LIMIT:新鲜路线超过本段剩余挖掘预算，未执行。", null));
         if (walkOnly && (digs > 0 || places > 0))
             return new Progress.Done(new Result(false,
                     "NO_PATH:只行走路线已出现需要挖放的变化，未修改世界；重新观察后换方向。", null));
+        if (!editsFeasible(plan, sampler))
+            return new Progress.Done(new Result(false,
+                    "NO_PATH:路线改动不满足当前工位、工作目标保护或挖放条件，未执行该方案；重新选择站位。", null));
         rememberPlan(c, plan);
         McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
@@ -367,7 +389,7 @@ public final class PathTask extends TickTask {
 
     /** 记下刚算好的路（连同**起点**，见 {@link PlanCache} 里"起点必须相同"的理由）。只在主线程调用。 */
     private void rememberPlan(CompanionPlayer c, List<DigAStar.Step> plan) {
-        if (c == null) {
+        if (c == null || !spec.equals(PathSpec.DEFAULT)) {
             return;
         }
         cacheKey = c.getUUID();
@@ -394,9 +416,12 @@ public final class PathTask extends TickTask {
         }
         if (exact && (p.path.isEmpty() || !atTarget(p.path.getLast()))) return false;
         // 采样器仍要建（执行期 mineOne/placeOne/复核都用它 live 读世界），但**不必重搜**
-        sampler = new LevelDigSampler(level, c, c.blockPosition(),
-                LevelDigSampler.countPlaceables(c.getInventory()));
+        sampler = samplerFor(c, c.blockPosition());
         path = liveify(p.path);
+        if (!editsFeasible(path, sampler)) {
+            dropPlan();
+            return false;
+        }
         cursor = 0;
         executed = 0;
         // 故意**不建** search 对象：这趟根本没搜，凭空造一个没 advance 过的 DigAStar 只为喂日志，
@@ -479,7 +504,16 @@ public final class PathTask extends TickTask {
         } else {
             memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
         }
-        DigAStar d = searchFor(memo != null ? memo : sampler, from, target, exact, walkOnly);
+        NavigationGoal goal = spec.workArrival()
+                ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
+                workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
+                Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),
+                pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, sampler, from, pos))
+                : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
+        DigAStar d = new DigAStar(memo != null ? memo : sampler,
+                from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(),
+                MAX_NODES, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs), goal);
+        d.totalBudget(SEARCH_TOTAL_NS);
         if (reusePending != null) {
             d.reuseBias(reusePending);
         }
@@ -538,6 +572,29 @@ public final class PathTask extends TickTask {
             fromY = st.y();
         }
         return out;
+    }
+
+    static boolean editsFeasible(List<DigAStar.Step> plan, DigSampler sampler) {
+        DigAStar.Step previous = null;
+        for (var step : plan) {
+            if (!sampler.inBounds(step.x(), step.y(), step.z())) return false;
+            if (previous != null && (!sampler.allowsStep(previous.x(), previous.y(), previous.z(),
+                    step.x(), step.y(), step.z()) || !sampler.canClear(
+                    previous.x(), previous.y(), previous.z(), step.dig()))) return false;
+            for (long cell : step.dig())
+                if (!DigSampler.feasibleDig(sampler.digSeconds(
+                        DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))) return false;
+            for (long cell : step.place())
+                if (!sampler.placeable(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
+                        DigAStar.unpackZ(cell))) return false;
+            previous = step;
+        }
+        return true;
+    }
+
+    private LevelDigSampler samplerFor(CompanionPlayer c, BlockPos from) {
+        return new LevelDigSampler(level, c, from,
+                walkOnly || spec.underground() ? 0 : LevelDigSampler.countPlaceables(c.getInventory()), workTarget, spec);
     }
 
     private String memoStats() {
@@ -733,9 +790,9 @@ public final class PathTask extends TickTask {
                     "NO_PATH:路线结束但身体没有在末节点站稳，重新观察当前位置。", null));
         }
         int radius = exact ? 0 : 1;
-        if (!c.onGround() || Math.abs(at.getX() - target.getX()) > radius
+        if (!c.onGround() || !spec.workArrival() && (Math.abs(at.getX() - target.getX()) > radius
                 || Math.abs(at.getY() - target.getY()) > radius
-                || Math.abs(at.getZ() - target.getZ()) > radius) {
+                || Math.abs(at.getZ() - target.getZ()) > radius)) {
             if (!partialTail) return new Progress.Done(new Result(false,
                     "NO_PATH:路线结束但身体未实际到达目标范围，重新观察当前位置。", null));
         }
@@ -751,6 +808,8 @@ public final class PathTask extends TickTask {
                             + "这一段已走完，请从该点重发 move_to（可分多段）"
                             + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。"), data));
         }
+        data.addProperty("arrival", spec.workArrival() ? "work" : "position");
+        data.addProperty("x", at.getX()); data.addProperty("y", at.getY()); data.addProperty("z", at.getZ());
         String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
                 + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
         return new Progress.Done(new Result(true, fb, data));
@@ -765,8 +824,7 @@ public final class PathTask extends TickTask {
         stopMovement();
         clearCrack();
         BlockPos from = c.blockPosition();
-        sampler = new LevelDigSampler(level, c, from,
-                walkOnly ? 0 : LevelDigSampler.countPlaceables(c.getInventory()));
+        sampler = samplerFor(c, from);
         replans++;
         wasReplan = true;
         partialTail = false;
@@ -839,6 +897,7 @@ public final class PathTask extends TickTask {
         BlockPos pos = new BlockPos(x, y, z);
         if (!level.isLoaded(pos)) return miningFailure("TARGET_LOST:开路目标未加载，重新查看路线。");
         if (mining == null && sampler.cleared(x, y, z)) return null;
+        if (actualDigs >= spec.maxDigs()) return miningFailure("ACTION_LIMIT:本段挖掘总预算已到，未继续开路。");
         Progress permission = checkChange("dig", pos);
         if (permission != null) return permission;
         if (digPos == null || !digPos.equals(pos)) {

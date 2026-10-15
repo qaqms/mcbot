@@ -65,14 +65,21 @@ public final class FindResourceTool implements ServerTool {
             @Override public void stands(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) {
                 target.add("stand_positions", WorkPositions.describeMining(companion, pos, budget));
             }
-            @Override public JsonArray frontiers() { return ExplorationPoints.describe(companion); }
+            @Override public JsonArray frontiers() {
+                return ExplorationPoints.describe(companion, args.has("frontier_distance")
+                        ? integer(args.get("frontier_distance")) : 16);
+            }
         });
     }
 
     static Input arguments(JsonObject args) {
         try {
             for (String key : args.keySet())
-                if (!List.of("targets", "r", "work", "offset", "frontiers", "scan_center").contains(key)) return null;
+                if (!List.of("targets", "r", "work", "offset", "frontiers", "scan_center", "frontier_distance").contains(key)) return null;
+            if (args.has("frontier_distance")) {
+                int distance = integer(args.get("frontier_distance"));
+                if (distance < 4 || distance > 16) return null;
+            }
             if (args.has("work") && (!args.get("work").isJsonPrimitive()
                     || !args.get("work").getAsJsonPrimitive().isBoolean())) return null;
             if (args.has("frontiers") && (!args.get("frontiers").isJsonPrimitive()
