@@ -19,6 +19,9 @@ class TaskPolicyTest {
         assertFalse(TaskPolicy.observation("craft", empty));
         assertFalse(TaskPolicy.observation("craft", JsonParser.parseString("{\"query\":\"true\"}").getAsJsonObject()));
         assertTrue(TaskPolicy.observation("craft", JsonParser.parseString("{\"query\":true}").getAsJsonObject()));
+        assertTrue(TaskPolicy.observation("place_block", JsonParser.parseString("{\"query\":true}").getAsJsonObject()));
+        assertFalse(TaskPolicy.observation("place_block", JsonParser.parseString("{\"query\":\"true\"}").getAsJsonObject()));
+        assertFalse(TaskPolicy.observation("place_block", JsonParser.parseString("{\"query\":false}").getAsJsonObject()));
         assertFalse(TaskPolicy.observation("smelt", JsonParser.parseString("{\"action\":null}").getAsJsonObject()));
         for (String name : new String[]{"move_to", "break_block", "place_block", "equip", "attack", "unknown"}) {
             assertFalse(TaskPolicy.observation(name, empty));

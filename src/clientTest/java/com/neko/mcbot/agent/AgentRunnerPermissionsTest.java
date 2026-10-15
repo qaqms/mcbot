@@ -128,6 +128,21 @@ class AgentRunnerPermissionsTest {
                 && t.content().startsWith("DENIED:")));
     }
 
+    @Test void readonlyTaskCanQueryPlacementButCannotTurnTheQueryIntoAMutation() {
+        runner.start();
+        runner.submitTask("[只读] check a placement site");
+        client.drain();
+        call(0, "place_block", "{\"x\":2,\"y\":90,\"z\":0,\"item\":\"stone\",\"query\":true}");
+        assertEquals("place_block", client.lastTool().str("tool"));
+        assertTrue(client.lastTool().obj("args").get("query").getAsBoolean());
+        receipt(client.lastTool().num("seq", -1), true, "observation", new JsonObject());
+        long calls = client.toolCount();
+        call(1, "place_block", "{\"x\":2,\"y\":90,\"z\":0,\"item\":\"stone\",\"query\":false}");
+        assertEquals(calls, client.toolCount());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m -> m instanceof Msg.Tool t
+                && t.content().startsWith("DENIED:")));
+    }
+
     @Test void changingModeStopsPendingConfirmationAndQueuedTasksWithoutGrantingOldScope() {
         long task = propose();
         var old = runner.questionSnapshot();

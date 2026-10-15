@@ -46,6 +46,8 @@ class BoundedGatherTest {
         int missedPickupMoves;
         int hiddenDropScans;
         int[] dropStancesAfterFailedMove;
+        int[] dropStancesAfterMining;
+        boolean stableDropIdentity, touchingAfterMining;
         boolean reportDrops;
         double stateX;
         Double stateXAfterFirstMining;
@@ -97,7 +99,7 @@ class BoundedGatherTest {
                     if (ground && !hidden) {
                         var item = withStances(false, dropStances);
                         item.addProperty("item", "minecraft:dirt");
-                        item.addProperty("target_uuid", "drop-" + dug);
+                        item.addProperty("target_uuid", stableDropIdentity ? "drop" : "drop-" + dug);
                         item.addProperty("count", 1);
                         item.addProperty("can_touch_here", touching);
                         item.addProperty("pickup_allowed", true);
@@ -130,6 +132,8 @@ class BoundedGatherTest {
                     if (!breakFailures.isEmpty()) return CompletableFuture.completedFuture(
                             new ToolOutcome(false, breakFailures.removeFirst(), data));
                     dug++;
+                    if (dropStancesAfterMining != null) dropStances = dropStancesAfterMining;
+                    if (touchingAfterMining) touching = true;
                     removedTargets.add(args.get("x").getAsInt());
                     if (stateXAfterFirstMining != null && dug == 1) stateX = stateXAfterFirstMining;
                     if (!noYield && dug > yieldAfter) { ground = true; pendingDrops++; }
@@ -393,6 +397,70 @@ class BoundedGatherTest {
         assertEquals(List.of(1, 3, 4, 5, 6, 7),
                 f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
         assertEquals(1, result.data().get("skipped_items").getAsInt());
+    }
+
+    @Test void anInitiallyUnreachableSameDropCanBeCollectedAfterWorkingOpensANewStance() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.stableDropIdentity = true;
+        f.dropStances = new int[]{};
+        f.dropStancesAfterMining = new int[]{3};
+        assertTrue(f.run().ok());
+        assertEquals(1, f.dug);
+        assertEquals(List.of(3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+    }
+
+    @Test void workingOpensNewStancesWithoutResettingTheSameDropsSixAttemptLimit() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.stableDropIdentity = true;
+        f.dropStances = new int[]{1, 3, 4, 5, 6, 7};
+        f.dropStancesAfterMining = new int[]{8};
+        f.missedPickupMoves = 20;
+        f.failureAfterFirstMining = "WRONG_TOOL:stop after checking the new drop geometry";
+        var result = f.run();
+        assertFalse(result.ok());
+        assertEquals(1, f.dug);
+        assertEquals(List.of(1, 3, 4, 5, 6, 7),
+                f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+    }
+
+    @Test void aPreviouslySkippedDropThatFallsIntoContactIsRecheckedWithoutAnotherRoute() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.stableDropIdentity = true;
+        f.dropStances = new int[]{};
+        f.touchingAfterMining = true;
+        assertTrue(f.run().ok());
+        assertEquals(1, f.dug);
+        assertEquals(0, f.moved);
+        assertEquals(1, f.calls.stream().filter("wait"::equals).count());
+    }
+
+    @Test void knownUnharvestableTargetsNeverSpendARouteOrDigBudget() {
+        var f = new Fixture(1, 0);
+        var target = withStances(false, 3);
+        target.addProperty("harvestable_with_hand", false);
+        f.blockTargets = List.of(target);
+        var result = f.run();
+        assertTrue(result.feedback().startsWith("WRONG_TOOL:"));
+        assertEquals(0, f.dug);
+        assertEquals(0, f.moved);
+        assertEquals(0, f.breakAttempts);
+    }
+
+    @Test void anUnharvestableSourceDoesNotHideAnotherSourceThatTheSameHandCanHarvest() {
+        var f = new Fixture(1, 0);
+        var wrong = block(true);
+        wrong.addProperty("harvestable_with_hand", false);
+        var good = block(true);
+        good.addProperty("x", 3);
+        good.addProperty("harvestable_with_hand", true);
+        f.blockTargets = List.of(wrong, good);
+        f.pickupDuringMining = true;
+        assertTrue(f.run().ok());
+        assertEquals(3, f.breakArgs.getFirst().get("x").getAsInt());
+        assertEquals(0, f.moved);
     }
 
     @Test void observedResourceOutsideTheFixedTaskScopeIsExplainedWithoutMoreExploration() {

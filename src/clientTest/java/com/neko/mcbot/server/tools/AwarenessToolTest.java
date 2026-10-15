@@ -49,6 +49,45 @@ class AwarenessToolTest {
         assertEquals(-6, targets.get(0).getAsJsonObject().get("z").getAsInt());
         assertFalse(result.data().get("no_targets").getAsBoolean());
     }
+
+    @Test void knownWrongToolIsReportedBeforeSpendingGeometryOrSuggestingWorkStances() {
+        var scan = new Scan() {
+            @Override public Boolean harvestable(BlockState state) { return false; }
+            @Override public void work(JsonObject target, BlockPos pos, com.neko.mcbot.server.BlockAim.TraceBudget budget) {
+                fail("no geometric evaluation is needed for a known unusable hand");
+            }
+            @Override public void stands(JsonObject target, BlockPos pos, com.neko.mcbot.server.BlockAim.TraceBudget budget) {
+                fail("must not suggest a route that cannot harvest its target");
+            }
+        };
+        scan.cells.put(scan.center().offset(2, -1, 0), Blocks.IRON_ORE.defaultBlockState());
+        var result = FindResourceTool.execute(json("{\"targets\":[\"iron_ore\"],\"r\":4,\"work\":true}"), scan);
+        assertTrue(result.ok());
+        var target = result.data().getAsJsonArray("targets").get(0).getAsJsonObject();
+        assertFalse(target.get("harvestable_with_hand").getAsBoolean());
+        assertTrue(target.get("work_failure").getAsString().startsWith("WRONG_TOOL:"));
+        assertTrue(target.getAsJsonArray("stand_positions").isEmpty());
+        assertEquals(0, result.data().get("work_traces").getAsInt());
+        assertFalse(result.data().get("work_truncated").getAsBoolean(),
+                "a known tool refusal is not unknown geometry");
+        assertTrue(result.feedback().contains("当前主手没有采收资格"));
+    }
+
+    @Test void manyToolRefusalsCannotHideAnEligibleCandidateWithUnknownGeometry() {
+        var scan = new Scan() {
+            @Override public Boolean harvestable(BlockState state) { return !state.is(Blocks.IRON_ORE); }
+        };
+        for (int x = -3; x <= 3; x++) for (int z = -3; z <= 3; z++)
+            scan.cells.put(scan.center().offset(x, 0, z), Blocks.IRON_ORE.defaultBlockState());
+        scan.cells.put(scan.center().offset(4, 0, 0), Blocks.OAK_LOG.defaultBlockState());
+        var result = FindResourceTool.execute(json(
+                "{\"targets\":[\"iron_ore\",\"oak_log\"],\"r\":5,\"work\":true}"), scan);
+        assertEquals("minecraft:oak_log", result.data().getAsJsonArray("targets").get(0)
+                .getAsJsonObject().get("block").getAsString());
+        assertEquals(1, result.data().get("work_checks").getAsInt());
+        assertFalse(result.data().get("work_truncated").getAsBoolean());
+        assertTrue(result.data().get("results_truncated").getAsBoolean());
+    }
     @Test void unknownCellsNeverReadAndEmptyDoesNotClaimAbsence() {
         var scan = new Scan();
         scan.loaded = false;

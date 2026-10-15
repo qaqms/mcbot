@@ -118,6 +118,25 @@ class BlockAimTest {
         assertTrue(BlockAim.mining(grid, far, 4).failure().startsWith("OUT_OF_REACH:"));
     }
 
+    @Test void highTreeWorkArrivalAndActualMiningUseTheSameEyeToSurfaceGeometry() {
+        var grid = new Grid();
+        grid.blocks.clear();
+        var target = new BlockPos(12, 69, 49);
+        grid.blocks.put(target, Blocks.ACACIA_LOG.defaultBlockState());
+        var feet = new BlockPos(13, 63, 48);
+        grid.eye = new Vec3(13.5, 64.62, 48.5);
+        assertTrue(feet.distSqr(target) > 5.5 * 5.5, "the former feet/centre test rejects this working height");
+        assertTrue(NavigationWork.goal(grid, target, 1.62, 4.5, true, p -> false)
+                .reached(feet.getX(), feet.getY(), feet.getZ()));
+        var planned = BlockAim.miningPlan(grid, target, 4.5, p -> false);
+        assertTrue(planned.ok(), planned.aim().failure());
+        var actual = BlockAim.mining(grid, target, 4.5);
+        assertTrue(actual.ok(), actual.failure());
+        assertTrue(BlockAim.miningRay(grid, target, actual.point(), 4.5).ok());
+        grid.eye = grid.eye.add(0, -.4, 0);
+        assertTrue(BlockAim.mining(grid, target, 4.5).failure().startsWith("OUT_OF_REACH:"));
+    }
+
     @Test void unloadedTargetAndIntermediateCellsNeverReachNativeClip() {
         for (BlockPos unknown : List.of(TARGET, new BlockPos(1, 1, 0))) {
             Grid grid = new Grid();

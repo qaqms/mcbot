@@ -154,6 +154,39 @@ class BlockMiningTest {
         assertEquals(4, access.held().getCount());
     }
 
+    @Test void nativePickupIntoEmptyHandContinuesButAnUnobservedToolChangeStillStops() {
+        for (boolean nativePickup : new boolean[]{true, false}) {
+            Mining access = new Mining();
+            access.inventory.setItem(0, ItemStack.EMPTY);
+            access.state = Blocks.ACACIA_LOG.defaultBlockState();
+            BlockMining mining = new BlockMining(access);
+            assertNull(mining.tick());
+            access.inventory.setItem(0, new ItemStack(Items.ACACIA_LOG));
+            if (nativePickup) access.pickups.recorded(0, ItemStack.EMPTY, 0, access.held(), 1);
+            if (nativePickup) {
+                assertNull(mining.tick());
+                assertNull(mining.tick());
+                assertTrue(mining.tick().ok());
+                assertEquals(1, access.destroys);
+            } else {
+                assertTrue(mining.tick().feedback().startsWith("WRONG_TOOL:"));
+                assertEquals(0, access.destroys);
+            }
+        }
+    }
+
+    @Test void pickupEvidenceNeverBypassesTheCurrentTargetsHarvestQualification() {
+        Mining access = new Mining();
+        access.inventory.setItem(0, ItemStack.EMPTY);
+        BlockMining mining = new BlockMining(access);
+        assertNull(mining.tick());
+        access.inventory.setItem(0, new ItemStack(Items.DIRT));
+        access.pickups.recorded(0, ItemStack.EMPTY, 0, access.held(), 1);
+        access.correct = false;
+        assertTrue(mining.tick().feedback().startsWith("WRONG_TOOL:"));
+        assertEquals(0, access.destroys);
+    }
+
     @Test void preflightAndTicksUseDifferentReachAndLiveProgress() {
         Mining access = new Mining();
         BlockMining mining = new BlockMining(access);

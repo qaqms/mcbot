@@ -47,6 +47,7 @@ public final class BlockActionFixtures {
         public final List<Drop> drops = new ArrayList<>();
         public final List<Integer> cracks = new ArrayList<>();
         public final List<Double> reaches = new ArrayList<>();
+        public final HandSnapshot.Pickups pickups = new HandSnapshot.Pickups();
         public BlockState state = Blocks.STONE.defaultBlockState();
         public String expectedBlock;
         public ServerTool.Result denied;
@@ -78,6 +79,7 @@ public final class BlockActionFixtures {
         @Override public float progress(BlockState state) { return gain; }
         @Override public int selectedSlot() { return inventory.getSelectedSlot(); }
         @Override public ItemStack held() { return inventory.getSelectedItem(); }
+        @Override public HandSnapshot.Pickups handPickups() { return pickups; }
         @Override public List<? extends BlockMining.Drop> nearbyDrops() { return List.copyOf(drops); }
         @Override public boolean destroy() { destroys++; action.run(); return reported; }
         @Override public void crack(int stage) { cracks.add(stage); }
@@ -97,12 +99,17 @@ public final class BlockActionFixtures {
         public int consume = 1;
         public int calls;
         public int reads;
+        public final List<BlockPos> prepared = new ArrayList<>();
+        public java.util.function.Function<BlockPos, ServerTool.Result> prepareAt;
 
         @Override public ServerTool.Result guard(BlockPos pos) { return denied; }
         @Override public Container inventory() { return inventory; }
         @Override public BlockState state(BlockPos pos) { reads++; return calls == 0 ? before : after; }
         @Override public ServerTool.Result sight(BlockPos pos, Direction face) { return sightFailure; }
-        @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) { return prepareFailure; }
+        @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) {
+            prepared.add(pos);
+            return prepareAt == null ? prepareFailure : prepareAt.apply(pos);
+        }
         @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
             calls++;
             target = pos;

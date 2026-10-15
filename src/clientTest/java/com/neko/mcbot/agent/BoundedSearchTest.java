@@ -57,6 +57,26 @@ class BoundedSearchTest {
             assertFalse(result.join().data().get("coverage_complete").getAsBoolean());
         }
     }
+    @Test void laterEligibleCandidateIsKeptWhenEarlierPagesContainOnlyToolRefusals() {
+        var queue = new ArrayDeque<Runnable>();
+        var search = new BoundedSearch(json("{\"targets\":[\"iron_ore\",\"oak_log\"],\"work\":true}"), (name, text) -> {
+            int offset = json(text).get("offset").getAsInt();
+            var data = page(offset, offset == 16384);
+            if (offset < 16384) {
+                for (int i = 0; i < 16; i++) data.getAsJsonArray("targets").add(json(
+                        "{\"block\":\"minecraft:iron_ore\",\"harvestable_with_hand\":false}"));
+                data.addProperty("matches_observed", 16);
+            }
+            return CompletableFuture.completedFuture(new ToolOutcome(true, "page", data));
+        }, queue::add, () -> 0, () -> fail("unexpected cancellation"));
+        var result = search.start();
+        while (!queue.isEmpty()) queue.removeFirst().run();
+        assertTrue(result.join().ok());
+        assertEquals(5, result.join().data().get("search_pages").getAsInt());
+        assertEquals("minecraft:oak_log", result.join().data().getAsJsonArray("targets").get(0)
+                .getAsJsonObject().get("block").getAsString());
+        assertTrue(result.join().data().get("results_truncated").getAsBoolean());
+    }
     @Test void cancellationAndTimeoutIgnoreLatePages() {
         for (boolean timeout : new boolean[]{false,true}) {
             long[] time = {0};

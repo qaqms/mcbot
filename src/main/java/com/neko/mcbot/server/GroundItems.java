@@ -25,10 +25,14 @@ public final class GroundItems {
                 || !body.level().isLoaded(item.blockPosition())
                 || !touches(body.getBoundingBox(), item.getBoundingBox())) return 0;
         int before = item.getItem().getCount();
+        int slot = body.getInventory().getSelectedSlot();
+        var hand = body.getMainHandItem().copy();
         // Vanilla owns delay, target, inventory capacity, components, animation and discard.
         item.playerTouch(body);
         int left = item.isRemoved() ? 0 : item.getItem().getCount();
-        return Math.max(0, before - left);
+        int taken = Math.max(0, before - left);
+        body.handPickups().recorded(slot, hand, body.getInventory().getSelectedSlot(), body.getMainHandItem(), taken);
+        return taken;
     }
 
     public static JsonObject describe(ItemEntity entity) {

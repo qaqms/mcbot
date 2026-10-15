@@ -3,6 +3,53 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 工作一致性、工具前提与只读放置查询（2026-10-15 16:38，Asia/Shanghai）
+
+- 本轮latest.log为186425 bytes，末写16:05:16，SHA256
+  `23a7b7817295ea038a20c61bb4c570614e19211d61e4ca847f808e2b7805659f`；
+  实际安装034e81f9候选。16:03:20铁镐合成、原版进度及16:03:22装备均有正证。
+  具体行号/时间、参考全链路和效率分析见docs/real-game-log-review-2026-10-15第五次测试节。
+  HTTP429及随后人工换模型/重启单列，不能归因规划缺陷或自行自动重试。
+- 已修工作到达与实际挖掘距离分叉：删除脚到方块中心冗余闸，
+  按BlockAim眼睛到可见命中面/实际原版交互范围工作，活世界、权限与采收复核不变。
+  空主手被原版拾取填入时，以本身体、动作开始后、同槽活堆栈/完整组件及数量证据续挖；
+  旧事件、其他身体、换槽/工具/组件仍拒绝，错误工具不会因拾取豁免。
+- find_resource work=true给harvestable_with_hand，明确false不评射线/站位；
+  gather查完来源/分页再交回WRONG_TOOL，不为不合格资源开路，完整搜索合并排序同步。
+  已明确工具拒绝不误报成未知几何；未新增自动装备、工艺求解或固定成品模板。
+  掉落同UUID在新触碰/新站位证据后重评，不刷新六个不同站位总帽；
+  无可用站位时继续当前扫描的其他候选，保留动作后背包/范围必要观测。
+- place_block新增严格布尔query=true，与执行共用预检，忙时/只读任务可查；
+  不转头、移动、挖放或消费。原目标受阻最多检查75格、给6个同face预检建议，
+  不自动替换精确目标。query.ok不等于已放置，preflight_passed和
+  native_validation_pending区分当前预检与原版最终接受；执行重验并核对真实变化/消费。
+  只读方向上下文与实际转头对应，墙上/地面两用物品继续原版选型；
+  TaskPolicy、权限闸、实际runner和气泡观察语义同步，工具仍23项，外部桥v1.0不变。
+- 专项stage2成功25秒；stage3全部UP-TO-DATE，不能写成重新执行。
+  方向/计数审查后stage4成功33秒；补跨页候选排序和六站位帽组合后，
+  最终专项build/work-consistency-stage5-20261015.log强制重新执行10/10任务、43秒成功，
+  XML实际为核心3项及客户端602项，failures/errors/skipped全0。
+  clientTest在本配置执行客户端全套，不能把过滤参数误记成只有所列测试类执行。
+- 最终强制命令：
+  `gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`。
+  日志build/work-consistency-final-20261015.log，56秒成功、20/20任务执行；
+  XML共123 suites、**997项**（agent-core290/根105/客户端602），
+  failures/errors/skipped全0；list-java无残留。比上一候选新增21项客户端回归。
+  保留既有过时API及Gradle弃用提示，没有把它们记为构建失败。
+- 放置方向回归使用真实Marker.lookAt及Direction.orderedByNearest对照124个方向，
+  Marker不加入世界；原版shape/clip、组合/runner与权限闸执行，世界/网络/模型受控。
+  未运行ServerLevel真实放置、玩家travel、原版playerTouch/并堆事件或真实模型。
+  新候选build/libs/mcbot-0.1.0.jar，**1,180,797 bytes**，末写16:37:23，
+  SHA256 `7034fc0bcbbc0fa6e37360173d4f53ba322e32264686dd3bb696853cd34d1c71`。
+  已核版本0.1.0、相关类、内嵌agent-core/LuaJ及许可；未自动安装、启动游戏/模型，
+  宿主、连接器、只读参考、实例配置与世界均未修改。
+- 后续仍缺完整掉落来源/合并/拾取者/销毁事件账、跨阶段资源簇与失败记忆、
+  分数脚高贯通导航、统一看门狗、按需工具目录、建筑让位/续建和跨退出目标恢复。
+  旧日志固定工具定义23项/24954字节值得优化，但本轮未实现按需加载，
+  也不删除用于真实成果核验的status来制造提速。扫描是加载范围事实查询，
+  不是相机FOV；动作仍需真实视线，不能声称完整视觉/建筑Agent已验。
+  新补测见REAL-GAME-RETESTING顶部；铁镐已完成不等于完整地下系统通过。
+
 ## 漏拾取、范围过滤与放置诊断（2026-10-15 15:48，Asia/Shanghai）
 
 - 维护者确认气泡整体正常，本轮反馈为木头漏捡、附近原木没采完及疑似卡雪。
@@ -4381,6 +4428,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 只读放置方向（10-15 javap/编译/原版方向离线对照） | `UseOnContext.getHorizontalDirection/getRotation`、`BlockPlaceContext.getNearestLookingDirection/getNearestLookingVerticalDirection/getNearestLookingDirections`均可覆写；原版BlockPlaceContext按replaceClicked决定是否把face反方向排首。Entity.lookAt使用Mth.atan2、RAD_TO_DEG、wrapDegrees；Direction.orderedByNearest使用浮点角度及Mth正余弦，不能把六方向double点积排序当作边界等价实现。实际Marker.lookAt对照124方向通过，Marker未入世界，不证明真实物品放置/特殊方块行为已验 |
 | 放置预检（10-15本地javap/编译/原版形状，未运行世界） | `Block.getStateForPlacement(BlockPlaceContext)`、`BlockState.canBeReplaced(BlockPlaceContext)`/`canSurvive(LevelReader,BlockPos)`公开；`getCollisionShape(BlockGetter,BlockPos,CollisionContext)`及`CollisionGetter.isUnobstructed(Entity,VoxelShape)`公开。`StandingAndWallBlockItem.getPlacementState`为protected且会选择墙面形态；新增普通预检不可用其getBlock默认形态代替，当前该类沿原BlockItem.place路径，不新增细分状态预测。原版最终放置/副作用仍须实机验证 |
 | 世界任务气泡（10-15缓存Fabric源/Javap/编译及离线提交，未运行GPU） | Fabric事件位于`client.rendering.v1.world`：`END_EXTRACTION`读world/camera/frustum/tickCounter，`BEFORE_ENTITIES`可用matrices/commandQueue；LevelRenderState可setData/getData(RenderStateDataKey)。实体`getPosition(float)`、`getBbHeight/getEyeHeight`公开，Camera为`position()/rotation()/forwardVector()`。世界PoseStack基础为identity；按相机相对位置、cameraRenderState.orientation及正/负/正缩放提交billboard。`submitCustomGeometry(PoseStack,RenderType,CustomGeometryRenderer)`和`submitText`可用；**submitText在DisplayMode后的四个int依次为lightCoords/color/backgroundColor/outlineColor**，不能照搬Font.drawInBatch颜色在先的顺序；15:09已用TextSubmit真实队列字段及构造/消费字节码复核。`rendertype.RenderTypes.textBackground()`为POSITION_COLOR_LIGHTMAP/QUADS且有深度测试，顶点必须setColor/setLight；文字用Font.DisplayMode.NORMAL。原版NameTagFeatureRenderer的Storage使用同一旋转/缩放约定；不使用SEE_THROUGH，不把离线管线/矩阵断言写成实机画面通过 |
 | 单输入烹饪事实（10-15 javap/编译/原版配方离线执行，未运行世界） | `AbstractCookingRecipe`继承`SingleItemRecipe`，公开`input():Ingredient`、`assemble(SingleRecipeInput,HolderLookup.Provider):ItemStack`，`cookingTime():int`；`RecipeHolder(ResourceKey<Recipe<?>>,T)`可构造供既有SmeltTool.cooking复用。仅确切SmeltingRecipe/BlastingRecipe/SmokingRecipe类进入支持范围，真实配方assemble已离线运行，不等于RecipeManager世界查询/机器tick已运行 |

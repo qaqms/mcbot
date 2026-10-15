@@ -96,6 +96,8 @@ class TaskBubbleStateTest {
         assertEquals(TaskBubbleState.Activity.RECIPES, TaskBubbleState.Activity.tool("craft", true));
         assertEquals(TaskBubbleState.Activity.CRAFTING, TaskBubbleState.Activity.tool("craft", false));
         assertEquals(TaskBubbleState.Activity.RECIPES, TaskBubbleState.Activity.tool("smelt", true));
+        assertEquals(TaskBubbleState.Activity.OBSERVING, TaskBubbleState.Activity.tool("place_block", true));
+        assertEquals(TaskBubbleState.Activity.PLACING, TaskBubbleState.Activity.tool("place_block", false));
         assertEquals(TaskBubbleState.Activity.PROCESSING, TaskBubbleState.Activity.tool("unknown", false));
     }
 }

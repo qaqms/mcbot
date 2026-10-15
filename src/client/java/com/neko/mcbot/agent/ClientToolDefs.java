@@ -121,6 +121,7 @@ public final class ClientToolDefs {
                             + "\"work\":{\"type\":\"boolean\"}},\"required\":[\"targets\"],\"additionalProperties\":false}"),
             new ToolSpec("find_resource", "底层单页资源查询；一般发现资源优先search_resource自动查完分页。targets为方块ID或#方块标签，如#minecraft:logs、oak_log、iron_ore。"
                     + "r默认8、最多16；每页采样4096格、最多16候选，work=true在预算内优先露出/可工作资源。"
+                    + "harvestable_with_hand=false时先核对/装备工具，不为该目标移动开路。"
                     + "offset默认0；续页须用next_offset并携带原scan_center、同一targets/r，-1为页末；身体移动后从0重查。"
                     + "frontiers=true在末页给exploration_points已加载落脚样本，路径仍须move_to walk_only=true核验。"
                     + "不强制加载、不证明可达/可挖/实际掉落；空结果不等于没有资源，采集宜gather本地分页/有界探索",
@@ -210,9 +211,11 @@ public final class ClientToolDefs {
                             + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12},\"item\":{\"type\":\"string\",\"maxLength\":128}}}"),
             new ToolSpec("place_block", "将背包0-35里的方块物品放到准确目标格，item用物品ID如cobblestone。"
                     + "原版处理朝向/多格/组件，默认点击上面，可用face选择接触面；水中/可替换格和同种半砖合并由原版判断。"
+                    + "选址不确定时先query=true，只读核对可替换/视线/支撑/实体占位，受阻时附附近最多6个同face预检候选。"
+                    + "查询不转头/挖放/消耗，preflight_passed不保证原版最终接受；精确指定目标不能自行改选其他格。"
                     + "暂不支持脚手架/告示牌等特殊物品；忙时先等待或取消。失败查看实际消耗和目标变化，勿自动重试",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
-                            + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"face\":{\"type\":\"string\","
+                            + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"query\":{\"type\":\"boolean\"},\"face\":{\"type\":\"string\","
                             + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。"
                     + "walk_only=true只走路/跳跃/下落，规划/重规划与执行均不挖放，探索使用此模式。"

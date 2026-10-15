@@ -18,7 +18,7 @@ import java.util.concurrent.CompletableFuture;
 
 /** Place the requested item at the exact target, preserving vanilla state and component hooks. */
 public final class PlaceBlockTool implements ServerTool {
-    record Arguments(BlockPos pos, BlockItem item, Direction face) {
+    record Arguments(BlockPos pos, BlockItem item, Direction face, boolean query) {
     }
 
     @Override public String name() { return "place_block"; }
@@ -55,7 +55,13 @@ public final class PlaceBlockTool implements ServerTool {
                 };
                 if (face == null) return null;
             }
-            return new Arguments(pos, item, face);
+            boolean query = false;
+            if (args.has("query")) {
+                var valueQuery = args.get("query");
+                if (!valueQuery.isJsonPrimitive() || !valueQuery.getAsJsonPrimitive().isBoolean()) return null;
+                query = valueQuery.getAsBoolean();
+            }
+            return new Arguments(pos, item, face, query);
         } catch (RuntimeException invalid) {
             return null;
         }
@@ -64,8 +70,8 @@ public final class PlaceBlockTool implements ServerTool {
     static Result place(BlockPlacement.Access access, JsonObject args, boolean busy) {
         Arguments input = arguments(args);
         if (input == null) return new Result(false,
-                "DENIED:需要整数 x/y/z 和方块物品 ID；face 可选 up/down/north/south/east/west。", null);
-        if (busy) return new Result(false, "BUSY:身体正忙，任务结束或取消后再放置。", null);
+                "DENIED:需要整数 x/y/z 和方块物品 ID；face 可选 up/down/north/south/east/west，query须为布尔。", null);
+        if (busy && !input.query()) return new Result(false, "BUSY:身体正忙，任务结束或取消后再放置。", null);
         int slot = -1;
         var inventory = access.inventory();
         for (int i = 0; i < Math.min(Inventory.INVENTORY_SIZE, inventory.getContainerSize()); i++) {
@@ -75,6 +81,7 @@ public final class PlaceBlockTool implements ServerTool {
                 break;
             }
         }
-        return BlockPlacement.place(access, input.pos(), slot, input.face());
+        return input.query() ? BlockPlacement.query(access, input.pos(), slot, input.face())
+                : BlockPlacement.place(access, input.pos(), slot, input.face());
     }
 }

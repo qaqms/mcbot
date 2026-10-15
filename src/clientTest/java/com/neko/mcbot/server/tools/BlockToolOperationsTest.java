@@ -55,6 +55,7 @@ class BlockToolOperationsTest {
         assertNotNull(input);
         assertSame(Items.COBBLESTONE, input.item());
         assertEquals(Direction.UP, input.face());
+        assertFalse(input.query());
         var wall = placeArgs();
         wall.addProperty("face", "west");
         assertEquals(Direction.WEST, PlaceBlockTool.arguments(wall).face());
@@ -68,6 +69,23 @@ class BlockToolOperationsTest {
             var args = placeArgs();
             args.add("item", JsonParser.parseString(value));
             assertNull(PlaceBlockTool.arguments(args), value);
+        }
+    }
+
+    @Test void placementQueryRequiresABooleanAndCanRunWhileTheBodyIsBusy() {
+        var args = placeArgs();
+        args.addProperty("query", true);
+        assertTrue(PlaceBlockTool.arguments(args).query());
+        Placement access = new Placement();
+        access.inventory.setItem(1, new ItemStack(Items.COBBLESTONE, 3));
+        var result = PlaceBlockTool.place(access, args, true);
+        assertTrue(result.ok(), result.feedback());
+        assertTrue(result.data().get("query").getAsBoolean());
+        assertEquals(0, access.calls);
+        assertEquals(3, access.inventory.getItem(1).getCount());
+        for (String value : new String[]{"\"true\"", "1", "null", "{}", "[]"}) {
+            args.add("query", JsonParser.parseString(value));
+            assertNull(PlaceBlockTool.arguments(args));
         }
     }
 

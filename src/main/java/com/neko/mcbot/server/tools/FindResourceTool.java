@@ -35,6 +35,7 @@ public final class FindResourceTool implements ServerTool {
         BlockPos center();
         boolean readable(BlockPos pos);
         BlockState state(BlockPos pos);
+        default Boolean harvestable(BlockState state) { return null; }
         default void work(JsonObject target, BlockPos pos) { }
         default void work(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { work(target, pos); }
         default void stands(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { }
@@ -53,6 +54,9 @@ public final class FindResourceTool implements ServerTool {
                 var chunk = companion.level().getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
                 if (chunk == null) throw new IllegalStateException("chunk left during server-thread scan");
                 return chunk.getBlockState(pos);
+            }
+            @Override public Boolean harvestable(BlockState state) {
+                return companion.hasCorrectToolForDrops(state);
             }
             @Override public void work(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) {
                 var plan = MiningWork.plan(companion, pos, companion.getEyePosition(), companion.blockPosition(), budget);
@@ -166,6 +170,10 @@ public final class FindResourceTool implements ServerTool {
             target.addProperty("y", pos.getY());
             target.addProperty("z", pos.getZ());
             target.addProperty("distance", Math.sqrt(distance));
+            if (work) {
+                Boolean harvestable = access.harvestable(state);
+                if (harvestable != null) target.addProperty("harvestable_with_hand", harvestable);
+            }
             candidates.add(target);
         }
         int workChecks = 0;
@@ -184,7 +192,15 @@ public final class FindResourceTool implements ServerTool {
             }
             candidates.sort(Comparator.comparingInt(t -> t.get("exposure_rank").getAsInt()));
             for (var target : candidates) {
-                if (workChecks >= MAX_WORK_CHECKS || !traceBudget.available()) break;
+                if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) {
+                    target.addProperty("work_checked", true);
+                    target.addProperty("can_work_here", false);
+                    target.addProperty("can_clear_here", false);
+                    target.addProperty("work_failure", "WRONG_TOOL:当前主手没有采收资格；先inventory/equip核对工具，再规划接近。");
+                    target.add("stand_positions", new JsonArray());
+                    continue;
+                }
+                if (workChecks >= MAX_WORK_CHECKS || !traceBudget.available()) continue;
                 access.work(target, point(target), traceBudget);
                 target.addProperty("work_checked", true);
                 workChecks++;
@@ -194,6 +210,7 @@ public final class FindResourceTool implements ServerTool {
             for (var target : candidates) {
                 if (!traceBudget.available()) break;
                 if (!target.has("work_checked")) continue;
+                if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) continue;
                 access.stands(target, point(target), traceBudget);
             }
             // Unchecked candidates stay diagnostic; never advertise them as actionable.
@@ -215,6 +232,8 @@ public final class FindResourceTool implements ServerTool {
                     .append(pos.getY()).append(",").append(pos.getZ()).append(")");
             if (work) {
                 lines.append("；");
+                if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean())
+                    lines.append("当前主手没有采收资格，先inventory/equip；");
                 if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean())
                     lines.append("当前可直接挖");
                 else if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean())
@@ -253,7 +272,8 @@ public final class FindResourceTool implements ServerTool {
         data.addProperty("no_targets", results.isEmpty());
         data.addProperty("work_checks", workChecks);
         data.addProperty("work_traces", traceBudget.used());
-        data.addProperty("work_truncated", work && (workChecks < candidates.size() || !traceBudget.available()));
+        data.addProperty("work_truncated", work && (candidates.stream().anyMatch(t -> !t.has("work_checked"))
+                || !traceBudget.available()));
         String feedback = "定向查找 " + input.targets() + "，半径 " + input.radius() + "，实读 "
                 + read + "/" + planned + " 格，未知 " + unknown + " 格，采样上限 " + MAX_SAMPLES
                 + "；列出 " + results.size() + " 个候选（最多16）。" + lines
@@ -274,6 +294,7 @@ public final class FindResourceTool implements ServerTool {
     }
 
     private static int workRank(JsonObject target) {
+        if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) return 5;
         if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean()) return 0;
         if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean()) return 1;
         if (target.has("stand_positions") && !target.getAsJsonArray("stand_positions").isEmpty()) return 2;

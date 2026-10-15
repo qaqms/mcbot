@@ -62,7 +62,8 @@ public final class BreakBlockTool implements ServerTool {
         if (clear) {
             var level = c.level();
             var sampler = new LevelDigSampler(level, c, c.blockPosition(), 0);
-            var hand = new HandSnapshot[]{new HandSnapshot(c.getInventory().getSelectedSlot(), c.getMainHandItem())};
+            var hand = new HandSnapshot[]{new HandSnapshot(c.getInventory().getSelectedSlot(),
+                    c.getMainHandItem(), c.handPickups())};
             var sequence = new ClearingMining(new ClearingMining.Access() {
                 @Override public BlockAim.MiningPlan plan() {
                     if (c.level() != level || !level.isLoaded(pos)) return new BlockAim.MiningPlan(
@@ -90,7 +91,7 @@ public final class BreakBlockTool implements ServerTool {
                     return hand[0].matches(c.getInventory().getSelectedSlot(), c.getMainHandItem());
                 }
                 @Override public void completed() {
-                    hand[0] = new HandSnapshot(c.getInventory().getSelectedSlot(), c.getMainHandItem());
+                    hand[0] = new HandSnapshot(c.getInventory().getSelectedSlot(), c.getMainHandItem(), c.handPickups());
                 }
                 @Override public Result targetGuard() {
                     return BlockMining.forPlayer(c, pos, expectedBlock).preflight(5.5);

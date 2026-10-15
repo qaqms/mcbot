@@ -88,6 +88,7 @@ final class BoundedGather {
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final Set<String> skippedBlocks = new HashSet<>();
     private final Set<String> skippedItems = new HashSet<>();
+    private final Set<String> unharvestableBlocks = new HashSet<>();
     private final java.util.Map<String, Set<String>> itemStances = new java.util.HashMap<>();
     private final Set<String> waitedItems = new HashSet<>();
     private final java.util.Map<String, JsonObject> excludedBlocks = new java.util.LinkedHashMap<>();
@@ -306,6 +307,7 @@ final class BoundedGather {
                     sampleOffset = 0;
                     targetGroup = 0;
                     skippedBlocks.clear();
+                    unharvestableBlocks.clear();
                     skippedItems.clear();
                     itemStances.clear();
                     waitedItems.clear();
@@ -347,9 +349,16 @@ final class BoundedGather {
                 if (!within(item) && !flag(item, "can_touch_here")) {
                     recordExclusion(excludedItems, item, "item"); continue;
                 }
-                if (!flag(item, "pickup_allowed") || skippedItems.contains(itemKey(item))) continue;
-                pickup(item);
-                return;
+                if (!flag(item, "pickup_allowed")) continue;
+                String key = itemKey(item);
+                if (skippedItems.contains(key)) {
+                    var tried = itemStances.getOrDefault(key, Set.of());
+                    boolean freshStance = tried.size() < 6
+                            && positions(item).stream().anyMatch(p -> !tried.contains(blockKey(p)));
+                    if (!flag(item, "can_touch_here") && !freshStance) continue;
+                    skippedItems.remove(key);
+                }
+                if (pickup(item)) return;
             }
             if (dropSettlePending) {
                 dropSettlePending = false;
@@ -368,13 +377,13 @@ final class BoundedGather {
         });
     }
 
-    private void pickup(JsonObject item) {
+    private boolean pickup(JsonObject item) {
         String key = itemKey(item);
         if (flag(item, "can_touch_here")) {
             if (!waitedItems.add(key)) {
                 finish(false, "PICKUP_BLOCKED:走近并等待后物品仍在触碰范围内，实际背包未满足目标；"
                         + "检查背包空间、拾取延迟或现场限制，未把物品消失当作入包。");
-                return;
+                return true;
             }
             // Give the server body tick time to touch a newly created or delayed item.
             var wait = new JsonObject();
@@ -383,7 +392,7 @@ final class BoundedGather {
                 if (!receipt.ok()) finish(false, receipt.feedback());
                 else observe();
             });
-            return;
+            return true;
         }
         var tried = itemStances.computeIfAbsent(key, ignored -> new HashSet<>());
         var positions = positions(item);
@@ -391,15 +400,18 @@ final class BoundedGather {
                 || positions.stream().allMatch(p -> tried.contains(blockKey(p)))) {
             skippedItems.add(itemKey(item));
             lastProblem = "掉落没有剩余的安全触碰站位；已按最新实体位置核对，本段不重复尝试旧站位。";
-            observe();
-            return;
+            return false;
         }
         // Movement ticks may already have picked it up. Only a fresh inventory proves progress.
         walk(positions, 0, tried, () -> { skippedItems.add(itemKey(item)); scanDrops(); });
+        return true;
     }
 
     private void findBlocks() {
-        if (sampleOffset == 0 && targetGroup == 0) excludedBlocks.clear();
+        if (sampleOffset == 0 && targetGroup == 0) {
+            excludedBlocks.clear();
+            unharvestableBlocks.clear();
+        }
         var args = new JsonObject();
         var targets = new JsonArray();
         sourceTargets.subList(targetGroup, Math.min(targetGroup + 8, sourceTargets.size())).forEach(targets::add);
@@ -423,6 +435,10 @@ final class BoundedGather {
                 var block = entry.getAsJsonObject();
                 if (!within(block)) { recordExclusion(excludedBlocks, block, "block"); continue; }
                 if (skippedBlocks.contains(blockKey(block))) continue;
+                if (block.has("harvestable_with_hand") && !flag(block, "harvestable_with_hand")) {
+                    unharvestableBlocks.add(blockKey(block));
+                    continue;
+                }
                 var positions = positions(block);
                 var tried = new HashSet<String>();
                 tried.add(currentFeet);
@@ -453,6 +469,10 @@ final class BoundedGather {
             if (targetGroup + 8 < sourceTargets.size()) {
                 targetGroup += 8; sampleOffset = 0; findBlocks(); return;
             }
+            if (!unharvestableBlocks.isEmpty()) {
+                finish(false, "WRONG_TOOL:已发现范围内匹配方块，但当前主手没有采收资格；"
+                        + "未为这些目标开路，先inventory/equip核对工具再决定后续。"); return;
+            }
             explore();
         });
     }
@@ -468,6 +488,7 @@ final class BoundedGather {
             var target = entry.getAsJsonObject();
             if (workBatch.size() >= batchLimit - 1) break;
             if (!within(target) || skippedBlocks.contains(blockKey(target))
+                    || target.has("harvestable_with_hand") && !flag(target, "harvestable_with_hand")
                     || !flag(target, "can_work_here") || !seen.add(blockKey(target))) continue;
             workBatch.addLast(target.deepCopy());
         }

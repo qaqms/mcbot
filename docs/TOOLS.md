@@ -8,6 +8,26 @@
 本节覆盖下方历史的“没有地下探索/工作目标A*/长期阶段”的限制描述；
 工具数量仍23（15服务端+8本地），桥协议不变。
 
+2026-10-15工作一致性与只读选址：
+
+- `find_resource work=true`的候选可带`harvestable_with_hand`，表示当前主手的原版采收资格。
+  false时不评几何/站位，反馈WRONG_TOOL；不表示周围无资源，也不自动换工具。
+  gather查完本地分页/来源后，只有不合格候选时停止开路并交回模型。
+  search_resource合并分页也将这些候选排后；旧回执缺字段时仍按动作实际复核。
+- gather被跳过的同UUID在新观测可触碰或有新站位时可重评，六个不同站位总帽不刷新。
+  无可用站位时继续本份扫描内其他物品，必要的动作后背包/位置/实体观测仍保留。
+- `place_block`可选严格布尔`query:true`，仍要求x/y/z/item，face默认up。
+  查询与实际放置共用前置检查；不转头、移动、挖放或消费，忙时及只读任务可用。
+  无材料/不支持物品/规则拒绝仍失败；其他目标受阻可返回观察成功与失败诊断。
+  `data.query=true`、`preflight_passed`表示原目标当前预检结果，
+  `native_validation_pending=true`表示原版最终接受尚未验证，
+  `changed=false`、`consumed_count=0`。不能把query.ok=true当作已放置。
+  原目标受阻时，x/z±2、y±1内总最多75格，`alternatives`最多6个同face位置，
+  `checked_positions`记录检查数量；精确目标不可自行替换。执行仍重读现场并按原版效果结算。
+  墙上/地面两用物品及多格放置的最终规则继续交原版，预检不保证成功。
+- 工作到达/实际挖掘共用眼睛到命中面判据，未扩大原版交互范围。
+  scan_area/find_resource查询已加载范围事实，未限制为相机FOV；实际挖放仍要求可见射线。
+
 2026-10-15拾取与放置修复补充：
 
 - `scan_area.item_targets[].stand_positions`现在同时满足安全整格站立与实际物品触碰盒，

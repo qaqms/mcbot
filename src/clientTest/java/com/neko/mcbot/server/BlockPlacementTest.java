@@ -92,6 +92,90 @@ class BlockPlacementTest {
         assertEquals(3, access.inventory.getItem(13).getCount());
     }
 
+    @Test void queryUsesTheExecutionPreflightAndFindsBoundedAlternativesWithoutPlacing() {
+        Placement access = access();
+        var reason = new com.google.gson.JsonObject();
+        reason.addProperty("placement_failure", "self_collision");
+        var blocked = new ServerTool.Result(false, "TARGET_BLOCKED:self", reason);
+        access.prepareAt = pos -> pos.equals(POS) ? blocked : null;
+        var query = BlockPlacement.query(access, POS, 13, Direction.WEST);
+        assertTrue(query.ok(), query.feedback());
+        assertFalse(query.data().get("preflight_passed").getAsBoolean());
+        assertEquals("self_collision", query.data().get("placement_failure").getAsString());
+        var alternatives = query.data().getAsJsonArray("alternatives");
+        assertEquals(6, alternatives.size());
+        assertEquals(7, query.data().get("checked_positions").getAsInt());
+        assertEquals(0, access.calls);
+        assertEquals(3, access.inventory.getItem(13).getCount());
+        assertFalse(query.data().get("changed").getAsBoolean());
+        assertEquals(0, query.data().get("consumed_count").getAsInt());
+        assertFalse(BlockPlacement.place(access, POS, 13, Direction.WEST).ok(),
+                "query never silently substitutes an alternative for the exact target");
+        var next = alternatives.get(0).getAsJsonObject();
+        assertEquals("west", next.get("face").getAsString());
+        var nextPos = new BlockPos(next.get("x").getAsInt(), next.get("y").getAsInt(), next.get("z").getAsInt());
+        access.prepareAt = pos -> blocked;
+        assertFalse(BlockPlacement.place(access, nextPos, 13, Direction.WEST).ok(),
+                "a stale suggestion is checked again before any consumption");
+        assertEquals(0, access.calls);
+        access.prepareAt = pos -> pos.equals(nextPos) ? null : blocked;
+        assertTrue(BlockPlacement.place(access, nextPos, 13, Direction.WEST).ok());
+        assertEquals(1, access.calls);
+        assertEquals(2, access.inventory.getItem(13).getCount());
+    }
+
+    @Test void fullyBlockedQueryHasASeventyFivePositionCapAndNoNativeEffects() {
+        Placement access = access();
+        access.prepareFailure = new ServerTool.Result(false, "TARGET_BLOCKED:wall", null);
+        var query = BlockPlacement.query(access, POS, 13, Direction.UP);
+        assertTrue(query.ok());
+        assertEquals(75, query.data().get("checked_positions").getAsInt());
+        assertTrue(query.data().getAsJsonArray("alternatives").isEmpty());
+        assertEquals(0, access.calls);
+        assertEquals(3, access.inventory.getItem(13).getCount());
+    }
+
+    @Test void successfulQueryIsStillAnObservationAndChecksNativeConditionsAgainOnExecution() {
+        Placement access = access();
+        var query = BlockPlacement.query(access, POS, 13, Direction.UP);
+        assertTrue(query.data().get("query").getAsBoolean());
+        assertTrue(query.data().get("preflight_passed").getAsBoolean());
+        assertTrue(query.data().get("native_validation_pending").getAsBoolean());
+        assertEquals(1, query.data().get("checked_positions").getAsInt());
+        assertEquals(0, access.calls);
+        access.sightFailure = new ServerTool.Result(false, "TARGET_LOST:world changed", null);
+        assertFalse(BlockPlacement.place(access, POS, 13, Direction.UP).ok());
+        assertEquals(0, access.calls);
+    }
+
+    @Test void projectedLookHasStableCardinalAndVerticalDirectionsWithoutMovingAnEntity() {
+        var eastUp = BlockPlacement.Look.toward(new net.minecraft.world.phys.Vec3(3, 5, 1));
+        assertEquals(Direction.EAST, eastUp.horizontal());
+        assertEquals(Direction.UP, eastUp.vertical());
+        assertEquals(Direction.UP, eastUp.order()[0]);
+        var northDown = BlockPlacement.Look.toward(new net.minecraft.world.phys.Vec3(0, -1, -4));
+        assertEquals(Direction.NORTH, northDown.horizontal());
+        assertEquals(Direction.DOWN, northDown.vertical());
+        assertEquals(Direction.NORTH, northDown.order()[0]);
+        assertEquals(6, java.util.Set.of(northDown.order()).size());
+    }
+
+    @Test void projectedLookMatchesVanillaLookAtAndDirectionOrderIncludingAxisTies() {
+        var marker = new net.minecraft.world.entity.Marker(net.minecraft.world.entity.EntityType.MARKER, null);
+        for (int x : new int[]{-4, -1, 0, 1, 4}) for (int y : new int[]{-4, -1, 0, 1, 4})
+            for (int z : new int[]{-4, -1, 0, 1, 4}) {
+                if (x == 0 && y == 0 && z == 0) continue;
+                var direction = new net.minecraft.world.phys.Vec3(x, y, z);
+                var look = BlockPlacement.Look.toward(direction);
+                marker.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                        marker.getEyePosition().add(direction));
+                assertEquals(marker.getYRot(), look.yaw(), direction.toString());
+                assertEquals(marker.getDirection(), look.horizontal(), direction.toString());
+                assertEquals(Direction.getFacingAxis(marker, Direction.Axis.Y), look.vertical(), direction.toString());
+                assertArrayEquals(Direction.orderedByNearest(marker), look.order(), direction.toString());
+            }
+    }
+
     @Test void originalFullStackFaceAndExactTargetCrossThePlacementBoundary() {
         Placement access = access();
         ItemStack original = access.inventory.getItem(13);

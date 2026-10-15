@@ -4,6 +4,18 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-15工作一致性卡：第五次日志已有铁镐合成/装备正证，本轮离线不冒充复测。
+HandSnapshot/BlockMining回归验证空主手仅凭本身体、动作后真实拾取证据续挖，
+换槽/工具/组件、旧证据和错误采收资格仍拒绝。
+BlockAim覆盖高处目标的工作到达与出手几何一致，不扩大交互距离。
+Awareness/BoundedGather/BoundedSearch覆盖工具前提零开路、其他来源及后页合格候选、
+同UUID新站位/落入触碰可重评且六站位帽不重置，取消和无成果帽保留。
+BlockPlacement查询/执行共用预检，验证75格/6建议、零消费、精确目标与过时建议重验；
+只读方向与原版Marker.lookAt/Direction.orderedByNearest对照124个方向，包括轴向/相等分量。
+Marker未加入世界，不执行身体travel；放置预检的世界状态/实体占位仍为受控边界。
+原权限闸、实际runner与气泡验证严格布尔query只读，未运行ServerLevel放置/原版playerTouch。
+最终强制build、XML和候选见STATUS；不启动游戏/模型或自动安装。
+
 2026-10-15漏拾取/放置卡：WorkPositionsTest使用真实GroundItems触碰盒判交，
 BoundedGatherTest覆盖成功未接触、移动后实体换位、每UUID六站位帽、范围排除、
 边界原地触碰、已知掉落有限等待、无成果与取消/超时迟到隔离。

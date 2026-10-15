@@ -38,6 +38,7 @@ public final class BlockMining {
         float progress(BlockState state);
         int selectedSlot();
         ItemStack held();
+        default HandSnapshot.Pickups handPickups() { return null; }
         List<? extends Drop> nearbyDrops();
         boolean destroy();
         void crack(int stage);
@@ -96,7 +97,7 @@ public final class BlockMining {
         if (failure != null) return failure;
         if (target == null) {
             target = current;
-            tool = new HandSnapshot(access.selectedSlot(), access.held());
+            tool = new HandSnapshot(access.selectedSlot(), access.held(), access.handPickups());
         } else if (!tool.matches(access.selectedSlot(), access.held())) {
             return failure("WRONG_TOOL:挖掘期间主手已改变，已停手；重新选择工具后再调用。");
         }
@@ -213,9 +214,7 @@ public final class BlockMining {
                     return failure("TARGET_LOST:挖掘邻域未加载或超出世界范围，换目标或先靠近。");
                 }
             }
-            if (player.distanceToSqr(pos.getX() + .5, pos.getY() + .5, pos.getZ() + .5) > reach * reach) {
-                return failure("OUT_OF_REACH:目标超出臂长，先 move_to 靠近。");
-            }
+            // BlockAim owns reach from eyes to the visible hit, as it does for work arrival.
             if (!player.gameMode.isSurvival() || !level.mayInteract(player, pos)) {
                 return failure("DENIED:当前生存模式或世界交互规则不允许破坏。");
             }
@@ -245,6 +244,7 @@ public final class BlockMining {
         @Override public void swing() { player.swing(InteractionHand.MAIN_HAND); }
         @Override public int selectedSlot() { return player.getInventory().getSelectedSlot(); }
         @Override public ItemStack held() { return player.getMainHandItem(); }
+        @Override public HandSnapshot.Pickups handPickups() { return player.handPickups(); }
         @Override public boolean destroy() { return player.gameMode.destroyBlock(pos); }
         @Override public void crack(int stage) {
             level.getServer().getPlayerList().broadcastAll(

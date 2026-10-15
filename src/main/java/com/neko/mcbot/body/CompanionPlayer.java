@@ -26,6 +26,8 @@ public final class CompanionPlayer extends ServerPlayer {
     private final UUID observationBodyId = UUID.randomUUID();
     private boolean observationWarning;
     private final MovementInput movementInput = new MovementInput();
+    private final com.neko.mcbot.server.HandSnapshot.Pickups handPickups =
+            new com.neko.mcbot.server.HandSnapshot.Pickups();
     private final CompanionPhysics.Access physics = new CompanionPhysics.Access() {
         @Override public boolean active() {
             return isAlive() && !isRemoved() && !isPassenger() && !isSleeping();
@@ -83,6 +85,8 @@ public final class CompanionPlayer extends ServerPlayer {
     public UUID ownerUuid() {
         return ownerUuid;
     }
+
+    public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }
 
     public void walkForTick(double x, double z, boolean jump) {
         movementInput.renew(x, z, jump);

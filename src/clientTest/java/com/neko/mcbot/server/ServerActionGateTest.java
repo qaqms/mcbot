@@ -43,6 +43,11 @@ class ServerActionGateTest {
         for (String name : new String[]{"status", "inventory", "scan_area"}) {
             assertTrue(ServerActionGate.execute(readonly, body, "world", name, pos, scheduler, this::action).join().ok());
         }
+        var query = pos.deepCopy();
+        query.addProperty("query", true);
+        assertTrue(ServerActionGate.execute(readonly, body, "world", "place_block", query, scheduler, this::action).join().ok());
+        query.addProperty("query", "true");
+        assertFalse(ServerActionGate.execute(readonly, body, "world", "place_block", query, scheduler, this::action).join().ok());
         assertTrue(ServerActionGate.execute(normal, body, "world", "equip", pos, scheduler, this::action)
                 .join().feedback().startsWith("BUSY:"));
         longTask.complete(new ServerTool.Result(true, "done", null));

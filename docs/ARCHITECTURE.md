@@ -19,6 +19,21 @@ CompanionTaskBubble在世界提取阶段读取实体插值/相机、VISUAL射线
 
 ## 当前导航、勘探与目标链路（2026-10-15）
 
+第五次日志已确认铁镐合成/装备；本轮工作一致性补丁不新增规划层。
+BlockMining的距离准入归BlockAim，去除与工作到达冲突的脚到中心闸。
+CompanionPlayer持有每身体HandSnapshot.Pickups，GroundItems仅在真实playerTouch
+前后记录来源；挖掘/局部清理接受动作开始后的同槽空手填充证据，其他变化仍拒绝。
+find_resource给当前采收资格，gather跳过明确不合格目标、查完来源后交回工具前提，
+search_resource跨页排序同步；最终动作仍复核工具/权限/视线/真实效果。
+掉落UUID重评不刷新六站位帽，无动作无站位时直接处理同份扫描其他候选。
+
+place_block query=true与执行共用BlockPlacement.preflight，使用只读方向上下文，
+实际place才facePoint并调用原版BlockItem.place。受阻时有界预检附近75格/最多6建议，
+不自动移动或更换精确目标；预检不是原版最终成功。TaskPolicy、服务端闸与气泡同步只读语义。
+相机FOV不是资源查询边界；加载范围事实与实际动作可见性分别解释。
+完整掉落事件账、跨阶段簇/失败记忆、分数脚高、统一看门狗、按需工具目录和
+建筑让位/续建生命周期仍未实现，详细对照见当日日志第五次测试节。
+
 拾取/放置新衔接：WorkPositions.describePickup用实际身体与ItemEntity碰撞盒共用
 GroundItems.touches筛选当前候选；不修改通用可站候选与挖掘判据。
 BoundedGather按UUID记录最多6个不同站位，成功未接触或局部失败后都重新status/scan_area，
