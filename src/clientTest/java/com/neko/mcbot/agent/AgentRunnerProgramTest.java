@@ -291,6 +291,23 @@ class AgentRunnerProgramTest {
         assertTrue(outcome().content().contains("NEED_CONFIRM:actual complete route"));
     }
 
+    @Test void receiptReferencesReachModelHistoryWithoutChangingTheScriptsObservedData() {
+        start("read a value", """
+                local r=mc.call("inventory",{})
+                print("inventory",r.ok,r.feedback)
+                assert(r.data.amount==7)
+                return {amount=r.data.amount,feedback=r.feedback}
+                """);
+        tool("inventory", 1);
+        receipt(true, "unique inventory receipt", "{\"amount\":7}");
+        var result = outcome();
+        assertTrue(result.ok(), result.content());
+        assertEquals(1, result.content().split("unique inventory receipt", -1).length - 1);
+        assertTrue(result.content().contains("见回执#1"));
+        assertTrue(result.content().contains("\"amount\":7"));
+        assertEquals(1, client.toolCount());
+    }
+
     @Test void nestedWorkflowUsesTheSameTerminalAndPrimitiveBudget() {
         start("query then wait", """
                 return mc.call("workflow",{steps={

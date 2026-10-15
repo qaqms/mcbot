@@ -5,6 +5,7 @@ import com.google.gson.JsonParser;
 import com.neko.mcbot.server.BlockActionFixtures.Mining;
 import com.neko.mcbot.server.BlockActionFixtures.Placement;
 import com.neko.mcbot.server.BlockMining;
+import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -145,5 +146,49 @@ class BlockToolOperationsTest {
         assertTrue(cancelled.result().feedback().startsWith("CANCELLED:"));
         assertEquals(0, waiting.destroys);
         assertEquals(-1, waiting.cracks.getLast());
+    }
+
+    @Test void miningGeometryFailureSuggestsAValidWorkGoalWithoutClearingOrRetrying() {
+        for (String reason : new String[]{"TARGET_BLOCKED:actual obstruction", "OUT_OF_REACH:actual distance"}) {
+            var access = new Mining();
+            access.sightFailure = new ServerTool.Result(false, reason, json("{\"removed\":false}"));
+            var failure = new BlockMining(access).preflight(5.5);
+            var args = json("{\"x\":-66,\"y\":-41,\"z\":-28,\"expected_block\":\"minecraft:stone\"}");
+            var result = BreakBlockTool.withWorkHint(failure, args);
+            assertFalse(result.ok());
+            assertTrue(result.feedback().startsWith(reason));
+            assertTrue(result.feedback().contains("move_to"));
+            assertEquals("move_to", result.data().get("recommended_tool").getAsString());
+            var move = result.data().getAsJsonObject("recommended_args");
+            assertEquals(new BlockPos(-66, -41, -28), MoveToTool.workTarget(move));
+            assertTrue(com.neko.mcbot.path.PathSpec.parse(move).workArrival());
+            assertFalse(move.get("clear_obstructions").getAsBoolean());
+            assertFalse(failure.data().has("recommended_args"));
+            assertEquals(0, access.swings);
+            assertEquals(0, access.destroys);
+            args.addProperty("clear_obstructions", true);
+            assertTrue(BreakBlockTool.withWorkHint(failure, args).data().getAsJsonObject("recommended_args")
+                    .get("clear_obstructions").getAsBoolean());
+            for (int limit : new int[]{0, 1, 2}) {
+                args.addProperty("clear_limit", limit);
+                assertFalse(BreakBlockTool.withWorkHint(failure, args).data().getAsJsonObject("recommended_args")
+                        .get("clear_obstructions").getAsBoolean(), "a hint must not widen terminal clearing");
+            }
+        }
+    }
+
+    @Test void workHintNeverReinterpretsPermissionToolOrPartialEffectFailures() {
+        var args = json("{\"x\":2,\"y\":90,\"z\":0}");
+        for (String reason : new String[]{"NEED_CONFIRM:plan", "DENIED:protected", "WRONG_TOOL:held",
+                "TARGET_LOST:changed", "CANCELLED:owner", "BREAK_FAILED:unknown"}) {
+            var failure = new ServerTool.Result(false, reason, json("{\"authorization_id\":\"fixture\"}"));
+            assertSame(failure, BreakBlockTool.withWorkHint(failure, args));
+        }
+        for (String data : new String[]{"{\"removed\":true}", "{\"removed\":false,\"cleared_blocks\":1}"}) {
+            var partial = new ServerTool.Result(false, "TARGET_BLOCKED:after effects", json(data));
+            assertSame(partial, BreakBlockTool.withWorkHint(partial, args));
+        }
+        var success = new ServerTool.Result(true, "removed", json("{\"removed\":true}"));
+        assertSame(success, BreakBlockTool.withWorkHint(success, args));
     }
 }

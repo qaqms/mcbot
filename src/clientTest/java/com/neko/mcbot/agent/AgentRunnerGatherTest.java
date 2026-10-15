@@ -250,6 +250,55 @@ class AgentRunnerGatherTest {
         assertEquals(moves, client.sent.stream().filter(e -> "move_to".equals(e.str("tool"))).count());
     }
 
+    @Test void explicitLocalGatherAtANewWorksiteKeepsTheRunnersOriginalExplorationLedger() {
+        runner.start();
+        runner.submitTask("在不同工区复用近处采集");
+        client.drain();
+        var trip = runner.execute("explore", "{\"max_steps\":1}");
+        client.drain();
+        reply(BoundedGatherTest.state(0));
+        reply(JsonParser.parseString("{\"exploration_points\":[{\"x\":8,\"y\":90,\"z\":0}]}").getAsJsonObject());
+        reply(new JsonObject());
+        var here = BoundedGatherTest.state(0);
+        here.addProperty("x", 8);
+        reply(here);
+        assertTrue(trip.join().ok());
+        String local = "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,"
+                + "\"scope\":\"subtask\",\"mode\":\"total\",\"explore_steps\":0}";
+        var gathering = runner.execute("gather", local);
+        client.drain();
+        var outside = BoundedGatherTest.state(0);
+        outside.addProperty("x", 100);
+        reply(outside);
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        var target = BoundedGatherTest.block(true);
+        target.addProperty("x", 102);
+        var targets = new JsonArray();
+        targets.add(target);
+        var found = new JsonObject();
+        found.add("targets", targets);
+        reply(found);
+        assertEquals("break_block", client.lastTool().str("tool"));
+        reply(JsonParser.parseString("{\"removed\":true}").getAsJsonObject());
+        var achieved = BoundedGatherTest.state(1);
+        achieved.addProperty("x", 100);
+        reply(achieved);
+        assertTrue(gathering.join().ok(), gathering.join().feedback());
+        assertEquals(1, gathering.join().data().get("exploration_attempts").getAsInt());
+        assertEquals(1, gathering.join().data().get("exploration_max_steps").getAsInt());
+        var repeated = runner.execute("gather", local);
+        client.drain();
+        reply(achieved);
+        assertTrue(repeated.join().ok());
+        assertEquals(1, repeated.join().data().get("exploration_attempts").getAsInt());
+        var back = runner.execute("explore", "{}");
+        client.drain();
+        reply(here);
+        assertTrue(back.join().feedback().startsWith("EXPLORATION_LIMIT:"));
+        assertEquals(1, back.join().data().get("exploration_attempts").getAsInt());
+        assertFalse(runner.execute("explore", "{\"max_steps\":2}").join().ok());
+    }
+
     @Test void childAcceptanceWaitsForRealTerminalAndCompletionWaitsForGoalVerification() {
         reachMining();
         var ack = new JsonObject();

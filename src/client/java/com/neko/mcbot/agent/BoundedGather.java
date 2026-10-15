@@ -294,10 +294,15 @@ final class BoundedGather {
             if (!dimension.equals(nowDimension)) {
                 finish(false, "SCOPE_CHANGED:身体换维度，已停止。"); return;
             }
-            boolean explored;
-            try { explored = exploration.observe(state); }
+            boolean explored = false;
+            try {
+                if (plan.exploreSteps() > 0) explored = exploration.observe(state);
+            }
             catch (IllegalArgumentException changed) {
-                finish(false, "SCOPE_CHANGED:身体离开有界探索范围或状态无效，已停止。"); return;
+                lastData = state.deepCopy();
+                finish(false, "SCOPE_CHANGED:身体离开有界探索范围或状态无效，已停止。"
+                        + "若已主动到达另一工区且只需近处采集，可显式explore_steps=0，"
+                        + "仅以本次起点为中心采集r内目标，不换区，也不重置原任务探索账。"); return;
             }
             if (exploring) {
                 exploring = false;
@@ -424,11 +429,11 @@ final class BoundedGather {
         if (plan.exploreSteps() > 0) args.addProperty("frontier_distance", Math.max(4, plan.radius()));
         call("find_resource", args, receipt -> {
             if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
-            exploration.searchPage(args, receipt, clock.getAsLong());
+            if (plan.exploreSteps() > 0) exploration.searchPage(args, receipt, clock.getAsLong());
             lastData = receipt.data();
             if (lastData.has("scan_center")) scanCenter = lastData.getAsJsonObject("scan_center").deepCopy();
             searchPages++;
-            if (sampleOffset == 0) exploration.searchedHere();
+            if (sampleOffset == 0 && plan.exploreSteps() > 0) exploration.searchedHere();
             var blocks = lastData.getAsJsonArray("targets");
             if (blocks == null) throw new IllegalArgumentException();
             for (var entry : blocks) {
@@ -721,7 +726,7 @@ final class BoundedGather {
 
     private void finish(boolean ok, String reason) {
         if (done()) return;
-        exploration.abandon();
+        if (plan.exploreSteps() > 0) exploration.abandon();
         var data = new JsonObject();
         data.addProperty("goal_satisfied", ok && goal != null && goal.satisfied());
         data.addProperty("scope", plan.scope() == ItemGoal.Scope.TASK ? "task" : "subtask");
@@ -733,6 +738,7 @@ final class BoundedGather {
         data.addProperty("work_position_attempts", workPositionAttempts);
         data.addProperty("batch_continuations", batchContinuations);
         data.addProperty("drop_settle_waits", dropSettleWaits);
+        data.addProperty("exploration_enabled", plan.exploreSteps() > 0);
         data.addProperty("exploration_attempts", exploration.attempts());
         data.addProperty("exploration_max_steps", exploration.maxSteps);
         data.addProperty("exploration_radius", exploration.radius);
@@ -754,6 +760,7 @@ final class BoundedGather {
                 + (goal == null ? "尚未取得本次采集的完整背包基线。" : goal.facts())
                 + (materialResolved ? "\n材料按服务器配方候选来源的实际件数结算；未自动转换，后续合成仍须重新查询及执行。" : "")
                 + (plan.scope() == ItemGoal.Scope.SUBTASK ? "\n此回执只结算材料子任务，不代表主人的整项目标完成。" : "")
+                + (plan.exploreSteps() == 0 ? "\n本段仅在开始工区附近采集，不换区；原任务探索账继续保留。" : "")
                 + "\n本段实际目标挖掘=" + dug + "，另清遮挡=" + cleared + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
                 + "，未拾取候选=" + skippedItems.size() + "；任务探索移动=" + exploration.attempts() + "/" + exploration.maxSteps
                 + "，共享范围半径=" + exploration.radius + "，新增观察区域=" + exploration.regions()

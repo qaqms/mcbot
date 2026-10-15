@@ -171,7 +171,7 @@ public final class ScanAreaTool implements ServerTool {
         fb.append("半径 ").append(r).append(" 内：")
                 .append(entities.isEmpty() ? "没有活物" : entities.size() + " 个活物(最多列 "
                         + MAX_ENTITY_LINES + ")");
-        fb.append("；可行动方块 ").append(summary.total())
+        fb.append("；分类观测方块 ").append(summary.total())
                 .append(" 格（实读 ").append(cells).append(" 格/计划 ").append(plan.cells().size())
                 .append(" 格，帽 ").append(ScanPlan.MAX_SAMPLES).append("）");
         if (plan.truncated()) {

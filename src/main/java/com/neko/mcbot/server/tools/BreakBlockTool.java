@@ -36,6 +36,11 @@ public final class BreakBlockTool implements ServerTool {
 
     @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer c, JsonObject args,
             CompanionScheduler sched, ActionPermissions permissions, ActionPermissions.Context context) {
+        return runMining(c, args, sched, permissions, context).thenApply(result -> withWorkHint(result, args));
+    }
+
+    private CompletableFuture<Result> runMining(CompanionPlayer c, JsonObject args,
+            CompanionScheduler sched, ActionPermissions permissions, ActionPermissions.Context context) {
         BlockPos pos = readPos(args);
         if (pos == null) return CompletableFuture.completedFuture(
                 new Result(false, "DENIED:参数需要数值整数坐标 x/y/z。", null));
@@ -112,6 +117,32 @@ public final class BreakBlockTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false, "BUSY:身体任务槽已占用，先等待或取消。", null));
         }
         return future;
+    }
+
+    static Result withWorkHint(Result result, JsonObject args) {
+        if (result.ok() || !(result.feedback().startsWith("TARGET_BLOCKED:")
+                || result.feedback().startsWith("OUT_OF_REACH:"))) return result;
+        BlockPos pos = readPos(args);
+        if (pos == null) return result;
+        var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+        if (data.has("removed") && data.get("removed").getAsBoolean()
+                || data.has("cleared_blocks") && data.get("cleared_blocks").getAsInt() > 0) return result;
+        var target = new JsonObject();
+        target.addProperty("x", pos.getX());
+        target.addProperty("y", pos.getY());
+        target.addProperty("z", pos.getZ());
+        var move = target.deepCopy();
+        move.addProperty("exact", true);
+        move.addProperty("arrival", "work");
+        move.add("work_target", target);
+        // Navigation has no smaller terminal clearing allowance; do not widen a stricter request.
+        move.addProperty("clear_obstructions", clearObstructions(args)
+                && (!args.has("clear_limit") || integer(args, "clear_limit") == BlockAim.MAX_CLEAR_BLOCKS));
+        data.addProperty("recommended_tool", "move_to");
+        data.add("recommended_args", move);
+        return new Result(false, result.feedback()
+                + " 此动作不移动；普通走近不保证可挖。可先请求工作站位 move_to " + move
+                + "，按其真实终态和新鲜观测再决定；建议未执行，不能视为已有可行路线。", data);
     }
 
     static boolean clearObstructions(JsonObject args) {

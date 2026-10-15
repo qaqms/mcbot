@@ -147,7 +147,8 @@ final class ExplorationRoute {
         return new ToolOutcome(false, "DENIED:同任务gather/explore须保持首次探索步数/半径。"
                 + "当前累计移动=" + attempts + "/" + maxSteps + "，剩余="
                 + Math.max(0, maxSteps - attempts) + "，范围半径=" + radius
-                + "；省略探索参数可沿用原配置，不能重置范围或预算。", data);
+                + "；省略探索参数可沿用原配置，不能重置范围或预算。"
+                + "若只需当前工区附近采集，可用gather explore_steps=0，不换区且不改原探索账。", data);
     }
 
     boolean observe(JsonObject state) {

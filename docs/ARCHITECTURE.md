@@ -19,6 +19,15 @@ CompanionTaskBubble在世界提取阶段读取实体插值/相机、VISUAL射线
 
 ## 当前导航、勘探与目标链路（2026-10-15）
 
+第六次日志已确认铁镐及后续钻石镐均合成/装备，详细证据见当日日志第六次测试节。
+局部gather显式explore_steps=0时不推进ExplorationRoute观测/覆盖/路标，
+但保留同一账引用供反馈与真实地形覆盖失效；默认模式仍检查首次探索球。
+范围/配置拒绝提示显式局部工作入口，不自动切换模式或补预算。
+BreakBlockTool仅给无部分效果的几何失败附工作导航建议，所有预检/真终态经同一装配；
+普通移动成功不保证能施工，ScanSummary不再作此暗示。
+BoundedProgram只在显示中引用本程序已记录的完全相同反馈，Lua值和结构化返回不变；
+实际动作和失败各有回执编号，取消/输出预算/原子预算与原权限保持。
+
 第五次日志已确认铁镐合成/装备；本轮工作一致性补丁不新增规划层。
 BlockMining的距离准入归BlockAim，去除与工作到达冲突的脚到中心闸。
 CompanionPlayer持有每身体HandSnapshot.Pickups，GroundItems仅在真实playerTouch

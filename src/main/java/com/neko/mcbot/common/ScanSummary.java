@@ -136,7 +136,7 @@ public final class ScanSummary {
         if (entries.isEmpty()) {
             return null;
         }
-        StringBuilder sb = new StringBuilder("近圈(步长1,可直接下指令): ");
+        StringBuilder sb = new StringBuilder("近圈(步长1,坐标未验工作条件): ");
         Group prev = null;
         for (Entry e : entries) {
             Group g = e.group();

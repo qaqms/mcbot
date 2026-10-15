@@ -59,6 +59,7 @@ public final class BoundedProgram {
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final CompletableFuture<Void> terminated = new CompletableFuture<>();
     private final StringBuilder receipts = new StringBuilder();
+    private final Map<String, Integer> feedbackRefs = new LinkedHashMap<>();
     private final Map<String, Long> counts = new LinkedHashMap<>();
     private volatile boolean halted;
     private volatile Thread worker;
@@ -146,7 +147,7 @@ public final class BoundedProgram {
                     if (args.narg() > 32) throw new Halt("RESULT_LIMIT:打印参数过多。");
                     var parts = new ArrayList<String>();
                     for (int i = 1; i <= args.narg(); i++)
-                        parts.add(toJson(args.arg(i), 0, new IdentityHashMap<>(), new int[]{0}).toString());
+                        parts.add(display(toJson(args.arg(i), 0, new IdentityHashMap<>(), new int[]{0})));
                     append("输出 " + String.join(" ", parts));
                     return LuaValue.NONE;
                 }
@@ -155,7 +156,7 @@ public final class BoundedProgram {
             var value = globals.load(plan.code(), "task-program").call();
             check();
             JsonElement returned = toJson(value, 0, new IdentityHashMap<>(), new int[]{0});
-            if (bytes(returned.toString()) > 12000 || bytes(returned.toString()) + outputBytes > OUTPUT_BYTES)
+            if (bytes(returned.toString()) > 12000 || bytes(display(returned)) + outputBytes > OUTPUT_BYTES)
                 throw new Halt("RESULT_LIMIT:返回值与阶段回执合计过大。");
             dispatch.accept(() -> {
                 if (!done()) {
@@ -204,6 +205,7 @@ public final class BoundedProgram {
                 || bytes(receipt.data().toString()) > VALUE_BYTES)
             throw new Halt("RESULT_LIMIT:子调用回执过大或无效。");
         synchronized (this) {
+            check();
             last = receipt;
             lastTool = name;
             completed++;
@@ -212,8 +214,8 @@ public final class BoundedProgram {
                 if (amount != null && amount.isJsonPrimitive() && amount.getAsJsonPrimitive().isNumber())
                     counts.merge(key, Math.max(0, amount.getAsLong()), Long::sum);
             }
+            recordReceipt(name, receipt);
         }
-        append(name + " ok=" + receipt.ok() + "：" + receipt.feedback());
         if (!receipt.ok()) throw new Halt("CHILD_STOPPED:子调用失败或需要确认，后续动作未执行。");
         var data = receipt.data();
         boolean progress = false;
@@ -248,6 +250,33 @@ public final class BoundedProgram {
         outputBytes += size;
         receipts.append('\n').append(line);
     }
+    private synchronized void recordReceipt(String name, ToolOutcome receipt) {
+        append("回执#" + completed + " " + name + " ok=" + receipt.ok() + "：" + receipt.feedback());
+        feedbackRefs.put(receipt.feedback(), completed);
+    }
+
+    private synchronized String display(JsonElement value) {
+        return referenced(value).toString();
+    }
+
+    // Only the display refers to text already present in this result; Lua and returned data stay intact.
+    private JsonElement referenced(JsonElement value) {
+        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+            Integer ref = feedbackRefs.get(value.getAsString());
+            if (ref != null) return new JsonPrimitive("见回执#" + ref);
+        }
+        if (value.isJsonArray()) {
+            var shown = new JsonArray();
+            value.getAsJsonArray().forEach(entry -> shown.add(referenced(entry)));
+            return shown;
+        }
+        if (value.isJsonObject()) {
+            var shown = new JsonObject();
+            value.getAsJsonObject().entrySet().forEach(entry -> shown.add(entry.getKey(), referenced(entry.getValue())));
+            return shown;
+        }
+        return value;
+    }
     private synchronized void finish(boolean ok, String reason, JsonElement returned) {
         if (done()) return;
         var data = new JsonObject();
@@ -261,7 +290,7 @@ public final class BoundedProgram {
         counts.forEach(data::addProperty);
         data.add("returned", returned);
         result.complete(new ToolOutcome(ok, reason + "\n实际终态=" + completed + "，子调用=" + calls
-                + receipts + (returned.isJsonNull() ? "" : "\n返回值=" + returned), data));
+                + receipts + (returned.isJsonNull() ? "" : "\n返回值=" + display(returned)), data));
     }
 
     private LuaValue fromJson(JsonElement value, int depth) {

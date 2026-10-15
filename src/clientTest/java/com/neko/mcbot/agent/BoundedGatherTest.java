@@ -79,10 +79,14 @@ class BoundedGatherTest {
             this(requested, baseline, "task");
         }
         Fixture(int requested, int baseline, String scope) {
+            this(requested, baseline, scope, 8, null);
+        }
+        Fixture(int requested, int baseline, String scope, int exploreSteps, ExplorationRoute route) {
             count = baseline;
             gather = new BoundedGather(BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":"
-                    + requested + ",\"scope\":\"" + scope + "\"}"), state(baseline), () -> now, this::remote,
-                    queue::addLast, () -> cancelled++, text -> { });
+                    + requested + ",\"scope\":\"" + scope + "\",\"explore_steps\":" + exploreSteps + "}"),
+                    state(baseline), () -> now, this::remote,
+                    queue::addLast, () -> cancelled++, text -> { }, null, route);
         }
         CompletableFuture<ToolOutcome> remote(String tool, String json) {
             calls.add(tool);
@@ -447,6 +451,75 @@ class BoundedGatherTest {
         assertEquals(0, f.dug);
         assertEquals(0, f.moved);
         assertEquals(0, f.breakAttempts);
+    }
+
+    @Test void localGatherOutsideExplorationPreservesSpentBudgetAndUndergroundReturnTrail() {
+        var route = new ExplorationRoute(1, 32);
+        route.beginUnderground(state(0));
+        var reached = state(0);
+        reached.addProperty("x", 8);
+        reached.addProperty("y", 86);
+        route.attempt(reached);
+        route.observe(reached);
+        route.reachedUnderground(reached, false);
+        route.recordDigs(JsonParser.parseString("{\"removed_blocks\":12}").getAsJsonObject());
+        var trail = route.trail();
+        var bounds = route.bounds();
+        var f = new Fixture(1, 0, "subtask", 0, route);
+        f.stateX = 100;
+        var target = block(true);
+        target.addProperty("x", 102);
+        f.blockTargets = List.of(target);
+        f.pickupDuringMining = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertFalse(result.data().get("exploration_enabled").getAsBoolean());
+        assertEquals(1, result.data().get("exploration_attempts").getAsInt());
+        assertEquals(1, result.data().get("exploration_max_steps").getAsInt());
+        assertEquals(trail, route.trail());
+        assertEquals(bounds, route.bounds());
+        assertEquals(116, route.remainingDigs());
+        assertTrue(route.exhausted());
+        assertEquals(1, f.dug);
+        assertEquals(0, f.moved);
+    }
+
+    @Test void localGatherKeepsItsCollectionRadiusAndCannotStartExploration() {
+        var f = new Fixture(1, 0, "subtask", 0, new ExplorationRoute(8, 64));
+        f.stateX = 100;
+        var target = block(true);
+        target.addProperty("x", 120);
+        f.blockTargets = List.of(target);
+        var result = f.run();
+        assertTrue(result.feedback().startsWith("SCOPE_LIMIT:"), result.feedback());
+        assertEquals("collection_scope", result.data().getAsJsonArray("scope_exclusions")
+                .get(0).getAsJsonObject().get("reason").getAsString());
+        assertEquals(0, f.dug);
+        assertEquals(0, f.moved);
+    }
+
+    @Test void outsideExplorationFailureExplainsLocalWorkWithoutReanchoringOrExecutingIt() {
+        var route = new ExplorationRoute(8, 32);
+        route.observe(state(0));
+        var bounds = route.bounds();
+        var f = new Fixture(1, 0, "subtask", 8, route);
+        f.stateX = 100;
+        var result = f.run();
+        assertTrue(result.feedback().startsWith("SCOPE_CHANGED:"), result.feedback());
+        assertTrue(result.feedback().contains("explore_steps=0"));
+        assertEquals(100, result.data().getAsJsonObject("last_observation").get("x").getAsInt());
+        assertEquals(bounds, route.bounds());
+        assertEquals(List.of("status"), f.calls);
+    }
+
+    @Test void localGatherStillRejectsActualDisplacementOutsideItsStartingArea() {
+        var f = new Fixture(1, 0, "subtask", 0, null);
+        f.ground = true;
+        f.moveFailures.add("PARTIAL:actual movement");
+        f.leaveScopeOnFailedMove = true;
+        assertTrue(f.run().feedback().startsWith("SCOPE_CHANGED:"));
+        assertEquals(1, f.moved);
+        assertEquals(0, f.dug);
     }
 
     @Test void anUnharvestableSourceDoesNotHideAnotherSourceThatTheSameHandCanHarvest() {

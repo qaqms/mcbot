@@ -1103,7 +1103,7 @@ public final class AgentRunner implements ToolExecutor {
         try {
             var plan = BoundedGather.parse(argsJson);
             var args = com.google.gson.JsonParser.parseString(argsJson).getAsJsonObject();
-            ExplorationRoute route = null;
+            ExplorationRoute route = explorationRoute;
             if (plan.exploreSteps() > 0) {
                 if (explorationRoute == null)
                     explorationRoute = new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius());

@@ -223,6 +223,72 @@ class BoundedProgramTest {
         }
     }
 
+    @Test void repeatedFeedbackUsesReferencesWhileLuaAndReturnedValuesKeepTheCompleteText() throws Exception {
+        String text = "actual world receipt ".repeat(260);
+        try (var f = new Fixture("""
+                local r=mc.call("inventory",{})
+                for i=1,4 do print("inventory",r.ok,r.feedback) end
+                assert(r.feedback==r.data.original)
+                mc.call("craft",{})
+                return {echo=r.feedback,amount=r.data.amount}
+                """)) {
+            f.host = (name, args) -> {
+                var data = new JsonObject();
+                data.addProperty("original", text);
+                data.addProperty("amount", 7);
+                return CompletableFuture.completedFuture(new ToolOutcome(true,
+                        name.equals("inventory") ? text : "crafted", data));
+            };
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(2, f.calls.size(), "duplicating display must not stop a dependent action");
+            assertEquals(1, result.feedback().split(java.util.regex.Pattern.quote(text), -1).length - 1);
+            assertTrue(result.feedback().contains("见回执#1"));
+            assertEquals(text, result.data().getAsJsonObject("returned").get("echo").getAsString());
+            assertEquals(7, result.data().getAsJsonObject("returned").get("amount").getAsInt());
+        }
+    }
+
+    @Test void referencesNeverElideDistinctCallsOrTextThatIsNotAnExactFeedbackCopy() throws Exception {
+        try (var f = new Fixture("""
+                print("actual")
+                local first=mc.call("inventory",{page=1})
+                local second=mc.call("inventory",{page=2})
+                print("prefix: "..first.feedback)
+                return {first=first.feedback,second=second.feedback,other="actual!"}
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(actual("{}"));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertTrue(result.feedback().contains("回执#1 inventory"));
+            assertTrue(result.feedback().contains("回执#2 inventory"));
+            assertTrue(result.feedback().contains("输出 \"actual\""));
+            assertTrue(result.feedback().contains("prefix: actual"));
+            assertTrue(result.feedback().contains("actual!"));
+            assertTrue(result.feedback().contains("见回执#2"));
+        }
+    }
+
+    @Test void failedChildKeepsItsFullReasonAndPriorReferencesWithoutDispatchingMoreWork() throws Exception {
+        try (var f = new Fixture("""
+                local r=mc.call("inventory",{})
+                print(r.feedback)
+                mc.call("move_to",{})
+                mc.call("craft",{})
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("inventory")
+                    ? actual("{}") : new ToolOutcome(false, "NEED_CONFIRM:full concrete plan",
+                    JsonParser.parseString("{\"authorization_id\":\"fixture\"}").getAsJsonObject()));
+            var result = f.outcome();
+            assertFalse(result.ok());
+            assertEquals(2, f.calls.size());
+            assertTrue(result.feedback().contains("见回执#1"));
+            assertTrue(result.feedback().contains("回执#2 move_to ok=false：NEED_CONFIRM:full concrete plan"));
+            assertEquals("fixture", result.data().getAsJsonObject("last_receipt")
+                    .get("authorization_id").getAsString());
+        }
+    }
+
     @Test void syntaxErrorsAreDetectedBeforeAnyEarlierStatementRuns() throws Exception {
         try (var f = new Fixture("mc.call('inventory',{}) if")) {
             assertTrue(f.outcome().feedback().startsWith("PROGRAM_ERROR:"));
