@@ -3,6 +3,20 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## Bot头顶任务显示（2026-10-15）
+
+TaskBubbleState只维护当前任务显示、在途原子工具seq和短终态，不参与任务规划。
+AgentRunner在真实发送、终态/超时和任务监听器更新显示，结构化读取问答、整理、
+地下勘探/返程及ItemGoal.Progress。数量/材料子目标和最终目标保持分离，
+job_ack不等于动作完成，长期检查点不等于任务结束，面板检查不会覆盖动作。
+ServerToolDispatcher仅向请求主人回传companion_uuid；缺失/非法身份不按名字绑定，
+同名替换、遣散及会话退出清旧显示。外部桥v1.0无变更。
+
+CompanionTaskBubble在世界提取阶段读取实体插值/相机、VISUAL射线及只读任务快照，
+将不可变帧附在LevelRenderState；BEFORE_ENTITIES只按帧提交面向相机的深度测试几何/文字。
+不新增服务端轮询、模型调用、点击或输入处理。show_hud继续由原配置保存，
+固定底部HUD已替换；具体几何、期限、兼容和实机边界见TASK-BUBBLE-DESIGN及STATUS。
+
 ## 当前导航、勘探与目标链路（2026-10-15）
 
 本段覆盖下方历史检查点中未实现工作A*/地下组合/目标生命周期的描述。
@@ -135,7 +149,7 @@ PathTask.walkOnly从搜索预算、缓存、活体计划及执行入口共同禁
 │    AgentRunner：大脑宿主（agent-core AgentLoop）
 │    BridgeHttp：127.0.0.1 任务桥（供连接器接入）
 │    McbotPanelScreen：G 面板（对话/同伴/设置，滚动、固定多行输入）
-│    PanelHistory：会话显示档案；CompanionHud：任务/待答提示
+│    PanelHistory：会话显示档案；CompanionTaskBubble：自己Bot头顶任务/待答显示
 │    ⇅ 自定义 payload mcbot:c2s / mcbot:s2c（单 JSON 信封）
 │
 └─ Minecraft 服务器（联机服） src/main/

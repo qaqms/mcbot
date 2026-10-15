@@ -73,6 +73,12 @@ public final class ItemGoal {
     }
 
     public Target target() { return target; }
+    public record Progress(String item, int current, int target, boolean additional, Scope scope,
+                           boolean alternatives) {}
+    public Progress snapshot() {
+        return new Progress(target.item(), progress(), target.count(), target.additional(), scope,
+                !accepted.equals(Set.of(target.item())));
+    }
     public void observe(JsonObject state) { current = count(state, accepted); }
     public int progress() { return target.additional() ? Math.max(0, current - baseline) : current; }
     public boolean satisfied() { return progress() >= target.count(); }

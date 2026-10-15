@@ -17,6 +17,7 @@ class ClientConfigTest {
         assertFalse(config.acceptMode);
         assertTrue(config.preferences.autoCompact());
         assertFalse(config.preferences.autonomousActions());
+        assertTrue(config.preferences.showHud());
     }
 
     @Test void autonomousPreferenceIsPersistedAndSurvivesUnrelatedDraftEdits() {
@@ -49,6 +50,7 @@ class ClientConfigTest {
         assertFalse(config.connectionChanged(restored));
         assertEquals("persona", restored.persona);
         assertFalse(restored.acceptMode);
+        assertFalse(restored.preferences.showHud());
     }
     @Test void invalidOrNonIntegerPreferencesFallBackAsAGroup() {
         for (Object value : new Object[]{-1, 2.5, "48000", true}) {

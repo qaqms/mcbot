@@ -3,6 +3,81 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## Bot头顶任务气泡实现与测试包（2026-10-15 14:54，Asia/Shanghai）
+
+- 维护者批准头顶方案后已完成原生接线：CompanionTaskBubble替换固定底部CompanionHud，
+  自己Bot插值包围盒顶部加0.72格为尾尖，184×88世界像素、相机朝向、3像素阶梯圆角、
+  居中像素尾巴及浅/深配色。24格截断、20至24格淡出、近处限制放大；
+  锚点视锥/相机前方、到Bot眼睛的VISUAL方块射线及正常世界深度共同准入。
+  世界不匹配、实体不可见/缺失、界面/F1、show_hud关闭时隐藏，无角落回退和输入处理。
+  首个原生版使用静态显示，未接原型的三点呼吸，不另加动画配置。
+- TaskBubbleState只读显示真实发送/真终态的工具活动，按task_id/seq隔离；job_ack不清除。
+  问答/确认优先，保留实际倒计时，配方查询不假装制作；地下勘探与返程明确区分。
+  ItemGoal.Progress只读背包净增/总量，本段材料与最终目标分离，替代来源标合计，
+  未知隐藏、不按挖掘/掉落计数。长期检查点不弹完成；完成/失败/取消停留6/10/4秒，
+  隐藏期间期限推进，新任务替换，排队取消/迟到不覆盖，重载/退出清空。
+- 内部生命周期回执增加companion_uuid，仅返回请求主人；同名换UUID清理旧身体读数和气泡，
+  缺失/非法UUID不按名字猜测。联机客户端/服务端需同步更新，旧服务端缺身份则不显示气泡。
+  G → 设置 → 通用改名“Bot头顶任务气泡”，沿用show_hud默认true/旧false和写盘语义；
+  切显示不取消任务/问题、不重建模型或改变权限。外部桥v1.0、宿主/连接器/参考未改。
+- 专项日志build/task-bubble-milestone-20261015.log、task-bubble-render-validation-20261015.log；
+  后者60项、8 suites通过。实际runner检查受理/终态/超时、问题、材料背包、
+  身份/旧读取、保存失败及生命周期；原长期/地下测试补检查点、授权和返程断言。
+  原生提交测试调用生产背景/文字提交与顶点生成，执行原版PoseStack/矩阵及管线配置，
+  核对相机相对跟随、姿态栈恢复、NORMAL文字、有深度测试、光照格式及淡出alpha。
+  队列/字体宽度/网络/模型/世界为受控边界，不是GPU像素、实体走跳或原生射线场景实测。
+- 强制全量`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`成功，
+  日志build/task-bubble-final-20261015.log：35秒、20/20任务实际执行；
+  XML共123 suites、**960项**（agent-core 290/根105/客户端565），failures/errors/skipped全0。
+  比前候选增加24项；编译及完整回归均已执行，不沿用设计阶段缓存测试计数。
+- 候选build/libs/mcbot-0.1.0.jar，**1,165,869 bytes**，末写14:53:46；
+  SHA256 `b14ef2cc711be38ea9acf16706ca1ec1bf5cfe387ad35a266f81bd2754687433`。
+  已核外包mcbot/0.1.0、气泡/布局/状态类、内嵌agent-core与LuaJ及许可存在，
+  旧CompanionHud类不在新包；list-java无残留进程。未修改实例、安装包或启动游戏/真实模型。
+  走跳/名字标签间隙、FOV/字体/缩放、透明或特殊形状遮挡、F1/菜单和多人体验
+  已列REAL-GAME-RETESTING，仍待维护者验证。源码提交推送结果另记，不推送构建产物。
+
+## Bot头顶气泡设计纠正（2026-10-15 14:27，Asia/Shanghai）
+
+- 维护者明确气泡显示在Bot头上。此前固定屏幕左下角的理解有误，本节覆盖下方初稿，
+  已更新dist/task-bubble-preview.html、docs/TASK-BUBBLE-DESIGN.md及PANEL设计指针。
+  原型尾巴居中对齐人物头顶，保留名字标签间隙；气泡随位置滑杆同步移动，
+  距离选项同时缩放人物和气泡，墙后/画面外隐藏，不吸附到屏幕角落。
+  头顶内容压缩，移除重复头像和可点击按钮，原G面板入口及可选设置设计保留。
+- 本机Chrome/Playwright共207项检查通过，四种视口×十种任务状态，
+  另验位置跟随、头顶/名字标签中心对齐、距离缩放、遮挡/画外隐藏及恢复、
+  鼠标穿透、开关保存/重载、场景外示例详情；浏览器异常0。
+  记录build/task-bubble-overhead-validation.json，截图build/task-bubble-overhead-*.png，
+  已人工查看桌面、窄屏长文本和地下待回答场景。
+- 完整离线build成功（9秒，20任务均UP-TO-DATE），
+  日志build/task-bubble-overhead-design-build-20261015.log；未重新执行Java测试，
+  936项强制全量沿用此前证据，list-java无残留。
+  仍仅HTML二维投影设计，无原生渲染或JAR功能更新，没有启动游戏/模型或安装实例。
+  正式接线还须核对实体稳定身份、实际相机/插值/深度遮挡API和结构化状态来源；
+  浏览器遮挡选项不能作为Minecraft射线或深度渲染实测证据。
+
+## 可选任务气泡设计预览（2026-10-15 14:18，Asia/Shanghai，位置理解已由上节纠正）
+
+- 维护者要求先理解需求并设计游戏内任务气泡，减少反复打开G面板，且设置可关闭。
+  已核对CompanionHud、ClientConfig、AgentRunner和PanelHistory：已有HUD及show_hud开关，
+  原HUD无终态停留，数量目标/地下返程尚缺面向HUD的结构化快照。
+  本卡仅设计，不修改Java生产/测试、游戏配置、宿主、连接器或参考项目。
+- 新增docs/TASK-BUBBLE-DESIGN.md及无外部依赖的dist/task-bubble-preview.html。
+  初稿固定左侧偏下，以头像/像素尾巴/微动保留趣味，突出当前动作；
+  子目标入包数量和最终任务分列，问答/授权突出，终态短停后收起，空闲隐藏。
+  设计沿用show_hud并把设置名称调整为任务气泡，显示开关不改变执行/权限。
+  鼠标锁定时仍以G进入原面板，HTML的详情按钮仅演示入口，不增加隐式批准。
+- 本机Chrome经Playwright检查1440×900、854×480、390×844、320×640，
+  每种视口切换10状态；共162项检查通过，包括可见性、安全边界、快捷栏不重叠、
+  横向无溢出、详情区分问题/清单、设置取消/保存/重载及无批准动作，浏览器异常0。
+  已人工查看桌面、窄屏长文本、地下授权和设置截图，文件在build/task-bubble-*.png；
+  场景和头像为原创像素示意，不是实际Minecraft画面。原型终态固定展示便于比较，
+  设置仅存浏览器预览偏好，不读写玩家配置，也不接真实模型/游戏任务。
+- gradlew.bat build --offline --console=plain --no-daemon成功（8秒，20任务均UP-TO-DATE），
+  日志build/task-bubble-design-build-20261015.log；本轮没有重新执行Java单测，
+  原936项证据仍为下方历史强制全量。list-java无残留进程。
+  尚未实现原生渲染/结构化快照/终态期限；本轮无JAR功能更新、实例安装或游戏启动。
+
 ## 本轮源码归档准备（2026-10-15）
 
 - 维护者要求提交推送。源码目录再次缺失Git元数据，已从既有origin取回历史，
@@ -4224,6 +4299,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 世界任务气泡（10-15缓存Fabric源/Javap/编译及离线提交，未运行GPU） | Fabric事件位于`client.rendering.v1.world`：`END_EXTRACTION`读world/camera/frustum/tickCounter，`BEFORE_ENTITIES`可用matrices/commandQueue；LevelRenderState可setData/getData(RenderStateDataKey)。实体`getPosition(float)`、`getBbHeight/getEyeHeight`公开，Camera为`position()/rotation()/forwardVector()`。世界PoseStack基础为identity；按相机相对位置、cameraRenderState.orientation及正/负/正缩放提交billboard。`submitCustomGeometry(PoseStack,RenderType,CustomGeometryRenderer)`和`submitText`可用；`rendertype.RenderTypes.textBackground()`为POSITION_COLOR_LIGHTMAP/QUADS且有深度测试，顶点必须setColor/setLight；文字用Font.DisplayMode.NORMAL。原版NameTagFeatureRenderer的Storage使用同一旋转/缩放约定；不使用SEE_THROUGH，不把离线管线/矩阵断言写成实机画面通过 |
 | 单输入烹饪事实（10-15 javap/编译/原版配方离线执行，未运行世界） | `AbstractCookingRecipe`继承`SingleItemRecipe`，公开`input():Ingredient`、`assemble(SingleRecipeInput,HolderLookup.Provider):ItemStack`，`cookingTime():int`；`RecipeHolder(ResourceKey<Recipe<?>>,T)`可构造供既有SmeltTool.cooking复用。仅确切SmeltingRecipe/BlastingRecipe/SmokingRecipe类进入支持范围，真实配方assemble已离线运行，不等于RecipeManager世界查询/机器tick已运行 |
 | 配方替代来源（10-15 javap/编译/离线注册表，未运行世界） | `Ingredient.items():Stream<Holder<Item>>`、`Ingredient.test(ItemStack):boolean`、`BlockItem.getBlock():Block`公开；`Item.getCraftingRemainder():ItemStack`公开final，不是Item。来源筛选只读这些事实，实际加载RecipeManager与原版世界采收仍待实测 |
 | 工作候选距离（10-14本地映射javap/编译） | Vec3i.distSqr(Vec3i):double公开，BlockPos继承可用；仅候选排序测试使用，生产假想眼睛沿用已核对的BlockAim原版shape/clip，不新增移动身体或世界读取API |

@@ -4,6 +4,15 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-15头顶气泡：TaskBubbleStateTest与实际AgentRunnerTaskBubbleTest验证活动seq、
+受理不清除、实际终态/超时/取消及迟到隔离、问题优先、数量净增/材料scope、
+终态期限与隐藏期间过期、配置保存失败及身份替换。原GoalSurvey测试补长期检查点、
+地下/返程状态断言，ServerToolDispatcherTest补owner范围UUID/无身体清除。
+TaskBubbleLayoutTest核对长文本/Unicode边界、计数行及距离准入；CompanionTaskBubbleTest
+实际调用生产提交/顶点生成/原版矩阵和管线，验证相机相对跟随、PoseStack恢复、
+NORMAL文字、光照属性和有深度测试；队列/字体宽度为受控边界，不运行GPU或游戏画面。
+最终强制构建、XML及JAR见STATUS；不启动游戏/真实模型、不安装实例或修改宿主/连接器。
+
 2026-10-15导航/地下/生命周期卡：NavigationWorkTest执行原版BlockAim/clip及实际A*，
 检查绕墙工作终点、有序清理、未知/占位拒绝；石块夹具逐格应用阶梯计划后零挖放反搜返程。
 这不是ServerLevel/玩家travel/PathTask完整实机执行。PathSpecTest验证严格类型与范围。

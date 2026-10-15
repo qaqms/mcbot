@@ -56,6 +56,8 @@ class AgentRunnerGoalSurveyTest {
         client.engine().reply(1, "第一阶段已到新区域"); client.drain();
         reply(here); // Finish verification.
         assertEquals(task, runner.currentTaskId());
+        assertEquals(TaskBubbleState.Tone.WORKING, runner.taskBubbleSnapshot().tone());
+        assertEquals(task, runner.taskBubbleSnapshot().taskId());
         assertEquals(1, client.sent.stream().filter(e -> e.kind().equals("task_begin")).count());
         assertEquals(0, client.sent.stream().filter(e -> e.kind().equals("task_end")).count());
         reply(here); // Next stage observation.
@@ -68,14 +70,18 @@ class AgentRunnerGoalSurveyTest {
         assertEquals(0, runner.currentTaskId());
         assertEquals(1, client.sent.stream().filter(e -> e.kind().equals("task_end")).count());
         assertEquals("completed", runner.panelHistory().tasks().getFirst().status());
+        assertEquals(TaskBubbleState.Tone.COMPLETED, runner.taskBubbleSnapshot().tone());
+        assertEquals(3, runner.taskBubbleSnapshot().progress().current());
     }
 
     @Test void surveyConsentWaitsForBothApprovalsAndMovementTerminalBeforeRescanning() {
         var future = survey();
+        assertEquals("正在地下勘探", runner.taskBubbleSnapshot().action());
         var original = client.lastTool().obj("args").deepCopy();
         reply(false, "NEED_CONFIRM:review cells", json("{\"authorization_id\":\"survey-plan\","
                 + "\"authorization_summary\":\"exact stair cells\",\"removed_blocks\":0,\"placed_blocks\":0}"));
         assertTrue(runner.questionSnapshot().text().contains("exact stair cells"));
+        assertEquals(TaskBubbleState.Tone.QUESTION, runner.taskBubbleSnapshot().tone());
         long count = client.toolCount();
         assertTrue(runner.answerFromPanel(runner.questionSnapshot().id(), "确认")); client.drain();
         assertEquals(count, client.toolCount());
@@ -106,6 +112,13 @@ class AgentRunnerGoalSurveyTest {
         assertEquals(1, future.join().data().get("return_steps").getAsInt());
         assertFalse(future.join().data().has("goal_satisfied"));
         assertEquals(1, client.engine().responses.size(), "discovery is a tool result, not a task finish");
+        var returning = runner.execute("explore", "{\"mode\":\"return\"}"); client.drain();
+        assertEquals("正在沿路标返回", runner.taskBubbleSnapshot().action());
+        reply(actual);
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertTrue(client.lastTool().obj("args").get("walk_only").getAsBoolean());
+        runner.cancelTask(0); client.drain();
+        assertFalse(returning.join().ok());
     }
 
     @Test void cancellingSurveyQuestionDoesNotAuthorizeOrContinueOnLateAnswer() {

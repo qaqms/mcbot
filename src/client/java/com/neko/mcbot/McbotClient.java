@@ -8,9 +8,7 @@ import com.neko.mcbot.cfg.ClientConfig;
 import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.common.McbotPayloads;
 import com.neko.mcbot.ui.McbotPanelScreen;
-import com.neko.mcbot.ui.CompanionHud;
-import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
-import net.minecraft.resources.Identifier;
+import com.neko.mcbot.ui.CompanionTaskBubble;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
@@ -33,8 +31,7 @@ public final class McbotClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         McbotMod.LOG.info("mcbot client part initializing");
-        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("mcbot", "companion_status"),
-                (graphics, delta) -> CompanionHud.render(graphics));
+        CompanionTaskBubble.register();
 
         panelKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.mcbot.panel", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G,

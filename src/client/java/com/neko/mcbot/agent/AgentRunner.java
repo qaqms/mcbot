@@ -113,6 +113,7 @@ public final class AgentRunner implements ToolExecutor {
     private final TaskReplies askWaiters = new TaskReplies();
     private final ArrayDeque<String> transcript = new ArrayDeque<>();
     private final PanelHistory panelHistory = new PanelHistory();
+    private final TaskBubbleState taskBubble = new TaskBubbleState();
     private JsonObject companionBody = new JsonObject();
     private String companionObservation = "尚未读取同伴信息";
     private boolean readingCompanion;
@@ -121,6 +122,7 @@ public final class AgentRunner implements ToolExecutor {
     private PromptBuilder sessionPrompt;
     private volatile long currentTask;
     private volatile String companionName = "";
+    private volatile java.util.UUID companionUuid;
     private volatile String lifecycleResult = "";
     /** 已超时或取消的调用仍收到回执；只计数，不重新消费。 */
     private final AtomicLong lateResults = new AtomicLong();
@@ -231,6 +233,8 @@ public final class AgentRunner implements ToolExecutor {
                     @Override
                     public void onTaskStarted(long taskId) {
                         currentTask = taskId;
+                        taskBubble.begin(taskId, panelHistory.tasks().stream()
+                                .filter(t -> t.id() == taskId).map(PanelHistory.Task::title).findFirst().orElse(""));
                         explorationRoute = null;
                         taskInitialObservation = null;
                         panelHistory.status(taskId, "running");
@@ -248,6 +252,8 @@ public final class AgentRunner implements ToolExecutor {
                     @Override
                     public void onTaskFinished(long taskId, AgentLoop.TaskStatus status, String text) {
                         boolean wasActive = currentTask == taskId;
+                        if (wasActive) taskBubble.finish(taskId, status, text,
+                                loop == null ? null : loop.goalProgress(), client.nowMs());
                         if (wasActive && status != AgentLoop.TaskStatus.COMPLETED) sendCancel();
                         if (wasActive) {
                             JsonObject scope = new JsonObject();
@@ -407,6 +413,7 @@ public final class AgentRunner implements ToolExecutor {
         readingCompanion = false;
         latestQuestion = null;
         clearTaskWaits(0, "CANCELLED:会话已重载或关闭。");
+        taskBubble.clear();
     }
 
     private void clearTaskWaits(long taskId, String text) {
@@ -434,6 +441,21 @@ public final class AgentRunner implements ToolExecutor {
     public long currentTaskId() { return currentTask; }
     public int queuedTasks() { return loop == null ? 0 : loop.queuedTasks(); }
     public boolean brainOnline() { return !closed && loop != null; }
+    public TaskBubbleState.Snapshot taskBubbleSnapshot() {
+        if (closed) return null;
+        var activity = taskBubble.primitive();
+        String detail = "";
+        if (surveyActive()) {
+            detail = activity == null ? "" : activity.label();
+            activity = survey.returning() ? TaskBubbleState.Activity.RETURNING : TaskBubbleState.Activity.SURVEY;
+        }
+        if (loop != null && loop.compacting()) activity = TaskBubbleState.Activity.COMPACTING;
+        if (activity == null) activity = loop != null && loop.awaitingModel()
+                ? TaskBubbleState.Activity.MODEL : TaskBubbleState.Activity.PROCESSING;
+        var progress = gather != null && gatherTask == currentTask && !gather.done()
+                ? gather.goalProgress() : loop == null ? null : loop.goalProgress();
+        return taskBubble.snapshot(currentTask, activity, detail, progress, questionSnapshot(), client.nowMs());
+    }
     public String taskState() {
         if (closed) return "会话已关闭";
         var question = questionSnapshot();
@@ -520,6 +542,7 @@ public final class AgentRunner implements ToolExecutor {
                 long seq = env.num("seq", -1);
                 var p = pending.takeTool(seq);
                 if (p != null) {
+                    taskBubble.settled(p.ticket().taskId(), seq);
                     rememberAuthorization(env, p.ticket());
                     p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback"), resultData(env)));
                 } else {
@@ -532,13 +555,7 @@ public final class AgentRunner implements ToolExecutor {
             case "job_ack" -> onJobAck(env);
             case "job_event" -> onJobEvent(env);
             case "companion_state" -> {
-                if (!companionName.equals(env.str("companion"))) {
-                    companionGeneration++;
-                    companionBody = new JsonObject();
-                    readingCompanion = false;
-                    companionObservation = "尚未读取同伴信息";
-                }
-                companionName = env.str("companion");
+                updateCompanion(env);
                 lifecycleResult = env.str("text");
                 emitState(lifecycleResult);
             }
@@ -550,12 +567,7 @@ public final class AgentRunner implements ToolExecutor {
                 String text = env.body().has("text") ? env.str("text") : env.kind();
                 say("§7[mcbot] " + text + "§r");
                 if (env.body().has("companion")) {
-                    if (!companionName.equals(env.str("companion"))) {
-                        companionGeneration++;
-                        companionBody = new JsonObject();
-                        readingCompanion = false;
-                    }
-                    companionName = env.str("companion");
+                    updateCompanion(env);
                     lifecycleResult = text;
                 }
                 emitState(text);
@@ -612,6 +624,7 @@ public final class AgentRunner implements ToolExecutor {
         LOG.info("[brain] job {} {} phase={} {}ms", jobId, j.tool(), phase,
                 client.nowMs() - j.acceptedAtMs());
         rememberAuthorization(env, j.ticket());
+        taskBubble.settled(j.ticket().taskId(), j.seq());
         boolean ok = "done".equals(phase);
         ToolOutcome outcome = new ToolOutcome(ok, text, resultData(env));
         if (j.ticket().terminalOnly()) {
@@ -648,6 +661,29 @@ public final class AgentRunner implements ToolExecutor {
     public String companionName() {
         return companionName;
     }
+    public java.util.UUID companionUuid() { return companionUuid; }
+    private void updateCompanion(Envelope env) {
+        java.util.UUID id = null;
+        var value = env.body().get("companion_uuid");
+        if (value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+            try {
+                String raw = value.getAsString();
+                java.util.UUID candidate = java.util.UUID.fromString(raw);
+                if (candidate.toString().equalsIgnoreCase(raw)) id = candidate;
+            } catch (IllegalArgumentException ignored) { }
+        }
+        String name = env.str("companion");
+        if (name.isEmpty()) id = null;
+        if (!companionName.equals(name) || !java.util.Objects.equals(companionUuid, id)) {
+            companionGeneration++;
+            companionBody = new JsonObject();
+            readingCompanion = false;
+            companionObservation = "尚未读取同伴信息";
+            taskBubble.clear();
+        }
+        companionName = name;
+        companionUuid = id;
+    }
 
     public String lifecycleResult() {
         return lifecycleResult;
@@ -678,12 +714,14 @@ public final class AgentRunner implements ToolExecutor {
         if (program != null) program.tick();
         long now = client.nowMs();
         for (var t : pending.sweepTools(now)) {
+            taskBubble.settled(t.ticket().taskId(), t.seq());
             if (t.ticket().owner() != null) sendCancel();
             t.ticket().complete(new ToolOutcome(false,
                     "TIMEOUT:这次操作 " + (t.timeoutMs() / 1000)
                             + " 秒没有结果，先别重复这个操作，向主人说明情况。"));
         }
         for (var j : pending.sweepJobs(now)) {
+            taskBubble.settled(j.ticket().taskId(), j.seq());
             sendCancel();
             // 长活超时必须**同样交给大脑**：不交的话 PARK 就永远解不开，整条链静默卡死
             // （比收到一条 TIMEOUT 教学坏得多——模型连"我卡住了"都看不到）。
@@ -1273,11 +1311,18 @@ public final class AgentRunner implements ToolExecutor {
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
         ToolTicket ticket = new ToolTicket(taskId, owner, f, terminalOnly);
+        f.whenComplete((outcome, failure) -> {
+            if (failure != null || outcome == null || !outcome.accepted())
+                client.executeOnClient(() -> taskBubble.settled(taskId, seq));
+        });
         pending.registerTool(seq, name, client.nowMs(), toolTimeoutMs(name, argsJson), ticket);
         client.executeOnClient(() -> {
             if (closed || f.isDone()) return;
             if (ticket.owner() != null && (ticket.owner() != loop || ticket.taskId() != currentTask)) return;
             if (client.canSend()) {
+                taskBubble.sent(taskId, seq, TaskBubbleState.Activity.tool(name,
+                        args.has("query") && args.get("query").isJsonPrimitive()
+                                && args.get("query").getAsJsonPrimitive().isBoolean() && args.get("query").getAsBoolean()));
                 client.send(new Envelope("tool_call", body));
             } else {
                 pending.takeTool(seq);

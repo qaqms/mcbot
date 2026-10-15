@@ -471,6 +471,7 @@ public final class ServerToolDispatcher {
                 || "companion_state".equals(kind)) {
             Body companion = companionOfSender(owner);
             body.addProperty("companion", companion == null ? "" : companion.name());
+            body.addProperty("companion_uuid", companion == null ? "" : companion.id().toString());
         }
         send(owner, kind, body);
     }

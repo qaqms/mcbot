@@ -239,6 +239,9 @@ public final class AgentLoop {
     public synchronized int steps() { return steps; }
     public synchronized boolean busy() { return running || activeDirective != null || !pending.isEmpty(); }
     public synchronized boolean compacting() { return compacting; }
+    public synchronized ItemGoal.Progress goalProgress() {
+        return activeDirective == null || itemGoal == null ? null : itemGoal.snapshot();
+    }
     public synchronized boolean awaitingModel() {
         return !compacting && activeResponse != null && !activeResponse.isDone();
     }

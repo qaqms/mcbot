@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcbot · Bot 头顶气泡设计预览</title>
+<style>
+  :root { color-scheme: light; font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: #263333; background: #edf1f2; }
+  * { box-sizing: border-box; letter-spacing: 0; }
+  body { margin: 0; }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 3px solid #348aab; outline-offset: 3px; }
+  button:disabled { cursor: default; opacity: .45; }
+  [hidden] { display: none !important; }
+  .workbench { min-height: 100dvh; display: flex; flex-direction: column; }
+  .topbar { min-height: 68px; padding: 14px 28px; display: flex; align-items: center; gap: 14px; background: #fff; border-bottom: 1px solid #d9e1e2; }
+  .brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .brand img { width: 30px; height: 30px; image-rendering: pixelated; }
+  h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  .caption { font-size: 12px; color: #798585; }
+  .top-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .segments { display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid #dce3e4; border-radius: 6px; }
+  .segments button { background: none; border: 0; color: #687676; padding: 6px 11px; border-radius: 3px; font-size: 12px; }
+  .segments button[aria-pressed="true"] { background: #e4eff0; color: #204d54; }
+  .icon-button { border: 0; border-radius: 4px; width: 32px; height: 32px; background: transparent; color: inherit; display: grid; place-items: center; font-size: 22px; flex: 0 0 auto; }
+  .icon-button:hover { background: #e7edef; }
+  .stage { position: relative; flex: 1; min-height: 440px; overflow: hidden; background: #a8c7cd; }
+  #world { display: block; width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; image-rendering: pixelated; }
+  .scene-caption { position: absolute; top: 20px; left: 24px; font-size: 11px; color: #fff; text-shadow: 0 1px 3px #15282b; }
+  .crosshair { position: absolute; left: 50%; top: 48%; width: 15px; height: 15px; transform: translate(-50%, -50%); opacity: .75; }
+  .crosshair::before, .crosshair::after { content: ""; position: absolute; background: #fff; box-shadow: 1px 1px #3c4c4c; }
+  .crosshair::before { width: 15px; height: 2px; top: 6px; }
+  .crosshair::after { width: 2px; height: 15px; left: 6px; }
+  .hotbar { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: 286px; display: flex; padding: 3px; background: #263131ce; border: 2px solid #9ca6a2; gap: 3px; }
+  .hotbar span { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid #7d8682; background: #4f5b57; }
+  .hotbar span:first-child { outline: 2px solid #edf4ed; }
+  .hotbar img { width: 24px; height: 24px; image-rendering: pixelated; }
+  .bubble-anchor { position: absolute; width: min(252px, calc(100% - 32px)); transform: translate(-50%, -100%) scale(var(--distance-scale, 1)); transform-origin: bottom center; pointer-events: none; }
+  .task-bubble { --accent: #3e8b83; --soft: #e5f2ed; --line: #c0d8d0; --paper: #f9fcfaf5; --ink: #243734; --muted: #73827e;
+    position: relative; border: 2px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 8px;
+    padding: 10px 12px; box-shadow: 0 3px 0 #142d2c26; }
+  .task-bubble::after { content: ""; position: absolute; bottom: -7px; left: calc(50% - 6px); width: 10px; height: 10px; background: var(--paper); border-right: 2px solid var(--line); border-bottom: 2px solid var(--line); transform: rotate(45deg); }
+  .task-bubble[data-tone="question"] { --accent: #ae712b; --soft: #f6ebd6; --line: #d9c69c; --paper: #fffdf5f7; --ink: #4b3c26; --muted: #927d5e; }
+  .task-bubble[data-tone="failure"] { --accent: #af6662; --soft: #f3e5e3; --line: #dcbbb6; --paper: #fffaf8f7; --ink: #503431; --muted: #987a73; }
+  .task-bubble[data-tone="neutral"] { --accent: #7a8589; --soft: #e9eeee; --line: #c6d0d0; --paper: #f7faf9f5; --ink: #3f4c4c; --muted: #788585; }
+  .cave .task-bubble { --paper: #253432f5; --ink: #f0f5ef; --muted: #b1c3bb; --line: #60837b; --soft: #364b44; --accent: #a2d2b9; }
+  .cave .task-bubble[data-tone="question"] { --paper: #373429f7; --ink: #f8efdd; --muted: #cfbea0; --line: #9d895f; --soft: #53482f; --accent: #e5c585; }
+  .cave .task-bubble[data-tone="failure"] { --paper: #3b302ff7; --ink: #f9ece8; --muted: #d0b0a9; --line: #9f7069; --soft: #573b37; --accent: #efb0a1; }
+  .cave .task-bubble[data-tone="neutral"] { --paper: #2d3536f5; --ink: #eef2ef; --muted: #b5c1c1; --line: #738385; --soft: #414c4c; --accent: #c0cece; }
+  .bubble-head { display: flex; align-items: center; gap: 8px; min-height: 18px; font-size: 11px; }
+  .companion-name { font-weight: 700; }
+  .state-word { margin-left: auto; color: var(--accent); font-size: 11px; }
+  .state-mark { display: inline-block; min-width: 14px; font-weight: 700; text-align: center; }
+  .motion .state-mark { animation: breathe 1.8s ease-in-out infinite; }
+  .bubble-title { margin: 7px 0 3px; font-size: 16px; line-height: 1.45; font-weight: 650; overflow-wrap: anywhere; }
+  .bubble-detail { margin: 0; font-size: 11px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .task-line { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 6px; font-size: 10px; line-height: 1.6; color: var(--muted); min-width: 0; }
+  .task-label { flex: 0 0 auto; }
+  #task-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .amount-row { display: flex; align-items: center; justify-content: space-between; margin-top: 9px; font-size: 11px; }
+  .amount-row strong { font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 650; }
+  .meter { height: 3px; margin-top: 7px; background: var(--soft); border-radius: 1px; overflow: hidden; }
+  .meter span { display: block; width: 50%; height: 100%; background: var(--accent); }
+  .bubble-bottom { display: flex; align-items: center; gap: 6px; margin-top: 7px; color: var(--muted); font-size: 10px; min-height: 14px; }
+  .dots { display: inline-flex; gap: 3px; align-items: center; margin-left: 4px; }
+  .dots i { width: 3px; height: 3px; background: var(--accent); animation: breathe 1.5s ease-in-out infinite; }
+  .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+  .bot-label { position: absolute; transform: translate(-50%, -100%); font-size: 11px; color: white; background: #1b2d29a8; padding: 2px 5px; pointer-events: none; }
+  .preview-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 10px 28px; background: #f6f9f8; border-top: 1px solid #d9e1e2; font-size: 12px; color: #667a73; }
+  .preview-controls label { display: flex; align-items: center; gap: 9px; }
+  .preview-controls input { width: 115px; accent-color: #3b8d7b; }
+  .preview-controls select { font: inherit; color: #36564c; background: #fff; padding: 5px 7px; border: 1px solid #cbd8d2; border-radius: 4px; }
+  .preview-controls .action { min-height: 29px; padding: 5px 12px; margin-left: auto; }
+  .bottom-bar { background: #fff; padding: 16px 28px; display: flex; align-items: center; gap: 16px; border-top: 1px solid #d9e1e2; }
+  .bottom-label { color: #788585; font-size: 12px; flex: 0 0 auto; }
+  .states { display: flex; gap: 4px; flex-wrap: wrap; }
+  .states button { border: 1px solid transparent; background: transparent; color: #6b7878; font-size: 12px; padding: 7px 12px; border-radius: 4px; }
+  .states button[aria-pressed="true"] { color: #236d65; background: #edf6f2; border-color: #c8dfd6; }
+  .states button:hover { background: #f0f4f4; }
+  .demo-note { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: #8a9696; }
+  dialog { padding: 0; color: #293b38; background: #fbfdfc; border: 1px solid #c9d7d2; border-radius: 8px; width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 32px); box-shadow: 0 12px 40px #12262140; overflow: auto; }
+  dialog::backdrop { background: #16272859; }
+  .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 17px 20px; border-bottom: 1px solid #e1e8e5; }
+  h2 { font-size: 16px; margin: 0; font-weight: 650; }
+  .dialog-body { padding: 22px 20px; }
+  .setting-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 44px; }
+  .setting-title { margin: 0; font-size: 14px; }
+  .setting-desc { color: #7f8e87; font-size: 12px; margin: 5px 0 0; }
+  .toggle { appearance: none; width: 36px; height: 20px; border-radius: 10px; background: #c0cbca; margin: 0; flex: 0 0 auto; cursor: pointer; position: relative; }
+  .toggle::after { content: ""; position: absolute; width: 14px; height: 14px; top: 3px; left: 3px; background: white; border-radius: 50%; transition: transform .15s; }
+  .toggle:checked { background: #3b8d7b; } .toggle:checked::after { transform: translateX(16px); }
+  .dialog-footer { padding: 14px 20px; border-top: 1px solid #e1e8e5; display: flex; justify-content: flex-end; gap: 8px; }
+  .action { min-height: 34px; padding: 7px 15px; border-radius: 4px; border: 1px solid #cbd8d2; color: #4e6660; background: transparent; font-size: 12px; }
+  .action.primary { background: #347c6a; border-color: #347c6a; color: #fff; }
+  .detail-task { color: #81918a; font-size: 12px; line-height: 1.8; margin: 0 0 12px; overflow-wrap: anywhere; }
+  .detail-copy { font-size: 14px; line-height: 1.9; margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+  .toast { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); color: #fff; background: #283e38ed; padding: 8px 14px; font-size: 12px; border-radius: 4px; max-width: calc(100% - 32px); text-align: center; }
+  @keyframes breathe { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { *, *::after { animation: none !important; transition: none !important; } }
+  @media (max-width: 720px) {
+    .topbar { padding: 12px 16px; gap: 8px; flex-wrap: wrap; }
+    .topbar > .caption { display: none; } .top-actions { gap: 6px; }
+    h1 { font-size: 15px; } .segments button { padding: 5px 7px; }
+    .brand { gap: 7px; } .brand img { width: 24px; height: 24px; }
+    .bubble-anchor { width: min(238px, calc(100% - 32px)); }
+    .preview-controls { padding: 9px 14px; gap: 8px 12px; }
+    .preview-controls input { width: 90px; }
+    .bottom-bar { padding: 12px 12px; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+    .bottom-label { padding: 7px 3px; } .states { flex: 1; }
+    .states button { padding: 7px 9px; } .demo-note { margin-left: 0; width: 100%; padding-left: 3px; }
+    .scene-caption { top: 14px; left: 18px; }
+  }
+</style>
+</head>
+<body>
+<main class="workbench">
+  <header class="topbar">
+    <div class="brand"><img class="face-image" alt=""><h1>Bot 头顶气泡</h1></div>
+    <span class="caption">设计预览 / 示例数据</span>
+    <div class="top-actions">
+      <div class="segments" aria-label="场景">
+        <button data-scene="day" aria-pressed="true">地表</button>
+        <button data-scene="cave" aria-pressed="false">地下</button>
+      </div>
+      <button class="icon-button" id="settings-open" aria-label="气泡设置" title="气泡设置">⚙</button>
+    </div>
+  </header>
+  <section class="stage" id="stage" aria-label="游戏内气泡效果预览">
+    <canvas id="world" width="640" height="360" aria-label="原创像素场景示意，非游戏截图" role="img"></canvas>
+    <div class="scene-caption">MCBOT / COMPANION</div>
+    <div class="crosshair" aria-hidden="true"></div>
+    <div class="bubble-anchor" id="bubble-anchor">
+      <article class="task-bubble motion" id="bubble" data-tone="normal" aria-live="polite" aria-atomic="true">
+        <div class="bubble-head">
+          <span class="companion-name">aimi</span>
+          <span class="state-word"><span class="state-mark" id="state-mark">⋯</span> <span id="state-word">执行中</span></span>
+        </div>
+        <h2 class="bubble-title" id="bubble-title">正在挖掘</h2>
+        <p class="bubble-detail" id="bubble-detail">收集这一步需要的材料</p>
+        <div id="amount">
+          <div class="amount-row"><span id="amount-name">本段圆石 · 已入包</span><strong id="amount-value">12 / 24</strong></div>
+          <div class="meter" aria-hidden="true"><span id="meter-fill"></span></div>
+        </div>
+        <div class="task-line"><span class="task-label">任务</span><span id="task-name">制作一把铁镐</span></div>
+        <div class="bubble-bottom">
+          <span><span id="bubble-footnote">采集材料</span><span class="dots" id="dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+        </div>
+      </article>
+    </div>
+    <span class="bot-label" id="bot-label">aimi</span>
+    <div class="hotbar" aria-hidden="true"><span><img id="tool-image" alt=""></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </section>
+  <div class="preview-controls" aria-label="头顶跟随效果">
+    <label for="bot-position">Bot 位置 <input id="bot-position" type="range" min="8" max="92" value="57"></label>
+    <label for="distance">距离 <select id="distance"><option value="1">近处</option><option value="0.8">中距</option><option value="0.6">远处</option></select></label>
+    <label for="visibility">视野 <select id="visibility"><option value="visible">可见</option><option value="wall">墙后</option><option value="outside">画面外</option></select></label>
+    <button class="action" id="details-open">示例详情</button>
+  </div>
+  <footer class="bottom-bar">
+    <span class="bottom-label">预览状态</span>
+    <div class="states" aria-label="任务状态">
+      <button data-state="working" aria-pressed="true">执行中</button>
+      <button data-state="planning" aria-pressed="false">等待模型</button>
+      <button data-state="exploring" aria-pressed="false">地下勘探</button>
+      <button data-state="question" aria-pressed="false">等你回答</button>
+      <button data-state="permission" aria-pressed="false">需要确认</button>
+      <button data-state="completed" aria-pressed="false">已完成</button>
+      <button data-state="blocked" aria-pressed="false">受阻</button>
+      <button data-state="cancelled" aria-pressed="false">已停止</button>
+      <button data-state="idle" aria-pressed="false">空闲</button>
+      <button data-state="long" aria-pressed="false">长文本</button>
+    </div>
+    <span class="demo-note">仅预览，不连接游戏</span>
+  </footer>
+</main>
+<dialog id="settings">
+  <div class="dialog-head"><h2>设置 / 通用</h2><button class="icon-button" data-close="settings" aria-label="关闭设置" title="关闭">×</button></div>
+  <div class="dialog-body">
+    <label class="setting-row" for="enabled">
+      <span><span class="setting-title">Bot 头顶任务气泡</span><span class="setting-desc" style="display:block">在同伴头顶显示当前任务状态</span></span>
+      <input type="checkbox" class="toggle" id="enabled" checked>
+    </label>
+  </div>
+  <div class="dialog-footer"><button class="action" data-close="settings">取消</button><button class="action primary" id="save-settings">保存设置</button></div>
+</dialog>
+<dialog id="details">
+  <div class="dialog-head"><h2 id="detail-heading">当前任务</h2><button class="icon-button" data-close="details" aria-label="关闭任务" title="关闭">×</button></div>
+  <div class="dialog-body"><p class="detail-task" id="detail-task"></p><p class="detail-copy" id="detail-copy"></p></div>
+  <div class="dialog-footer"><button class="action primary" data-close="details">返回</button></div>
+</dialog>
+<script>
+  const $ = id => document.getElementById(id);
+  const samples = {
+    working: { title: "正在挖掘", detail: "收集这一步需要的材料", word: "执行中", mark: "⋯", foot: "采集材料", amount: ["本段圆石 · 已入包", 12, 24], text: "当前动作：挖掘圆石\n本段已入包：12 / 24\n最终任务仍在进行中。" },
+    planning: { title: "等待下一步", detail: "等待模型响应", word: "模型等待", mark: "⋯", foot: "任务进行中", text: "上一段操作已经结算，正在等待模型返回下一步。\n此时没有可展示的游戏动作进度。" },
+    exploring: { title: "正在地下勘探", detail: "沿选定方向前进，查找目标资源", word: "执行中", mark: "⋯", foot: "勘探阶段", text: "当前动作：推进一段地下路线并查询资源。\n发现候选不等于已经采到，勘探阶段也不等于最终任务完成。" },
+    question: { title: "想问你一下", detail: "材料收集好了，接下来往哪边探索？", word: "等你回答", mark: "?", tone: "question", foot: "剩余 1:48", action: "查看问题", heading: "aimi 的问题", text: "材料收集好了，接下来往哪边探索？\n\n这是一条示例问题。正式版从这里进入 G 面板，使用原问题编号回答。" },
+    permission: { title: "这一步需要确认", detail: "前方路线需要移除部分方块", word: "等待确认", mark: "!", tone: "question", foot: "剩余 1:48", action: "查看清单", heading: "待确认的路线改动", text: "示例清单\n移除：石头 × 3\n放置：无\n\n正式版进入原 G 面板查看服务端完整清单，再进行确认。" },
+    completed: { title: "任务完成了", detail: "已核对最终目标：铁镐 × 1", word: "已完成", mark: "✓", foot: "稍后自动收起", text: "完成依据：最终背包条件已核对。\n本预览固定展示终态；正式版显示约 6 秒后收起。" },
+    blocked: { title: "暂时走不通", detail: "当前路线不可达，任务已停止", word: "受阻", mark: "!", tone: "failure", foot: "稍后自动收起", action: "查看原因", heading: "任务停止原因", text: "当前路线不可达，任务已停止。\n已完成的材料收集会保留。\n\n正式版展示实际终态原因，不自动重试任务。" },
+    cancelled: { title: "任务已取消", detail: "已收到停止请求", word: "已取消", mark: "×", tone: "neutral", foot: "稍后自动收起", text: "大脑任务已取消。\n此状态不表示已经收到服务端身体停手的确认。" },
+    long: { title: "正在查找可工作的站位", detail: "附近候选暂时无法直接工作，正在核对实际位置与候选条件。", word: "执行中", mark: "⋯", foot: "任务进行中", task: "补齐所缺的材料并制作工具，再继续原来的地下资源勘探任务", text: "任务：补齐所缺的材料并制作工具，再继续原来的地下资源勘探任务\n\n长任务名在气泡里保留一行。实际动作最多两行；完整内容在任务面板查看。" }
+  };
+  let state = "working", scene = "day", enabled = true, toastTimer;
+  try { enabled = localStorage.getItem("mcbot-task-bubble-preview-enabled") !== "false"; } catch {}
+  function render() {
+    const s = samples[state];
+    $("bubble-anchor").hidden = !enabled || state === "idle" || $("visibility").value !== "visible";
+    $("details-open").disabled = !s;
+    document.querySelectorAll("[data-state]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.state === state)));
+    if (!s) return;
+    $("bubble").dataset.tone = s.tone || "normal";
+    const moving = ["working", "planning", "exploring", "long"].includes(state);
+    $("bubble").classList.toggle("motion", moving);
+    for (const [id, value] of Object.entries({ "bubble-title": s.title, "bubble-detail": s.detail, "state-word": s.word, "state-mark": s.mark, "bubble-footnote": s.foot, "task-name": s.task || "制作一把铁镐" })) $(id).textContent = value;
+    $("task-name").title = s.task || "制作一把铁镐";
+    $("dots").hidden = !moving;
+    $("amount").hidden = !s.amount;
+    if (s.amount) {
+      $("amount-name").textContent = s.amount[0];
+      $("amount-value").textContent = s.amount[1] + " / " + s.amount[2];
+      $("meter-fill").style.width = (s.amount[1] / s.amount[2] * 100) + "%";
+    }
+  }
+  document.querySelectorAll("[data-state]").forEach(b => b.addEventListener("click", () => {
+    state = b.dataset.state;
+    if (state === "exploring") setScene("cave");
+    render();
+  }));
+  document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => $(b.dataset.close).close()));
+  $("settings-open").addEventListener("click", () => { $("enabled").checked = enabled; $("settings").showModal(); });
+  $("save-settings").addEventListener("click", () => {
+    enabled = $("enabled").checked;
+    try { localStorage.setItem("mcbot-task-bubble-preview-enabled", String(enabled)); } catch {}
+    $("settings").close(); render();
+    clearTimeout(toastTimer); $("toast").textContent = enabled ? "任务气泡已开启" : "任务气泡已关闭"; $("toast").hidden = false;
+    toastTimer = setTimeout(() => { $("toast").hidden = true; }, 2200);
+  });
+  $("details-open").addEventListener("click", () => {
+    const s = samples[state];
+    $("detail-heading").textContent = s.heading || "当前任务";
+    $("detail-task").textContent = "任务 · " + (s.task || "制作一把铁镐");
+    $("detail-copy").textContent = s.text;
+    $("details").showModal();
+  });
+  function face() {
+    const c = document.createElement("canvas"); c.width = c.height = 8;
+    const g = c.getContext("2d");
+    g.fillStyle = "#3c443f"; g.fillRect(0, 0, 8, 8);
+    g.fillStyle = "#dcbaa1"; g.fillRect(1, 2, 6, 6);
+    g.fillStyle = "#657a69"; g.fillRect(0, 0, 8, 2); g.fillRect(0, 1, 2, 3); g.fillRect(6, 1, 2, 3); g.fillRect(3, 1, 2, 2);
+    g.fillStyle = "#283d3b"; g.fillRect(2, 4, 1, 1); g.fillRect(5, 4, 1, 1);
+    g.fillStyle = "#a57567"; g.fillRect(3, 6, 2, 1);
+    return c.toDataURL();
+  }
+  const faceUrl = face();
+  document.querySelectorAll(".face-image").forEach(img => { img.src = faceUrl; });
+  const faceBitmap = new Image(); faceBitmap.src = faceUrl; faceBitmap.onload = drawWorld;
+  const pick = document.createElement("canvas"); pick.width = pick.height = 16;
+  const pg = pick.getContext("2d");
+  pg.fillStyle = "#694d38";
+  for (let i = 0; i < 9; i++) pg.fillRect(3 + i, 12 - i, 2, 2);
+  pg.fillStyle = "#c5d6d4"; pg.fillRect(6, 2, 7, 2); pg.fillRect(11, 4, 3, 5);
+  pg.fillStyle = "#819b99"; pg.fillRect(5, 3, 7, 1); pg.fillRect(13, 5, 1, 5);
+  $("tool-image").src = pick.toDataURL();
+  function polygon(g, points, color) {
+    g.fillStyle = color; g.beginPath(); points.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); g.fill();
+  }
+  function drawWorld() {
+    const g = $("world").getContext("2d"); g.imageSmoothingEnabled = false;
+    const cave = scene === "cave";
+    g.fillStyle = cave ? "#393f3c" : "#b9d4d8"; g.fillRect(0, 0, 640, 360);
+    if (!cave) {
+      g.fillStyle = "#edf0df"; g.fillRect(470, 36, 26, 26);
+      g.fillStyle = "#e1e9df"; g.fillRect(80, 45, 82, 12); g.fillRect(100, 37, 38, 10); g.fillRect(350, 72, 65, 10);
+      polygon(g, [[0,154],[40,154],[40,140],[88,140],[88,118],[132,118],[132,140],[178,140],[178,124],[211,124],[211,101],[253,101],[253,141],[315,141],[315,166],[380,166],[380,135],[427,135],[427,113],[472,113],[472,144],[535,144],[535,153],[640,153],[640,230],[0,230]], "#8fa7a2");
+      polygon(g, [[0,202],[78,202],[78,185],[153,185],[153,193],[220,193],[220,166],[292,166],[292,184],[362,184],[362,196],[448,196],[448,173],[518,173],[518,189],[640,189],[640,295],[0,295]], "#6b8e80");
+      g.fillStyle = "#7c9c7a"; g.fillRect(0, 225, 640, 135);
+      g.fillStyle = "#96ae82"; g.fillRect(0, 223, 640, 5);
+      for (let y = 234; y < 360; y += 7) for (let x = 0; x < 640; x += 11) {
+        const n = (x * 17 + y * 29) % 19;
+        g.fillStyle = ["#749475","#8ba47e","#789b7a","#98ad85"][n % 4]; g.fillRect(x + n % 5, y, 3, 2);
+      }
+      for (const [x, y, scale] of [[70, 140, 1], [538, 132, 1.3], [377, 156, .7]]) {
+        g.fillStyle = "#706651"; g.fillRect(x + 15 * scale, y + 25 * scale, 9 * scale, 57 * scale);
+        g.fillStyle = "#496f59"; g.fillRect(x, y + 15 * scale, 42 * scale, 37 * scale); g.fillRect(x + 5 * scale, y, 32 * scale, 30 * scale);
+        g.fillStyle = "#5d8364"; g.fillRect(x + 7 * scale, y + 4 * scale, 17 * scale, 15 * scale);
+      }
+      g.fillStyle = "#b1b8aa"; g.fillRect(451, 253, 42, 17); g.fillStyle = "#c4cabb"; g.fillRect(455, 248, 36, 9);
+    } else {
+      g.fillStyle = "#282f2d"; g.fillRect(190, 84, 270, 172);
+      g.fillStyle = "#313b36"; g.fillRect(223, 105, 199, 151);
+      g.fillStyle = "#242e2a"; g.fillRect(260, 129, 126, 127);
+      for (let y = 0; y < 360; y += 16) for (let x = 0; x < 640; x += 16) {
+        if (x > 190 && x < 456 && y > 80 && y < 256) continue;
+        const n = (x * 7 + y * 13) % 11;
+        g.fillStyle = ["#555e56","#60675e","#4c564e","#687064"][n % 4]; g.fillRect(x, y, 16, 16);
+        g.fillStyle = "#414b44"; g.fillRect(x + 2, y + 13, 12, 2);
+        g.fillStyle = "#747b6b"; g.fillRect(x + n, y + 3, 3, 2);
+      }
+      for (const [x, y] of [[500,130],[516,146],[500,146]]) {
+        g.fillStyle = "#c19a77"; g.fillRect(x + 2, y + 3, 4, 3); g.fillRect(x + 9, y + 8, 4, 4);
+      }
+      g.fillStyle = "#665746"; g.fillRect(167, 166, 3, 16); g.fillStyle = "#ecce80"; g.fillRect(165, 161, 7, 7);
+    }
+    const stageWidth = $("stage").clientWidth, stageHeight = $("stage").clientHeight;
+    const cover = Math.max(stageWidth / 640, stageHeight / 360);
+    const offsetX = (stageWidth - 640 * cover) / 2, offsetY = (stageHeight - 360 * cover) / 2;
+    const distance = Number($("distance").value);
+    const bodyScale = 118 / (62 * cover) * distance;
+    const screenX = stageWidth * ($("visibility").value === "outside" ? 1.3 : Number($("bot-position").value) / 100);
+    const headY = stageHeight * .79 - 62 * bodyScale * cover;
+    const worldX = (screenX - offsetX) / cover - 12 * bodyScale;
+    const worldY = (headY - offsetY) / cover;
+    $("bubble-anchor").style.left = screenX + "px";
+    $("bubble-anchor").style.top = (headY - 34 * distance) + "px";
+    $("bubble-anchor").style.setProperty("--distance-scale", distance);
+    $("bot-label").style.left = screenX + "px";
+    $("bot-label").style.top = (headY - 8 * distance) + "px";
+    $("bot-label").hidden = $("visibility").value !== "visible";
+    $("bot-label").style.fontSize = (11 * distance) + "px";
+    g.save(); g.translate(worldX, worldY); g.scale(bodyScale, bodyScale);
+    const x = 0, y = 0;
+    g.fillStyle = cave ? "#1f2924" : "#5f7f63"; g.fillRect(x - 4, y + 58, 40, 6);
+    if (faceBitmap.complete && faceBitmap.naturalWidth) g.drawImage(faceBitmap, x, y, 24, 24);
+    g.fillStyle = "#426e73"; g.fillRect(x, y + 24, 24, 22); g.fillRect(x - 7, y + 25, 7, 19); g.fillRect(x + 24, y + 25, 7, 19);
+    g.fillStyle = "#debaa0"; g.fillRect(x - 7, y + 40, 7, 6); g.fillRect(x + 24, y + 40, 7, 6);
+    g.fillStyle = "#444e4d"; g.fillRect(x, y + 46, 10, 16); g.fillRect(x + 14, y + 46, 10, 16);
+    g.drawImage(pick, x + 25, y + 30, 24, 24);
+    g.restore();
+    if ($("visibility").value === "wall") {
+      const wallX = worldX - 22 * bodyScale, wallY = worldY - 10 * bodyScale;
+      g.fillStyle = "#667169"; g.fillRect(wallX, wallY, 90 * bodyScale, 85 * bodyScale);
+      g.fillStyle = "#889187";
+      for (let row = 0; row < 5; row++) g.fillRect(wallX + 2, wallY + row * 16 * bodyScale, 86 * bodyScale, 2 * bodyScale);
+      g.fillStyle = "#4c5850";
+      for (let row = 0; row < 5; row++) for (let col = 0; col < 3; col++) g.fillRect(wallX + (col * 30 + (row % 2) * 12) * bodyScale, wallY + row * 16 * bodyScale, 2 * bodyScale, 16 * bodyScale);
+    }
+  }
+  function setScene(value) {
+    scene = value; $("stage").classList.toggle("cave", scene === "cave");
+    document.querySelectorAll("[data-scene]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.scene === scene)));
+    drawWorld();
+  }
+  document.querySelectorAll("[data-scene]").forEach(b => b.addEventListener("click", () => setScene(b.dataset.scene)));
+  $("bot-position").addEventListener("input", drawWorld);
+  $("distance").addEventListener("change", drawWorld);
+  $("visibility").addEventListener("change", () => { drawWorld(); render(); });
+  new ResizeObserver(drawWorld).observe($("stage"));
+  drawWorld(); render();
+</script>
+</body>
+</html>

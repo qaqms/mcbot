@@ -67,6 +67,21 @@ class ServerToolDispatcherTest {
         return JsonParser.parseString(text).getAsJsonObject();
     }
 
+    @Test void companionIdentityIsScopedToTheRequestingOwnerAndClearedWhenAbsent() {
+        send(sender, "companion_status", new JsonObject());
+        assertEquals("companion_state", receipts.getLast().kind());
+        assertEquals(companion.toString(), receipts.getLast().str("companion_uuid"));
+        assertEquals("sample", receipts.getLast().str("companion"));
+        var stranger = new ServerToolDispatcher.Sender(UUID.randomUUID(), null,
+                text -> receipts.add(Envelope.decode(text)));
+        send(stranger, "companion_status", new JsonObject());
+        assertEquals("", receipts.getLast().str("companion_uuid"));
+        assertEquals("", receipts.getLast().str("companion"));
+        bodies.remove(owner);
+        send(sender, "companion_status", new JsonObject());
+        assertEquals("", receipts.getLast().str("companion_uuid"));
+    }
+
     private void send(ServerToolDispatcher.Sender caller, String kind, JsonObject body) {
         dispatcher.handle(caller, Envelope.decode(new Envelope(kind, body).encode()));
     }

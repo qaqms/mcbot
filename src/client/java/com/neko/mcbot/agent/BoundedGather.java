@@ -185,6 +185,7 @@ final class BoundedGather {
     }
     boolean done() { return result.isDone(); }
     String activity() { return activity; }
+    ItemGoal.Progress goalProgress() { return goal == null ? null : goal.snapshot(); }
     void tick() { if (!done() && clock.getAsLong() - started >= plan.seconds() * 1000L) stop("TIMEOUT:连续采集时限已到。"); }
     void stop(String reason) {
         if (done()) return;

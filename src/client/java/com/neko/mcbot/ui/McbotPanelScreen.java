@@ -404,7 +404,7 @@ public final class McbotPanelScreen extends Screen {
         addToggle("折叠工具过程", 50, preferences::foldTools,
                 () -> updatePreferences(preferences.contextWindow(), preferences.compactThreshold(), preferences.recentBudget(),
                         preferences.autoCompact(), !preferences.foldTools(), preferences.dark(), preferences.showHud()));
-        addToggle("游戏内状态提示", 87, preferences::showHud,
+        addToggle("Bot头顶任务气泡", 87, preferences::showHud,
                 () -> updatePreferences(preferences.contextWindow(), preferences.compactThreshold(), preferences.recentBudget(),
                         preferences.autoCompact(), preferences.foldTools(), preferences.dark(), !preferences.showHud()));
         text("执行权限", 4, 137, viewport.width() - 12, ink());

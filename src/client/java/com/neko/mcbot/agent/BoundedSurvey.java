@@ -51,6 +51,7 @@ final class BoundedSurvey {
         started = clock.getAsLong(); dispatch.accept(this::observe); return result;
     }
     boolean done() { return result.isDone(); }
+    boolean returning() { return returning; }
     void tick() {
         if (search != null) search.tick();
         if (!done() && clock.getAsLong() - started >= seconds * 1000L) stop("TIMEOUT:地下本段时限已到。");
