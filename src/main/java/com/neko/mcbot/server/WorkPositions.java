@@ -37,10 +37,18 @@ public final class WorkPositions {
     }
 
     public static List<BlockPos> candidates(BlockPos target, Access access) {
+        return candidates(target, access, false);
+    }
+
+    public static List<BlockPos> pickupCandidates(BlockPos target, Access access) {
+        return candidates(target, access, true);
+    }
+
+    private static List<BlockPos> candidates(BlockPos target, Access access, boolean contact) {
         List<BlockPos> candidates = new ArrayList<>();
         for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) for (int z = -1; z <= 1; z++) {
             BlockPos pos = target.offset(x, y, z);
-            if (access.standable(pos)) candidates.add(pos);
+            if (access.standable(pos) && (!contact || access.workable(pos))) candidates.add(pos);
         }
         candidates.sort(Comparator.comparingDouble(access::distanceSquared)
                 .thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getX).thenComparingInt(BlockPos::getZ));
@@ -72,6 +80,29 @@ public final class WorkPositions {
 
     public static JsonArray describe(CompanionPlayer player, BlockPos target) {
         return describe(player, target, false);
+    }
+
+    public static JsonArray describePickup(CompanionPlayer player, net.minecraft.world.entity.item.ItemEntity item) {
+        var points = pickupCandidates(item.blockPosition(), new Access() {
+            @Override public boolean standable(BlockPos pos) { return WorkPositions.standable(player, pos); }
+            @Override public double distanceSquared(BlockPos pos) {
+                return player.distanceToSqr(pos.getX() + .5, pos.getY(), pos.getZ() + .5);
+            }
+            @Override public boolean workable(BlockPos pos) {
+                var bounds = player.getBoundingBox().move(pos.getX() + .5 - player.getX(),
+                        pos.getY() - player.getY(), pos.getZ() + .5 - player.getZ());
+                return GroundItems.touches(bounds, item.getBoundingBox());
+            }
+        });
+        var result = new JsonArray();
+        for (BlockPos pos : points) {
+            var point = new JsonObject();
+            point.addProperty("x", pos.getX());
+            point.addProperty("y", pos.getY());
+            point.addProperty("z", pos.getZ());
+            result.add(point);
+        }
+        return result;
     }
 
     public static JsonArray describeMining(CompanionPlayer player, BlockPos target) {

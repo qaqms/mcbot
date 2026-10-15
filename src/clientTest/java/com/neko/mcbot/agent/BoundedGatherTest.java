@@ -43,6 +43,10 @@ class BoundedGatherTest {
         final ArrayDeque<String> moveFailures = new ArrayDeque<>();
         int[] dropStances = {1};
         boolean pickupOnFailedMove, leaveScopeOnFailedMove;
+        int missedPickupMoves;
+        int hiddenDropScans;
+        int[] dropStancesAfterFailedMove;
+        boolean reportDrops;
         double stateX;
         Double stateXAfterFirstMining;
         boolean trackRemovedTargets;
@@ -67,6 +71,7 @@ class BoundedGatherTest {
         final List<JsonObject> breakArgs = new ArrayList<>();
         CompletableFuture<ToolOutcome> mining;
         CompletableFuture<ToolOutcome> movement;
+        CompletableFuture<ToolOutcome> waiting;
         final BoundedGather gather;
         Fixture(int requested, int baseline) {
             this(requested, baseline, "task");
@@ -88,7 +93,8 @@ class BoundedGatherTest {
                 }
                 case "scan_area" -> {
                     var items = new JsonArray();
-                    if (ground) {
+                    boolean hidden = dug > 0 && hiddenDropScans-- > 0;
+                    if (ground && !hidden) {
                         var item = withStances(false, dropStances);
                         item.addProperty("item", "minecraft:dirt");
                         item.addProperty("target_uuid", "drop-" + dug);
@@ -131,6 +137,13 @@ class BoundedGatherTest {
                     data.addProperty("collected_count", 0);
                     data.addProperty("remaining_count", 1);
                     data.addProperty("cleared_blocks", clearPerMining);
+                    if (reportDrops) {
+                        var drops = new JsonArray();
+                        var drop = new JsonObject();
+                        drop.addProperty("item", "minecraft:dirt");
+                        drops.add(drop);
+                        data.add("drops", drops);
+                    }
                     if (pickupDuringMining) automaticPickup(true);
                 }
                 case "move_to" -> {
@@ -143,14 +156,19 @@ class BoundedGatherTest {
                     if (!moveFailures.isEmpty()) {
                         if (pickupOnFailedMove) automaticPickup(true);
                         if (leaveScopeOnFailedMove) stateX = 999;
+                        if (dropStancesAfterFailedMove != null) dropStances = dropStancesAfterFailedMove;
                         return CompletableFuture.completedFuture(
                                 new ToolOutcome(false, moveFailures.removeFirst(), data));
                     }
                     if (needConfirm) return CompletableFuture.completedFuture(new ToolOutcome(false, "NEED_CONFIRM:route", data));
+                    if (moved <= missedPickupMoves) break;
                     touching = true;
                     automaticPickup(false);
                 }
-                case "wait" -> automaticPickup(true);
+                case "wait" -> {
+                    if (waiting != null) return waiting;
+                    automaticPickup(true);
+                }
                 default -> fail(tool);
             }
             return CompletableFuture.completedFuture(new ToolOutcome(true, "receipt", data));
@@ -325,7 +343,190 @@ class BoundedGatherTest {
             assertEquals(0, f.dug);
             int firstMove = f.calls.indexOf("move_to");
             assertEquals("status", f.calls.get(firstMove + 1));
-            assertEquals("move_to", f.calls.get(firstMove + 2));
+            assertEquals("scan_area", f.calls.get(firstMove + 2));
+            assertEquals("move_to", f.calls.get(firstMove + 3));
+        }
+    }
+
+    @Test void failedPickupRouteUsesTheItemsNewStancesRatherThanItsOldObservation() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3};
+        f.dropStancesAfterFailedMove = new int[]{5};
+        f.moveFailures.add("PARTIAL:item moved");
+        assertTrue(f.run().ok());
+        assertEquals(List.of(1, 5), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertTrue(f.moves.stream().allMatch(p -> p.has("max_digs")));
+    }
+
+    @Test void successfulRouteWithoutContactRescansAndTriesAnotherDistinctStance() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3};
+        f.missedPickupMoves = 1;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(0, f.dug, "a route receipt is not a pickup receipt");
+    }
+
+    @Test void persistentUntouchableDropExhaustsDistinctStancesOnceBeforeOtherWork() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3};
+        f.missedPickupMoves = 10;
+        f.pickupDuringMining = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(1, result.data().get("skipped_items").getAsInt());
+    }
+
+    @Test void pickupRetriesNeverExceedSixDistinctStancesForOneEntity() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3, 4, 5, 6, 7};
+        f.missedPickupMoves = 10;
+        f.pickupDuringMining = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(List.of(1, 3, 4, 5, 6, 7),
+                f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(1, result.data().get("skipped_items").getAsInt());
+    }
+
+    @Test void observedResourceOutsideTheFixedTaskScopeIsExplainedWithoutMoreExploration() {
+        var route = new ExplorationRoute(8, 32);
+        route.observe(state(0));
+        var fresh = state(0);
+        fresh.addProperty("x", 31);
+        var target = block(true);
+        target.addProperty("x", 33);
+        var calls = new ArrayList<String>();
+        var gather = new BoundedGather(BoundedGather.parse(
+                "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1}"), state(0), () -> 0,
+                (name, json) -> {
+                    calls.add(name);
+                    var data = new JsonObject();
+                    if (name.equals("status")) data = fresh;
+                    else if (name.equals("scan_area")) data.add("item_targets", new JsonArray());
+                    else if (name.equals("find_resource")) {
+                        var targets = new JsonArray();
+                        targets.add(target);
+                        data.add("targets", targets);
+                        data.addProperty("next_offset", -1);
+                    } else fail("scope exclusions must not dispatch " + name);
+                    return CompletableFuture.completedFuture(new ToolOutcome(true, "fresh", data));
+                }, Runnable::run, () -> fail("no pending child"), text -> { }, null, route);
+        var result = gather.start().join();
+        assertTrue(result.feedback().startsWith("SCOPE_LIMIT:"), result.feedback());
+        assertEquals("task_scope", result.data().getAsJsonArray("scope_exclusions").get(0)
+                .getAsJsonObject().get("reason").getAsString());
+        assertEquals(0, route.attempts());
+        assertEquals(List.of("status", "scan_area", "find_resource"), calls);
+    }
+
+    @Test void touchingAnItemOutsideTheTaskBoundaryNeedsNoOutOfScopeMovement() {
+        var route = new ExplorationRoute(8, 32);
+        route.observe(state(0));
+        var calls = new ArrayList<String>();
+        boolean[] picked = {false};
+        var gather = new BoundedGather(BoundedGather.parse(
+                "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1}"), state(0), () -> 0,
+                (name, json) -> {
+                    calls.add(name);
+                    var data = new JsonObject();
+                    if (name.equals("status")) {
+                        data = state(picked[0] ? 1 : 0);
+                        data.addProperty("x", 31.9);
+                    } else if (name.equals("scan_area")) {
+                        var items = new JsonArray();
+                        var item = new JsonObject();
+                        item.addProperty("x", 32.2);
+                        item.addProperty("y", 90);
+                        item.addProperty("z", 0);
+                        item.addProperty("item", "minecraft:dirt");
+                        item.addProperty("target_uuid", "boundary-item");
+                        item.addProperty("can_touch_here", true);
+                        item.addProperty("pickup_allowed", true);
+                        items.add(item);
+                        data.add("item_targets", items);
+                    } else if (name.equals("wait")) picked[0] = true;
+                    else fail("passive contact must not dispatch " + name);
+                    return CompletableFuture.completedFuture(new ToolOutcome(true, "fresh", data));
+                }, Runnable::run, () -> fail("no pending child"), text -> { }, null, route);
+        var result = gather.start().join();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(List.of("status", "scan_area", "wait", "status"), calls);
+        assertEquals(0, route.attempts());
+    }
+
+    @Test void settlingMayPickUpTheGoalButOnlyTheNextInventoryConfirmsIt() {
+        var f = new Fixture(1, 0);
+        f.reportDrops = true;
+        f.hiddenDropScans = 1;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(1, f.dug);
+        assertEquals(1, result.data().get("drop_settle_waits").getAsInt());
+        assertEquals("status", f.calls.getLast());
+        assertEquals(1, result.data().get("actual_progress").getAsInt());
+    }
+
+    @Test void knownMiningDropsGetOneSettlingWaitAndAFreshScanBeforeFurtherWork() {
+        var f = new Fixture(1, 0);
+        f.reportDrops = true;
+        f.hiddenDropScans = 1;
+        f.full = true;
+        var result = f.run();
+        assertFalse(result.ok(), "settling alone does not prove inventory progress");
+        assertTrue(result.feedback().startsWith("PICKUP_BLOCKED:"), result.feedback());
+        assertEquals(1, f.dug);
+        assertEquals(1, result.data().get("drop_settle_waits").getAsInt());
+        int firstWait = f.calls.indexOf("wait");
+        assertEquals(List.of("wait", "status", "scan_area", "move_to"),
+                f.calls.subList(firstWait, firstWait + 4));
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+    }
+
+    @Test void disappearedKnownDropsDoNotCauseUnboundedWaitOrInventInventoryProgress() {
+        var f = new Fixture(1, 0);
+        f.reportDrops = true;
+        f.noYield = true;
+        var result = f.run();
+        assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
+        assertEquals(3, f.dug);
+        assertEquals(3, result.data().get("drop_settle_waits").getAsInt());
+        assertEquals(0, f.count);
+    }
+
+    @Test void knownDropsAlreadyPickedUpDoNotAddAPerBlockSettlingDelay() {
+        var f = new Fixture(4, 0);
+        f.reportDrops = true;
+        assertTrue(f.run().ok());
+        assertFalse(f.calls.contains("wait"));
+        assertEquals(4, f.dug);
+    }
+
+    @Test void cancellationAndTimeoutDuringSettlingNeverResumeAfterALateWaitReceipt() {
+        for (boolean timeout : List.of(false, true)) {
+            var f = new Fixture(1, 0);
+            f.reportDrops = true;
+            f.hiddenDropScans = 1;
+            f.waiting = new CompletableFuture<>();
+            var result = f.gather.start();
+            f.drain();
+            assertEquals("wait", f.calls.getLast());
+            int calls = f.calls.size();
+            if (timeout) {
+                f.now += 600001;
+                f.gather.tick();
+            } else f.gather.stop("CANCELLED:owner");
+            f.waiting.complete(new ToolOutcome(true, "late wait"));
+            f.drain();
+            assertTrue(result.join().feedback().startsWith(timeout ? "TIMEOUT:" : "CANCELLED:"));
+            assertEquals(calls, f.calls.size());
+            assertEquals(1, f.cancelled);
         }
     }
 

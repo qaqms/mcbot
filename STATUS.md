@@ -3,6 +3,54 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 漏拾取、范围过滤与放置诊断（2026-10-15 15:48，Asia/Shanghai）
+
+- 维护者确认气泡整体正常，本轮反馈为木头漏捡、附近原木没采完及疑似卡雪。
+  只读复核latest.log（153713 bytes，末写15:20:13），SHA256
+  `6626201a35dedf9908ba1143285d753a0ddfa0f58e46933e7fc39e50af97fe54`；
+  安装包为82d8f28d候选。详细时间/行号与参考全链路对照见
+  docs/real-game-log-review-2026-10-15.md第四次测试节。
+- 现场事实：15:15:05–14挖3，15:15:26背包仅新增2/3，却又耗尽剩余两段探索。
+  所见四格原木中(-36,72,-13)距任务锚点平方1025，超出固定32半径；
+  查询能看见但gather旧过滤不解释。不能据日志确认第三件掉落的去向。
+  本段16个move_to均成功，后半段主要是工作台反复TARGET_BLOCKED/PLACE_FAILED；
+  inspect确认有snow，仍不足以认定雪造成移动卡死或每次放置都是自身碰撞。
+- 修复：掉落站位以真实触碰盒过滤再取6个；同UUID最多6个不同站位，
+  走路成功未入包/局部失败后都重读背包及实体，不沿旧实体站位继续。
+  追物路径计入剩余挖掘帽；已知匹配掉落但暂无可处理候选时有限等1秒再观察，
+  正向入包清等待标志，不增加每格固定延迟。成果仍仅认实际背包。
+  范围排除写scope_exclusions及feedback，SCOPE_LIMIT停止额外换区，不扩预算/范围。
+  已能触碰的边界掉落可原地等待，不能为它向界外移动。
+- 放置保留原生消费/组件/精确目标，增加同格最多28射线可见点及预检原因：
+  occupied_block/unsupported_state/self_collision/entity_collision。
+  自身直接按形状判交，不依赖假玩家实体索引；失败保留零变化/零消费事实。
+  复核发现墙上/地面两用物品由物品层选型，已让该类继续走原生选择，
+  不从默认地面方块预测而误拒墙面放置；该分支仍可能只有原生失败诊断。
+- 先以旧生产代码复现7项中3项拾取失败，日志
+  build/pickup-contact-reproduce-20261015.log。
+  阶段一46项2失败含固定点放置红测试及新增通用候选契约回归；
+  后者已恢复独立pickupCandidates，阶段二/三专项成功。
+  新回归覆盖新鲜实体换位、六站位帽、范围原因、边界原地触碰、落定窗口、
+  无成果/满包/取消/超时迟到、原版clip局部遮挡及放置形状/拒绝不消费。
+- 最终强制全量命令：
+  `gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`。
+  第一轮47秒、兼容保护后最终41秒，均20/20任务执行；
+  最终日志build/pickup-placement-final2-20261015.log。
+  XML共123 suites、**976项**（agent-core290/根105/客户端581），
+  failures/errors/skipped全0；list-java及进程复核均无残留。
+  原版shape/clip和实际组合/runner执行，世界、路径效果、状态/容量边界受控；
+  没有运行ServerLevel放置、玩家travel、原版并堆事件或真实模型。
+- 最终候选build/libs/mcbot-0.1.0.jar，**1,172,762 bytes**，末写15:47:10，
+  SHA256 `034e81f9f47d7bb45153546c4adff51eb8200a759684c11707343dd7c8bb8854`。
+  已核相关类、fabric.mod.json版本0.1.0、内嵌agent-core/LuaJ和许可。
+  第一轮b6985c1f为中间包，以本节034e81f9为交付候选。
+  未自动安装、启动游戏/模型或修改宿主、连接器、参考、实例配置/世界。
+- 关联机制没有全销账：完整掉落来源/合并/拾取者/销毁事件账、跨阶段资源簇、
+  任意雪层/半砖脚高贯通导航及全局动作重复守卫仍缺。
+  文档已逐项对照参考的感知→工作到达→挖掘→落定→触碰→成果→剩余/受阻，
+  后续几何需同时完善规划、执行和工作点，不能只加“雪可走”的名字特例。
+  新候选拾取/放置及真实模型策略继续按REAL-GAME-RETESTING补测。
+
 ## Bot头顶气泡文字透明修复（2026-10-15 15:09，Asia/Shanghai）
 
 - 维护者实测截图已有浅色背景、尾巴和数量底线，但全部文字缺失。
@@ -4333,6 +4381,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 放置预检（10-15本地javap/编译/原版形状，未运行世界） | `Block.getStateForPlacement(BlockPlaceContext)`、`BlockState.canBeReplaced(BlockPlaceContext)`/`canSurvive(LevelReader,BlockPos)`公开；`getCollisionShape(BlockGetter,BlockPos,CollisionContext)`及`CollisionGetter.isUnobstructed(Entity,VoxelShape)`公开。`StandingAndWallBlockItem.getPlacementState`为protected且会选择墙面形态；新增普通预检不可用其getBlock默认形态代替，当前该类沿原BlockItem.place路径，不新增细分状态预测。原版最终放置/副作用仍须实机验证 |
 | 世界任务气泡（10-15缓存Fabric源/Javap/编译及离线提交，未运行GPU） | Fabric事件位于`client.rendering.v1.world`：`END_EXTRACTION`读world/camera/frustum/tickCounter，`BEFORE_ENTITIES`可用matrices/commandQueue；LevelRenderState可setData/getData(RenderStateDataKey)。实体`getPosition(float)`、`getBbHeight/getEyeHeight`公开，Camera为`position()/rotation()/forwardVector()`。世界PoseStack基础为identity；按相机相对位置、cameraRenderState.orientation及正/负/正缩放提交billboard。`submitCustomGeometry(PoseStack,RenderType,CustomGeometryRenderer)`和`submitText`可用；**submitText在DisplayMode后的四个int依次为lightCoords/color/backgroundColor/outlineColor**，不能照搬Font.drawInBatch颜色在先的顺序；15:09已用TextSubmit真实队列字段及构造/消费字节码复核。`rendertype.RenderTypes.textBackground()`为POSITION_COLOR_LIGHTMAP/QUADS且有深度测试，顶点必须setColor/setLight；文字用Font.DisplayMode.NORMAL。原版NameTagFeatureRenderer的Storage使用同一旋转/缩放约定；不使用SEE_THROUGH，不把离线管线/矩阵断言写成实机画面通过 |
 | 单输入烹饪事实（10-15 javap/编译/原版配方离线执行，未运行世界） | `AbstractCookingRecipe`继承`SingleItemRecipe`，公开`input():Ingredient`、`assemble(SingleRecipeInput,HolderLookup.Provider):ItemStack`，`cookingTime():int`；`RecipeHolder(ResourceKey<Recipe<?>>,T)`可构造供既有SmeltTool.cooking复用。仅确切SmeltingRecipe/BlastingRecipe/SmokingRecipe类进入支持范围，真实配方assemble已离线运行，不等于RecipeManager世界查询/机器tick已运行 |
 | 配方替代来源（10-15 javap/编译/离线注册表，未运行世界） | `Ingredient.items():Stream<Holder<Item>>`、`Ingredient.test(ItemStack):boolean`、`BlockItem.getBlock():Block`公开；`Item.getCraftingRemainder():ItemStack`公开final，不是Item。来源筛选只读这些事实，实际加载RecipeManager与原版世界采收仍待实测 |

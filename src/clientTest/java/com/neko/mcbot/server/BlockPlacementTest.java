@@ -9,6 +9,7 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.SlabType;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,59 @@ class BlockPlacementTest {
         assertEquals(0, result.data().get("consumed_count").getAsInt());
         assertEquals(0, access.calls);
         assertTrue(ItemStack.matches(before, access.inventory.getItem(13)));
+    }
+
+    private static final class Site implements BlockPlacement.Site {
+        BlockState current = Blocks.SNOW.defaultBlockState();
+        BlockState placed = Blocks.CRAFTING_TABLE.defaultBlockState();
+        boolean replaceable = true, survives = true, clear = true;
+        net.minecraft.world.phys.AABB body = new net.minecraft.world.phys.AABB(0, 90, 0, .6, 91.8, .6);
+        @Override public BlockState current() { return current; }
+        @Override public boolean replaceable() { return replaceable; }
+        @Override public BlockState placed() { return placed; }
+        @Override public boolean survives() { return survives; }
+        @Override public java.util.List<net.minecraft.world.phys.AABB> collision() {
+            return placed.getCollisionShape(net.minecraft.world.level.EmptyBlockGetter.INSTANCE, POS)
+                    .move(POS.getX(), POS.getY(), POS.getZ()).toAabbs();
+        }
+        @Override public net.minecraft.world.phys.AABB body() { return body; }
+        @Override public boolean entityClear() { return clear; }
+    }
+
+    @Test void snowReplacementAndExactShapeCollisionHaveSeparateActionableReasons() {
+        var site = new Site();
+        assertNull(BlockPlacement.checkSite(POS, site), "native replaceability admits snow without harvesting it");
+        site.body = new net.minecraft.world.phys.AABB(2.2, 90, -3.8, 2.8, 91.8, -3.2);
+        var self = BlockPlacement.checkSite(POS, site);
+        assertEquals("self_collision", self.data().get("placement_failure").getAsString());
+        assertTrue(self.feedback().contains("exact=true"));
+        site.placed = Blocks.OAK_SLAB.defaultBlockState();
+        site.body = site.body.move(0, .5, 0);
+        assertNull(BlockPlacement.checkSite(POS, site), "standing above a lower slab does not intersect its shape");
+        site.clear = false;
+        assertEquals("entity_collision", BlockPlacement.checkSite(POS, site)
+                .data().get("placement_failure").getAsString());
+        site.replaceable = false;
+        assertEquals("occupied_block", BlockPlacement.checkSite(POS, site)
+                .data().get("placement_failure").getAsString());
+        site.replaceable = true;
+        site.survives = false;
+        assertEquals("unsupported_state", BlockPlacement.checkSite(POS, site)
+                .data().get("placement_failure").getAsString());
+    }
+
+    @Test void nativePreflightRefusalPreservesEvidenceAndNeverPlacesOrConsumes() {
+        Placement access = access();
+        var data = new com.google.gson.JsonObject();
+        data.addProperty("placement_failure", "self_collision");
+        access.prepareFailure = new ServerTool.Result(false, "TARGET_BLOCKED:move first", data);
+        var result = BlockPlacement.place(access, POS, 13, Direction.UP);
+        assertFalse(result.ok());
+        assertEquals("self_collision", result.data().get("placement_failure").getAsString());
+        assertFalse(result.data().get("changed").getAsBoolean());
+        assertEquals(0, result.data().get("consumed_count").getAsInt());
+        assertEquals(0, access.calls);
+        assertEquals(3, access.inventory.getItem(13).getCount());
     }
 
     @Test void originalFullStackFaceAndExactTargetCrossThePlacementBoundary() {

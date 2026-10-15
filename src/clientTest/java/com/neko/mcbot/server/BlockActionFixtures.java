@@ -90,6 +90,7 @@ public final class BlockActionFixtures {
         public ServerTool.Result denied;
         public ServerTool.Result sightFailure;
         public InteractionResult result = InteractionResult.SUCCESS;
+        public ServerTool.Result prepareFailure;
         public ItemStack supplied;
         public Direction face;
         public BlockPos target;
@@ -101,6 +102,7 @@ public final class BlockActionFixtures {
         @Override public Container inventory() { return inventory; }
         @Override public BlockState state(BlockPos pos) { reads++; return calls == 0 ? before : after; }
         @Override public ServerTool.Result sight(BlockPos pos, Direction face) { return sightFailure; }
+        @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) { return prepareFailure; }
         @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
             calls++;
             target = pos;

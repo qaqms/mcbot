@@ -176,6 +176,18 @@ class BlockAimTest {
         assertEquals(0, grid.traces);
     }
 
+    @Test void placementUsesAnExposedPartOfTheCellWhenTheRequestedFacePointIsOccluded() {
+        Grid grid = new Grid();
+        grid.blocks.clear();
+        grid.blocks.put(new BlockPos(1, 1, 0), Blocks.OAK_SLAB.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.SlabBlock.TYPE, SlabType.TOP));
+        Vec3 top = Vec3.atCenterOf(TARGET).add(0, .5, 0);
+        var aim = BlockAim.placement(grid, TARGET, top, 4.5);
+        assertTrue(aim.ok(), aim.failure());
+        assertTrue(aim.point().y < top.y);
+        assertTrue(grid.traces <= 28);
+    }
+
     @Test void descendingClearanceOrderOpensSightBeforeMiningTheLowerCells() {
         Grid grid = new Grid();
         grid.blocks.clear();

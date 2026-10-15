@@ -4,6 +4,16 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-15漏拾取/放置卡：WorkPositionsTest使用真实GroundItems触碰盒判交，
+BoundedGatherTest覆盖成功未接触、移动后实体换位、每UUID六站位帽、范围排除、
+边界原地触碰、已知掉落有限等待、无成果与取消/超时迟到隔离。
+BlockAimTest执行原版shape/clip验证局部遮挡另取可见点、整墙和未知读取拒绝。
+BlockPlacementTest执行实际预检函数/原版形状，验证原地替换/支撑/自身和其他实体
+分别给原因，预检拒绝不执行或消费；环境与replaceability/survival仍受控，
+没有运行真实ServerLevel放置上下文、玩家travel或原版并堆/拾取事件。
+墙上/地面两用物品保留原版形态选择，新增预检不猜其默认形态；原生墙面放置仍待实测。
+专项、最终强制全量和JAR哈希见STATUS；不据此宣称雪层导航或真实模型策略已验。
+
 2026-10-15气泡文字修复：维护者截图背景已出现但文字全空，确认submitText参数错位，
 真实顺序为DisplayMode后lightCoords/color/backgroundColor/outlineColor。
 文字提交回归改用真实SubmitNodeStorage/TextSubmit字段；旧生产代码先复现2项失败，

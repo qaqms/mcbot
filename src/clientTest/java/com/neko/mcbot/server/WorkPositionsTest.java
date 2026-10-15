@@ -41,7 +41,7 @@ class WorkPositionsTest {
         assertEquals(java.util.List.of(exposed), WorkPositions.miningCandidates(BlockAimTest.TARGET, access));
         assertEquals(originalEye, grid.eye(), "planning must not move the real eyes");
         assertTrue(WorkPositions.candidates(BlockAimTest.TARGET, access).contains(blocked),
-                "pickup stances must retain their separate collision-only contract");
+                "generic standing candidates retain their separate collision-only contract");
     }
 
     @Test void elevatedSurfaceStancesAreIncludedAndOnlyWorkableCandidatesConsumeTheResultCap() {
@@ -63,5 +63,21 @@ class WorkPositionsTest {
         });
         assertTrue(points.isEmpty());
         assertEquals(WorkPositions.MAX_MINING_CHECKS, checks.get());
+    }
+
+    @Test void pickupCandidatesMustActuallyIntersectTheNativeTouchBoxBeforeTakingResultSlots() {
+        var item = new net.minecraft.world.phys.AABB(2.8, 90, .3, 3.05, 90.25, .55);
+        var points = WorkPositions.pickupCandidates(new BlockPos(2, 90, 0), new WorkPositions.Access() {
+            @Override public boolean standable(BlockPos pos) { return pos.getY() == 90; }
+            @Override public double distanceSquared(BlockPos pos) { return pos.getX(); }
+            @Override public boolean workable(BlockPos pos) {
+                var body = new net.minecraft.world.phys.AABB(pos.getX() + .2, pos.getY(), pos.getZ() + .2,
+                        pos.getX() + .8, pos.getY() + 1.8, pos.getZ() + .8);
+                return GroundItems.touches(body, item);
+            }
+        });
+        assertFalse(points.isEmpty());
+        assertTrue(points.stream().allMatch(p -> p.getX() >= 2),
+                "the nearest safe column can still be too far away to pick the item up");
     }
 }

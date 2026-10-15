@@ -213,7 +213,7 @@ public final class ScanAreaTool implements ServerTool {
                 .stream().sorted(java.util.Comparator.comparingDouble(item -> item.distanceToSqr(companion)))
                 .limit(16).forEach(item -> {
                     var observation = GroundItems.describe(item);
-                    observation.add("stand_positions", WorkPositions.describe(companion, item.blockPosition()));
+                    observation.add("stand_positions", WorkPositions.describePickup(companion, item));
                     observation.addProperty("can_touch_here",
                             GroundItems.touches(companion.getBoundingBox(), item.getBoundingBox()));
                     var target = ((com.neko.mcbot.mixin.ItemTargetAccess) item).mcbot$getPickupTarget();

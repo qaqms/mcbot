@@ -8,6 +8,28 @@
 本节覆盖下方历史的“没有地下探索/工作目标A*/长期阶段”的限制描述；
 工具数量仍23（15服务端+8本地），桥协议不变。
 
+2026-10-15拾取与放置修复补充：
+
+- `scan_area.item_targets[].stand_positions`现在同时满足安全整格站立与实际物品触碰盒，
+  最多6个；只是当前几何候选，不保证路线可达或原版延迟/容量/归属允许入包。
+- gather在成功移动但未入包时也刷新实体，局部路线失败后不沿用旧实体站位；
+  同UUID最多6个不同站位，用尽记skipped_items，再考虑其他资源。
+  追物move_to带exact=true及剩余max_digs，开路计入本段预算。
+  只有已知移除产生匹配掉落而当前无可处理物品时补一次1秒观察，
+  data.drop_settle_waits计次数；正向背包进展清该标志，不每格固定等待。
+- data.scope_exclusions按方块/物品各保留最多16条坐标、ID和reason，
+  task_scope表示首次固定任务范围，collection_scope表示本段范围。
+  剩余可选资源仅被范围排除时SCOPE_LIMIT返回，不额外耗探索步数或扩大范围；
+  已在实际触碰范围的物品可原地等拾取，不向界外走。实际背包仍是成果依据。
+- place_block被局部遮挡时在同一目标格尝试其他可见点，最多28射线；
+  完整遮挡不穿透，未知沿线仍拒绝。所选点进入原生放置上下文。
+  预检失败data.placement_failure为occupied_block/unsupported_state/self_collision/
+  entity_collision，对应不能原地替换、无法形成可存活状态、自身或其他实体占位。
+  均changed=false/consumed_count=0；自身占位提示move_to exact=true挪身。
+  其他原生失败仍PLACE_FAILED，并按实际世界/库存效果记账，不能自动重放。
+  墙上/地面两用物品保留原版形态选择，不用默认地面方块做新增状态/占位预检；
+  此分支可能仍给原生PLACE_FAILED，不能宣称所有特殊形态都有细分诊断。
+
 - `move_to`新增可选`arrival:"work"`，须`exact:true`及`work_target:{x,y,z}`。
   搜索实际可工作的脚格，输入x/y/z仍必填且为规划盒校验位置，不要求最终站在该格。
   `clear_obstructions:true`允许以原有最多3格清理判据评估终点，目标和其支撑不清；
@@ -818,6 +840,8 @@ AgentLoop另设当前任务累计三次空搜索上限（含workflow搜索）：
 | `WRONG_TOOL:` | 当前主手无采收资格、已改变或进度无效 | inventory/equip 换合适工具，目标未按本工具继续破坏 |
 | `BREAK_FAILED:` | 未确认原版破坏成功，可能已有耐久或世界副作用 | 核对实际目标、背包和工具，勿自动重试 |
 | `PLACE_FAILED:` | 未确认目标格成功放置或不能形成路径支撑 | 核对回执的目标变化/实际消耗，勿自动重试 |
+| `TARGET_BLOCKED:` | 工作视线、占位或放置条件不满足 | 查看具体遮挡或placement_failure；按事实换位/补条件，不原样重复 |
+| `SCOPE_LIMIT:` | 已观测匹配候选被固定任务/本段范围排除 | 核对scope_exclusions，保留范围/预算，不将其解释为没有资源 |
 | `ATTACK_FAILED:` | 已出手但没有观测到生命或吸收减少 | 核对目标/工具与实际状态，不能自动重投 |
 | `OCCLUDED:` | 目标被遮挡，不能进行本次近战 | 重扫或显式移动，不隔墙攻击 |
 | `UNSAFE_SWEEP:` | 剑的横扫邻域有其他活物 | 更换非横扫工具或等目标分开，不扩大授权对象 |

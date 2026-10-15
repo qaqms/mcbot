@@ -209,11 +209,24 @@ public final class BlockAim {
         if (!validReach(reach) || access.eye().distanceToSqr(point) > reach * reach) {
             return failed("OUT_OF_REACH:放置点超出实际交互距离，先 move_to 靠近。");
         }
+        Aim first = placementRay(access, pos, point);
+        if (first.ok() || first.failure().startsWith("TARGET_LOST:")) return first;
+        // A face's centre can be covered while another part of the exact placement cell is exposed.
+        for (double x : SAMPLES) for (double y : SAMPLES) for (double z : SAMPLES) {
+            Vec3 sample = new Vec3(pos.getX() + x, pos.getY() + y, pos.getZ() + z);
+            if (access.eye().distanceToSqr(sample) > reach * reach) continue;
+            Aim aim = placementRay(access, pos, sample);
+            if (aim.ok() || aim.failure().startsWith("TARGET_LOST:")) return aim;
+        }
+        return first;
+    }
+
+    private static Aim placementRay(Access access, BlockPos pos, Vec3 point) {
         if (!access.loaded(pos) || !loadedSegment(access, access.eye(), point)) return unloaded();
         BlockHitResult hit = access.trace(access.eye(), point);
-        if (hit.getType() == HitResult.Type.BLOCK && !pos.equals(hit.getBlockPos())) {
-            return failed("TARGET_BLOCKED:放置点被其他方块遮挡，先查看或调整站位。");
-        }
+        if (hit.getType() == HitResult.Type.BLOCK && !pos.equals(hit.getBlockPos()))
+            return failed("TARGET_BLOCKED:放置目标的可见采样点被方块 " + hit.getBlockPos().toShortString()
+                    + " 遮挡；先inspect_block查看遮挡或move_to exact=true换位，再决定放置。");
         return new Aim(point, null);
     }
 

@@ -88,8 +88,10 @@ final class BoundedGather {
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final Set<String> skippedBlocks = new HashSet<>();
     private final Set<String> skippedItems = new HashSet<>();
-    private final Set<String> approachedItems = new HashSet<>();
+    private final java.util.Map<String, Set<String>> itemStances = new java.util.HashMap<>();
     private final Set<String> waitedItems = new HashSet<>();
+    private final java.util.Map<String, JsonObject> excludedBlocks = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, JsonObject> excludedItems = new java.util.LinkedHashMap<>();
     private double originX, originY, originZ;
     private final ExplorationRoute exploration;
     private boolean exploring;
@@ -109,6 +111,8 @@ final class BoundedGather {
     private String observedFeet, batchFeet;
     private final java.util.ArrayDeque<JsonObject> workBatch = new java.util.ArrayDeque<>();
     private int batchDigs, batchLimit, batchContinuations;
+    private boolean dropSettlePending;
+    private int dropSettleWaits;
     private String lastProblem = "";
     private JsonObject lastData = new JsonObject();
 
@@ -303,7 +307,7 @@ final class BoundedGather {
                     targetGroup = 0;
                     skippedBlocks.clear();
                     skippedItems.clear();
-                    approachedItems.clear();
+                    itemStances.clear();
                     waitedItems.clear();
                 } else lastProblem = "探索移动未产生至少4格的实际位移，未计为新区域。";
             }
@@ -315,7 +319,11 @@ final class BoundedGather {
             if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; targetGroup = 0; }
             progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
             if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
-            if (goal.progress() > lastProgress) { stalls = 0; lastProgress = goal.progress(); }
+            if (goal.progress() > lastProgress) {
+                stalls = 0;
+                lastProgress = goal.progress();
+                dropSettlePending = false;
+            }
             if (next != null) next.run();
             else if (!continueBatch()) scanDrops();
         });
@@ -323,6 +331,7 @@ final class BoundedGather {
 
     private void scanDrops() {
         workBatch.clear();
+        excludedItems.clear();
         var args = new JsonObject();
         args.addProperty("r", plan.radius());
         args.addProperty("items_only", true);
@@ -333,9 +342,24 @@ final class BoundedGather {
             if (items == null) throw new IllegalArgumentException();
             for (var entry : items) {
                 JsonObject item = entry.getAsJsonObject();
-                if (!acceptedItems.contains(item.get("item").getAsString()) || !within(item)
-                        || !flag(item, "pickup_allowed") || skippedItems.contains(itemKey(item))) continue;
+                if (!acceptedItems.contains(item.get("item").getAsString())) continue;
+                // Passive contact needs no movement beyond the allowed work area.
+                if (!within(item) && !flag(item, "can_touch_here")) {
+                    recordExclusion(excludedItems, item, "item"); continue;
+                }
+                if (!flag(item, "pickup_allowed") || skippedItems.contains(itemKey(item))) continue;
                 pickup(item);
+                return;
+            }
+            if (dropSettlePending) {
+                dropSettlePending = false;
+                dropSettleWaits++;
+                var wait = new JsonObject();
+                wait.addProperty("seconds", 1);
+                call("wait", wait, settled -> {
+                    if (!settled.ok()) finish(false, settled.feedback());
+                    else observe();
+                });
                 return;
             }
             if (stalls >= 3) { finish(false, "NO_PROGRESS:三次采集/拾取未增加实际背包数量。" + lastProblem); return; }
@@ -361,25 +385,21 @@ final class BoundedGather {
             });
             return;
         }
-        if (!approachedItems.add(key)) {
-            skippedItems.add(key);
-            stalls++;
-            lastProblem = "已到候选站位但最新物品仍未进入身体触碰范围。";
-            observe();
-            return;
-        }
+        var tried = itemStances.computeIfAbsent(key, ignored -> new HashSet<>());
         var positions = positions(item);
-        if (positions.isEmpty()) {
+        if (positions.isEmpty() || tried.size() >= 6
+                || positions.stream().allMatch(p -> tried.contains(blockKey(p)))) {
             skippedItems.add(itemKey(item));
-            lastProblem = "掉落附近没有已观测安全站位。";
+            lastProblem = "掉落没有剩余的安全触碰站位；已按最新实体位置核对，本段不重复尝试旧站位。";
             observe();
             return;
         }
         // Movement ticks may already have picked it up. Only a fresh inventory proves progress.
-        walk(positions, 0, () -> { skippedItems.add(itemKey(item)); scanDrops(); });
+        walk(positions, 0, tried, () -> { skippedItems.add(itemKey(item)); scanDrops(); });
     }
 
     private void findBlocks() {
+        if (sampleOffset == 0 && targetGroup == 0) excludedBlocks.clear();
         var args = new JsonObject();
         var targets = new JsonArray();
         sourceTargets.subList(targetGroup, Math.min(targetGroup + 8, sourceTargets.size())).forEach(targets::add);
@@ -401,7 +421,8 @@ final class BoundedGather {
             if (blocks == null) throw new IllegalArgumentException();
             for (var entry : blocks) {
                 var block = entry.getAsJsonObject();
-                if (!within(block) || skippedBlocks.contains(blockKey(block))) continue;
+                if (!within(block)) { recordExclusion(excludedBlocks, block, "block"); continue; }
+                if (skippedBlocks.contains(blockKey(block))) continue;
                 var positions = positions(block);
                 var tried = new HashSet<String>();
                 tried.add(currentFeet);
@@ -471,6 +492,10 @@ final class BoundedGather {
     }
 
     private void explore() {
+        if ((!excludedBlocks.isEmpty() || !excludedItems.isEmpty()) && skippedBlocks.isEmpty()) {
+            resourceBlocked("SCOPE_LIMIT:已发现匹配资源或掉落，但剩余已知候选超出本段采集或任务共享范围；未继续换区消耗探索预算。");
+            return;
+        }
         if (plan.exploreSteps() == 0) { resourceBlocked("RESOURCE_BLOCKED:本段未启用换区探索。"); return; }
         if (exploration.exhausted()) {
             resourceBlocked("EXPLORATION_LIMIT:本任务共享探索移动预算已到，重复gather/explore不会补充。"); return;
@@ -583,6 +608,11 @@ final class BoundedGather {
                 sampleOffset = 0; targetGroup = 0;
                 // A real removal can expose a previously blocked target. Query it afresh, with the same caps.
                 skippedBlocks.clear();
+                var drops = receipt.data().getAsJsonArray("drops");
+                if (drops != null) for (var drop : drops) {
+                    var item = drop.getAsJsonObject();
+                    if (acceptedItems.contains(item.get("item").getAsString())) dropSettlePending = true;
+                }
                 if (!receipt.ok()) { finish(false, receipt.feedback()); return; }
                 observe();
             } else if (localStanceFailure(receipt.feedback())) {
@@ -595,15 +625,19 @@ final class BoundedGather {
         });
     }
 
-    private void walk(List<JsonObject> positions, int index, Runnable unavailable) {
-        if (index >= positions.size()) { unavailable.run(); return; }
-        JsonObject point = positions.get(index);
+    private void walk(List<JsonObject> positions, int index, Set<String> tried, Runnable unavailable) {
+        while (index < positions.size() && tried.contains(blockKey(positions.get(index)))) index++;
+        if (index >= positions.size() || tried.size() >= 6) { unavailable.run(); return; }
+        JsonObject point = positions.get(index).deepCopy();
+        tried.add(blockKey(point));
         point.addProperty("exact", true);
+        point.addProperty("max_digs", Math.min(128, Math.max(0, plan.maxBlocks() - dug - cleared)));
         call("move_to", point, receipt -> {
             if (receipt.ok()) { afterMovement(receipt, null); return; }
             if (localRouteFailure(receipt.feedback())) {
                 lastProblem = receipt.feedback();
-                afterMovement(receipt, () -> walk(positions, index + 1, unavailable));
+                // A failed route can displace the item too; select again from a fresh entity observation.
+                afterMovement(receipt, null);
             } else {
                 // Permission, cancellation and unknown failures retain their terminal meaning.
                 lastData = receipt.data();
@@ -630,6 +664,17 @@ final class BoundedGather {
         return distance(finite(target, "x"), finite(target, "y"), finite(target, "z"))
                 <= plan.radius() * (double) plan.radius()
                 && (plan.exploreSteps() == 0 || exploration.within(target));
+    }
+
+    private void recordExclusion(java.util.Map<String, JsonObject> evidence, JsonObject target, String kind) {
+        // Retain a bounded sample of observed exclusions, not a claim that the world has no resources.
+        if (evidence.size() >= 16) return;
+        var point = new JsonObject();
+        for (String axis : List.of("x", "y", "z")) point.add(axis, target.get(axis).deepCopy());
+        point.addProperty(kind, target.get(kind).getAsString());
+        point.addProperty("reason", plan.exploreSteps() > 0 && !exploration.within(target)
+                ? "task_scope" : "collection_scope");
+        evidence.put(kind.equals("item") ? itemKey(target) : blockKey(target), point);
     }
     private double distance(double x, double y, double z) {
         return (x - originX) * (x - originX) + (y - originY) * (y - originY) + (z - originZ) * (z - originZ);
@@ -666,6 +711,7 @@ final class BoundedGather {
         data.addProperty("primitive_calls", calls);
         data.addProperty("work_position_attempts", workPositionAttempts);
         data.addProperty("batch_continuations", batchContinuations);
+        data.addProperty("drop_settle_waits", dropSettleWaits);
         data.addProperty("exploration_attempts", exploration.attempts());
         data.addProperty("exploration_max_steps", exploration.maxSteps);
         data.addProperty("exploration_radius", exploration.radius);
@@ -676,6 +722,10 @@ final class BoundedGather {
         data.addProperty("estimated_new_coverage", exploration.selectedCoverage());
         data.addProperty("skipped_blocks", skippedBlocks.size());
         data.addProperty("skipped_items", skippedItems.size());
+        var excluded = new JsonArray();
+        excludedBlocks.values().forEach(excluded::add);
+        excludedItems.values().forEach(excluded::add);
+        data.add("scope_exclusions", excluded);
         data.add("last_observation", lastData);
         for (String key : List.of("authorization_id", "authorization_summary"))
             if (lastData.has(key)) data.add(key, lastData.get(key).deepCopy());
@@ -687,6 +737,9 @@ final class BoundedGather {
                 + "，未拾取候选=" + skippedItems.size() + "；任务探索移动=" + exploration.attempts() + "/" + exploration.maxSteps
                 + "，共享范围半径=" + exploration.radius + "，新增观察区域=" + exploration.regions()
                 + "，搜索半径=" + plan.radius() + "，本段查询页=" + searchPages
-                + "，完整已知查询区域=" + exploration.coverageRegions() + "；请按实际回执决定后续。", data));
+                + "，完整已知查询区域=" + exploration.coverageRegions()
+                + (excluded.isEmpty() ? "" : "\n观测到但范围排除的候选样本（方块/掉落各最多16）=" + excluded
+                + "；task_scope为本任务首次固定的共享范围，collection_scope为本段搜索范围；不是不可挖或不可拾取。")
+                + "；请按实际回执决定后续。", data));
     }
 }
