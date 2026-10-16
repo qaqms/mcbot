@@ -3,6 +3,20 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## F1 身体区间观察（2026-10-16）
+
+status追加data.body_changes，修改动作终态追加data.body_delta及同源feedback。
+body_id/from_seq/through_seq标识观察区间；net为开始至结束净变，
+carried_items为真实库存总量变化，equipment另外描述，不能把主手重复加总。
+equipment_breaks仅含原版确认损坏；空槽或卸装不代表损坏。
+history_truncated/breaks_truncated/carried_items_truncated及*_omitted显式说明缺失；
+每份差量最多4096字节。observation_known=false表示观察不完整，不能解释为无副作用。
+same_world=false时不跨世界计算net；status近期各最多4条，动作损坏最多8条。
+差量只是观察，不证明本动作因果、掉落来源、入包成果或最终目标满足，
+重复游标不能重复累计，换槽/受伤或重复差量不刷新失败账。
+取消/部分失败/异常保留已发生效果；超大回执含receipt_truncated及有限效果，
+先核对状态/现场，不重投修改。完整边界见F1-BODY-FACTS-2026-10-16与STATUS。
+
 ## C1 身体控制与等待（2026-10-16）
 
 同步修改与跨刻工作均在同一身体控制门执行；避险持有身体时新修改返回BUSY，观察仍可用。

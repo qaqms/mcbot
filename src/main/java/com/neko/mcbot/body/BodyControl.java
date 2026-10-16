@@ -22,7 +22,13 @@ public final class BodyControl {
         Objects.requireNonNull(token);
         if (reflex || work != null) return false;
         work = token;
-        select();
+        try {
+            select();
+        } catch (RuntimeException | Error failure) {
+            work = null;
+            owner = reflex ? Owner.REFLEX : Owner.IDLE;
+            throw failure;
+        }
         return true;
     }
 

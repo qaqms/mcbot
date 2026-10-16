@@ -38,4 +38,16 @@ class BodyControlTest {
         control.release(work);
         assertEquals(BodyControl.Owner.IDLE, control.owner());
     }
+
+    @Test void cleanupFailureWhileClaimingCannotPermanentlyLeaseTheBody() {
+        var fail = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var control = new BodyControl(previous -> {
+            if (fail.getAndSet(false)) throw new IllegalStateException("native release hook");
+        });
+        assertThrows(IllegalStateException.class, () -> control.claim(new Object()));
+        assertEquals(BodyControl.Owner.IDLE, control.owner());
+        Object next = new Object();
+        assertTrue(control.claim(next));
+        assertTrue(control.owns(next));
+    }
 }

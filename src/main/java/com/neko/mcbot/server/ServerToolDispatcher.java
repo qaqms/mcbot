@@ -42,6 +42,9 @@ public final class ServerToolDispatcher {
         default com.neko.mcbot.body.BodyControl control(Body body) {
             return body.identity() instanceof CompanionPlayer cp ? cp.bodyControl() : null;
         }
+        default com.neko.mcbot.body.BodyChangeLog changes(Body body) {
+            return body.identity() instanceof CompanionPlayer cp ? cp.bodyChanges() : null;
+        }
         CompletableFuture<ServerTool.Result> run(ServerTool tool, Body body, JsonObject args,
                 ActionPermissions permissions, ActionPermissions.Context context);
     }
@@ -282,6 +285,13 @@ public final class ServerToolDispatcher {
                 && tool.acceptanceMode() == ServerTool.Acceptance.ACCEPT;
 
         long t0 = System.nanoTime();
+        var changes = access.changes(companion);
+        var window = new com.neko.mcbot.body.BodyChangeLog.Window[1];
+        java.util.function.Supplier<CompletableFuture<ServerTool.Result>> run = () -> {
+            if (changes != null && !com.neko.mcbot.agentcore.loop.TaskPolicy.observation(toolName, args))
+                window[0] = changes.open();
+            return access.run(tool, companion, args, permissions, context);
+        };
         CompletableFuture<ServerTool.Result> fut;
         try {
             JsonObject resourceArgs = args.deepCopy();
@@ -294,22 +304,33 @@ public final class ServerToolDispatcher {
                     scheduler, () -> {
                         var control = access.control(companion);
                         if (com.neko.mcbot.agentcore.loop.TaskPolicy.observation(toolName, args) || control == null)
-                            return access.run(tool, companion, args, permissions, context);
+                            return run.get();
                         return scheduler.controlled(companion.id(), control,
                                 () -> context != null && context.equals(permissions.current(
                                 sender.owner(), companion.id(), companion.dimension(), context.taskId(), companion.identity())),
-                                () -> access.run(tool, companion, args, permissions, context));
+                                run);
                     });
         } catch (Throwable t) {
             McbotMod.LOG.error("工具 {} 派发异常", toolName, t);
             logToolTiming(toolName, t0, -1);
-            replyTool(sender, seq, false,
-                    "INTERNAL:工具内部错误: " + t.getClass().getSimpleName(), null);
+            var failed = observed(window[0], new ServerTool.Result(false,
+                    "INTERNAL:工具内部错误: " + t.getClass().getSimpleName()
+                            + "；可能已有部分效果，先核对现场，不能重投。", null));
+            replyTool(sender, seq, failed.ok(), failed.feedback(), failed.data());
             return;
         }
         if (fut == null) {
             fut = CompletableFuture.completedFuture(
                     new ServerTool.Result(false, "INTERNAL:工具没有返回 future", null));
+        }
+        if (window[0] != null) {
+            // Project only at the wire boundary. Scheduler cancellation still owns the original future.
+            fut = fut.handle((res, err) -> {
+                if (err != null) McbotMod.LOG.error("工具 {} 异步失败", toolName, err);
+                return observed(window[0], err != null || res == null
+                        ? new ServerTool.Result(false, "INTERNAL:工具异常结束，可能已有部分效果；先核对现场，不能重投。", null)
+                        : res);
+            });
         }
 
         // 已经出结果了（DENIED/BUSY/TARGET_LOST 这些快路径，或 wait(0) 这类瞬时活）：
@@ -448,6 +469,22 @@ public final class ServerToolDispatcher {
         send(owner, "tool_result", body);
     }
 
+    private static ServerTool.Result observed(com.neko.mcbot.body.BodyChangeLog.Window window,
+                                              ServerTool.Result result) {
+        if (window == null) return result;
+        try {
+            return window.finish(result);
+        } catch (RuntimeException failure) {
+            McbotMod.LOG.warn("身体差量采样不可用", failure);
+            var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+            var delta = new JsonObject();
+            delta.addProperty("observation_known", false);
+            data.add("body_delta", delta);
+            return new ServerTool.Result(result.ok(), result.feedback()
+                    + "\n身体变化未能完整观察，不能据此断言没有副作用。", data);
+        }
+    }
+
     /** 受理回执：seq 这条待办就此定性（转成 job 通道），所以它自己就是一个"终局"。 */
     private void replyAck(Sender owner, int seq, String jobId, String tool, String text, int capTicks) {
         JsonObject body = new JsonObject();
@@ -544,9 +581,44 @@ public final class ServerToolDispatcher {
                     + (body != null && body.has("job_id") ? body.get("job_id").getAsString() : "") + "。");
             return new Envelope(kind, small).encode();
         }
-        small.addProperty("feedback", "INTERNAL:回执过大（" + originalBytes
+        var kept = new JsonObject();
+        kept.addProperty("receipt_truncated", true);
+        if (body != null && body.has("data") && body.get("data").isJsonObject()) {
+            var original = body.getAsJsonObject("data");
+            var delta = original.get("body_delta");
+            if (delta != null && delta.isJsonObject()
+                    && WireSize.utf8Bytes(delta.toString()) <= com.neko.mcbot.body.BodyChangeLog.MAX_BYTES)
+                kept.add("body_delta", delta.deepCopy());
+            for (String key : java.util.List.of("removed", "changed", "cleared_blocks", "removed_blocks",
+                    "placed_blocks", "collected_count", "crafted_count", "loaded_input_count",
+                    "loaded_fuel_count", "taken_count", "moved_items", "strikes",
+                    "observed_health_loss", "observed_absorption_loss", "observation_known")) {
+                var value = original.get(key);
+                if (value != null && value.isJsonPrimitive()
+                        && (value.getAsJsonPrimitive().isBoolean() || value.getAsJsonPrimitive().isNumber()))
+                    kept.add(key, value.deepCopy());
+            }
+        }
+        small.add("data", kept);
+        String originalPhase = body != null && body.has("phase") ? body.get("phase").getAsString() : "";
+        String prefix = "cancelled".equals(originalPhase) ? "CANCELLED:"
+                : "superseded".equals(originalPhase) ? "SUPERSEDED:" : "INTERNAL:";
+        if (body != null && body.has("feedback")) {
+            String feedback = body.get("feedback").getAsString();
+            if (feedback.startsWith("CANCELLED:")) prefix = "CANCELLED:";
+            else if (feedback.startsWith("SUPERSEDED:")) prefix = "SUPERSEDED:";
+        }
+        String text = prefix + "回执过大（" + originalBytes
                 + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），详细数据已丢弃。"
-                + "请把这次请求范围改小（如缩小扫描半径、分批取数）后重试。");
+                + "已发生效果保留，可能还有未列出的副作用；先查状态和现场，不要重投修改动作。";
+        if (kept.has("body_delta")) text += com.neko.mcbot.body.BodyChangeLog.sentence(
+                kept.getAsJsonObject("body_delta"));
+        small.addProperty("feedback", text);
+        if ("job_event".equals(kind)) {
+            small.addProperty("phase", java.util.List.of("cancelled", "superseded").contains(originalPhase)
+                    ? originalPhase : "failed");
+            small.addProperty("text", text);
+        }
         return new Envelope(kind, small).encode();
     }
 }

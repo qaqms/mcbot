@@ -34,14 +34,21 @@ public final class StatusTool implements ServerTool {
         companion.observeHealth(com.neko.mcbot.body.HealthObservation.Phase.STATUS);
         var task = scheduler.observation(companion.getUUID());
         task.addProperty("body_owner", companion.bodyControl().owner().name());
-        return java.util.concurrent.CompletableFuture.completedFuture(report(args,
+        Result result = report(args,
                 new Body(companion.getX(), companion.getY(), companion.getZ(),
                         companion.level().dimension().identifier().toString(), companion.getHealth(),
                         companion.getFoodData().getFoodLevel(), companion.isOnFire(), companion.level().getGameTime(),
                         companion.onGround(), companion.isInWater(),
                         companion.isEyeInFluid(net.minecraft.tags.FluidTags.WATER), companion.isInLava(),
                         companion.getAirSupply(), companion.getMaxAirSupply(), companion.waterRecoveryState()),
-                companion.getInventory(), task));
+                companion.getInventory(), task);
+        if (result.ok()) {
+            var recent = companion.recentBodyChanges();
+            result.data().add("body_changes", recent);
+            result = new Result(true, result.feedback()
+                    + com.neko.mcbot.body.BodyChangeLog.sentence(recent), result.data());
+        }
+        return java.util.concurrent.CompletableFuture.completedFuture(result);
     }
 
     @Override public java.util.concurrent.CompletableFuture<Result> runAuthorized(

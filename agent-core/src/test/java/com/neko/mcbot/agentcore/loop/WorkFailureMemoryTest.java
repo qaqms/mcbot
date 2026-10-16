@@ -42,6 +42,19 @@ class WorkFailureMemoryTest {
         assertNull(memory.refusal("break_block", POINT));
     }
 
+    @Test void bodyObservationHistoryNeverReplenishesAttemptsEvenWithRepeatedInventoryOrDamageFacts() {
+        var memory = new WorkFailureMemory();
+        exhaust(memory);
+        var data = json("{\"body_delta\":{\"body_id\":\"body\",\"from_seq\":0,\"through_seq\":8,"
+                + "\"net\":{\"carried_items\":[{\"item\":\"minecraft:stone\",\"count_delta\":3}],"
+                + "\"selected_slot\":[0,1],\"health\":[20,18]}}}");
+        for (int i = 0; i < 8; i++) {
+            memory.terminal("move_to", POINT, new ToolOutcome(true, "same observed interval", data));
+            memory.terminal("status", json("{\"details\":true}"), new ToolOutcome(true, "incomplete", data));
+        }
+        assertNotNull(memory.refusal("move_to", POINT));
+    }
+
     @Test void argumentsAreFrozenAndOnlyKnownLocalFailuresCount() {
         var memory = new WorkFailureMemory();
         var args = POINT.deepCopy();

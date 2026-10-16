@@ -3,6 +3,39 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## F1 共用动作与身体差量（2026-10-16 16:07，Asia/Shanghai）
+
+- 本轮C1→F1依次实现、独立验收；C1已提交推送027d703，前序N1为033af8c。
+  当前N1/C1/F1三卡完成离线验收，19卡待实施；下一组优先N2a→N2b。
+  F1完整参考链、字段边界、有限上限与取舍见docs/F1-BODY-FACTS-2026-10-16.md。
+  只改本体，宿主/连接器/只读参考/玩家实例未改，未安装或启动游戏/服务器/真实模型。
+- BodyChangeLog按每身体独立身份复制真实库存/装备，逐刻采样与status、动作终态共用。
+  位置、生命/吸收、食物/空气、经验、骑乘、槽位、物品净变与装备/组件变化均取实际值；
+  主手不重复加总，空槽不推断损坏，只有原版装备损坏回调记确认事件。
+  不输出自定义文字/NBT/组件正文；跨world实例不相减，新身体不继承旧游标。
+  采样异常不中断身体tick，恢复后记录缺口，区间未知不能冒充没有副作用。
+- 原权限/锁/身体控制通过后开动作Window，在scheduler外的线路层附body_delta和feedback，
+  保持原future取消链；status.body_changes读同源近期变化。部分失败/取消/异常保留观察和
+  原实际效果；终态稳定不重采样或重放。普通变化/损坏分别16条，近期各4条，动作损坏8条，
+  差量4096字节，截断/省略显式标记，长动作仍保留开始至结束净变。
+  超大回执保留有限效果/差量，成功job降为失败，取消/替换相位保留，不建议重投修改。
+- 差量仅为观察，不证明因果/掉落来源/成果或最终完成，不参与失败账失效。
+  原动作/目标核验、许可、范围、探索账、模型和身体累计预算不变。
+  同时加固C1清理异常时控制回滚及finally清挥手，防止永久BUSY。
+  持续行为已共用逐刻事实入口，不据此宣称持续自卫/跟随/完整生存或F2已完成。
+- 新增18项（核心1/根1/客户端16）。专项build/f1-focused1-20261016.log，24秒成功。
+  最终强制`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/f1-final-20261016.log第61行BUILD SUCCESSFUL，46秒、20/20任务全部执行。
+  实际XML136 suites，**1171项**（核心330/根131/客户端710），failures/errors/skipped全0。
+  覆盖净变化/装备不重复、槽移动/时钟、文本隔离、真实损坏区别、有界/缺口/身份，
+  生产dispatcher部分失败/取消/同步异步异常/超大回执及重复差量不补失败次数。
+  世界/身体/网络边界受控，不冒充原生tick、损坏/拾取事件或真实模型行为已验。
+- 最新候选build/libs/mcbot-0.1.0.jar为**1,281,998 bytes**，末写16:07:05，SHA256
+  `cf439c4ba3d4feb0b411c9ca495549c7a0807b01945711657933c465254300aa`。
+  已核0.1.0元数据、BodyChangeLog/BodyControl、内嵌agent-core/LuaJ与许可；
+  list-java无残留。文档同步不重复构建，提交推送以实际Git记录为准。
+  REAL-GAME-RETESTING补F1现场核对；原无敌未改，未安装候选或实机验收。
+
 ## C1 身体控制与中断（2026-10-16 15:54，Asia/Shanghai）
 
 - 维护者授权适合的两卡可在一轮顺序推进，本轮选择C1→F1，保持独立验收提交。
@@ -4848,6 +4881,12 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+C1/F1新增核对（10-16本地官方映射javap/编译，未运行真实身体）：
+LivingEntity.onEquippedItemBroken(Item,EquipmentSlot):void、getItemBySlot(EquipmentSlot):ItemStack、
+stopUsingItem():void公开；swinging/swingTime/attackAnim/oAttackAnim公开。
+Player.experienceLevel/totalExperience公开，Entity.getVehicle():Entity公开。
+回调先super再记录，不从空槽推断损坏；手部清理不等于原生动画或损坏事件已实机验收。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|

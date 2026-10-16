@@ -6,6 +6,7 @@ import com.neko.mcbot.common.Envelope;
 import com.neko.mcbot.server.tools.WaitTool;
 import com.neko.mcbot.task.CompanionScheduler;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeAll;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ServerToolDispatcherTest {
+    @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
     private final UUID owner = UUID.randomUUID(), companion = UUID.randomUUID();
     private final AtomicLong clock = new AtomicLong();
     private final CompanionScheduler scheduler = new CompanionScheduler();
@@ -26,7 +28,9 @@ class ServerToolDispatcherTest {
     private final List<String> effects = new ArrayList<>();
     private final ToolRegistry registry = new ToolRegistry();
     private final com.neko.mcbot.body.BodyControl control = new com.neko.mcbot.body.BodyControl(previous -> {});
+    private final com.neko.mcbot.body.BodyChangeFixtures facts = new com.neko.mcbot.body.BodyChangeFixtures();
     private CompletableFuture<ServerTool.Result> nextResult;
+    private Runnable onRun = () -> {};
     private ActionPermissions.Context receivedContext;
     private ActionPermissions receivedPermissions;
     private final ServerToolDispatcher dispatcher;
@@ -51,12 +55,16 @@ class ServerToolDispatcherTest {
                     @Override public com.neko.mcbot.body.BodyControl control(ServerToolDispatcher.Body body) {
                         return control;
                     }
+                    @Override public com.neko.mcbot.body.BodyChangeLog changes(ServerToolDispatcher.Body body) {
+                        return facts.log;
+                    }
                     @Override public CompletableFuture<ServerTool.Result> run(ServerTool tool,
                             ServerToolDispatcher.Body body, JsonObject args, ActionPermissions permissions,
                             ActionPermissions.Context context) {
                         effects.add(tool.name());
                         receivedContext = context;
                         receivedPermissions = permissions;
+                        onRun.run();
                         return nextResult == null ? CompletableFuture.completedFuture(
                                 new ServerTool.Result(true, "effect", null)) : nextResult;
                     }
@@ -83,6 +91,121 @@ class ServerToolDispatcherTest {
         control.reflex(false);
         assertTrue(call(1, "equip", "{}").bool("ok"));
         assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
+    }
+
+    @Test void acceptedPartialFailureCarriesBodyFactsExactlyOnceWithoutChangingEffectCounters() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        var ack = call(1, "break_block", "{}");
+        assertEquals("job_ack", ack.kind());
+        facts.hp = 17;
+        facts.held = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE, 2);
+        var data = json("{\"removed\":true,\"cleared_blocks\":1}");
+        nextResult.complete(new ServerTool.Result(false, "PARTIAL:world changed", data));
+        var terminal = receipts.getLast();
+        assertEquals("failed", terminal.str("phase"));
+        var result = terminal.body().getAsJsonObject("data");
+        assertTrue(result.get("removed").getAsBoolean());
+        assertEquals(1, result.get("cleared_blocks").getAsInt());
+        assertEquals(17, result.getAsJsonObject("body_delta").getAsJsonObject("net")
+                .getAsJsonArray("health").get(1).getAsInt());
+        assertTrue(terminal.str("text").contains("身体区间观察"));
+        assertEquals(2, receipts.size());
+        assertFalse(nextResult.complete(new ServerTool.Result(true, "duplicate", null)));
+        assertEquals(2, receipts.size());
+    }
+
+    @Test void cancellingAcceptedCallStillSettlesOriginalFutureAndKeepsObservedChanges() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        call(1, "move_to", "{}");
+        facts.hp = 16;
+        send(sender, "cancel", new JsonObject());
+        assertTrue(nextResult.isDone());
+        var event = receipts.stream().filter(e -> e.kind().equals("job_event")).findFirst().orElseThrow();
+        assertEquals("cancelled", event.str("phase"));
+        assertEquals(16, event.body().getAsJsonObject("data").getAsJsonObject("body_delta")
+                .getAsJsonObject("net").getAsJsonArray("health").get(1).getAsInt());
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
+    }
+
+    @Test void nativeExceptionRetainsObservedBodyChangesAndNeverSuggestsRetry() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        call(1, "attack", "{}");
+        facts.hp = 18;
+        nextResult.completeExceptionally(new IllegalStateException("native callback"));
+        var event = receipts.getLast();
+        assertEquals("failed", event.str("phase"));
+        assertTrue(event.str("text").startsWith("INTERNAL:"));
+        assertEquals(18, event.body().getAsJsonObject("data").getAsJsonObject("body_delta")
+                .getAsJsonObject("net").getAsJsonArray("health").get(1).getAsInt());
+        assertEquals(List.of("attack"), effects);
+    }
+
+    @Test void unavailableTerminalObservationKeepsOriginalPartialEffectAndMarksUnknown() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        call(1, "break_block", "{}");
+        facts.unavailable = true;
+        nextResult.complete(new ServerTool.Result(false, "PARTIAL:removed", json("{\"removed\":true}")));
+        var data = receipts.getLast().body().getAsJsonObject("data");
+        assertTrue(data.get("removed").getAsBoolean());
+        assertFalse(data.getAsJsonObject("body_delta").get("observation_known").getAsBoolean());
+    }
+
+    @Test void wireOverflowKeepsBoundedEffectsAndNeverLabelsTruncatedJobSuccessful() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        var ack = call(1, "break_block", "{}");
+        facts.hp = 19;
+        nextResult.complete(new ServerTool.Result(true, "huge".repeat(12000), json("{\"removed\":true}")));
+        var event = receipts.getLast();
+        assertEquals("job_event", event.kind());
+        assertEquals(ack.str("job_id"), event.str("job_id"));
+        assertEquals("failed", event.str("phase"));
+        assertTrue(event.str("text").contains("不要重投"));
+        var data = event.body().getAsJsonObject("data");
+        assertTrue(data.get("removed").getAsBoolean());
+        assertTrue(data.get("receipt_truncated").getAsBoolean());
+        assertTrue(data.has("body_delta"));
+        assertTrue(com.neko.mcbot.common.WireSize.fits(event.encode()));
+    }
+
+    @Test void synchronousMutationExceptionStillReportsFactsAndReleasesOriginalControl() {
+        begin(sender, 1, false);
+        onRun = () -> { facts.hp = 18; throw new IllegalStateException("controlled sync hook"); };
+        var result = call(1, "equip", "{}");
+        assertEquals("tool_result", result.kind());
+        assertTrue(result.str("feedback").startsWith("INTERNAL:"));
+        assertEquals(18, result.body().getAsJsonObject("data").getAsJsonObject("body_delta")
+                .getAsJsonObject("net").getAsJsonArray("health").get(1).getAsInt());
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
+        onRun = () -> {};
+        assertTrue(call(1, "equip", "{}").bool("ok"));
+    }
+
+    @Test void refusedWorkAndQueriesNeverOpenAnActionObservation() {
+        facts.unavailable = true;
+        begin(sender, 1, true);
+        var refused = call(1, "equip", "{}");
+        assertTrue(refused.str("feedback").startsWith("DENIED:"));
+        assertFalse(refused.body().getAsJsonObject("data").has("body_delta"));
+        assertTrue(call(1, "status", "{}").bool("ok"));
+        assertEquals(List.of("status"), effects);
+    }
+
+    @Test void oversizedCancellationRetainsCancellationPhaseAndPartialEffects() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        call(1, "break_block", "{}");
+        nextResult.complete(new ServerTool.Result(false, "CANCELLED:" + "large".repeat(10000),
+                json("{\"removed\":true}")));
+        var result = receipts.getLast();
+        assertEquals("cancelled", result.str("phase"));
+        assertTrue(result.str("text").startsWith("CANCELLED:"));
+        assertTrue(result.body().getAsJsonObject("data").get("removed").getAsBoolean());
+        assertTrue(com.neko.mcbot.common.WireSize.fits(result.encode()));
     }
 
     @Test void companionIdentityIsScopedToTheRequestingOwnerAndClearedWhenAbsent() {

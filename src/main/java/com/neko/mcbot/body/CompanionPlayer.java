@@ -24,17 +24,22 @@ public final class CompanionPlayer extends ServerPlayer {
     private final MeleeClock meleeClock = new MeleeClock();
     private final HealthObservation healthObservation = new HealthObservation();
     private final UUID observationBodyId = UUID.randomUUID();
+    private final BodyChangeLog bodyChanges = BodyChangeLog.forPlayer(observationBodyId, this);
     private boolean observationWarning;
+    private boolean bodyChangeWarning;
     private final MovementInput movementInput = new MovementInput();
     private final BodyControl bodyControl = new BodyControl(previous -> {
         try {
             if (previous == BodyControl.Owner.WORK) McbotMod.scheduler().preempt(this);
         } finally {
             releaseMovement();
-            stopUsingItem();
-            swinging = false;
-            swingTime = 0;
-            attackAnim = oAttackAnim = 0;
+            try {
+                stopUsingItem();
+            } finally {
+                swinging = false;
+                swingTime = 0;
+                attackAnim = oAttackAnim = 0;
+            }
         }
     });
     private final WaterRecovery waterRecovery = new WaterRecovery();
@@ -140,6 +145,7 @@ public final class CompanionPlayer extends ServerPlayer {
                            ClientInformation clientInformation, UUID ownerUuid) {
         super(server, level, profile, clientInformation);
         this.ownerUuid = ownerUuid;
+        observeBodyChanges();
     }
 
     public UUID ownerUuid() {
@@ -155,6 +161,35 @@ public final class CompanionPlayer extends ServerPlayer {
     public void releaseMovement() { movementInput.clear(); }
 
     public BodyControl bodyControl() { return bodyControl; }
+
+    public BodyChangeLog bodyChanges() { return bodyChanges; }
+
+    public com.google.gson.JsonObject recentBodyChanges() {
+        try {
+            return bodyChanges.recent();
+        } catch (RuntimeException failure) {
+            warnBodyChanges(failure);
+            var data = new com.google.gson.JsonObject();
+            data.addProperty("body_id", observationBodyId.toString());
+            data.addProperty("observation_known", false);
+            return data;
+        }
+    }
+
+    private void observeBodyChanges() {
+        try {
+            bodyChanges.observe();
+        } catch (RuntimeException failure) {
+            warnBodyChanges(failure);
+        }
+    }
+
+    private void warnBodyChanges(RuntimeException failure) {
+        if (!bodyChangeWarning) {
+            bodyChangeWarning = true;
+            McbotMod.LOG.warn("身体差量采样不可用 body_id={}", observationBodyId, failure);
+        }
+    }
 
     public String waterRecoveryState() { return waterRecovery.state(); }
 
@@ -185,6 +220,20 @@ public final class CompanionPlayer extends ServerPlayer {
         }
         BodyPickup.tick(pickup);
         observeHealth(HealthObservation.Phase.AFTER_TICK);
+        observeBodyChanges();
+    }
+
+    @Override
+    public void onEquippedItemBroken(net.minecraft.world.item.Item item,
+                                     net.minecraft.world.entity.EquipmentSlot slot) {
+        super.onEquippedItemBroken(item, slot);
+        if (bodyChanges != null) {
+            try {
+                bodyChanges.equipmentBroken(item, slot);
+            } catch (RuntimeException failure) {
+                warnBodyChanges(failure);
+            }
+        }
     }
 
     @Override
