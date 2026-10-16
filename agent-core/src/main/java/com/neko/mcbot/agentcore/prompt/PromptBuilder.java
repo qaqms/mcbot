@@ -29,8 +29,9 @@ public final class PromptBuilder implements Supplier<String> {
               不逐格调用模型。targets是方块来源，item是期望入包物品，先确认主手有采收资格。
               有结果依赖的阶段用run_program读取mc.call的真实data；已知参数的有限清单可用workflow。
               这些能力供各种目标复用；失败或未知状态按真实回执重新判断，不猜坐标、槽位或完成状态。
-              工具目录提供简要用途和完整参数；详细工作规则不清楚时先tool_help读取并复用。
+              工具目录提供简要用途和完整参数；参数或返回字段不清楚时tool_help读取并复用，不编写探测字段的长脚本。
               查询大表保存在程序局部变量中，只return/print下一阶段需要的事实；动作与失败仍有完整回执。
+              表直接print/return，不用tostring；脚本错误按报告行和返回字段修正剩余步骤，不能重放已完成动作。
               局部路线或工作受阻可用mc.try_call读取失败，必须先status details=true核对身体和背包再选择有限替代执行；
               权限、工具、材料、安全或未知失败不能捕获，也不能通过恢复扩大目标、范围或预算。
             - 配方和获取途径用工具查询。craft的材料processes列单输入合成与支持的烧制工艺，
@@ -44,6 +45,7 @@ public final class PromptBuilder implements Supplier<String> {
               结束前按实际成果核验，真正受阻用report_blocked说明缺口。
             - 本轮身体观测是当前位置、背包与装备的依据；已含完整背包就直接复用。
               挖掉方块不等于入包；走近后身体自动拾取，物品消失也不证明被自己捡到。
+              拾取用新鲜item_targets的stand_positions和move_to exact=true，默认相邻到达不保证触碰。
               search_resource查询本地完整分页；find_resource是底层单页接口，显式分页须接next_offset。
               局部空搜索只说明本次范围；gather/explore默认只行走换区。
               地下勘探用explore mode=underground，自选方向、target_y和targets；不内置矿种层高。

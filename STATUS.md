@@ -3,6 +3,39 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 程序返回契约与恢复效率（2026-10-16 12:35，Asia/Shanghai）
+
+- 第四次latest.log为465918 bytes，末写12:16:14，SHA256
+  `8a557bc186676a8bda5cf6ca247d7f584442155e03e84ae1a3b44e4fd72ca2f9`；
+  实例包确认18c442b1。105次请求中86次完成且有派发，平均9994/中位6113ms；
+  40次craft执行合计114ms、最大20ms。跨任务/世界/模型配置，不能作受控速度同比。
+  9次PROGRAM_ERROR、字段猜测、程序内帮助被隐藏及75次负放置预检，说明上轮
+  缩回执后缺少返回契约/局部纠错信息，完整行号及参考链路见当日日志第四次测试节。
+- tool_help由同一输入注册表附returns字段说明，核对status/槽位/配方/扫描/工作等真实
+  生产字段；不是强制类型Schema。实际Lua环境说明共用，明确基础函数及不开放的库，
+  表直接print/return，set_goal/report_blocked/ask_owner只能外层调用。
+  程序内帮助始终展示；can_craft/preflight负值保留有界原因、相同原因仅展示一次。
+  CraftTool负查询新增failure字符串，原动作/消费/实际成果语义保持。
+- 脚本错误返回program_error.kind/line及有界最后查询提示，不回显原始异常或源码，
+  保留已完成动作且不重放。局部恢复按工具/结构化参数/失败类别累计五次；
+  变化耗时、JSON键顺序、成功空动作不清账。BodyFacts复用长期阶段既有指纹，
+  完整36槽/位置/维度的真实事实变化或实际计数才允许重评，时钟/换槽/耐久不算进展。
+  仅同程序记忆，原新鲜状态门、权限/前提/安全/范围/未知停止、预算/取消继续保留。
+- 掉落日志确认普通move_to相邻到达不保证触碰，常驻说明/帮助/提示补新鲜stand_positions
+  及exact=true；gather本来已精确到达。本卡不改底层寻路，未销账8001节点失败、
+  坑内/分数脚高、完整掉落账、改后世界A*、普通移动返程或独立身体批次。
+- 新增12项（核心9/客户端3）回归。stage1的诊断/夹具问题及stage2精简说明漏实体身份
+  已修正，失败阶段不记通过，未放宽已有测试。最终强制
+  `gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/program-contract-final-20261016.log，31秒成功、20/20任务执行；
+  XML129 suites、**1095项**（核心322/根106/客户端667），failures/errors/skipped全0。
+  生产工具输出经真实Lua桥与实际runner回归；世界/模型受控，未运行真实游戏或模型。
+- 候选build/libs/mcbot-0.1.0.jar，**1,228,248 bytes**，末写12:34:21，SHA256
+  `547ba97380f02b90103ac4dc343642865921b85c30484fa5b2f1711529f6da9f`。
+  已核0.1.0版本、ToolCatalog、内嵌BodyFacts/BoundedProgram、LuaJ及许可，list-java无残留。
+  最小同工具集请求完整说明27836/短说明16900 bytes，必要契约令短请求比上一卡增加628，
+  不宣称实机提速已验。未自动安装，宿主/连接器/参考/实例未改；提交以Git实际记录为准。
+
 ## 上下文效率、按需帮助与有限恢复（2026-10-16 11:25，Asia/Shanghai）
 
 - 第三次latest.log为234713 bytes，末写11:07:07，SHA256

@@ -36,10 +36,22 @@ class ToolCatalogTest {
                     s.name().equals(definition.get("name").getAsString())).findFirst().orElseThrow();
             assertEquals(spec.description(), definition.get("description").getAsString());
             assertEquals(JsonParser.parseString(spec.paramsJsonSchema()), definition.get("parameters"));
+            assertEquals(ClientToolDefs.resultGuide(spec.name()), definition.get("returns").getAsString());
         }
         assertTrue(result.feedback().contains("mc.try_call"));
     }
 
+    @Test void resultHelpExplainsActualFieldShapesAndTheProgramEnvironment() {
+        var result = ToolCatalog.read("{\"names\":[\"status\",\"inspect_block\",\"craft\"]}");
+        assertTrue(result.ok());
+        assertTrue(result.feedback().contains("data.x/y/z"));
+        assertTrue(result.feedback().contains("data.block是方块ID字符串"));
+        assertTrue(result.feedback().contains("required_count"));
+        assertTrue(result.feedback().contains("output_per_batch是{item,count}"));
+        var language = ToolCatalog.MODEL_SPECS.stream().filter(s -> s.name().equals("run_program")).findFirst().orElseThrow();
+        assertTrue(language.description().contains("不提供string/table/math库"));
+        assertTrue(language.description().contains("set_goal/report_blocked/ask_owner只能外层"));
+    }
     @Test void helpIsBoundedAndNeverEchoesUnknownInputOrModifiesTheRegistry() {
         var before = List.copyOf(ToolCatalog.MODEL_SPECS);
         for (String json : List.of("{\"names\":[\"private-unknown\"]}",

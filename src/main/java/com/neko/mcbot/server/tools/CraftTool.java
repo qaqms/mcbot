@@ -165,6 +165,7 @@ public final class CraftTool implements ServerTool {
         JsonObject data = details(companion, selected, args.count(), batches, table);
         boolean possible = selectedPlan.failure() == null;
         data.addProperty("can_craft", possible);
+        if (!possible) data.addProperty("failure", selectedPlan.failure());
         data.addProperty("query", args.query());
         data.addProperty("crafted_count", possible && !args.query() ? produced : 0);
         if (args.materialIndex() != null) {

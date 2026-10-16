@@ -7,20 +7,35 @@
 
 - 第三次测试后的工具目录共24项（15服务端+9本地）。模型常驻稳定简要说明和
   全部原参数Schema；`tool_help {}`返回索引，`{"names":["craft","move_to"]}`返回
-  1–3项完整原说明/Schema，1024字符输入帽，不执行游戏动作或改变后续目录。
-  Lua可调用帮助，但需要模型阅读的说明须显式return/print；这不是动态减少Schema的懒加载。
+  1–3项完整原说明/Schema及`returns`返回字段说明，1024字符输入帽。
+  Lua内帮助也始终展示，不必显式print；不执行游戏动作或改变后续目录。
+  returns是核对生产输出的说明，不是强制类型Schema，也不是动态减少Schema的懒加载。
 - run_program成功查询全文仅供Lua读取，自动反馈记录编号及有界负预检/覆盖/环境标记。
   `can_craft/preflight_passed/no_targets/unknown/unloaded/scan_complete/coverage_complete/
   results_truncated/work_truncated/next_offset/truncated/in_water/eyes_in_water/in_lava/water_recovery`
   等仅在实际data含有时保留，不推测缺失字段。动作和失败仍完整记录。
+  第四次测试后，can_craft/preflight_passed=false还保留最多1024字节原因，
+  同原因只展示一次；优先读data.failure，缺失则从真实feedback截短。
+  craft不可制作时新增data.failure，查询ok仍只表示观察完成。
   显式输出精确feedback会展开一次并引用编号，Lua值和data.returned不变；输出帽仍生效。
+- 脚本环境支持变量/表/函数/条件/循环及assert/error/ipairs/pairs/next/tonumber/tostring/type/print；
+  不提供string/table/math库、pcall、require、元表或外部访问。
+  追加表用`t[#t+1]=v`，查看表直接print/return，不用tostring。
+  脚本错误给`data.program_error:{kind,line}`及有界最后查询提示，line=0表示无法定位；
+  类别为SYNTAX/FIELD_ACCESS/FUNCTION_CALL/VALUE_TYPE/LUA_RUNTIME/VALUE_OR_DEPTH，
+  不输出原异常或源码，修改剩余步骤而不重放已完成动作。
 - `mc.call`失败即停。`mc.try_call`仅对move_to/break_block/gather/explore的
   NO_PATH/NO_PROGRESS/PARTIAL/TARGET_BLOCKED/OUT_OF_REACH/TARGET_LOST允许读取失败，
   不自动重发。继续修改前必须`mc.call("status",{details=true})`取得有限数值位置、
   非空维度及inventory.slots，再按新事实选同任务内的有限替代。
   相同无进展局部失败五次停止，插入状态查询不补次数。
+  同程序按工具/结构化参数/失败类别累计，不受键顺序、耗时文字或成功空动作刷新；
+  完整36槽/位置/维度事实变化或真实成果计数允许重评，时间/槽位重排/耐久不算进展。
   权限/确认、工具/材料、安全/范围、取消/超时及未知错误仍立即停止；
   调用/时间/计算/输出及嵌套原子预算不因恢复重开，不允许扩大原目标或许可。
+- 掉落拾取使用新鲜item_targets[].stand_positions与move_to exact=true，再查背包；
+  默认相邻到达不能证明触碰。scan的special_blocks/summary_lines/groups/entities为文字列表，
+  不是带坐标的方块对象；指定资源用search_resource，inspect.data.block是ID字符串。
 - 完整请求达到配置窗口75%且有足够可替换历史时提前整理；autoCompact关闭仍不整理。
   原较低软阈值、完整工具组、近段原文、净节省与失败熔断保持。
   摘要读取既有出站投影，成功后重新查询身体；任务目标/基线/总步帽及探索账独立保留。

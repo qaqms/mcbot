@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neko.mcbot.agentcore.llm.ToolSpec;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
+import com.neko.mcbot.agentcore.script.BoundedProgram;
 
 import java.util.List;
 
@@ -18,10 +19,12 @@ public final class ToolCatalog {
     private static String summary(ToolSpec spec) {
         if (spec.name().equals("run_program"))
             return "用Lua变量、条件和有界循环组合依赖步骤，mc.call(name,args)返回ok/feedback/data，失败即停。"
-                    + "语法或结果字段不清楚先tool_help读取完整说明。成功查询全文仅供程序使用，需要模型判断的事实显式return/print。"
+                    + BoundedProgram.LANGUAGE_GUIDE
+                    + "结果字段不清楚先tool_help。成功查询留本地，所需事实return/print；帮助始终展示，负预检保留原因。"
                     + "mc.try_call只允许读取局部移动/工作失败；继续动作前必须mc.call('status',{details=true})核对新鲜身体和背包。"
                     + "不能捕获权限/材料/工具/安全/未知失败，不自动重试。最终目标先set_goal，材料gather用scope=subtask；"
-                    + "不能嵌套程序或反问，默认共享128原子调用预算，不按脚本行数缩小嵌套采集预算。";
+                    + "set_goal/report_blocked/ask_owner只能外层调用；不能嵌套程序。默认共享128原子调用预算，"
+                    + "不按脚本行数缩小嵌套采集预算。错误按program_error.kind/line核对，已完成动作勿重放。";
         if (spec.name().equals("tool_help")) return spec.description();
         String text = switch (spec.name()) {
             case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"
@@ -47,11 +50,21 @@ public final class ToolCatalog {
                     + "query只读，须看preflight_passed；执行重验，失败核对实际消耗/变化，不自动重试。";
             case "move_to" -> "规划有界行走/挖穿/搭路；walk_only=true不挖放，exact=true指定脚格，"
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
+                    + "拾取须用新鲜stand_positions和exact=true；默认相邻到达不保证触碰。"
                     + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";
             case "attack" -> "原地近战不追击；先扫描entity_id/target_uuid，确认模式NEED_CONFIRM后ask_owner取得具体授权。"
                     + "ACCEPTED等真终态，挥击次数不等于伤害或击杀。";
             case "collect" -> "兼容触碰拾取，身体会自动拾取；r只是查询范围，远处先走近。"
                     + "ok=false可能已部分拾取，按新鲜背包核对成果。";
+            case "status" -> "读取新鲜身体；data.x/y/z是脚格，没有position对象。details=true有"
+                    + "data.inventory.slots[{slot,item,count}]；有完整观测则复用，不重复查询。";
+            case "inventory" -> "读取data.slots[{slot,item,count}]和selected_slot；列表从1起，"
+                    + "entry.slot是equip使用的0-35槽号。";
+            case "scan_area" -> "只读附近摘要：data.item_targets为掉落/触碰站位，entity_targets为活物，"
+                    + "entity_id/target_uuid供attack，不可猜编号；special_blocks为近圈坐标文字列表。"
+                    + "没有blocks字段。指定方块用search_resource。";
+            case "inspect_block" -> "只读6.5格内精确方块，data.block是ID字符串；容器看slots及next_offset，"
+                    + "区域搜索用search_resource，不逐格inspect。";
             case "transfer" -> "近身普通容器存取，机器用smelt；ok=false可能部分搬运，未搬部分留在来源，先核对背包。";
             default -> {
                 int end = spec.description().indexOf('。');
@@ -90,6 +103,7 @@ public final class ToolCatalog {
                     definition.addProperty("name", spec.name());
                     definition.addProperty("description", spec.description());
                     definition.add("parameters", JsonParser.parseString(spec.paramsJsonSchema()));
+                    definition.addProperty("returns", ClientToolDefs.resultGuide(spec.name()));
                     definitions.add(definition);
                 }
                 data.add("definitions", definitions);

@@ -105,6 +105,178 @@ class BoundedProgramTest {
         }
     }
 
+    @Test void runtimeFailureReportsTheScriptLineAndLastQueryWithoutEchoingTheException() throws Exception {
+        try (var f = new Fixture("""
+                local q=mc.call("inspect_block",{x=1,y=64,z=2})
+                local missing=q.data.position
+                return missing.x
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(true,
+                    "actual block is a string; no inventory was changed", JsonParser.parseString(
+                    "{\"block\":\"minecraft:stone\",\"slots\":[]}").getAsJsonObject()));
+            var result = f.outcome();
+            assertFalse(result.ok());
+            assertTrue(result.feedback().startsWith("PROGRAM_ERROR:FIELD_ACCESS"), result.feedback());
+            assertEquals(3, result.data().getAsJsonObject("program_error").get("line").getAsInt());
+            assertTrue(result.feedback().contains("actual block is a string"));
+            assertEquals(1, result.data().get("terminal_calls").getAsInt());
+            assertEquals(1, f.calls.size());
+        }
+        try (var f = new Fixture("error('private-script-value-do-not-echo')")) {
+            var result = f.outcome();
+            assertTrue(result.feedback().contains("FUNCTION_CALL"));
+            assertFalse(result.feedback().contains("private-script"));
+            assertFalse(result.data().toString().contains("private-script"));
+        }
+    }
+
+    @Test void compileFailureReportsOnlyANumericLocationAndDoesNotExecuteTheValidPrefix() throws Exception {
+        try (var f = new Fixture("mc.call('craft',{item='fixture'})\nlocal private_source = @")) {
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("PROGRAM_ERROR:SYNTAX"), result.feedback());
+            assertEquals(2, result.data().getAsJsonObject("program_error").get("line").getAsInt());
+            assertFalse(result.feedback().contains("private_source"));
+            assertTrue(f.calls.isEmpty());
+        }
+    }
+
+    @Test void unavailableLibraryErrorsGiveTheActualLanguageBoundaryAndNoWorldAction() throws Exception {
+        try (var f = new Fixture("local n=3\nlocal x=math.floor(n)\nmc.call('craft',{})")) {
+            var result = f.outcome();
+            assertFalse(result.ok());
+            assertEquals(2, result.data().getAsJsonObject("program_error").get("line").getAsInt());
+            assertTrue(result.feedback().contains("不提供string/table/math库"));
+            assertTrue(result.feedback().contains("t[#t+1]=v"));
+            assertTrue(f.calls.isEmpty());
+        }
+    }
+
+    @Test void negativeQueryReasonsRemainVisibleWithoutReprintingLargeCandidateTables() throws Exception {
+        try (var f = new Fixture("""
+                for i=1,3 do mc.call("craft",{item="fixture",query=true}) end
+                return {ready=false}
+                """)) {
+            String text = "candidate ".repeat(600);
+            f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(true, text,
+                    JsonParser.parseString("{\"can_craft\":false,\"failure\":\"NEED_WORKBENCH:real missing worksite\"}")
+                            .getAsJsonObject()));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertTrue(result.feedback().contains("NEED_WORKBENCH:real missing worksite"));
+            assertEquals(result.feedback().indexOf("real missing worksite"),
+                    result.feedback().lastIndexOf("real missing worksite"));
+            assertFalse(result.feedback().contains(text));
+            assertEquals(3, f.calls.size());
+        }
+    }
+
+    @Test void failedScriptsGetABoundedQueryHintAndPreserveAlreadyCompletedEffects() throws Exception {
+        try (var f = new Fixture("""
+                mc.call("craft",{item="fixture"})
+                mc.call("inventory",{})
+                error("do not replay")
+                mc.call("craft",{item="fixture"})
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("craft")
+                    ? actual("{\"crafted_count\":2}") : new ToolOutcome(true,
+                    "large observation ".repeat(1000), new JsonObject()));
+            var result = f.outcome();
+            assertFalse(result.ok());
+            assertTrue(result.feedback().contains("说明截短"));
+            assertTrue(result.feedback().getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 4000);
+            assertEquals(2, result.data().get("crafted_count").getAsInt());
+            assertEquals(List.of("craft", "inventory"), f.calls.stream().map(s -> s.split(":")[0]).toList());
+        }
+    }
+
+    @Test void helpInsideAProgramIsVisibleEvenWhenTheScriptOnlyPrintsItsType() throws Exception {
+        try (var f = new Fixture("""
+                local h=mc.call("tool_help",{names={"craft"}})
+                print(type(h.data))
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(true,
+                    "trusted help with actual result fields", JsonParser.parseString("{\"definitions\":[]}")
+                            .getAsJsonObject()));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertTrue(result.feedback().contains("trusted help with actual result fields"));
+            assertEquals(1, f.calls.size());
+        }
+    }
+
+    @Test void errorHintRemainsBoundedWithUnicodeAndAnAlmostFullOutput() throws Exception {
+        try (var f = new Fixture("print('" + "x".repeat(18700)
+                + "')\nmc.call('inventory',{})\nlocal function broken()\nreturn nil_value.x\nend\nbroken()")) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(
+                    new ToolOutcome(true, "木头🪵".repeat(2000), new JsonObject()));
+            var result = f.outcome();
+            assertFalse(result.ok());
+            assertTrue(result.feedback().startsWith("PROGRAM_ERROR:FIELD_ACCESS"), result.feedback().substring(0, 100));
+            assertEquals(4, result.data().getAsJsonObject("program_error").get("line").getAsInt());
+            assertTrue(result.feedback().contains("说明截短"));
+            assertFalse(result.feedback().contains("\uFFFD"));
+            assertTrue(result.feedback().getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 21000);
+            assertEquals(1, f.calls.size());
+        }
+    }
+
+    @Test void changingTimingTextArgumentOrderOrNoOpSuccessCannotReplenishLocalRecovery() throws Exception {
+        try (var f = new Fixture("""
+                mc.call("status",{details=true})
+                for i=1,20 do
+                    local args
+                    if i%2==0 then args={z=0,y=64,x=2} else args={x=2,y=64,z=0} end
+                    mc.try_call("move_to",args)
+                    mc.call("status",{details=true})
+                    mc.call("move_to",{x=0,y=64,z=0})
+                end
+                """)) {
+            var failures = new java.util.concurrent.atomic.AtomicInteger();
+            f.host = (name, args) -> {
+                if (name.equals("status")) return CompletableFuture.completedFuture(actual(
+                        "{\"x\":0,\"y\":64,\"z\":0,\"dimension\":\"fixture:world\",\"inventory\":{\"slots\":[]}}"));
+                if (JsonParser.parseString(args).getAsJsonObject().get("x").getAsInt() == 0)
+                    return CompletableFuture.completedFuture(actual("{\"x\":0,\"y\":64,\"z\":0}"));
+                return CompletableFuture.completedFuture(new ToolOutcome(false,
+                        "NO_PROGRESS:8001 nodes in " + failures.incrementAndGet() + "ms"));
+            };
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
+            assertEquals(5, failures.get());
+        }
+    }
+
+    @Test void actualBodyProgressAllowsNewAttemptsButClockSlotAndWearDoNot() throws Exception {
+        try (var f = new Fixture("""
+                mc.call("status",{details=true})
+                for i=1,12 do
+                    mc.try_call("move_to",{x=2})
+                    mc.call("status",{details=true})
+                end
+                """)) {
+            var observations = new java.util.concurrent.atomic.AtomicInteger();
+            f.host = (name, args) -> {
+                if (!name.equals("status")) return CompletableFuture.completedFuture(new ToolOutcome(false, "NO_PATH:wall"));
+                int i = observations.getAndIncrement();
+                var data = JsonParser.parseString("{\"x\":" + (i >= 4 ? 1 : 0)
+                        + ",\"y\":64,\"z\":0,\"dimension\":\"fixture:world\",\"game_tick\":" + i
+                        + ",\"inventory\":{\"slots\":[]}}").getAsJsonObject();
+                for (int index = 0; index < 36; index++) {
+                    var slot = new JsonObject();
+                    slot.addProperty("slot", index);
+                    slot.addProperty("item", index == i % 36 ? "fixture:tool" : "");
+                    slot.addProperty("count", index == i % 36 ? 1 : 0);
+                    slot.addProperty("damage", i);
+                    data.getAsJsonObject("inventory").getAsJsonArray("slots").add(slot);
+                }
+                return CompletableFuture.completedFuture(new ToolOutcome(true, "actual state", data));
+            };
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
+            assertEquals(9, result.data().get("local_failures").getAsInt());
+        }
+    }
+
     @Test void localFailureCanChooseAnAlternativeOnlyAfterFreshCompleteBodyObservation() throws Exception {
         try (var f = new Fixture("""
                 local first=mc.try_call("move_to",{x=1,y=64,z=0})
@@ -251,7 +423,7 @@ class BoundedProgramTest {
             assertTrue(result.feedback().contains("\"truncated\":true"));
             assertTrue(result.feedback().contains("\"eyes_in_water\":true"));
             assertTrue(result.feedback().contains("seeking_air"));
-            assertFalse(result.feedback().contains("unabridged observation"));
+            assertTrue(result.feedback().contains("unabridged observation"), "negative preflight must retain its reason");
         }
     }
 

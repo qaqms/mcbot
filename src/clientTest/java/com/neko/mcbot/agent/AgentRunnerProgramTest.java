@@ -136,10 +136,25 @@ class AgentRunnerProgramTest {
         assertTrue(result.ok(), result.content());
         assertTrue(result.content().contains("\"ready\":true"));
         assertFalse(result.content().contains(full));
-        assertFalse(result.content().contains("整批能否完成"));
+        assertTrue(result.content().contains("整批能否完成"), "help is model-facing even inside Lua");
         assertEquals(1, client.toolCount());
     }
 
+    @Test void actualRunnerReportsADataAccessErrorAndKeepsTheFreshQueryForCorrection() {
+        start("[只读] inspect a nearby block", """
+                local r=mc.call("inspect_block",{x=1,y=90,z=0})
+                return r.data.position.x
+                """);
+        tool("inspect_block", 1);
+        receipt(true, "block identity from the actual receipt",
+                "{\"block\":\"minecraft:stone\",\"container\":false,\"slots\":[],\"next_offset\":-1}");
+        var result = outcome();
+        assertFalse(result.ok());
+        assertTrue(result.content().contains("FIELD_ACCESS"), result.content());
+        assertTrue(result.content().contains("脚本行=2"));
+        assertTrue(result.content().contains("block identity from the actual receipt"));
+        assertEquals(1, client.toolCount());
+    }
     @Test void localRecoveryThroughActualRunnerStillRequiresFreshFullStatusAndOriginalPermission() {
         start("approach the same worksite", """
                 local r=mc.try_call("move_to",{x=1,y=90,z=0,walk_only=true})

@@ -1,6 +1,7 @@
 package com.neko.mcbot.agent;
 
 import com.neko.mcbot.agentcore.llm.ToolSpec;
+import com.neko.mcbot.agentcore.script.BoundedProgram;
 
 import java.util.List;
 
@@ -10,19 +11,91 @@ public final class ClientToolDefs {
     private ClientToolDefs() {
     }
 
+    /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
+    static String resultGuide(String name) {
+        return switch (name) {
+            case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
+                    + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
+                    + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
+                    + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。";
+            case "inventory" -> "data.selected_slot、storage_size、slots_used；"
+                    + "data.slots是[{slot,item,count,damage?,max_damage?}]，data.equipment是装备列表。"
+                    + "slots是从1起的列表，传给equip的是entry.slot实际0-35槽号。";
+            case "craft" -> "data.can_craft布尔；false时data.failure说明缺口，不是脚本异常。"
+                    + "data.ingredients是[{options:物品ID字符串列表,per_batch,required_count,available_count,options_truncated}]；"
+                    + "没有materials或missing字段。requested_count/batches/produced_count为计划数，crafted_count为实际数；"
+                    + "output_per_batch是{item,count}，requires_workbench为布尔，workbench?为{x,y,z}。"
+                    + "material_index查询才有material:{index,recipe,items,sources,"
+                    + "processes,truncated,processes_truncated,world_sources_verified}；"
+                    + "items/sources条目为{item,block?,conversion?}，processes条目有process/workstation/"
+                    + "produced_item/produced_count/input_count/inputs/requires_fuel/cooking_ticks?。"
+                    + "ingredients[n]的材料分组序号是n-1；缺口按required_count与available_count计算，"
+                    + "options可能重叠，最终可制作仍以can_craft为准。";
+            case "scan_area" -> "data.item_targets是[{item,count,x,y,z,target_uuid,stand_positions,"
+                    + "can_touch_here,pickup_allowed,pickup_delayed,pickup_delay_ticks}]；"
+                    + "stand_positions是整数脚格{x,y,z}，用exact=true走到候选后核对新鲜背包。"
+                    + "一般扫描另有entity_targets、summary_lines、groups、special_blocks；"
+                    + "entities/summary_lines/groups/special_blocks是文字列表，不是带坐标的对象。"
+                    + "entity_targets条目的entity_id/target_uuid供attack，不可猜编号。"
+                    + "items_only=true不含方块/活物字段；frontiers=true才有exploration_points。"
+                    + "没有blocks字段；查指定方块应search_resource，不逐格inspect代替区域搜索。";
+            case "find_resource", "search_resource" -> "data.targets是[{block,x,y,z,distance,...}]；"
+                    + "work=true时按预算附work_checked/can_work_here/can_clear_here/stand_positions/work_failure/"
+                    + "harvestable_with_hand/dry_work_safe，缺字段表示未知。stand_positions是脚格{x,y,z}。"
+                    + "no_targets为布尔，unknown为数量，results_truncated/work_truncated表示输出/工作评估截断；"
+                    + "find_resource续页看next_offset及scan_center；search_resource给scan_complete/coverage_complete/"
+                    + "search_pages。局部空结果不等于没有资源；目标发现不等于可采或入包。";
+            case "inspect_block" -> "data.block是方块ID字符串，container是布尔，slots是[{slot,item,count,...}]，"
+                    + "slot_count/offset/next_offset为整数。没有block.name或pos；next_offset=-1为末页。"
+                    + "普通方块也返回成功且slots为空；区域搜索用search_resource。";
+            case "place_block" -> "query时data.preflight_passed布尔；false时failure是原因字符串，"
+                    + "alternatives是最多6个{x,y,z,face}，checked_positions为检查数；"
+                    + "建议已做有界预检，不必再次遍历邻域，执行前仍重验。"
+                    + "native_validation_pending表示原版尚待执行，changed=false/consumed_count=0不是已放置。"
+                    + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
+            case "move_to" -> "真正终态data.x/y/z为实际落脚，arrival为position或work，"
+                    + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
+                    + "拾取用scan_area.item_targets[].stand_positions及exact=true；工作用arrival=work。"
+                    + "失败数据可能仅含已知部分效果，须status details=true重新核对，不假定到了请求格。";
+            case "gather" -> "data.goal_satisfied、actual_progress、scope、mined_blocks、cleared_blocks、"
+                    + "primitive_calls、skipped_blocks/skipped_items及last_observation。"
+                    + "成果是实际背包增量/总量，mined_blocks或source_observations不是入包数。"
+                    + "失败回执保留实际效果与原因，材料subtask不改变最终目标。";
+            case "explore" -> "data.state为新鲜身体/背包，discovery?为搜索结果，movement?为本段移动；"
+                    + "exploration_advanced只表示已换观察区；exploration_attempts/exploration_max_steps/"
+                    + "exploration_radius/return_steps/underground_remaining_digs是原任务累计账。";
+            case "smelt" -> "data.input/fuel/output是{item,count,...}；state、cook_progress_ticks/cook_total_ticks、"
+                    + "burn_remaining_ticks、fuel_sufficient_for_input、suggested_wait_seconds描述机器。"
+                    + "实际装取看loaded_input_count/loaded_fuel_count/taken_count；装料不表示产物已完成。";
+            case "tool_help" -> "有names时data.definitions是[{name,description,parameters,returns}]；"
+                    + "省略names时data.tools是[{name,summary}]。说明自动展示，无须tostring表；同任务直接复用。";
+            case "run_program" -> "data.returned保留Lua返回原值；api_calls/terminal_calls/query_calls/"
+                    + "primitive_calls记录原预算；last_tool/last_receipt是最后子调用。"
+                    + "错误时program_error?={kind,line}；line为本段源码行，0表示无法定位。"
+                    + "mc.call返回{ok,feedback,data}；列表从1开始，缺字段为nil。"
+                    + "只读例：local r=mc.call('status',{details=true}); "
+                    + "return {x=r.data.x,slots=r.data.inventory.slots}。";
+            default -> "mc.call返回{ok:布尔,feedback:说明字符串,data:结构化对象}；"
+                    + "字段依实际终态/模式可能省略。先检查nil，不能根据参数名猜返回值；"
+                    + "不清楚可直接return r.data或print(r.data)，避免tostring表丢失结构。";
+        };
+    }
+
     public static final List<ToolSpec> SPECS = List.of(
             new ToolSpec("run_program", "优先组合有结果依赖的阶段：Lua局部变量/函数/if/for/while从真实回执选下一步，减少逐动作模型往返。"
                     + "通过mc.call('工具名',{参数})顺序执行现有游戏工具及gather/workflow/explore/search_resource；返回表含ok/feedback/data，数组从1开始。"
                     + "查询配方缺口、inventory槽位、工作站位均据data，不猜坐标/槽；缺字段或条件不够则return说明阻塞，核验后才继续。"
                     + "最终物品先在外层set_goal登记；组合内gather必须scope='subtask'，已有足量材料宜mode='total'。"
                     + "失败/需确认立即停止并保留回执，交回外层ask_owner；不在程序内重试或自动批准。"
-                    + "支持算术、表、局部函数、assert/error/ipairs/pairs/next/tonumber/tostring/type/print；"
-                    + "不提供文件/网络/Java/require/load/debug/coroutine/string/table/math库、pcall或元表，不能嵌套run_program。"
+                    + BoundedProgram.LANGUAGE_GUIDE
+                    + "不能嵌套run_program或调用set_goal/report_blocked/ask_owner；这些只能外层调用。"
                     + "code最多16384字节；timeout_seconds默认300最多900，max_calls默认128最多256；"
                     + "max_calls同时约束mc.call次数和嵌套内部的原子调用总数，gather一次会消耗多次扫描/移动/挖掘/背包调用；"
                     + "不要按Lua里的mc.call行数给嵌套采集设置很小的预算，通常省略沿用默认值。查询大表留在局部变量，只返回所需事实。"
                     + "计算/表/字符串/输出都有独立预算，动作仍走任务权限、身体互斥与真实终态。"
                     + "成功查询只记录调用编号，全文供程序读取；需要模型判断的事实须显式return/print。"
+                    + "tool_help说明始终展示给模型；负预检保留有界原因。运行错误带program_error.kind/line，"
+                    + "核对该行及最近查询后改写剩余步骤，勿重放已经完成的动作。"
                     + "动作与失败反馈完整记录；显式输出的查询反馈展开一次，完全相同的文字引用回执编号，data与脚本读值不变。"
                     + "mc.try_call(name,args)仅可读取NO_PATH/NO_PROGRESS/PARTIAL/TARGET_BLOCKED/OUT_OF_REACH/TARGET_LOST局部失败，"
                     + "失败后须status details=true核对位置/维度/完整背包，再按新事实选择同一任务内的有限替代动作。"
@@ -32,8 +105,8 @@ public final class ClientToolDefs {
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
                             + "\"max_calls\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
                             + "\"required\":[\"code\"],\"additionalProperties\":false}"),
-            new ToolSpec("tool_help", "只读查询已注册工具的完整说明和参数Schema。names一次1-3项；省略返回能力目录。"
-                    + "参数或工作规则不清楚时先读说明并在同一任务复用；Lua可mc.call('tool_help',...)后显式return/print需要的说明。",
+            new ToolSpec("tool_help", "只读查询已注册工具的完整说明、参数Schema和返回字段。names一次1-3项；省略返回能力目录。"
+                    + "参数或结果字段不清楚时先读说明并在同一任务复用；Lua内调用的帮助也会展示给模型。",
                     "{\"type\":\"object\",\"properties\":{\"names\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":3,"
                             + "\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":32}}},\"additionalProperties\":false}"),
             new ToolSpec("explore", "独立、通用的换区观察能力，用新鲜status核验实际位移。"

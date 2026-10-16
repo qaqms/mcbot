@@ -122,6 +122,67 @@ class AwarenessToolTest {
         assertTrue(report.feedback().contains("trapped_or_unknown"));
         assertTrue(report.data().has("inventory"));
     }
+
+    @Test void productionObservationFieldsAreReadableThroughTheActualLuaBridge() throws Exception {
+        var inventory = new Inventory(null, new EntityEquipment());
+        inventory.setItem(4, new ItemStack(Items.BIRCH_LOG, 3));
+        var scan = new Scan();
+        scan.cells.put(scan.center().offset(1, 0, 0), Blocks.BIRCH_LOG.defaultBlockState());
+        var calls = new java.util.ArrayList<String>();
+        var program = new com.neko.mcbot.agentcore.script.BoundedProgram(
+                new com.neko.mcbot.agentcore.script.BoundedProgram.Plan("""
+                        local s=mc.call("status",{details=true})
+                        local inv=mc.call("inventory",{})
+                        local found=mc.call("find_resource",{targets={"birch_log"},r=3})
+                        local t=found.data.targets[1]
+                        local b=mc.call("inspect_block",{x=t.x,y=t.y,z=t.z})
+                        return {x=s.data.x,z=s.data.z,slot=s.data.inventory.slots[5].slot,
+                            item=inv.data.slots[5].item,count=inv.data.slots[5].count,
+                            block=b.data.block,next_offset=b.data.next_offset,container=b.data.container}
+                        """, 30, 8), System::currentTimeMillis, (name, text) -> {
+                    calls.add(name);
+                    var args = json(text);
+                    ServerTool.Result receipt = switch (name) {
+                        case "status" -> StatusTool.report(args,
+                                new StatusTool.Body(12.8, 80, -5.2, "minecraft:overworld", 20, 20, false, 50),
+                                inventory, json("{\"busy\":false}"));
+                        case "inventory" -> InventoryTool.report(inventory);
+                        case "find_resource" -> FindResourceTool.execute(args, scan);
+                        case "inspect_block" -> InspectBlockTool.execute(args, new InspectBlockTool.Access() {
+                            @Override public ServerTool.Result guard(BlockPos pos) {
+                                assertEquals(new BlockPos(13, 80, -6), pos);
+                                return null;
+                            }
+                            @Override public InspectBlockTool.Target target(BlockPos pos) {
+                                return new InspectBlockTool.Target("minecraft:birch_log", null, false, true, false);
+                            }
+                        });
+                        default -> throw new AssertionError(name);
+                    };
+                    return java.util.concurrent.CompletableFuture.completedFuture(
+                            new com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome(
+                                    receipt.ok(), receipt.feedback(), receipt.data()));
+                }, Runnable::run, () -> { });
+        try {
+            var result = program.start().get(3, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(result.ok(), result.feedback());
+            var returned = result.data().getAsJsonObject("returned");
+            assertEquals(12, returned.get("x").getAsInt());
+            assertEquals(-6, returned.get("z").getAsInt());
+            assertEquals(4, returned.get("slot").getAsInt());
+            assertEquals("minecraft:birch_log", returned.get("item").getAsString());
+            assertEquals(3, returned.get("count").getAsInt());
+            assertEquals("minecraft:birch_log", returned.get("block").getAsString());
+            assertEquals(-1, returned.get("next_offset").getAsInt());
+            assertFalse(returned.get("container").getAsBoolean());
+            assertEquals(java.util.List.of("status", "inventory", "find_resource", "inspect_block"), calls);
+            assertEquals(3, inventory.getItem(4).getCount());
+            assertEquals(4, result.data().get("query_calls").getAsInt());
+        } finally {
+            program.stop("CANCELLED:test cleanup");
+            program.terminated().get(3, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
     @Test void unknownCellsNeverReadAndEmptyDoesNotClaimAbsence() {
         var scan = new Scan();
         scan.loaded = false;

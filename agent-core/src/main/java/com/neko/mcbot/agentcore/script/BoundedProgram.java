@@ -4,6 +4,7 @@ import com.google.gson.*;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
 import com.neko.mcbot.agentcore.loop.SearchPages;
 import com.neko.mcbot.agentcore.loop.TaskPolicy;
+import com.neko.mcbot.agentcore.loop.BodyFacts;
 import org.luaj.vm2.*;
 import org.luaj.vm2.compiler.LuaC;
 import org.luaj.vm2.lib.BaseLib;
@@ -20,6 +21,12 @@ import java.util.function.LongSupplier;
 
 /** Lua controls data and sequencing; only the host may dispatch a game action. */
 public final class BoundedProgram {
+    private static final Set<String> GLOBALS =
+            Set.of("assert", "error", "ipairs", "pairs", "next", "tonumber", "tostring", "type");
+    public static final String LANGUAGE_GUIDE =
+            "支持Lua变量/表/函数/条件/循环和assert/error/ipairs/pairs/next/tonumber/tostring/type/print；"
+            + "不提供string/table/math库、pcall、require、元表或外部访问。"
+            + "追加列表用t[#t+1]=v；查看表直接print(t)或return t，不用tostring(t)。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
             if (json == null || bytes(json) > 20000) throw new IllegalArgumentException();
@@ -63,7 +70,9 @@ public final class BoundedProgram {
     private final Map<String, Integer> feedbackRefs = new LinkedHashMap<>();
     private record QueryReceipt(int number, String name) { }
     private final Map<String, QueryReceipt> queryRefs = new LinkedHashMap<>();
-    private final Map<String, Integer> localFailureRepeats = new LinkedHashMap<>();
+    private record FailureKey(String tool, JsonObject args, String kind) { }
+    private final Map<FailureKey, Integer> localFailureRepeats = new LinkedHashMap<>();
+    private final Map<String, Integer> queryNoteRefs = new LinkedHashMap<>();
     private final Map<String, Long> counts = new LinkedHashMap<>();
     private volatile boolean halted;
     private volatile Thread worker;
@@ -77,6 +86,10 @@ public final class BoundedProgram {
     private int queryCalls, expandedQueries, recoveredFailures;
     private boolean needsBodyCheck;
     private String signature = "";
+    private String bodyFacts;
+    private volatile int sourceLine, opcode = -1;
+    private volatile boolean compiled;
+    private JsonObject programError;
     private final SearchPages searchPages = new SearchPages();
 
     public BoundedProgram(Plan plan, LongSupplier clock,
@@ -122,8 +135,7 @@ public final class BoundedProgram {
             var globals = new Globals();
             globals.load(new BaseLib());
             // Keep only bounded pure helpers; no loaders, metatables, protected calls or external libraries.
-            Set<String> keep = Set.of("assert", "error", "ipairs", "pairs", "next", "tonumber", "tostring", "type");
-            for (LuaValue key : globals.keys()) if (!keep.contains(key.tojstring())) globals.set(key, LuaValue.NIL);
+            for (LuaValue key : globals.keys()) if (!GLOBALS.contains(key.tojstring())) globals.set(key, LuaValue.NIL);
             LuaC.install(globals);
             globals.debuglib = new Budget();
             var api = new LuaTable();
@@ -141,7 +153,9 @@ public final class BoundedProgram {
                 }
             });
             check();
-            var value = globals.load(plan.code(), "task-program").call();
+            var chunk = globals.load(plan.code(), "task-program");
+            compiled = true;
+            var value = chunk.call();
             check();
             JsonElement returned = toJson(value, 0, new IdentityHashMap<>(), new int[]{0});
             if (bytes(returned.toString()) > 12000 || bytes(display(returned)) + outputBytes > OUTPUT_BYTES)
@@ -154,13 +168,43 @@ public final class BoundedProgram {
             });
         } catch (Halt stopped) {
             dispatch.accept(() -> stop(stopped.reason));
-        } catch (LuaError | IllegalArgumentException | StackOverflowError invalid) {
-            dispatch.accept(() -> stop("PROGRAM_ERROR:脚本语法、类型、返回值或调用深度无效；未重试动作。"));
+        } catch (LuaError invalid) {
+            String kind = !compiled ? "SYNTAX" : switch (opcode) {
+                case Lua.OP_GETTABLE, Lua.OP_GETTABUP, Lua.OP_SELF -> "FIELD_ACCESS";
+                case Lua.OP_CALL, Lua.OP_TAILCALL -> "FUNCTION_CALL";
+                case Lua.OP_ADD, Lua.OP_SUB, Lua.OP_MUL, Lua.OP_DIV, Lua.OP_MOD, Lua.OP_POW,
+                        Lua.OP_UNM, Lua.OP_LEN, Lua.OP_CONCAT -> "VALUE_TYPE";
+                default -> "LUA_RUNTIME";
+            };
+            int line = sourceLine;
+            if (!compiled) {
+                // Only the compiler's numeric location is exposed, never its source excerpt or error value.
+                var location = java.util.regex.Pattern.compile("^(?:task-program|\\[string \"task-program\"\\]):(\\d{1,5}):")
+                        .matcher(Objects.toString(invalid.getMessage(), ""));
+                if (location.find()) line = Integer.parseInt(location.group(1));
+            }
+            int failedLine = line;
+            dispatch.accept(() -> programFailed(kind, failedLine));
+        } catch (IllegalArgumentException | StackOverflowError invalid) {
+            int failedLine = sourceLine;
+            dispatch.accept(() -> programFailed("VALUE_OR_DEPTH", failedLine));
         } catch (RuntimeException unexpected) {
             dispatch.accept(() -> stop("INTERNAL:组合执行未取得有效结果，未猜测或重发。"));
         } finally {
             terminated.complete(null);
         }
+    }
+
+    private synchronized void programFailed(String kind, int line) {
+        if (done()) return;
+        programError = new JsonObject();
+        programError.addProperty("kind", kind);
+        programError.addProperty("line", line);
+        // The query was useful to Lua, but a broken script may never have printed its blocking facts.
+        if (last != null && queryRefs.containsKey(last.feedback()) && !feedbackRefs.containsKey(last.feedback()))
+            queryNote(last.feedback(), Math.min(2048, OUTPUT_BYTES - outputBytes - 128));
+        String hint = "按tool_help的返回字段读取data，缺字段先检查nil；" + LANGUAGE_GUIDE;
+        stop("PROGRAM_ERROR:" + kind + "，脚本行=" + line + "。" + hint + "未重试动作。");
     }
 
     private VarArgFunction bridge(boolean allowLocalFailure) {
@@ -241,6 +285,15 @@ public final class BoundedProgram {
                 && arguments.get("details").getAsBoolean() && completeBody(data)) {
             needsBodyCheck = false;
         }
+        if (receipt.ok() && name.equals("status") && completeBody(data)) {
+            try {
+                String fresh = BodyFacts.fingerprint(data);
+                if (bodyFacts != null && !bodyFacts.equals(fresh)) localFailureRepeats.clear();
+                bodyFacts = fresh;
+            } catch (RuntimeException incomplete) {
+                // An incomplete inventory cannot prove work progress or replenish recovery attempts.
+            }
+        }
         boolean progress = false;
         for (String key : COUNTS) {
             var amount = data.get(key);
@@ -260,10 +313,12 @@ public final class BoundedProgram {
             else if (!continuation) emptySearches++;
             if (emptySearches >= 3) throw new Halt("NO_TARGETS:三次搜索未取得目标，停止组合执行。");
         }
+        String kind = receipt.feedback().split(":", 2)[0];
         String now = name + "|" + args + "|" + receipt.feedback();
         // Fresh observations must not let the same failed action evade the no-progress guard.
-        if (progress || receipt.ok() && !TaskPolicy.observation(name, arguments)) localFailureRepeats.clear();
-        else if (!receipt.ok() && localFailureRepeats.merge(now, 1, Integer::sum) >= 5)
+        if (progress) localFailureRepeats.clear();
+        else if (!receipt.ok() && localFailureRepeats.merge(
+                new FailureKey(name, arguments.deepCopy(), kind), 1, Integer::sum) >= 5)
             throw new Halt("NO_PROGRESS:五次相同局部失败，刷新状态不补充恢复次数。");
         repeats = progress ? 0 : now.equals(signature) ? repeats + 1 : 1;
         signature = now;
@@ -301,6 +356,12 @@ public final class BoundedProgram {
     private synchronized void recordReceipt(String name, JsonObject args, ToolOutcome receipt) {
         if (receipt.ok() && TaskPolicy.observation(name, args)) {
             queryCalls++;
+            if (name.equals("tool_help")) {
+                // Instructions are for the next model turn even when help was called inside a program.
+                append("回执#" + completed + " " + name + " ok=true：" + display(new JsonPrimitive(receipt.feedback())));
+                feedbackRefs.put(receipt.feedback(), completed);
+                return;
+            }
             var signals = new JsonObject();
             for (String key : List.of("no_targets", "can_craft", "preflight_passed", "truncated",
                     "unknown", "unloaded", "scan_complete", "coverage_complete", "results_truncated",
@@ -312,10 +373,39 @@ public final class BoundedProgram {
             append("回执#" + completed + " " + name + " ok=true（查询数据供程序使用）"
                     + (signals.isEmpty() ? "" : " " + signals));
             queryRefs.put(receipt.feedback(), new QueryReceipt(completed, name));
+            if (falseFlag(receipt.data(), "can_craft") || falseFlag(receipt.data(), "preflight_passed")) {
+                var failure = receipt.data().get("failure");
+                queryNote(failure != null && failure.isJsonPrimitive() && failure.getAsJsonPrimitive().isString()
+                        ? failure.getAsString() : receipt.feedback(), 1024);
+            }
         } else {
             append("回执#" + completed + " " + name + " ok=" + receipt.ok() + "：" + receipt.feedback());
             feedbackRefs.put(receipt.feedback(), completed);
         }
+    }
+
+    private static boolean falseFlag(JsonObject data, String name) {
+        var value = data.get(name);
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean()
+                && !value.getAsBoolean();
+    }
+
+    private void queryNote(String text, int budget) {
+        if (budget < 128 || queryNoteRefs.containsKey(text)) return;
+        String shown = text;
+        if (bytes(shown) > budget) {
+            int end = 0, used = 0;
+            while (end < text.length()) {
+                int next = end + Character.charCount(text.codePointAt(end));
+                int size = bytes(text.substring(end, next));
+                if (used + size > budget - 64) break;
+                used += size;
+                end = next;
+            }
+            shown = text.substring(0, end) + " [说明截短，完整值仍在feedback/data中]";
+        }
+        append("查询提示#" + completed + "：" + shown);
+        queryNoteRefs.put(text, completed);
     }
 
     private synchronized String display(JsonElement value) {
@@ -358,6 +448,7 @@ public final class BoundedProgram {
         data.addProperty("local_failures", recoveredFailures);
         data.addProperty("body_recheck_required", needsBodyCheck);
         data.addProperty("last_tool", lastTool);
+        if (programError != null) data.add("program_error", programError.deepCopy());
         if (last != null) {
             data.add("last_receipt", last.data());
             if (last.data().has("no_targets")) data.add("no_targets", last.data().get("no_targets"));
@@ -449,8 +540,12 @@ public final class BoundedProgram {
             if (++instructions > INSTRUCTIONS || ++slice > SLICE)
                 throw new Halt("INSTRUCTION_LIMIT:脚本计算预算已到。");
             Frame frame = frames.peek();
+            if (frame == null) return;
+            if (frame.closure().p.lineinfo != null && pc < frame.closure().p.lineinfo.length)
+                sourceLine = frame.closure().p.lineinfo[pc];
             int instruction = frame.closure().p.code[pc];
             int op = Lua.GET_OPCODE(instruction);
+            BoundedProgram.this.opcode = op;
             if (op == Lua.OP_CONCAT) {
                 // Inspect operands before Lua allocates the concatenation, including intermediate buffers.
                 int length = 0, allocated = 0;
