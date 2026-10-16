@@ -5,6 +5,7 @@ import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
 import com.neko.mcbot.agentcore.loop.SearchPages;
 import com.neko.mcbot.agentcore.loop.TaskPolicy;
 import com.neko.mcbot.agentcore.loop.BodyFacts;
+import com.neko.mcbot.agentcore.loop.WorkFailureMemory;
 import org.luaj.vm2.*;
 import org.luaj.vm2.compiler.LuaC;
 import org.luaj.vm2.lib.BaseLib;
@@ -275,7 +276,7 @@ public final class BoundedProgram {
         }
         var data = receipt.data();
         if (!receipt.ok()) {
-            if (!allowLocalFailure || !localFailure(name, receipt.feedback()))
+            if (!allowLocalFailure || !WorkFailureMemory.localFailure(name, receipt.feedback()))
                 throw new Halt("CHILD_STOPPED:子调用失败或需要确认，后续动作未执行。");
             recoveredFailures++;
             needsBodyCheck = true;
@@ -318,19 +319,12 @@ public final class BoundedProgram {
         // Fresh observations must not let the same failed action evade the no-progress guard.
         if (progress) localFailureRepeats.clear();
         else if (!receipt.ok() && localFailureRepeats.merge(
-                new FailureKey(name, arguments.deepCopy(), kind), 1, Integer::sum) >= 5)
+                new FailureKey(name, arguments.deepCopy(), kind), 1, Integer::sum) >= WorkFailureMemory.FAILURE_LIMIT)
             throw new Halt("NO_PROGRESS:五次相同局部失败，刷新状态不补充恢复次数。");
         repeats = progress ? 0 : now.equals(signature) ? repeats + 1 : 1;
         signature = now;
         if (repeats >= 5) throw new Halt("NO_PROGRESS:连续五次相同调用及回执，停止组合执行。");
         return receipt;
-    }
-
-    private static boolean localFailure(String name, String feedback) {
-        if (!Set.of("move_to", "break_block", "gather", "explore").contains(name)) return false;
-        int colon = feedback.indexOf(':');
-        return colon > 0 && Set.of("NO_PATH", "NO_PROGRESS", "PARTIAL", "TARGET_BLOCKED",
-                "OUT_OF_REACH", "TARGET_LOST").contains(feedback.substring(0, colon));
     }
 
     private static boolean completeBody(JsonObject data) {

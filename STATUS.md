@@ -3,6 +3,50 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 整体机制审查与任务共用失败账（2026-10-16 13:00，Asia/Shanghai）
+
+- 维护者要求只改MC agent本体，参考整体关联机制并保证长短任务共用。
+  本轮核对模型/组合/身体/目标职责，以及参考战斗控制、身体仲裁、自卫/撤退、
+  工作导航/掉落与身体差量、目标续跑、技能按需及执行预算链。
+  机制依据、明确未完成范围和施工依赖见`docs/AGENT-MECHANISM-AUDIT-2026-10-16.md`；
+  参考只读，只学机制，无复制/翻译。当前attack仍原地有界近战，
+  无统一身体抢占、追击、受击自卫/撤退或完整生存；原无敌设置未变。
+- latest.log仍为465918 bytes、末写12:16:14、SHA256
+  `8a557bc186676a8bda5cf6ca247d7f584442155e03e84ae1a3b44e4fd72ca2f9`。
+  3392/3410及后续、3565行多次同脚格附近8001节点失败；各次目标参数并非全部相同，
+  本轮止损不冒充空间归并或底层路径修复。实例仍是18c442b1，
+  上节源码已修的帮助/脚本错误不当作新发现重复施工；没有新游戏测试。
+- 新增WorkFailureMemory由AgentRunner按task_id持有，在所有远端原子工具发送前检查，
+  匹配tool_result/job终态先记后交付。直接工具、跨Lua、workflow/gather/explore内部
+  原子动作和长期阶段共用；job_ack/progress、重复包、本地超时取消补账与迟到不计。
+  只跟踪move_to/break_block明确局部失败；同工具/结构化参数/原因五次真实失败后，
+  第六次REPEATED_FAILURE零派发，原第五次终态/实际部分效果原样保留。
+  128条不淘汰补次数，满账FAILURE_MEMORY_LIMIT，结构化failure_memory含dispatched=false。
+- 完整36槽/脚格/维度的details真实事实变化，或原子真实挖放/制作/拾取/装取料/搬运效果，
+  允许重评；首次/不完整状态、时间/微移/槽位/耐久/血量、查询、成功空动作及组合累计
+  actual_progress不清账。新任务/会话/身体独立，旧身体排队拒发、旧终态不影响新账；
+  原Lua状态门、权限、所有累计预算与取消保持，不自动重试、不新增第二套规划器。
+  相邻/默认参数等语义归并、往返旧位置、外部世界修改及跨退出空间记忆仍缺。
+- 新增16项（核心7/客户端9）。修复前`failure-memory-before-20261016.log`
+  已复现跨程序第六次仍派发；另有测试等待写法阻塞，终止该测试worker并改为有界断言，
+  该失败阶段不记通过。专项stage1的smelt夹具误用默认query，改显式load/take；
+  不放宽生产只读判据。stage2核心329/客户端专项通过，详见
+  `build/failure-memory-focused2-20261016.log`。
+  实际runner覆盖直接/Lua/workflow/gather、长期检查点、受理/重复终态、真实部分效果、
+  取消晚到和同名新身体；世界/模型受控，不是原生动作或实际模型速度验收。
+- 最终强制`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  `build/agent-mechanism-final-20261016.log`，31秒成功、20/20任务执行。
+  XML131 suites，**1111项**（核心329/根106/客户端676），failures/errors/skipped全0。
+  候选`build/libs/mcbot-0.1.0.jar`为**1,234,094 bytes**、末写12:56:18，SHA256
+  `86660af72855d68d8c310db435f20ac4a0d59f39ca09a87df02a36d23a399c1d`。
+  已核0.1.0元数据、AgentRunner、内嵌WorkFailureMemory/BodyFacts/BoundedProgram、
+  LuaJ与许可；list-java无残留。文档同步不重复运行构建，提交以Git实际记录为准。
+- 后续优先工作导航/坑内触碰及编辑后世界/费用、完整掉落来源；
+  战斗先身体控制权/抢占契约，再共用战斗控制器/可信威胁/追击撤退/恢复重验。
+  技能正文按需、通用目标验收及跨退出生命周期继续分卡，未以本轮全部销账。
+  连接器默认57121与本体17897不一致已记录待协作者对齐，桥v1.0未改。
+  宿主/连接器/参考/玩家实例未修改，未安装候选或启动游戏/真实模型。
+
 ## 程序返回契约与恢复效率（2026-10-16 12:35，Asia/Shanghai）
 
 - 第四次latest.log为465918 bytes，末写12:16:14，SHA256

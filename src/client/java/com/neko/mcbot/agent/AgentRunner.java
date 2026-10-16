@@ -10,6 +10,7 @@ import com.neko.mcbot.agentcore.loop.PendingJobs;
 import com.neko.mcbot.agentcore.loop.TaskReplies;
 import com.neko.mcbot.agentcore.loop.ToolExecutor;
 import com.neko.mcbot.agentcore.loop.TaskPolicy;
+import com.neko.mcbot.agentcore.loop.WorkFailureMemory;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.agentcore.prompt.SkillLoader;
 import com.neko.mcbot.agentcore.script.BoundedProgram;
@@ -84,11 +85,15 @@ public final class AgentRunner implements ToolExecutor {
     private volatile boolean closed;
 
     private record ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future,
-                              boolean terminalOnly) {
+                              boolean terminalOnly, java.util.function.Consumer<ToolOutcome> terminal) {
+        ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future, boolean terminalOnly) {
+            this(taskId, owner, future, terminalOnly, null);
+        }
         ToolTicket(long taskId, AgentLoop owner, CompletableFuture<ToolOutcome> future) {
             this(taskId, owner, future, false);
         }
         void complete(ToolOutcome outcome) { future.complete(outcome); }
+        void recordTerminal(ToolOutcome outcome) { if (terminal != null) terminal.accept(outcome); }
     }
     private BoundedWorkflow workflow;
     private long workflowTask;
@@ -105,6 +110,7 @@ public final class AgentRunner implements ToolExecutor {
     private int programPrimitives;
     private int programPrimitiveLimit;
     private JsonObject taskInitialObservation;
+    private WorkFailureMemory workFailures;
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
      * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
@@ -237,6 +243,7 @@ public final class AgentRunner implements ToolExecutor {
                                 .filter(t -> t.id() == taskId).map(PanelHistory.Task::title).findFirst().orElse(""));
                         explorationRoute = null;
                         taskInitialObservation = null;
+                        workFailures = new WorkFailureMemory();
                         panelHistory.status(taskId, "running");
                         JsonObject scope = new JsonObject();
                         scope.addProperty("task_id", taskId);
@@ -263,7 +270,10 @@ public final class AgentRunner implements ToolExecutor {
                         taskPolicies.remove(taskId);
                         authorizationPlans.entrySet().removeIf(entry -> entry.getValue().taskId() == taskId);
                         clearTaskWaits(taskId, status.name() + ":任务已终止。");
-                        if (wasActive) currentTask = 0;
+                        if (wasActive) {
+                            currentTask = 0;
+                            workFailures = null;
+                        }
                         panelHistory.status(taskId, status.name().toLowerCase(java.util.Locale.ROOT));
                         if (status != AgentLoop.TaskStatus.COMPLETED) panelHistory.add(taskId, "[mcbot] " + text);
                         emitDone(taskId, status, text);
@@ -408,6 +418,7 @@ public final class AgentRunner implements ToolExecutor {
         if (old != null) old.close();
         loop = null;
         currentTask = 0;
+        workFailures = null;
         parked = false;
         parkedJobs = 0;
         readingCompanion = false;
@@ -547,7 +558,9 @@ public final class AgentRunner implements ToolExecutor {
                 if (p != null) {
                     taskBubble.settled(p.ticket().taskId(), seq);
                     rememberAuthorization(env, p.ticket());
-                    p.ticket().complete(new ToolOutcome(env.bool("ok"), env.str("feedback"), resultData(env)));
+                    var outcome = new ToolOutcome(env.bool("ok"), env.str("feedback"), resultData(env));
+                    p.ticket().recordTerminal(outcome);
+                    p.ticket().complete(outcome);
                 } else {
                     // 超时、取消、会话清理或重复包都可能迟到；计数不能单独证明超时帽错误。
                     lateResults.incrementAndGet();
@@ -630,6 +643,7 @@ public final class AgentRunner implements ToolExecutor {
         taskBubble.settled(j.ticket().taskId(), j.seq());
         boolean ok = "done".equals(phase);
         ToolOutcome outcome = new ToolOutcome(ok, text, resultData(env));
+        j.ticket().recordTerminal(outcome);
         if (j.ticket().terminalOnly()) {
             j.ticket().complete(outcome);
         } else if (j.ticket().owner() == loop && loop != null) {
@@ -679,6 +693,7 @@ public final class AgentRunner implements ToolExecutor {
         if (name.isEmpty()) id = null;
         if (!companionName.equals(name) || !java.util.Objects.equals(companionUuid, id)) {
             companionGeneration++;
+            workFailures = currentTask == 0 ? null : new WorkFailureMemory();
             companionBody = new JsonObject();
             readingCompanion = false;
             companionObservation = "尚未读取同伴信息";
@@ -1326,7 +1341,14 @@ public final class AgentRunner implements ToolExecutor {
                             + "B，上限 " + WireSize.MAX_BODY_BYTES + "B），服务器不会收。"
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
-        ToolTicket ticket = new ToolTicket(taskId, owner, f, terminalOnly);
+        WorkFailureMemory memory = taskId != 0 && taskId == currentTask && owner == loop ? workFailures : null;
+        long bodyGeneration = companionGeneration;
+        var recordedArgs = args.deepCopy();
+        ToolTicket ticket = new ToolTicket(taskId, owner, f, terminalOnly, outcome -> {
+            if (!closed && memory != null && memory == workFailures && bodyGeneration == companionGeneration
+                    && owner == loop && taskId == currentTask)
+                memory.terminal(name, recordedArgs, outcome);
+        });
         f.whenComplete((outcome, failure) -> {
             if (failure != null || outcome == null || !outcome.accepted())
                 client.executeOnClient(() -> taskBubble.settled(taskId, seq));
@@ -1335,6 +1357,17 @@ public final class AgentRunner implements ToolExecutor {
         client.executeOnClient(() -> {
             if (closed || f.isDone()) return;
             if (ticket.owner() != null && (ticket.owner() != loop || ticket.taskId() != currentTask)) return;
+            if (memory != null && bodyGeneration != companionGeneration) {
+                pending.takeTool(seq);
+                f.complete(ToolOutcome.synthetic("CANCELLED:同伴身体已替换，旧调用未发送。"));
+                return;
+            }
+            ToolOutcome refused = memory == null ? null : memory.refusal(name, recordedArgs);
+            if (refused != null) {
+                pending.takeTool(seq);
+                f.complete(refused);
+                return;
+            }
             if (client.canSend()) {
                 taskBubble.sent(taskId, seq, TaskBubbleState.Activity.tool(name,
                         args.has("query") && args.get("query").isJsonPrimitive()
