@@ -3,6 +3,58 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 真实放置接触与调用诊断（2026-10-16 09:40，Asia/Shanghai）
+
+- 本轮latest.log为326589 bytes，末写09:19:04，SHA256
+  `326639a2defb208d7ab498bd8ffb4960eca6601ba9b2d65e3649358e7c8fb55c`；
+  安装包仍为上节4dea76e3。09:15:21合成钻石镐，09:15:21装备1561/1561；
+  首任务09:11:23用尽40步，之后重新投任务，73模型请求跨多条指令。
+  现场没有放置邻域快照，不能唯一指出玩家看到的悬空台或断言其支撑后来被谁拆掉。
+  完整证据、统计、参考链路及剩余机制见docs/real-game-log-review-2026-10-16.md。
+- 源码确认旧BlockPlacement把空格当点击对象并强制getClickedPos/canPlace，
+  普通工作台canSurvive允许悬空，因此预检未阻止无真实接触放置。
+  现以BlockAim.placementContact检查真实OUTLINE形状的面、朝向、距离、
+  已加载沿线及首个命中block/face；空气/流体/MISS不当锚点。
+  真实命中进入原版BlockPlaceContext，仅原版精确落位且可替换才继续，
+  删除强制落位覆写；查询/执行共用，执行重验，原版最终变化/消费核对保留。
+  普通占位/自身/实体/支撑预检继续使用，墙/地面两用物品最终仍交原版。
+- PathTask同步复用该入口，在同一目标最多查六面，再重验并执行一次，
+  不在原版失败且可能有消费后换面重放；原材料、具体许可及支撑核验保留。
+  合法侧接允许下方空气；未改成工作台/全建筑下方必须实心的模板。
+  查询通过及成功动作附placement_contact，记录原目标真实点击格/face/方块ID；
+  新增no_clickable_face/wrong_landing诊断，几何拒绝数据不再在预检装配中丢失。
+  放置后拆依附块、搜索中的完整点击几何/边缘桥接身体动作仍未实现。
+- 日志09:10:37把query.ok当可执行而原地失败；工具说明/反馈明确检查
+  data.preflight_passed==true。固定workflow在false时PLACEMENT_BLOCKED停止，
+  Lua仍能读取alternatives自主分支，不把观察受阻改成不可读取的失败。
+  09:10:15/09:13:48组合move_to错误没有派发，现给工具、可信Schema字段路径、
+  类型/范围/枚举，具体提示上限512字符，不回显错误值/未知字段原文或自动改参数。
+- gather保留最多8次目标回执drops的物品样本，每次最多展示8种ID；
+  observed_item_count/items_truncated明示展示帽，匹配仍看该次最多32条实际drops。
+  与clearing_results分开，不把无样本认成来源错，不把抽样当战利品表，
+  不放宽精确物品目标或删除三次无进展/实际背包/权限/取消/原子预算核验。
+  坑内掉落无整格安全触碰站位、地下偏水平PARTIAL、跨任务无返程账继续挂账，
+  不凭本轮钻石镐成功销账。日志reasoning只有帧计数，没有内部思考原文。
+- 服务端status162次合计16ms，69条有first_dispatch记录的模型响应平均6097.51ms；
+  不能把必要成果查询都归为耗时错误，也不能把原版走路/挖掘时间当CPU卡顿。
+  两次参数拒绝及一次无视预检是明确可改进的恢复往返。
+  固定23定义25568 bytes、末轮157264 bytes/工具历史59345字符仍值得减重；
+  本轮没有按需工具目录、真实模型收益或删除完整结构化slots。
+- 新增21项客户端回归。专项stage1六类154项通过（30秒），stage2夹具缺Gson导入
+  编译失败，补齐后stage3六类157项通过（31秒）；未把失败阶段记成通过。
+  最后补单次产物展示帽及匹配未截断回归后，强制全量
+  `gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  日志build/placement-contact-final-20261016.log，35秒成功、20/20任务执行。
+  XML共124 suites、**1029项**（agent-core293/根105/客户端631），
+  failures/errors/skipped全0；list-java无残留，保留既有过时API/Gradle弃用提示。
+- 新候选build/libs/mcbot-0.1.0.jar，**1,190,024 bytes**，末写09:39:01，
+  SHA256 `45ab4f2739f0ad811c466620c141ba018bad5efe515f8909c6bc5681232e6914`。
+  核版本0.1.0、相关类、内嵌agent-core/LuaJ与LuaJ许可。
+  原版shape/clip、实际预检函数/runner/workflow/Lua执行，世界和工具回执受控；
+  未创建ServerLevel运行真实BlockPlaceContext/BlockItem.place、travel或边缘桥接。
+  雪替换/半砖合并/墙火把/多格规则及模型效率仍按REAL-GAME-RETESTING顶部补测。
+  不自动安装或启动游戏/真实模型，宿主、连接器、只读参考、实例配置与世界未修改。
+
 ## 新工区采集恢复、工作导航提示与回执去重（2026-10-15 17:33，Asia/Shanghai）
 
 - 第六次latest.log为338231 bytes，末写17:08:13，SHA256
@@ -4475,6 +4527,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 
 | 事项 | 真实形状（Mojang 映射） |
 |---|---|
+| 真实放置落位（10-16本地javap/编译，未运行世界上下文） | `BlockPlaceContext(Player,InteractionHand,ItemStack,BlockHitResult)`按原命中格的`canBeReplaced(this)`计算replaceClicked；默认getClickedPos选择原命中格或沿face的相邻格，默认canPlace检查实际落位可替换。BlockItem.place先canPlace、updatePlacementContext，再getPlacementState/原版写入和消费；本体保留默认落位/可替换方法，仅覆写只读朝向。StandingAndWallBlockItem的protected getPlacementState会选择墙面/地面形态，不能用默认getBlock预测等价；其最终规则仍待实机 |
 | 只读放置方向（10-15 javap/编译/原版方向离线对照） | `UseOnContext.getHorizontalDirection/getRotation`、`BlockPlaceContext.getNearestLookingDirection/getNearestLookingVerticalDirection/getNearestLookingDirections`均可覆写；原版BlockPlaceContext按replaceClicked决定是否把face反方向排首。Entity.lookAt使用Mth.atan2、RAD_TO_DEG、wrapDegrees；Direction.orderedByNearest使用浮点角度及Mth正余弦，不能把六方向double点积排序当作边界等价实现。实际Marker.lookAt对照124方向通过，Marker未入世界，不证明真实物品放置/特殊方块行为已验 |
 | 放置预检（10-15本地javap/编译/原版形状，未运行世界） | `Block.getStateForPlacement(BlockPlaceContext)`、`BlockState.canBeReplaced(BlockPlaceContext)`/`canSurvive(LevelReader,BlockPos)`公开；`getCollisionShape(BlockGetter,BlockPos,CollisionContext)`及`CollisionGetter.isUnobstructed(Entity,VoxelShape)`公开。`StandingAndWallBlockItem.getPlacementState`为protected且会选择墙面形态；新增普通预检不可用其getBlock默认形态代替，当前该类沿原BlockItem.place路径，不新增细分状态预测。原版最终放置/副作用仍须实机验证 |
 | 世界任务气泡（10-15缓存Fabric源/Javap/编译及离线提交，未运行GPU） | Fabric事件位于`client.rendering.v1.world`：`END_EXTRACTION`读world/camera/frustum/tickCounter，`BEFORE_ENTITIES`可用matrices/commandQueue；LevelRenderState可setData/getData(RenderStateDataKey)。实体`getPosition(float)`、`getBbHeight/getEyeHeight`公开，Camera为`position()/rotation()/forwardVector()`。世界PoseStack基础为identity；按相机相对位置、cameraRenderState.orientation及正/负/正缩放提交billboard。`submitCustomGeometry(PoseStack,RenderType,CustomGeometryRenderer)`和`submitText`可用；**submitText在DisplayMode后的四个int依次为lightCoords/color/backgroundColor/outlineColor**，不能照搬Font.drawInBatch颜色在先的顺序；15:09已用TextSubmit真实队列字段及构造/消费字节码复核。`rendertype.RenderTypes.textBackground()`为POSITION_COLOR_LIGHTMAP/QUADS且有深度测试，顶点必须setColor/setLight；文字用Font.DisplayMode.NORMAL。原版NameTagFeatureRenderer的Storage使用同一旋转/缩放约定；不使用SEE_THROUGH，不把离线管线/矩阵断言写成实机画面通过 |
@@ -4491,7 +4544,7 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 | 近战/身体时钟（C4，10-11 javap + 编译，未运行实体/Mixin） | Player.attack(Entity)返回void，经原版伤害/耐久/附魔/击退路径，onAttack只resetOnlyAttackStrengthTicker；满冷却用getAttackStrengthScale(0)，cannotAttackWithItem(ItemStack,int)另检查MINIMUM_ATTACK_CHARGE；isWithinAttackRange(AABB,double)委托AttackRange。ServerPlayer.tick不调用Player.tick；ServerPlayer.doTick才调用后者，假连接不驱动listener doTick。Player.tick推进protected attackStrengthTicker/itemSwapTicker，主手不同物品时两者归零，同类耐久/组件变化不归零 |
 | 装备/横扫/保护（C4，10-11 javap + 编译，未运行世界） | LivingEntity私有detectEquipmentUpdates先collectEquipmentChanges移除旧modifier再用实际ItemStack.forEachModifier/原版附魔效果加入新modifier，用Invoker复用。Player剑横扫查询目标AABB.inflate(1,.25,1)内LivingEntity，排自己/主目标/同队等再hurtServer；本体更保守地拒绝第三活物。OwnableEntity.getOwnerReference可不加载主人判定归属，TamableAnimal.isTame、animal.equine.AbstractHorse.isTamed；Enemy接口覆盖不属于Monster的敌对类型。PIERCING_WEAPON/KINETIC_WEAPON组件与MaceItem单独拒绝 |
 | 破坏/耐久（C2，10-10 javap + 编译；未运行世界动作） | BlockState.getDestroySpeed(BlockGetter,BlockPos) 是硬度，getDestroyProgress(Player,BlockGetter,BlockPos) 按真实身体速度/硬度/采收门计算；零硬度可正无穷。ServerPlayerGameMode.destroyBlock(BlockPos) 使用真实主手 canDestroyBlock、限制检查、playerWillDestroy/removeBlock/destroy，非创造模式执行主手 mineBlock，只有移除且可采收才 playerDestroy；返回 true 不保证 removeBlock 成功，失败也可能已损耗耐久 |
-| 放置上下文（C2，10-10 javap + 编译） | BlockPlaceContext(Player,InteractionHand,ItemStack,BlockHitResult) 可用，构造时按目标 canBeReplaced 算 replaceClicked，默认 getClickedPos 可能转到相邻格；本体覆写 getClickedPos/canPlace 固定精确目标。DirectionalPlaceContext 使用 null Player，不用于本体。BlockItem.place 调状态/支撑/碰撞、多格/组件/setPlacedBy 等原版钩子后 consume(1)，失败不得额外 shrink；ItemStack.useOn 可能有消费回退，直接 place 避免菜单/食用 |
+| 放置上下文（C2，10-10 javap + 编译；10-16修订） | BlockPlaceContext(Player,InteractionHand,ItemStack,BlockHitResult) 可用，构造时按点击格 canBeReplaced 算 replaceClicked，默认 getClickedPos 可能转到相邻格；旧本体覆写 getClickedPos/canPlace 的机制已在10-16删除，现核对原版实际落位等于请求目标。DirectionalPlaceContext 使用 null Player，不用于本体。BlockItem.place 调状态/支撑/碰撞、多格/组件/setPlacedBy 等原版钩子后 consume(1)，失败不得额外 shrink；ItemStack.useOn 可能有消费回退，直接 place 避免菜单/食用 |
 | 挖放守卫/材料（C2） | gameMode.isSurvival、Level.mayInteract(Entity,BlockPos)、player.blockActionRestricted/hasCorrectToolForDrops/mayUseItemAt、ItemStack.canDestroyBlock 均可编译；BedItem/DoubleHighBlockItem/StandingAndWallBlockItem 为 BlockItem 子类，特殊子类需要各自上下文。getComponentsPatch().isEmpty 可识别普通原堆栈，新增/移除组件均为非空。Bootstrap 冻结注册表后不能 new Item/BlockItem（intrusive holder），离线使用已注册物品 |
 | 物品移动（C1，10-10 javap + 离线） | Container.canPlaceItem(int,ItemStack)/canTakeItem(Container,int,ItemStack)、getMaxStackSize(ItemStack)、stillValid(Player) 均公开；WorldlyContainer.getSlotsForFace(Direction)/canPlaceItemThroughFace/canTakeItemThroughFace 可用。BaseContainerBlockEntity.isLocked() 可直接拒锁，ChestBlockEntity.applyComponents 可在无世界夹具设置 DataComponents.LOCK，测试不等于实际开启/菜单行为 |
 | 背包部分插入/离线（C1） | Inventory.add(ItemStack) 字节码可先修改目标/传入余量后返回 false，不能用返回值推断零移动。Inventory(null,new EntityEquipment()) 的 getItem/setItem/setChanged/getContainerSize 不访问 Player，可在注册表初始化后用于离线存储/装备保全；不调用需要 player 的 add/世界行为。SimpleContainer.setItem 按 getMaxStackSize(stack) 裁量，先核对容量再写；DataComponents.MAX_STACK_SIZE 参与 ItemStack 堆叠上限 |

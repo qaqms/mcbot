@@ -401,6 +401,48 @@ class AgentRunnerProgramTest {
         assertFalse(outcome().ok());
         assertEquals(1, client.toolCount());
         assertTrue(outcome().content().contains("Schema"));
+        assertTrue(outcome().content().contains("args.slot"));
+        assertTrue(outcome().content().contains("integer"));
+    }
+
+    @Test void nestedMoveArgumentErrorsExplainTheMissingCoordinateWithoutDispatch() {
+        start("approach work", "mc.call('move_to',{x=2,y=90,z=0,exact=true,work_target={x=3,y=90}})");
+        var result = outcome();
+        assertFalse(result.ok());
+        assertTrue(result.content().contains("move_to"));
+        assertTrue(result.content().contains("args.work_target.z"));
+        assertTrue(result.content().contains("缺少必要参数"));
+        assertEquals(0, client.toolCount());
+    }
+
+    @Test void declaredEnumsAreExplainedWithoutEchoingInvalidArgumentValues() {
+        start("place", "mc.call('place_block',{x=2,y=90,z=0,item='dirt',face='private-value'})");
+        var result = outcome();
+        assertFalse(result.ok());
+        assertTrue(result.content().contains("args.face"));
+        assertTrue(result.content().contains("允许值="));
+        assertTrue(result.content().contains("up"));
+        assertFalse(result.content().contains("private-value"));
+        assertEquals(0, client.toolCount());
+    }
+
+    @Test void negativePlacementQueryCanBeUsedToSelectAnExplicitAlternativeInLua() {
+        start("choose workstation site", """
+                local q=mc.call("place_block",{x=2,y=90,z=0,item="crafting_table",query=true})
+                if not q.data.preflight_passed then
+                  local p=q.data.alternatives[1]
+                  if p then return mc.call("place_block",{x=p.x,y=p.y,z=p.z,item="crafting_table"}) end
+                  return {blocked=true}
+                end
+                """);
+        tool("place_block", 1);
+        receipt(true, "query only", "{\"query\":true,\"preflight_passed\":false,"
+                + "\"alternatives\":[{\"x\":3,\"y\":90,\"z\":0}]}");
+        tool("place_block", 2);
+        assertEquals(3, client.lastTool().obj("args").get("x").getAsInt());
+        receipt(true, "native placement confirmed", "{\"changed\":true,\"consumed_count\":1}");
+        assertTrue(outcome().ok());
+        assertEquals(2, client.toolCount());
     }
 
     @Test void cannotNestProgramsOrUseOwnerQuestionsOrGoalMutation() {

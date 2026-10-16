@@ -1248,6 +1248,12 @@ public final class AgentRunner implements ToolExecutor {
             var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals(name)).findFirst().orElseThrow();
             BoundedWorkflow.validate(com.google.gson.JsonParser.parseString(json),
                     com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
+        } catch (BoundedWorkflow.ArgumentFailure invalid) {
+            String detail = invalid.getMessage();
+            if (detail.length() > 512) detail = detail.substring(0, 512);
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:" + name + "参数不符合实际Schema，未派发；" + detail
+                            + "。按该工具定义修正参数，不要原样重试。"));
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:组合子工具参数不符合实际Schema，未派发。"));
         }

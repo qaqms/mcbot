@@ -49,6 +49,9 @@ class BoundedGatherTest {
         int[] dropStancesAfterMining;
         boolean stableDropIdentity, touchingAfterMining;
         boolean reportDrops;
+        String reportedDropItem = "minecraft:dirt";
+        List<String> extraReportedItems = List.of();
+        boolean reportClearingDrops;
         double stateX;
         Double stateXAfterFirstMining;
         boolean trackRemovedTargets;
@@ -148,10 +151,17 @@ class BoundedGatherTest {
                     if (reportDrops) {
                         var drops = new JsonArray();
                         var drop = new JsonObject();
-                        drop.addProperty("item", "minecraft:dirt");
+                        drop.addProperty("item", reportedDropItem);
                         drops.add(drop);
+                        for (String id : extraReportedItems) {
+                            var extra = new JsonObject();
+                            extra.addProperty("item", id);
+                            drops.add(extra);
+                        }
                         data.add("drops", drops);
                     }
+                    if (reportClearingDrops) data.add("clearing_results", JsonParser.parseString(
+                            "[{\"result\":{\"drops\":[{\"item\":\"minecraft:dirt\"}]}}]"));
                     if (pickupDuringMining) automaticPickup(true);
                 }
                 case "move_to" -> {
@@ -647,6 +657,66 @@ class BoundedGatherTest {
         assertTrue(f.run().ok());
         assertFalse(f.calls.contains("wait"));
         assertEquals(4, f.dug);
+    }
+
+    @Test void mismatchedTargetYieldsExplainFailureWithoutRelaxingTheInventoryGoal() {
+        var f = new Fixture(4, 0);
+        f.reportDrops = true;
+        f.reportedDropItem = "minecraft:acacia_log";
+        f.noYield = true;
+        f.reportClearingDrops = true;
+        f.clearPerMining = 1;
+        var result = f.run();
+        assertFalse(result.ok());
+        assertTrue(result.feedback().startsWith("NO_PROGRESS:"));
+        assertEquals(3, f.dug, "observed yield samples do not replace the existing no-progress bound");
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+        assertEquals(0, result.data().get("drop_settle_waits").getAsInt(),
+                "unrelated drops are not expected goal items awaiting pickup");
+        var sources = result.data().getAsJsonArray("source_observations");
+        assertEquals(3, sources.size());
+        for (var source : sources) {
+            var evidence = source.getAsJsonObject();
+            assertFalse(evidence.get("observed_goal_item").getAsBoolean());
+            assertEquals("[\"minecraft:acacia_log\"]", evidence.get("observed_items").toString(),
+                    "incidental clearing drops must not be attributed to the requested resource");
+        }
+        assertTrue(result.feedback().contains("item与targets"));
+    }
+
+    @Test void absentDropEvidenceDoesNotInventASourceMismatch() {
+        var f = new Fixture(4, 0);
+        f.noYield = true;
+        var result = f.run();
+        assertTrue(result.feedback().startsWith("NO_PROGRESS:"));
+        assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
+        assertFalse(result.feedback().contains("observed_goal_item=false"));
+    }
+
+    @Test void yieldObservationsAreBoundedAndDoNotAddWaitsOrChangeSuccessfulCounts() {
+        var f = new Fixture(64, 0);
+        f.reportDrops = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(64, f.count);
+        assertEquals(8, result.data().getAsJsonArray("source_observations").size());
+        assertTrue(result.data().getAsJsonArray("source_observations").get(0).getAsJsonObject()
+                .get("observed_goal_item").getAsBoolean());
+        assertFalse(f.calls.contains("wait"));
+    }
+
+    @Test void yieldDisplayCapDoesNotHideAMatchingItemFromTheActualObservationCheck() {
+        var f = new Fixture(1, 0);
+        f.reportDrops = true;
+        f.extraReportedItems = java.util.stream.IntStream.range(0, 12).mapToObj(i -> "a:item_" + i).toList();
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        var source = result.data().getAsJsonArray("source_observations").get(0).getAsJsonObject();
+        assertEquals(8, source.getAsJsonArray("observed_items").size());
+        assertEquals(13, source.get("observed_item_count").getAsInt());
+        assertTrue(source.get("items_truncated").getAsBoolean());
+        assertTrue(source.get("observed_goal_item").getAsBoolean());
+        assertFalse(source.getAsJsonArray("observed_items").contains(new JsonPrimitive("minecraft:dirt")));
     }
 
     @Test void cancellationAndTimeoutDuringSettlingNeverResumeAfterALateWaitReceipt() {

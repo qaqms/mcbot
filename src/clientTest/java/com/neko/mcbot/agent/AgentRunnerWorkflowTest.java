@@ -127,6 +127,28 @@ class AgentRunnerWorkflowTest {
         assertEquals(1, client.toolCount());
     }
 
+    @Test void successfulPlacementObservationWithFailedPreflightStopsBeforeAnyPlacement() {
+        start("place workstation", plan(
+                "{\"tool\":\"place_block\",\"args\":{\"x\":2,\"y\":90,\"z\":0,\"item\":\"crafting_table\",\"query\":true}}",
+                "{\"tool\":\"place_block\",\"args\":{\"x\":2,\"y\":90,\"z\":0,\"item\":\"crafting_table\"}}"));
+        receipt(true, "query finished; no real contact", "{\"query\":true,\"preflight_passed\":false,"
+                + "\"alternatives\":[{\"x\":3,\"y\":90,\"z\":0}]}");
+        assertFalse(result().ok());
+        assertTrue(result().content().startsWith("PLACEMENT_BLOCKED:"));
+        assertEquals(1, client.toolCount(), "a fixed workflow cannot branch to an alternative");
+    }
+
+    @Test void successfulPlacementPreflightStillWaitsForTheActualPlacementReceipt() {
+        start("place workstation", plan(
+                "{\"tool\":\"place_block\",\"args\":{\"x\":2,\"y\":90,\"z\":0,\"item\":\"crafting_table\",\"query\":true}}",
+                "{\"tool\":\"place_block\",\"args\":{\"x\":2,\"y\":90,\"z\":0,\"item\":\"crafting_table\"}}"));
+        receipt(true, "query finished", "{\"query\":true,\"preflight_passed\":true}");
+        assertEquals(2, client.toolCount());
+        receipt(false, "TARGET_LOST:support changed", "{\"changed\":false,\"consumed_count\":0}");
+        assertFalse(result().ok());
+        assertTrue(result().content().contains("support changed"));
+    }
+
     @Test void readonlyPlanIsRejectedEntirelyBeforeItsFirstObservation() {
         start("[只读] inspect", plan(INVENTORY, LOAD));
         assertEquals(0, client.toolCount());

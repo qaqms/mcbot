@@ -1,6 +1,7 @@
 package com.neko.mcbot.server;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
@@ -176,35 +177,93 @@ class BlockAimTest {
         assertEquals(0, grid.outlines);
     }
 
-    @Test void placementAllowsAClearEmptyCellButRejectsAWallInFrontOfIt() {
+    @Test void placementNeedsAnActualOutlineAndCannotClickAirOrWater() {
         Grid grid = new Grid();
         grid.blocks.clear();
-        Vec3 point = Vec3.atCenterOf(TARGET).add(0, .5, 0);
-        assertTrue(BlockAim.placement(grid, TARGET, point, 4.5).ok());
-        grid.wall();
-        assertTrue(BlockAim.placement(grid, TARGET, point, 4.5).failure().startsWith("TARGET_BLOCKED:"));
+        assertFalse(BlockAim.placementContact(grid, TARGET, Direction.UP, 4.5).ok());
+        grid.blocks.put(TARGET, Blocks.WATER.defaultBlockState());
+        assertFalse(BlockAim.placementContact(grid, TARGET, Direction.UP, 4.5).ok());
+        assertEquals(0, grid.traces);
+        grid.blocks.put(TARGET.below(), Blocks.STONE.defaultBlockState());
+        var contact = BlockAim.placementContact(grid, TARGET.below(), Direction.UP, 4.5);
+        assertTrue(contact.ok(), contact.failure());
+        assertEquals(TARGET.below(), contact.hit().getBlockPos());
+        assertEquals(Direction.UP, contact.hit().getDirection());
+        assertEquals(1, contact.hit().getLocation().y);
     }
 
     @Test void placementCannotReadUnknownRayCellsOrExceedEyeReach() {
         Grid grid = new Grid();
-        Vec3 point = Vec3.atCenterOf(TARGET);
         grid.unknown.add(new BlockPos(1, 1, 0));
-        assertTrue(BlockAim.placement(grid, TARGET, point, 4.5).failure().startsWith("TARGET_LOST:"));
+        assertTrue(BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5).failure().startsWith("TARGET_LOST:"));
         assertEquals(0, grid.traces);
-        assertTrue(BlockAim.placement(grid, TARGET, point, 1).failure().startsWith("OUT_OF_REACH:"));
+        assertTrue(BlockAim.placementContact(grid, TARGET, Direction.WEST, 1).failure().startsWith("OUT_OF_REACH:"));
         assertEquals(0, grid.traces);
     }
 
-    @Test void placementUsesAnExposedPartOfTheCellWhenTheRequestedFacePointIsOccluded() {
+    @Test void placementSamplesAnExposedPartOfTheSameFaceWithoutChangingTheFace() {
         Grid grid = new Grid();
-        grid.blocks.clear();
         grid.blocks.put(new BlockPos(1, 1, 0), Blocks.OAK_SLAB.defaultBlockState()
                 .setValue(net.minecraft.world.level.block.SlabBlock.TYPE, SlabType.TOP));
-        Vec3 top = Vec3.atCenterOf(TARGET).add(0, .5, 0);
-        var aim = BlockAim.placement(grid, TARGET, top, 4.5);
-        assertTrue(aim.ok(), aim.failure());
-        assertTrue(aim.point().y < top.y);
-        assertTrue(grid.traces <= 28);
+        var contact = BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5);
+        assertTrue(contact.ok(), contact.failure());
+        assertEquals(Direction.WEST, contact.hit().getDirection());
+        assertTrue(contact.hit().getLocation().y < 1.5);
+        assertTrue(grid.traces <= 9);
+    }
+
+    @Test void placementCannotClickTheBackSideOrSeeThroughAFullWall() {
+        Grid grid = new Grid();
+        assertFalse(BlockAim.placementContact(grid, TARGET, Direction.EAST, 4.5).ok());
+        grid.wall();
+        assertFalse(BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5).ok());
+    }
+
+    @Test void contactUsesRealSnowAndSlabSurfacesForNativeReplacementAndMerging() {
+        for (var state : List.of(Blocks.SNOW.defaultBlockState(), Blocks.OAK_SLAB.defaultBlockState())) {
+            var grid = new Grid();
+            grid.eye = new Vec3(2.5, 3.62, .5);
+            grid.blocks.put(TARGET, state);
+            var contact = BlockAim.placementContact(grid, TARGET, Direction.UP, 4.5);
+            assertTrue(contact.ok(), contact.failure());
+            assertEquals(TARGET, contact.hit().getBlockPos());
+            double shapeTop = state.getShape(grid, TARGET).max(Direction.Axis.Y) + TARGET.getY();
+            assertEquals(shapeTop, contact.hit().getLocation().y, 1e-7);
+        }
+    }
+
+    @Test void sidePlacementCanBridgeWithoutRequiringABlockDirectlyBelowItsTarget() {
+        var grid = new Grid();
+        grid.eye = new Vec3(4.5, 1.62, .5);
+        BlockPos target = TARGET.east();
+        assertTrue(grid.getBlockState(target.below()).isAir());
+        var contact = BlockAim.placementContact(grid, target.west(), Direction.EAST, 4.5);
+        assertTrue(contact.ok(), contact.failure());
+        assertEquals(target, contact.hit().getBlockPos().relative(contact.hit().getDirection()));
+    }
+
+    @Test void contactMustReallyHitTheRequestedFaceNotJustReportItsCell() {
+        var grid = new Grid();
+        grid.blocks.clear();
+        grid.forcedOutline = List.of(new AABB(0, 0, 0, 1, 1, 1));
+        assertFalse(BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5).ok(),
+                "native MISS has a position but is not a usable contact");
+    }
+
+    @Test void changedSupportAndInvalidReachCannotReuseAnOldPlacementContact() {
+        var grid = new Grid();
+        assertTrue(BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5).ok());
+        grid.blocks.clear();
+        assertFalse(BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5).ok());
+        for (double reach : new double[]{0, -1, Double.NaN, Double.POSITIVE_INFINITY, 7}) {
+            assertTrue(BlockAim.placementContact(grid, TARGET, Direction.WEST, reach)
+                    .failure().startsWith("OUT_OF_REACH:"));
+        }
+        grid.unknown.add(TARGET);
+        int reads = grid.reads;
+        assertTrue(BlockAim.placementContact(grid, TARGET, Direction.WEST, 4.5)
+                .failure().startsWith("TARGET_LOST:"));
+        assertEquals(reads, grid.reads);
     }
 
     @Test void descendingClearanceOrderOpensSightBeforeMiningTheLowerCells() {

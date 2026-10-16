@@ -103,46 +103,79 @@ final class BoundedWorkflow {
         return value.getAsString();
     }
 
+    static final class ArgumentFailure extends IllegalArgumentException {
+        ArgumentFailure(String path, String expected) { super(path + "：" + expected); }
+    }
+
     static void validate(JsonElement value, JsonObject schema) {
+        validate(value, schema, "args");
+    }
+
+    private static void validate(JsonElement value, JsonObject schema, String path) {
         if (schema.has("oneOf")) {
             int matches = 0;
             for (var alternative : schema.getAsJsonArray("oneOf")) {
-                try { validate(value, alternative.getAsJsonObject()); matches++; }
-                catch (RuntimeException invalid) { /* A different declared type may match. */ }
+                try { validate(value, alternative.getAsJsonObject(), path); matches++; }
+                catch (ArgumentFailure invalid) { /* A different declared type may match. */ }
             }
-            if (matches != 1) throw new IllegalArgumentException("参数不符合唯一声明类型");
+            if (matches != 1) {
+                var types = new ArrayList<String>();
+                for (var alternative : schema.getAsJsonArray("oneOf"))
+                    types.add(alternative.getAsJsonObject().get("type").getAsString());
+                throw new ArgumentFailure(path, "须匹配唯一声明类型 " + types);
+            }
             return;
         }
+        if (value == null || value.isJsonNull())
+            throw new ArgumentFailure(path, "须提供 " + schema.get("type").getAsString() + "，不能为null");
         switch (schema.get("type").getAsString()) {
             case "object" -> {
+                if (!value.isJsonObject()) throw new ArgumentFailure(path, "须为object对象");
                 JsonObject object = value.getAsJsonObject();
                 JsonObject properties = schema.getAsJsonObject("properties");
-                keys(object, properties.keySet());
+                if (!properties.keySet().containsAll(object.keySet()))
+                    throw new ArgumentFailure(path, "含未声明字段；可用字段=" + properties.keySet());
                 if (schema.has("required")) for (JsonElement key : schema.getAsJsonArray("required"))
-                    if (!object.has(key.getAsString())) throw new IllegalArgumentException("缺少必要参数");
-                object.entrySet().forEach(e -> validate(e.getValue(), properties.getAsJsonObject(e.getKey())));
+                    if (!object.has(key.getAsString()))
+                        throw new ArgumentFailure(path + "." + key.getAsString(), "缺少必要参数");
+                object.entrySet().forEach(e -> validate(e.getValue(), properties.getAsJsonObject(e.getKey()),
+                        path + "." + e.getKey()));
             }
-            case "integer" -> integer(value, schema.has("minimum") ? schema.get("minimum").getAsInt() : Integer.MIN_VALUE,
-                    schema.has("maximum") ? schema.get("maximum").getAsInt() : Integer.MAX_VALUE);
+            case "integer" -> {
+                int min = schema.has("minimum") ? schema.get("minimum").getAsInt() : Integer.MIN_VALUE;
+                int max = schema.has("maximum") ? schema.get("maximum").getAsInt() : Integer.MAX_VALUE;
+                try { integer(value, min, max); }
+                catch (IllegalArgumentException invalid) {
+                    throw new ArgumentFailure(path, "须为integer整数，范围[" + min + "," + max + "]，不能用字符串或小数");
+                }
+            }
             case "boolean" -> {
                 if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
-                    throw new IllegalArgumentException("布尔参数无效");
+                    throw new ArgumentFailure(path, "须为boolean布尔值true或false");
             }
             case "string" -> {
-                string(value, schema.has("maxLength") ? schema.get("maxLength").getAsInt() : 128);
-                if (schema.has("minLength") && value.getAsString().length() < schema.get("minLength").getAsInt())
-                    throw new IllegalArgumentException("字符串过短");
+                int max = schema.has("maxLength") ? schema.get("maxLength").getAsInt() : 128;
+                int min = schema.has("minLength") ? schema.get("minLength").getAsInt() : 1;
+                try { string(value, max); }
+                catch (IllegalArgumentException invalid) {
+                    throw new ArgumentFailure(path, "须为string非空字符串，长度[" + min + "," + max + "]");
+                }
+                if (value.getAsString().length() < min)
+                    throw new ArgumentFailure(path, "字符串长度须为[" + min + "," + max + "]");
                 if (schema.has("enum") && !schema.getAsJsonArray("enum").contains(value))
-                    throw new IllegalArgumentException("枚举参数无效");
+                    throw new ArgumentFailure(path, "允许值=" + schema.getAsJsonArray("enum"));
             }
             case "array" -> {
+                if (!value.isJsonArray()) throw new ArgumentFailure(path, "须为array数组");
                 var array = value.getAsJsonArray();
                 if (array.size() < schema.get("minItems").getAsInt()
                         || array.size() > schema.get("maxItems").getAsInt())
-                    throw new IllegalArgumentException("数组数量越界");
-                array.forEach(e -> validate(e, schema.getAsJsonObject("items")));
+                    throw new ArgumentFailure(path, "数组数量须为[" + schema.get("minItems").getAsInt()
+                            + "," + schema.get("maxItems").getAsInt() + "]");
+                for (int i = 0; i < array.size(); i++)
+                    validate(array.get(i), schema.getAsJsonObject("items"), path + "[" + i + "]");
             }
-            default -> throw new IllegalArgumentException("不支持的参数结构");
+            default -> throw new ArgumentFailure(path, "不支持的参数结构");
         }
     }
 
@@ -217,6 +250,10 @@ final class BoundedWorkflow {
                 boolean missing = step.tool().equals("craft") && data.has("can_craft")
                         && data.get("can_craft").isJsonPrimitive() && data.get("can_craft").getAsJsonPrimitive().isBoolean()
                         && !data.get("can_craft").getAsBoolean();
+                boolean placementBlocked = step.tool().equals("place_block") && data.has("preflight_passed")
+                        && data.get("preflight_passed").isJsonPrimitive()
+                        && data.get("preflight_passed").getAsJsonPrimitive().isBoolean()
+                        && !data.get("preflight_passed").getAsBoolean();
                 var state = data.get("state");
                 boolean machineCheck = step.tool().equals("smelt")
                         && !("take".equals(step.args().has("action") ? step.args().get("action").getAsString() : "query"));
@@ -228,10 +265,12 @@ final class BoundedWorkflow {
                         && state.isJsonPrimitive() && state.getAsJsonPrimitive().isString()
                         && "COOKING".equals(state.getAsString()) && enough != null
                         && enough.isJsonPrimitive() && enough.getAsJsonPrimitive().isBoolean() && !enough.getAsBoolean();
-                if (!receipt.ok() || noTargets || missing || machineBlocked || batchFuelMissing || receiptBytes > 12000) {
+                if (!receipt.ok() || noTargets || missing || placementBlocked
+                        || machineBlocked || batchFuelMissing || receiptBytes > 12000) {
                     stopped = true;
                     finish(false, noTargets ? "NO_TARGETS:搜索未取得目标，后续步骤未执行。"
                             : missing ? "MISSING_MATERIALS:整批制作条件不足，后续步骤未执行。"
+                            : placementBlocked ? "PLACEMENT_BLOCKED:放置预检未通过，后续步骤未执行；核对候选再决定选址。"
                             : machineBlocked || batchFuelMissing ? "MACHINE_BLOCKED:机器无法完成本批烧制，后续步骤未执行。"
                             : receiptBytes > 12000 ? "RESULT_LIMIT:回执预算已到，后续步骤未执行。"
                             : "STOPPED:子步骤失败或需要确认，后续步骤未执行。");

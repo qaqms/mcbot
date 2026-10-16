@@ -39,6 +39,61 @@ class BlockPlacementTest {
         assertTrue(ItemStack.matches(before, access.inventory.getItem(13)));
     }
 
+    @Test void pathPlacementSelectsAVisibleSideAtTheSameTargetAndPlacesOnlyOnce() {
+        var access = access();
+        var seen = new java.util.ArrayList<Direction>();
+        var grid = new BlockAimTest.Grid();
+        grid.blocks.clear();
+        grid.eye = new net.minecraft.world.phys.Vec3(4.5, 91.62, -3.5);
+        grid.blocks.put(POS.west(), Blocks.STONE.defaultBlockState());
+        access.sightAt = (pos, face) -> {
+            seen.add(face);
+            var aim = BlockAim.placementContact(grid, pos.relative(face.getOpposite()), face, 4.5);
+            return aim.ok() ? null : new ServerTool.Result(false, aim.failure(), null);
+        };
+        var result = BlockPlacement.placeAttached(access, POS, 13);
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(POS, access.target);
+        assertEquals(Direction.EAST, access.face);
+        assertEquals(1, access.calls);
+        assertEquals(2, access.inventory.getItem(13).getCount());
+        assertEquals(6, seen.size(), "five face probes and a fresh execution check");
+    }
+
+    @Test void failedPathFaceSearchIsBoundedAndNeverRetriesAnActionWithEffects() {
+        var access = access();
+        var probes = new java.util.ArrayList<Direction>();
+        access.sightAt = (pos, face) -> {
+            probes.add(face);
+            return new ServerTool.Result(false, "TARGET_BLOCKED:no face", null);
+        };
+        assertFalse(BlockPlacement.placeAttached(access, POS, 13).ok());
+        assertEquals(6, probes.size());
+        assertEquals(0, access.calls);
+        access.sightAt = (pos, face) -> null;
+        access.result = InteractionResult.FAIL;
+        assertFalse(BlockPlacement.placeAttached(access, POS, 13).ok());
+        assertEquals(1, access.calls, "native failure with consumption must not try another face");
+    }
+
+    @Test void contactDiagnosticsSurviveQueryAndExecutionAndSightRefusalsKeepTheirReason() {
+        var access = access();
+        access.contactData = new com.google.gson.JsonObject();
+        access.contactData.addProperty("face", "west");
+        access.contactData.addProperty("block", "minecraft:stone");
+        var query = BlockPlacement.query(access, POS, 13, Direction.WEST);
+        assertEquals(access.contactData, query.data().getAsJsonObject("placement_contact"));
+        var placed = BlockPlacement.place(access, POS, 13, Direction.WEST);
+        assertEquals(access.contactData, placed.data().getAsJsonObject("placement_contact"));
+        var reason = new com.google.gson.JsonObject();
+        reason.addProperty("placement_failure", "no_clickable_face");
+        access.sightFailure = new ServerTool.Result(false, "TARGET_BLOCKED:no contact", reason);
+        var refused = BlockPlacement.query(access, POS, 13, Direction.UP);
+        assertFalse(refused.data().get("preflight_passed").getAsBoolean());
+        assertEquals("no_clickable_face", refused.data().get("placement_failure").getAsString());
+        assertFalse(refused.data().has("placement_contact"));
+    }
+
     private static final class Site implements BlockPlacement.Site {
         BlockState current = Blocks.SNOW.defaultBlockState();
         BlockState placed = Blocks.CRAFTING_TABLE.defaultBlockState();

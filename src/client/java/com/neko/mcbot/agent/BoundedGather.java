@@ -93,6 +93,7 @@ final class BoundedGather {
     private final Set<String> waitedItems = new HashSet<>();
     private final java.util.Map<String, JsonObject> excludedBlocks = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, JsonObject> excludedItems = new java.util.LinkedHashMap<>();
+    private final JsonArray sourceObservations = new JsonArray();
     private double originX, originY, originZ;
     private final ExplorationRoute exploration;
     private boolean exploring;
@@ -635,6 +636,7 @@ final class BoundedGather {
                 // A real removal can expose a previously blocked target. Query it afresh, with the same caps.
                 skippedBlocks.clear();
                 var drops = receipt.data().getAsJsonArray("drops");
+                recordYield(block, drops);
                 if (drops != null) for (var drop : drops) {
                     var item = drop.getAsJsonObject();
                     if (acceptedItems.contains(item.get("item").getAsString())) dropSettlePending = true;
@@ -649,6 +651,29 @@ final class BoundedGather {
                 blocked(block);
             } else finish(false, receipt.feedback());
         });
+    }
+
+    private void recordYield(JsonObject block, JsonArray drops) {
+        // Only the requested block's receipt is evidence here, never incidental clearing_results.
+        if (drops == null || drops.isEmpty() || sourceObservations.size() >= 8) return;
+        if (drops.size() > 32) throw new IllegalArgumentException();
+        var items = new java.util.TreeSet<String>();
+        for (var drop : drops) {
+            String id = drop.getAsJsonObject().get("item").getAsString();
+            if (id.length() > 128 || !id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+"))
+                throw new IllegalArgumentException();
+            items.add(id);
+        }
+        var evidence = new JsonObject();
+        for (String axis : List.of("x", "y", "z")) evidence.addProperty(axis, exact(block, axis));
+        evidence.add("block", block.get("block").deepCopy());
+        var observed = new JsonArray();
+        items.stream().limit(8).forEach(observed::add);
+        evidence.add("observed_items", observed);
+        evidence.addProperty("observed_item_count", items.size());
+        evidence.addProperty("items_truncated", items.size() > 8);
+        evidence.addProperty("observed_goal_item", items.stream().anyMatch(acceptedItems::contains));
+        sourceObservations.add(evidence);
     }
 
     private void walk(List<JsonObject> positions, int index, Set<String> tried, Runnable unavailable) {
@@ -753,6 +778,7 @@ final class BoundedGather {
         excludedBlocks.values().forEach(excluded::add);
         excludedItems.values().forEach(excluded::add);
         data.add("scope_exclusions", excluded);
+        data.add("source_observations", sourceObservations.deepCopy());
         data.add("last_observation", lastData);
         for (String key : List.of("authorization_id", "authorization_summary"))
             if (lastData.has(key)) data.add(key, lastData.get(key).deepCopy());
@@ -768,6 +794,10 @@ final class BoundedGather {
                 + "，完整已知查询区域=" + exploration.coverageRegions()
                 + (excluded.isEmpty() ? "" : "\n观测到但范围排除的候选样本（方块/掉落各最多16）=" + excluded
                 + "；task_scope为本任务首次固定的共享范围，collection_scope为本段搜索范围；不是不可挖或不可拾取。")
+                + (!ok && !sourceObservations.isEmpty()
+                ? "\n本段目标方块的实际掉落样本（最多8次）=" + sourceObservations
+                + "；observed_goal_item=false表示本次记录未见期望物品，先核对item与targets是否匹配。"
+                + "样本不是完整战利品表，也不证明该方块永不产出目标；未自动放宽物品目标，实际成果仍以背包为准。" : "")
                 + "；请按实际回执决定后续。", data));
     }
 }

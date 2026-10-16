@@ -3,6 +3,21 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 生存放置与具体回执（2026-10-16）
+
+BlockAim.placementContact评估实际轮廓面、首个命中block/face、眼睛距离及已加载射线。
+BlockPlacement.preflight共用于查询和执行，真实命中交给原版BlockPlaceContext；
+删除强制getClickedPos/canPlace覆写，只在原版精确落位可替换时继续。
+查询不转头/消费，执行重验、转向并调用原版BlockItem.place；placement_contact保存原目标点击证据。
+PathTask复用同一预检，在既定目标最多查六面再执行一次，保留许可、材料和真实支撑核对；
+尚未把完整点击几何/边缘身体动作加入路径搜索，不以合成命中保住不可执行计划。
+
+BoundedWorkflow在放置查询的preflight_passed=false时停止，Lua仍可读取候选自主分支；
+ArgumentFailure给可信Schema字段路径及类型/范围，不回显错误值或未知字段原文。
+BoundedGather只保留目标回执drops的最多8次物品样本，与清障产物分离；
+样本不改精确成果目标、不代替战利品表或背包，不新增成品模板/规划层。
+现场、参考链路及余项见real-game-log-review-2026-10-16.md，测试/包见STATUS。
+
 ## Bot头顶任务显示（2026-10-15）
 
 TaskBubbleState只维护当前任务显示、在途原子工具seq和短终态，不参与任务规划。

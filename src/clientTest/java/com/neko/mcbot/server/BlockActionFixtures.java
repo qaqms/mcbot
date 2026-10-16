@@ -1,5 +1,6 @@
 package com.neko.mcbot.server;
 
+import com.google.gson.JsonObject;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -101,11 +102,16 @@ public final class BlockActionFixtures {
         public int reads;
         public final List<BlockPos> prepared = new ArrayList<>();
         public java.util.function.Function<BlockPos, ServerTool.Result> prepareAt;
+        public java.util.function.BiFunction<BlockPos, Direction, ServerTool.Result> sightAt;
+        public JsonObject contactData;
 
         @Override public ServerTool.Result guard(BlockPos pos) { return denied; }
         @Override public Container inventory() { return inventory; }
         @Override public BlockState state(BlockPos pos) { reads++; return calls == 0 ? before : after; }
-        @Override public ServerTool.Result sight(BlockPos pos, Direction face) { return sightFailure; }
+        @Override public ServerTool.Result sight(BlockPos pos, Direction face) {
+            return sightAt == null ? sightFailure : sightAt.apply(pos, face);
+        }
+        @Override public JsonObject contact() { return contactData; }
         @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) {
             prepared.add(pos);
             return prepareAt == null ? prepareFailure : prepareAt.apply(pos);

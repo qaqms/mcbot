@@ -14,7 +14,6 @@ import com.neko.mcbot.task.ResourceLocks.Region;
 import com.neko.mcbot.server.ServerTool.Result;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 
 import java.util.ArrayList;
@@ -938,8 +937,8 @@ public final class PathTask extends TickTask {
         if (permission != null) return permission;
         if (!sampler.placeable(x, y, z)) return new Progress.Done(new Result(false,
                 "NO_PATH:计划的搭路格现在不可安全放置；重新查看路线。", null));
-        Result result = BlockPlacement.place(BlockPlacement.forPlayer(c), pos,
-                PathMaterials.find(c.getInventory()), Direction.UP);
+        Result result = BlockPlacement.placeAttached(BlockPlacement.forPlayer(c), pos,
+                PathMaterials.find(c.getInventory()));
         if (!result.ok()) return new Progress.Done(result);
         actualPlaces++;
         authorization.observed("place", pos.asLong());

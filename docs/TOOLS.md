@@ -3,6 +3,33 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 放置与错误诊断（2026-10-16）
+
+- place_block的face表示真实点击面，默认up；先看目标轮廓及反向邻格的轮廓，
+  必须首个命中block/face一致、实际够距且沿线已加载。空气/流体不能当点击锚点。
+  每个点击格最多16盒、每盒9个面内样点；不再把目标空格视作合法MISS点击。
+  原版BlockPlaceContext决定替换/相邻落位，落位必须精确等于请求格；
+  原地雪/半砖、朝向/多格/组件继续按原版处理，墙/地面两用物品最终规则仍待实际place。
+- query.ok只表示观察完成。执行前必须检查`data.preflight_passed==true`，
+  通过仍有native_validation_pending；失败可读alternatives，由调用方按任务选址，
+  不自动更换精确目标。固定workflow在preflight_passed=false时PLACEMENT_BLOCKED停止；
+  run_program可读取失败查询的data，自行选择候选，无动作自动重试。
+- 通过的原目标查询/成功动作给`placement_contact:{x,y,z,face,block}`，
+  表示点击的格子及其原状态ID，区别于外层请求/放置坐标。
+  no_clickable_face表示没有真实可点面，wrong_landing表示原版落位不匹配或不能替换；
+  拒绝保持changed=false/consumed_count=0。执行不复用上次查询的世界/上下文。
+- PathTask在同一搭路目标最多查六个面，通过后重验并只执行一次。
+  不移动寻找点击面，不在有消费/变化的失败后换面；原许可/材料/支撑核验保留。
+  尚无完整边缘桥接身体动作或搜索中的逐步点击几何，不能承诺所有旧搭路计划都可执行。
+- run_program动态子参数的Schema拒绝给具体工具、字段路径和声明类型/范围/枚举，
+  错误值/未知字段正文不回显，提示最多512字符；仍零原子派发，不自动改参数。
+- gather的source_observations最多8条目标移除时的实际drops物品样本，
+  含方块坐标/ID、observed_items及observed_goal_item（与本次acceptedItems交集）。
+  每次最多展示8种ID，observed_item_count/items_truncated明示展示截断；
+  匹配判断仍检查该次最多32条drops，不只检查展示的前8种。
+  不混入清障掉落，不把样本当完整战利品表，不替换期望item，不省略实际背包核验。
+  无进展时展示这些样本供模型核对来源；原三次无进展帽及等待/工作预算不变。
+
 ## 当前补充契约（2026-10-15）
 
 第六次日志后的工作恢复与回执：
@@ -57,8 +84,8 @@
   task_scope表示首次固定任务范围，collection_scope表示本段范围。
   剩余可选资源仅被范围排除时SCOPE_LIMIT返回，不额外耗探索步数或扩大范围；
   已在实际触碰范围的物品可原地等拾取，不向界外走。实际背包仍是成果依据。
-- place_block被局部遮挡时在同一目标格尝试其他可见点，最多28射线；
-  完整遮挡不穿透，未知沿线仍拒绝。所选点进入原生放置上下文。
+- place_block的旧“目标空格可见点”检查已由上方2026-10-16真实接触面检查替换；
+  完整遮挡不穿透，未知沿线仍拒绝。实际命中进入原生放置上下文。
   预检失败data.placement_failure为occupied_block/unsupported_state/self_collision/
   entity_collision，对应不能原地替换、无法形成可存活状态、自身或其他实体占位。
   均changed=false/consumed_count=0；自身占位提示move_to exact=true挪身。

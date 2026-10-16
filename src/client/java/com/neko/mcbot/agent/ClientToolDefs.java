@@ -104,7 +104,7 @@ public final class ClientToolDefs {
                     + "break_block/place_block/craft/smelt/wait；不支持移动/攻击/存取/拾取/反问/嵌套。"
                     + "timeout_seconds默认180、最多300；制作count、装料input_count/fuel_count、取出count必须明确填写，"
                     + "请求数合计≤128（放置算1件），明确挖放≤12格。这是请求预算，不限制原版配方取整产量/消耗或真实掉落。"
-                    + "全部参数先校验；失败/缺制作条件/搜索无目标/需确认立即停止，保留已完成回执，不重试。"
+                    + "全部参数先校验；失败/放置预检未过/缺制作条件/搜索无目标/需确认立即停止，保留已完成回执，不重试。"
                     + "只读任务须所有步骤只读；装料/等待成功不是成品完成，须查询和取出真实产物；取消不熄炉。"
                     + "根据新状态确定真实槽与坐标，不在清单里猜搜索结果或合成后的槽号",
                     "{\"type\":\"object\",\"properties\":{\"steps\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":12,"
@@ -212,9 +212,11 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
                             + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":12},\"item\":{\"type\":\"string\",\"maxLength\":128}}}"),
             new ToolSpec("place_block", "将背包0-35里的方块物品放到准确目标格，item用物品ID如cobblestone。"
-                    + "原版处理朝向/多格/组件，默认点击上面，可用face选择接触面；水中/可替换格和同种半砖合并由原版判断。"
+                    + "须实际命中目标可替换轮廓或邻接方块接触面，不能点空气放置；face默认up即下方邻格的顶面，可指定侧面。"
+                    + "原版处理准确落位/朝向/多格/组件，水中/可替换格和同种半砖合并由原版判断。"
                     + "选址不确定时先query=true，只读核对可替换/视线/支撑/实体占位，受阻时附附近最多6个同face预检候选。"
-                    + "查询不转头/挖放/消耗，preflight_passed不保证原版最终接受；精确指定目标不能自行改选其他格。"
+                    + "query.ok仅表示查询完成，执行须检查data.preflight_passed==true；通过仍不保证原版最终接受。"
+                    + "查询不转头/挖放/消耗；精确指定目标不能自行改选其他格。"
                     + "暂不支持脚手架/告示牌等特殊物品；忙时先等待或取消。失败查看实际消耗和目标变化，勿自动重试",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
                             + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"query\":{\"type\":\"boolean\"},\"face\":{\"type\":\"string\","

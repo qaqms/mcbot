@@ -36,6 +36,7 @@ public final class BlockPlacement {
         ServerTool.Result sight(BlockPos pos, Direction face);
         /** Read-only preflight; the same context is consumed only by place. */
         default ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) { return null; }
+        default JsonObject contact() { return null; }
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
     }
 
@@ -69,6 +70,7 @@ public final class BlockPlacement {
         ItemStack stack = inventory.getItem(slot);
         BlockState before = access.state(pos);
         int count = stack.getCount();
+        JsonObject contact = access.contact();
         InteractionResult result = access.place(pos, stack, face);
         BlockState after = access.state(pos);
         int consumed = Math.max(0, count - stack.getCount());
@@ -86,8 +88,24 @@ public final class BlockPlacement {
         data.addProperty("x", pos.getX());
         data.addProperty("y", pos.getY());
         data.addProperty("z", pos.getZ());
+        if (contact != null) data.add("placement_contact", contact.deepCopy());
         return new ServerTool.Result(true, "在 (" + pos.toShortString() + ") 放置 "
-                + data.get("placed").getAsString() + "，消耗 1 个；朝向/组件由原版放置流程处理。", data);
+                + data.get("placed").getAsString() + "，消耗 1 个；朝向/组件由原版放置流程处理。"
+                + (contact == null ? "" : "实际点击=" + contact), data);
+    }
+
+    /** A path specifies the exact support cell but leaves the usable click face to the body. */
+    public static ServerTool.Result placeAttached(Access access, BlockPos pos, int slot) {
+        ServerTool.Result first = null;
+        for (Direction face : List.of(Direction.UP, Direction.NORTH, Direction.SOUTH,
+                Direction.WEST, Direction.EAST, Direction.DOWN)) {
+            var failure = preflight(access, pos, slot, face);
+            if (failure == null) return place(access, pos, slot, face);
+            if (failure.feedback().startsWith("NO_ITEM:") || failure.feedback().startsWith("DENIED:"))
+                return failure;
+            if (first == null) first = failure;
+        }
+        return first;
     }
 
     private static ServerTool.Result preflight(Access access, BlockPos pos, int slot, Direction face) {
@@ -105,8 +123,7 @@ public final class BlockPlacement {
             return failed("DENIED:暂不支持该特殊方块物品的放置上下文，换普通方块。", false, 0);
         }
         failure = access.sight(pos, face);
-        if (failure != null) return failed(failure.feedback(), false, 0);
-        failure = access.prepare(pos, stack, face);
+        if (failure == null) failure = access.prepare(pos, stack, face);
         if (failure != null) {
             var data = failure.data() == null ? new JsonObject() : failure.data().deepCopy();
             data.addProperty("changed", false);
@@ -128,6 +145,8 @@ public final class BlockPlacement {
         data.addProperty("changed", false);
         data.addProperty("consumed_count", 0);
         data.addProperty("x", pos.getX()); data.addProperty("y", pos.getY()); data.addProperty("z", pos.getZ());
+        if (failure == null && access.contact() != null)
+            data.add("placement_contact", access.contact().deepCopy());
         var alternatives = new JsonArray();
         int checked = 1;
         if (failure != null) {
@@ -153,6 +172,7 @@ public final class BlockPlacement {
                 + pos.toShortString() + (failure == null ? " 通过当前预检。" : " 受阻：" + failure.feedback())
                 + " 其他通过预检的位置（同face，最多6个）：" + alternatives
                 + "。精确目标不能自行换格；若任务允许选址，再选择其中一格执行。"
+                + "query.ok仅表示查询完成；执行前必须检查data.preflight_passed=true。"
                 + "预检不保证原版物品最终接受，执行仍重新核对世界并以实际变化/消耗为准。", data);
     }
 
@@ -217,7 +237,9 @@ public final class BlockPlacement {
 
     private static final class PlayerAccess implements Access {
         private final CompanionPlayer player;
-        private BlockAim.Aim aim;
+        private final List<BlockHitResult> contacts = new ArrayList<>(2);
+        private BlockHitResult hit;
+        private JsonObject contact;
         private BlockPlaceContext context;
 
         private PlayerAccess(CompanionPlayer player) { this.player = player; }
@@ -239,33 +261,49 @@ public final class BlockPlacement {
         @Override public Container inventory() { return player.getInventory(); }
         @Override public BlockState state(BlockPos pos) { return player.level().getBlockState(pos); }
         @Override public ServerTool.Result sight(BlockPos pos, Direction face) {
-            aim = BlockAim.placement(BlockAim.forPlayer(player), pos, clickPoint(pos, face),
-                    Math.min(6.5, player.blockInteractionRange()));
-            return aim.ok() ? null : failed(aim.failure(), false, 0);
+            contacts.clear();
+            context = null;
+            hit = null;
+            contact = null;
+            BlockAim.Contact failure = null;
+            var world = BlockAim.forPlayer(player);
+            // The native context decides whether the clicked cell is replaced or placement is adjacent.
+            for (BlockPos clicked : List.of(pos, pos.relative(face.getOpposite()))) {
+                var contact = BlockAim.placementContact(world, clicked, face,
+                        Math.min(6.5, player.blockInteractionRange()));
+                if (contact.ok()) contacts.add(contact.hit());
+                else if (failure == null || contact.failure().startsWith("TARGET_LOST:")
+                        || contact.failure().startsWith("OUT_OF_REACH:")) failure = contact;
+            }
+            if (!contacts.isEmpty()) return null;
+            var data = new JsonObject();
+            data.addProperty("placement_failure", "no_clickable_face");
+            return new ServerTool.Result(false, failure.failure(), data);
         }
         @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) {
-            Vec3 click = aim.point();
             if (!player.mayUseItemAt(pos, face, stack))
                 return failed("DENIED:当前物品或玩家规则不允许在此放置。", false, 0);
-            Vec3 toward = click.subtract(player.getEyePosition());
-            var look = Look.toward(toward.lengthSqr() < 1e-10 ? player.getLookAngle() : toward);
-            context = new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack,
-                    new BlockHitResult(click, face, pos, false)) {
-                @Override public BlockPos getClickedPos() { return pos; }
-                @Override public boolean canPlace() { return state(pos).canBeReplaced(this); }
-                @Override public Direction getHorizontalDirection() { return look.horizontal(); }
-                @Override public float getRotation() { return look.yaw(); }
-                @Override public Direction getNearestLookingDirection() { return look.order()[0]; }
-                @Override public Direction getNearestLookingVerticalDirection() { return look.vertical(); }
-                @Override public Direction[] getNearestLookingDirections() {
-                    var ordered = new ArrayList<>(List.of(look.order()));
-                    if (!replacingClickedOnBlock()) {
-                        ordered.remove(face.getOpposite());
-                        ordered.addFirst(face.getOpposite());
-                    }
-                    return ordered.toArray(Direction[]::new);
+            for (BlockHitResult candidate : contacts) {
+                var proposed = placementContext(stack, candidate);
+                if (pos.equals(proposed.getClickedPos()) && proposed.canPlace()) {
+                    context = proposed;
+                    hit = candidate;
+                    break;
                 }
-            };
+            }
+            if (context == null) {
+                var data = new JsonObject();
+                data.addProperty("placement_failure", "wrong_landing");
+                return new ServerTool.Result(false, "TARGET_BLOCKED:真实点击后的原版落位不是指定目标，"
+                        + "或目标不能替换；不会强制改写落位。核对目标占位、face及邻接接触面。", data);
+            }
+            contact = new JsonObject();
+            BlockPos clicked = hit.getBlockPos();
+            contact.addProperty("x", clicked.getX());
+            contact.addProperty("y", clicked.getY());
+            contact.addProperty("z", clicked.getZ());
+            contact.addProperty("face", hit.getDirection().getName());
+            contact.addProperty("block", BuiltInRegistries.BLOCK.getKey(state(clicked).getBlock()).toString());
             BlockItem item = (BlockItem) stack.getItem();
             // The item's native selector can choose a wall variant instead of getBlock().
             if (item instanceof StandingAndWallBlockItem) return null;
@@ -287,8 +325,29 @@ public final class BlockPlacement {
                 }
             });
         }
+        private BlockPlaceContext placementContext(ItemStack stack, BlockHitResult clickHit) {
+            Vec3 click = clickHit.getLocation();
+            Direction face = clickHit.getDirection();
+            Vec3 toward = click.subtract(player.getEyePosition());
+            var look = Look.toward(toward.lengthSqr() < 1e-10 ? player.getLookAngle() : toward);
+            return new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack, clickHit) {
+                @Override public Direction getHorizontalDirection() { return look.horizontal(); }
+                @Override public float getRotation() { return look.yaw(); }
+                @Override public Direction getNearestLookingDirection() { return look.order()[0]; }
+                @Override public Direction getNearestLookingVerticalDirection() { return look.vertical(); }
+                @Override public Direction[] getNearestLookingDirections() {
+                    var ordered = new ArrayList<>(List.of(look.order()));
+                    if (!replacingClickedOnBlock()) {
+                        ordered.remove(face.getOpposite());
+                        ordered.addFirst(face.getOpposite());
+                    }
+                    return ordered.toArray(Direction[]::new);
+                }
+            };
+        }
+        @Override public JsonObject contact() { return contact; }
         @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
-            player.facePoint(aim.point());
+            player.facePoint(hit.getLocation());
             // Invoke placement directly: using a block must not open its menu or eat an item.
             InteractionResult result = ((BlockItem) stack.getItem()).place(context);
             if (result.consumesAction()) player.swing(InteractionHand.MAIN_HAND);
@@ -296,7 +355,4 @@ public final class BlockPlacement {
         }
     }
 
-    private static Vec3 clickPoint(BlockPos pos, Direction face) {
-        return Vec3.atCenterOf(pos).add(face.getStepX() * .5, face.getStepY() * .5, face.getStepZ() * .5);
-    }
 }

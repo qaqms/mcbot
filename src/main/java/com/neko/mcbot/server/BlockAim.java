@@ -2,6 +2,7 @@ package com.neko.mcbot.server;
 
 import com.neko.mcbot.body.CompanionPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
@@ -28,6 +29,10 @@ public final class BlockAim {
     }
 
     public record Aim(Vec3 point, String failure) {
+        public boolean ok() { return failure == null; }
+    }
+
+    public record Contact(BlockHitResult hit, String failure) {
         public boolean ok() { return failure == null; }
     }
 
@@ -204,30 +209,41 @@ public final class BlockAim {
         return new Aim(point, null);
     }
 
-    /** Empty placement cells may produce MISS; a nearer blocking cell may never be clicked through. */
-    public static Aim placement(Access access, BlockPos pos, Vec3 point, double reach) {
-        if (!validReach(reach) || access.eye().distanceToSqr(point) > reach * reach) {
-            return failed("OUT_OF_REACH:放置点超出实际交互距离，先 move_to 靠近。");
+    /** A placement click must hit a real outline on the requested face, including partial shapes. */
+    public static Contact placementContact(Access access, BlockPos clicked, Direction face, double reach) {
+        if (!validReach(reach)) return new Contact(null, "OUT_OF_REACH:当前放置交互距离无效。");
+        if (!access.loaded(clicked)) return new Contact(null, unloaded().failure());
+        Vec3 eye = access.eye();
+        boolean distant = false, unknown = false;
+        var boxes = access.outline(clicked);
+        for (int i = 0; i < Math.min(MAX_BOXES, boxes.size()); i++) {
+            AABB box = boxes.get(i);
+            for (double u : SAMPLES) for (double v : SAMPLES) {
+                boolean positive = face.getAxisDirection() == Direction.AxisDirection.POSITIVE;
+                Vec3 local = switch (face.getAxis()) {
+                    case X -> new Vec3(positive ? box.maxX : box.minX,
+                            box.minY + (box.maxY - box.minY) * u, box.minZ + (box.maxZ - box.minZ) * v);
+                    case Y -> new Vec3(box.minX + (box.maxX - box.minX) * u,
+                            positive ? box.maxY : box.minY, box.minZ + (box.maxZ - box.minZ) * v);
+                    case Z -> new Vec3(box.minX + (box.maxX - box.minX) * u,
+                            box.minY + (box.maxY - box.minY) * v, positive ? box.maxZ : box.minZ);
+                };
+                Vec3 surface = local.add(clicked.getX(), clicked.getY(), clicked.getZ());
+                Vec3 normal = new Vec3(face.getStepX(), face.getStepY(), face.getStepZ());
+                if (eye.subtract(surface).dot(normal) <= 1e-7) continue;
+                if (eye.distanceToSqr(surface) > reach * reach) { distant = true; continue; }
+                Vec3 inside = surface.subtract(normal.scale(1e-4));
+                if (!loadedSegment(access, eye, inside)) { unknown = true; continue; }
+                var hit = access.trace(eye, inside);
+                if (hit.getType() == HitResult.Type.BLOCK && clicked.equals(hit.getBlockPos())
+                        && hit.getDirection() == face && eye.distanceToSqr(hit.getLocation()) <= reach * reach)
+                    return new Contact(hit, null);
+            }
         }
-        Aim first = placementRay(access, pos, point);
-        if (first.ok() || first.failure().startsWith("TARGET_LOST:")) return first;
-        // A face's centre can be covered while another part of the exact placement cell is exposed.
-        for (double x : SAMPLES) for (double y : SAMPLES) for (double z : SAMPLES) {
-            Vec3 sample = new Vec3(pos.getX() + x, pos.getY() + y, pos.getZ() + z);
-            if (access.eye().distanceToSqr(sample) > reach * reach) continue;
-            Aim aim = placementRay(access, pos, sample);
-            if (aim.ok() || aim.failure().startsWith("TARGET_LOST:")) return aim;
-        }
-        return first;
-    }
-
-    private static Aim placementRay(Access access, BlockPos pos, Vec3 point) {
-        if (!access.loaded(pos) || !loadedSegment(access, access.eye(), point)) return unloaded();
-        BlockHitResult hit = access.trace(access.eye(), point);
-        if (hit.getType() == HitResult.Type.BLOCK && !pos.equals(hit.getBlockPos()))
-            return failed("TARGET_BLOCKED:放置目标的可见采样点被方块 " + hit.getBlockPos().toShortString()
-                    + " 遮挡；先inspect_block查看遮挡或move_to exact=true换位，再决定放置。");
-        return new Aim(point, null);
+        return new Contact(null, unknown ? unloaded().failure()
+                : distant ? "OUT_OF_REACH:眼睛到可点击放置面超出实际交互距离，先靠近。"
+                : "TARGET_BLOCKED:没有可见且实际命中的放置接触面；空气/流体不能作为点击锚点。"
+                + "核对face、邻接方块或调整站位，再查询放置。");
     }
 
     private static boolean loadedSegment(Access access, Vec3 from, Vec3 to) {
