@@ -27,6 +27,8 @@ class ClearingMiningTest {
         final List<BlockPos> removed = new ArrayList<>();
         boolean safe = true, hand = true, reserved = true, reported = true, correctTarget = true;
         float gain = 1;
+        boolean emitDrops;
+        final Map<BlockPos, BlockActionFixtures.Mining> actions = new HashMap<>();
         Fixture(boolean autonomous) {
             context = new ActionPermissions.Context(UUID.randomUUID(), UUID.randomUUID(), "world", 1,
                     false, autonomous);
@@ -57,10 +59,16 @@ class ClearingMiningTest {
             nativeAction.state = state(pos);
             nativeAction.gain = gain;
             nativeAction.reported = reported;
+            nativeAction.dropRole = pos.equals(TARGET) ? "target" : "clearing";
+            nativeAction.dropSource = pos;
+            actions.put(pos, nativeAction);
             nativeAction.action = () -> {
                 cells.remove(pos);
                 removed.add(pos);
                 nativeAction.state = Blocks.AIR.defaultBlockState();
+                if (emitDrops) nativeAction.drops.add(new BlockActionFixtures.Drop(
+                        new net.minecraft.world.item.ItemStack(pos.equals(TARGET)
+                                ? net.minecraft.world.item.Items.COBBLESTONE : net.minecraft.world.item.Items.LEAF_LITTER)));
             };
             return new BlockMining(nativeAction);
         }
@@ -77,6 +85,38 @@ class ClearingMiningTest {
         assertTrue(result.data().get("removed").getAsBoolean());
         assertEquals(1, result.data().get("cleared_blocks").getAsInt());
         assertEquals(1, result.data().getAsJsonArray("clearing_results").size());
+    }
+
+    @Test void clearingAndTargetOriginsStaySeparateAndCancellationRefreshesCompletedClearing() {
+        for (boolean cancelled : new boolean[]{true, false}) {
+            var f = new Fixture(true);
+            f.emitDrops = true;
+            var sequence = f.sequence(null, 3);
+            assertNull(sequence.prepare());
+            assertNull(sequence.tick());
+            var clearing = f.actions.get(COVER);
+            var id = clearing.drops.getFirst().id;
+            clearing.ledger.unavailable(id, "unloaded");
+            ServerTool.Result result;
+            if (cancelled) result = sequence.interrupted("CANCELLED:owner");
+            else result = sequence.refreshDrops(sequence.tick());
+            var clear = result.data().getAsJsonArray("clearing_results").get(0).getAsJsonObject()
+                    .getAsJsonObject("result").getAsJsonObject("drop_accounting");
+            assertEquals("clearing", clear.get("role").getAsString());
+            assertEquals(1, clear.get("unresolved_count").getAsInt());
+            assertEquals(1, result.data().getAsJsonObject("clearing_drop_summary")
+                    .get("unresolved_drop_items").getAsInt());
+            if (cancelled) {
+                assertFalse(result.ok());
+                assertEquals(List.of(COVER), f.removed);
+                assertFalse(result.data().get("removed").getAsBoolean());
+            } else {
+                assertTrue(result.ok());
+                assertEquals("target", result.data().getAsJsonObject("drop_accounting").get("role").getAsString());
+                assertEquals("minecraft:cobblestone", result.data().getAsJsonArray("drop_spawns").get(0)
+                        .getAsJsonObject().get("item").getAsString());
+            }
+        }
     }
 
     @Test void confirmModeUsesTheExistingOneUseConcreteScope() {

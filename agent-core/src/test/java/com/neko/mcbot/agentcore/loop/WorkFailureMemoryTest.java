@@ -55,6 +55,23 @@ class WorkFailureMemoryTest {
         assertNotNull(memory.refusal("move_to", POINT));
     }
 
+    @Test void repeatedOriginPickupAndMergeReportsDoNotReplenishTheOriginalFailureBudget() {
+        var memory = new WorkFailureMemory();
+        var fresh = state();
+        observe(memory, fresh);
+        exhaust(memory);
+        for (int i = 1; i < 8; i++) {
+            var report = json("{\"drop_accounting_known\":true,\"drop_accounting\":{"
+                    + "\"origin_id\":1,\"spawned_count\":64,\"live_count\":0,\"picked_up_self_count\":64,"
+                    + "\"accounting_complete\":true}}");
+            memory.terminal("move_to", POINT, new ToolOutcome(true, "same native origin", report));
+            fresh.add("drop_changes", report);
+            fresh.addProperty("game_tick", i);
+            observe(memory, fresh);
+        }
+        assertNotNull(memory.refusal("move_to", POINT));
+    }
+
     @Test void argumentsAreFrozenAndOnlyKnownLocalFailuresCount() {
         var memory = new WorkFailureMemory();
         var args = POINT.deepCopy();

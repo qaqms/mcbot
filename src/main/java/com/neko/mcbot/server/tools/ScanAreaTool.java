@@ -213,6 +213,10 @@ public final class ScanAreaTool implements ServerTool {
                 .stream().sorted(java.util.Comparator.comparingDouble(item -> item.distanceToSqr(companion)))
                 .limit(16).forEach(item -> {
                     var observation = GroundItems.describe(item);
+                    var provenance = com.neko.mcbot.server.DropTracker.provenance(companion, item);
+                    provenance.addProperty("unattributed_to_body_count", Math.max(0,
+                            item.getItem().getCount() - provenance.get("recorded_own_count").getAsInt()));
+                    observation.add("drop_origins", provenance);
                     observation.add("stand_positions", WorkPositions.describePickup(companion, item));
                     observation.addProperty("can_touch_here",
                             GroundItems.touches(companion.getBoundingBox(), item.getBoundingBox()));

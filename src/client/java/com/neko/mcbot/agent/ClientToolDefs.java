@@ -17,7 +17,8 @@ public final class ClientToolDefs {
             case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
                     + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
                     + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
-                    + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。";
+                    + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。"
+                    + "drop_changes为本身体近期有界来源摘要，拾取事件不替代当前inventory。";
             case "inventory" -> "data.selected_slot、storage_size、slots_used；"
                     + "data.slots是[{slot,item,count,damage?,max_damage?}]，data.equipment是装备列表。"
                     + "slots是从1起的列表，传给equip的是entry.slot实际0-35槽号。";
@@ -32,7 +33,8 @@ public final class ClientToolDefs {
                     + "ingredients[n]的材料分组序号是n-1；缺口按required_count与available_count计算，"
                     + "options可能重叠，最终可制作仍以can_craft为准。";
             case "scan_area" -> "data.item_targets是[{item,count,x,y,z,target_uuid,stand_positions,"
-                    + "can_touch_here,pickup_allowed,pickup_delayed,pickup_delay_ticks}]；"
+                    + "can_touch_here,pickup_allowed,pickup_delayed,pickup_delay_ticks,drop_origins}]；"
+                    + "drop_origins含recorded_own_count、unattributed_to_body_count及有界parts，不认领历史掉落；"
                     + "stand_positions是整数脚格{x,y,z}，用exact=true走到候选后核对新鲜背包。"
                     + "一般扫描另有entity_targets、summary_lines、groups、special_blocks；"
                     + "entities/summary_lines/groups/special_blocks是文字列表，不是带坐标的对象。"
@@ -54,10 +56,19 @@ public final class ClientToolDefs {
                     + "建议已做有界预检，不必再次遍历邻域，执行前仍重验。"
                     + "native_validation_pending表示原版尚待执行，changed=false/consumed_count=0不是已放置。"
                     + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
+            case "break_block" -> "data.removed表示真实移除；collected_count=0表示挖掘不直接塞包。"
+                    + "drop_accounting_known表示原生来源观察可用；可用时drop_accounting含ledger_id/origin_id/role/source、"
+                    + "spawned_count/live_count/picked_up_self_count/picked_up_other_count/destroyed_count/unresolved_count。"
+                    + "accounting_complete仅结算已观察生成物；同步区间外延迟生成不归源，混堆部分转移可变未知。"
+                    + "drops仅源格当前可归源物，related_drops为连带/来源不明物；"
+                    + "drop_spawns是源格生成样本，须drop_spawns_complete=true才可据未出现判断。"
+                    + "clearing_results/clearing_drop_summary与目标分开。拾取累计不替代新鲜背包或最终目标。";
             case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position或work，"
                     + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
                     + "拾取用scan_area.item_targets[].stand_positions及exact=true；工作用arrival=work。"
                     + "放置工作可加place_item和face，can_work_here仅当前放置预检，到站未执行放置。"
+                    + "remaining_items是开路来源当前在地量，picked_up_self_items/picked_up_other_items/"
+                    + "destroyed_drop_items/unresolved_drop_items分别结算，未知不冒充入包。"
                     + "失败数据可能仅含已知部分效果，须status details=true重新核对，不假定到了请求格。";
             case "gather" -> "data.goal_satisfied、actual_progress、scope、mined_blocks、cleared_blocks、"
                     + "primitive_calls、skipped_blocks/skipped_items及last_observation。"
@@ -266,7 +277,7 @@ public final class ClientToolDefs {
                     + "expected_block可填写最新观测的完整方块ID，目标被替换则停止；gather自动携带。"
                     + "clear_obstructions=true可先清理射线上最多3格安全遮挡，clear_limit为0-3剩余清理预算；"
                     + "确认模式需ask_owner批准服务端完整清单，再带authorization_id重发；自主模式复用主人当前权限。"
-                    + "按真实进度耗时，原版处理破坏/耐久，掉落留在地上，返回掉落实体位置；不会直接入包。"
+                    + "按真实进度耗时，原版处理破坏/耐久；返回有界来源、并堆/拾取/损毁结算与当前掉落位置，不直接塞包。"
                     + "走近掉落物会自动拾取，须核对最新背包，挖掉矿块不等于获得物品；失败须核对实际回执。"
                     + "回执以 ACCEPTED: 开头表示已受理、还没挖完——别重发，做完系统会主动报结果",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"

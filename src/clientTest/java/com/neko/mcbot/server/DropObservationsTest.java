@@ -10,6 +10,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DropObservationsTest {
+    @org.junit.jupiter.api.BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
     private static JsonObject drop(UUID id, int count) {
         var data = new JsonObject();
         data.addProperty("target_uuid", id.toString());
@@ -63,5 +64,51 @@ class DropObservationsTest {
         assertEquals(256, snapshot.get("remaining_items").getAsInt());
         assertEquals(1, snapshot.get("unresolved_drop_items").getAsInt());
         assertEquals(16, snapshot.getAsJsonArray("remaining_drops").size());
+    }
+
+    @Test void nativeOriginsAreDeduplicatedFollowMergesAndKeepOtherPickupOutOfInventoryProgress() {
+        var ledger = new DropLedger();
+        var actor = UUID.randomUUID(); var body = UUID.randomUUID();
+        var origin = ledger.begin(actor, body, net.minecraft.core.BlockPos.ZERO, "path_clear", 0);
+        UUID source = UUID.randomUUID(), destination = UUID.randomUUID();
+        ledger.spawned(origin, DropLedgerTest.item(source, 4), DropLedger.Relation.SOURCE_CELL);
+        var removal = new JsonObject();
+        DropTracker.addReport(removal, ledger.report(origin));
+        var observations = new DropObservations();
+        observations.record(removal); observations.record(removal.deepCopy());
+        ledger.merged(DropLedgerTest.item(source, 4), DropLedgerTest.item(destination, 7),
+                DropLedgerTest.item(source, 0), DropLedgerTest.item(destination, 11));
+        var snapshot = observations.snapshotSources(ignored -> ledger.report(origin));
+        assertEquals(4, snapshot.get("observed_drop_items").getAsInt());
+        assertEquals(4, snapshot.get("remaining_items").getAsInt());
+        assertEquals(destination.toString(), snapshot.getAsJsonArray("remaining_drops").get(0)
+                .getAsJsonObject().get("target_uuid").getAsString());
+        ledger.reduced(DropLedgerTest.item(destination, 11), DropLedgerTest.item(destination, 0),
+                DropLedger.Outcome.PICKUP, new DropLedger.Picker(UUID.randomUUID(), null), "other_player");
+        snapshot = observations.snapshotSources(ignored -> ledger.report(origin));
+        assertEquals(4, snapshot.get("picked_up_other_items").getAsInt());
+        assertEquals(0, snapshot.get("picked_up_self_items").getAsInt());
+        assertEquals(0, snapshot.get("remaining_items").getAsInt());
+        assertTrue(snapshot.get("remaining_items_complete").getAsBoolean());
+        assertFalse(snapshot.has("collected_count"));
+    }
+
+    @Test void expiredMissingOrUninstrumentedOriginsStayUnknownAndNeverLoadOrInventEntities() {
+        var ledger = new DropLedger();
+        var origin = ledger.begin(UUID.randomUUID(), UUID.randomUUID(), net.minecraft.core.BlockPos.ZERO, "target", 0);
+        ledger.spawned(origin, DropLedgerTest.item(UUID.randomUUID(), 3), DropLedger.Relation.SOURCE_CELL);
+        var removal = new JsonObject();
+        DropTracker.addReport(removal, ledger.report(origin));
+        var observations = new DropObservations();
+        observations.record(removal);
+        var missing = observations.snapshotSources(ignored -> null);
+        assertEquals(3, missing.get("unresolved_drop_items").getAsInt());
+        assertFalse(missing.get("remaining_items_complete").getAsBoolean());
+        var uninstrumented = new JsonObject();
+        DropTracker.addReport(uninstrumented, null);
+        observations.record(uninstrumented);
+        assertFalse(observations.snapshotSources(ignored -> ledger.report(origin))
+                .get("remaining_items_complete").getAsBoolean());
+        assertTrue(DropObservations.sentence(missing).contains("最终成果仍须核对背包"));
     }
 }

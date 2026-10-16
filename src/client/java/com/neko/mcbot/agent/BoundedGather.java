@@ -649,7 +649,10 @@ final class BoundedGather {
                 // A real removal can expose a previously blocked target. Query it afresh, with the same caps.
                 skippedBlocks.clear();
                 var drops = receipt.data().getAsJsonArray("drops");
-                recordYield(block, drops);
+                if (!receipt.data().has("drop_spawns_complete")
+                        || receipt.data().get("drop_spawns_complete").getAsBoolean())
+                    recordYield(block, receipt.data().has("drop_spawns")
+                            ? receipt.data().getAsJsonArray("drop_spawns") : drops);
                 if (drops != null) for (var drop : drops) {
                     var item = drop.getAsJsonObject();
                     if (acceptedItems.contains(item.get("item").getAsString())) dropSettlePending = true;

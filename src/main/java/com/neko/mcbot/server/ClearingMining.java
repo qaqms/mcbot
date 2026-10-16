@@ -35,6 +35,8 @@ public final class ClearingMining {
     private ServerTool.Result terminal;
     private boolean initialized;
     private boolean requiresApproval;
+    private final java.util.List<BlockMining> completedMining = new java.util.ArrayList<>();
+    private BlockMining targetMining;
 
     public ClearingMining(Access access, BlockPos target, String expectedBlock,
                           ActionPermissions permissions, ActionPermissions.Context context,
@@ -119,6 +121,7 @@ public final class ClearingMining {
         access.completed();
         boolean removed = result.data().get("removed").getAsBoolean();
         if (active.equals(target)) {
+            targetMining = mining;
             if (removed) approval.observed("dig", active.asLong());
             return finish(result.ok(), result.feedback(), result.data());
         }
@@ -129,6 +132,7 @@ public final class ClearingMining {
             record.addProperty("z", active.getZ());
             record.add("result", result.data().deepCopy());
             clears.add(record);
+            completedMining.add(mining);
         }
         mining = null;
         if (!result.ok()) return finish(false, result.feedback(), null);
@@ -157,6 +161,41 @@ public final class ClearingMining {
     }
 
     public ServerTool.Result interrupted(String feedback) {
-        return finish(false, feedback, terminal == null ? null : terminal.data());
+        return refreshDrops(finish(false, feedback, terminal == null ? null : terminal.data()));
+    }
+
+    public ServerTool.Result refreshDrops(ServerTool.Result result) {
+        var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+        String feedback = result.feedback();
+        var observed = new DropObservations();
+        var reports = new java.util.HashMap<String, JsonObject>();
+        for (int i = 0; i < completedMining.size(); i++) {
+            var clear = clears.get(i).getAsJsonObject();
+            var prior = new ServerTool.Result(true, "", clear.getAsJsonObject("result"));
+            clear.add("result", completedMining.get(i).refreshDrops(prior).data());
+            var refreshed = clear.getAsJsonObject("result");
+            observed.record(refreshed);
+            if (refreshed.has("drop_accounting")) {
+                var report = refreshed.getAsJsonObject("drop_accounting");
+                reports.put(report.get("ledger_id").getAsString() + ":" + report.get("origin_id").getAsString(), report);
+            }
+        }
+        if (targetMining != null) {
+            var refreshed = targetMining.refreshDrops(new ServerTool.Result(result.ok(), feedback, data));
+            data = refreshed.data();
+            feedback = refreshed.feedback();
+        }
+        else if (mining != null && active != null) {
+            var partial = mining.refreshDrops(new ServerTool.Result(false, "", null));
+            if (partial.data() != null) data.add("active_mining_result", partial.data());
+        }
+        data.add("clearing_results", clears.deepCopy());
+        if (!completedMining.isEmpty()) {
+            var summary = observed.snapshotSources(token -> reports.get(
+                    token.get("ledger_id").getAsString() + ":" + token.get("origin_id").getAsString()));
+            data.add("clearing_drop_summary", summary);
+            feedback += " 清障产物：" + DropObservations.sentence(summary);
+        }
+        return new ServerTool.Result(result.ok(), feedback, data);
     }
 }

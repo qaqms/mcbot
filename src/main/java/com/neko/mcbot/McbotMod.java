@@ -74,6 +74,7 @@ public final class McbotMod implements ModInitializer {
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             com.neko.mcbot.path.PathTask.clearPlanCache();
+            com.neko.mcbot.server.DropTracker.clear();
             CompanionRoster roster = new CompanionRoster(server);
             roster.load();
 
@@ -104,6 +105,7 @@ public final class McbotMod implements ModInitializer {
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             scheduler.cancelAll("服务器已关闭。");
+            com.neko.mcbot.server.DropTracker.clear();
             com.neko.mcbot.path.PathTask.clearPlanCache();
             SummonService service = summonService;
             summonService = null;
@@ -120,6 +122,7 @@ public final class McbotMod implements ModInitializer {
             // （自锁死陷阱见 CompanionChunkPads 注释③，不可改到别处）。
             com.neko.mcbot.body.CompanionChunkPads.tick(server);
             scheduler.tick(server);
+            for (var level : server.getAllLevels()) com.neko.mcbot.server.DropTracker.tick(level);
             if (++tickCount[0] >= 60) {
                 // 归零重计：旧写法过了 60 拍后**每拍**进 onTick，正常运行（无 flag）时
                 // 就是每秒 20 次 Files.exists——开发工装漏进生产路径。改成每 3 秒探一次，

@@ -45,6 +45,7 @@ public final class StatusTool implements ServerTool {
         if (result.ok()) {
             var recent = companion.recentBodyChanges();
             result.data().add("body_changes", recent);
+            result.data().add("drop_changes", com.neko.mcbot.server.DropTracker.recent(companion));
             result = new Result(true, result.feedback()
                     + com.neko.mcbot.body.BodyChangeLog.sentence(recent), result.data());
         }

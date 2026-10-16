@@ -3,6 +3,19 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## F2 共用掉落事实（2026-10-16）
+
+BlockMining请求与原生destroyBlock匹配区间捕获实际接受的掉落；
+DropTracker把生成/源格、并堆、原版拾取/损毁和卸载事件交给每世界有界DropLedger。
+源格/其他格/仅操作区间与target/clearing/path_clear分开，不认领附近历史物。
+全量与同质部分转移可精确结算，混堆部分转移保守转未知，不按任意先后分配来源。
+单挖/清障/路线终态、status与扫描共用；BodyPickup/collect仍调用同一原生playerTouch，
+本身体身份同时核UUID和body_id，最终成果仍查真实背包。
+路线保存轻量令牌、一次刷新后聚合，不给失败账补次数或重开任何原预算。
+缺钩子/未知/卸载/过期/样本截断显式声明；只覆盖同步破坏区间生成，
+异步生成、任意战斗战利品及跨退出来源恢复不在本卡范围。
+完整边界及离线/原生区分见F2-DROP-ACCOUNTING-2026-10-16与STATUS。
+
 ## N2b 共用放置工作（2026-10-16）
 
 PlacementWork将目标/材料/面交给原NavigationGoal与PathTask，不另建导航器；

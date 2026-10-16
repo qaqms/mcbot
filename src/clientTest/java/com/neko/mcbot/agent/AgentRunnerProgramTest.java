@@ -379,6 +379,33 @@ class AgentRunnerProgramTest {
         assertTrue(outcome().content().contains("只读"));
     }
 
+    @Test void luaReadsOriginAccountingThenChecksActualInventoryBeforeDecidingTheNextAction() {
+        start("inspect actual yield", """
+                local mined=mc.call("break_block",{x=2,y=90,z=0})
+                local origin=mined.data.drop_accounting
+                local fresh=mc.call("status",{details=true})
+                local actual=0
+                for _,s in ipairs(fresh.data.inventory.slots) do
+                  if s.item=="minecraft:dirt" then actual=actual+s.count end
+                end
+                if actual==0 then
+                  return {blocked="inventory empty",observed_pickup=origin.picked_up_self_count}
+                end
+                return mc.call("equip",{slot=0})
+                """);
+        tool("break_block", 1);
+        ack("native-mining");
+        assertEquals(1, client.toolCount());
+        terminal(client.lastTool().num("seq", -1), "native-mining", "{\"removed\":true,\"drop_accounting_known\":true,"
+                + "\"drop_accounting\":{\"spawned_count\":4,\"picked_up_self_count\":4}}");
+        tool("status", 2);
+        receipt(true, "actual inventory", BoundedGatherTest.state(0).toString());
+        assertTrue(outcome().ok());
+        assertTrue(outcome().content().contains("inventory empty"));
+        assertEquals(2, client.toolCount());
+        assertTrue(client.sent.stream().noneMatch(e -> "equip".equals(e.str("tool"))));
+    }
+
     @Test void authorizationFailureReturnsFullActualReceiptAndStopsDependentWork() {
         start("approach then work", "mc.call('move_to',{x=3,y=65,z=2}) mc.call('break_block',{x=4,y=65,z=2})");
         tool("move_to", 1);

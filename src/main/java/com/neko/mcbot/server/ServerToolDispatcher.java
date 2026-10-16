@@ -589,6 +589,20 @@ public final class ServerToolDispatcher {
             if (delta != null && delta.isJsonObject()
                     && WireSize.utf8Bytes(delta.toString()) <= com.neko.mcbot.body.BodyChangeLog.MAX_BYTES)
                 kept.add("body_delta", delta.deepCopy());
+            if (original.has("drop_accounting_known")) {
+                kept.addProperty("drop_accounting_known", false);
+                kept.addProperty("drop_spawns_complete", false);
+                var origin = original.get("drop_accounting");
+                if (origin != null && origin.isJsonObject()) {
+                    var summary = origin.getAsJsonObject().deepCopy();
+                    summary.remove("spawns"); summary.remove("events"); summary.remove("live_drops");
+                    summary.addProperty("details_omitted", true);
+                    if (WireSize.utf8Bytes(summary.toString()) <= 2048) {
+                        kept.add("drop_accounting", summary);
+                        kept.addProperty("drop_accounting_known", original.get("drop_accounting_known").getAsBoolean());
+                    }
+                }
+            }
             for (String key : java.util.List.of("removed", "changed", "cleared_blocks", "removed_blocks",
                     "placed_blocks", "collected_count", "crafted_count", "loaded_input_count",
                     "loaded_fuel_count", "taken_count", "moved_items", "strikes",

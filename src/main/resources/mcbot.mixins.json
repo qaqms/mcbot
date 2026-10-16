@@ -2,6 +2,8 @@
   "required": true,
   "package": "com.neko.mcbot.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["FurnaceAccess", "ItemTargetAccess", "LivingEquipmentAccess", "EntityFluidAccess", "BlockItemPlacementAccess"],
+  "mixins": ["FurnaceAccess", "ItemTargetAccess", "LivingEquipmentAccess", "EntityFluidAccess", "BlockItemPlacementAccess",
+    "DropAdmissionMixin", "DropBreakMixin", "DropSourceMixin", "DropRemovalMixin", "DropMutationMixin",
+    "DropMobPickupMixin"],
   "injectors": {"defaultRequire": 1}
 }

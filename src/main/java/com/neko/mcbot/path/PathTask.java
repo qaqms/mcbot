@@ -221,6 +221,10 @@ public final class PathTask extends TickTask {
 
     private Progress terminal(Result result) {
         stopMovement();
+        if (mining != null) {
+            var partial = mining.refreshDrops(new Result(false, "", null));
+            if (partial.data() != null) drops.record(partial.data());
+        }
         clearCrack();
         if (!result.feedback().startsWith("NEED_CONFIRM:")) dropPlan();
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
@@ -1102,7 +1106,7 @@ public final class PathTask extends TickTask {
         if (digPos == null || !digPos.equals(pos)) {
             clearCrack();
             digPos = pos;
-            mining = BlockMining.forPlayer(c, pos);
+            mining = BlockMining.forPlayer(c, pos, null, "path_clear");
         }
         double seconds = sampler.digSeconds(x, y, z);
         if (!DigSampler.feasibleDig(seconds)) {

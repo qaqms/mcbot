@@ -3,6 +3,23 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## F2 来源与去向（2026-10-16）
+
+break_block不再凭附近新实体认领产物。drop_accounting_known声明原生观察是否可用，
+drop_accounting含ledger_id/origin_id、role/source/created_tick、spawned_count/live_count、
+picked_up_self_count/picked_up_other_count/destroyed_count/unresolved_count及accounting_complete。
+role为target/clearing/path_clear；同操作中未经源格确认的连带物不进入目标产出样本。
+drops只列源格当前可归源份额，related_drops单列连带现物，drop_spawns为源格生成样本；
+drop_spawns_complete=false时不可根据缺项判断来源错配。collected_count仍为0，
+挖掘不直接塞包；拾取累计不能代替新鲜库存。清障的来源在clearing_results/clearing_drop_summary。
+
+move_to的remaining_items为当前可归源在地量，分别报告本身体/其他实体拾取、损毁与未知；
+status.drop_changes最多4来源摘要，scan_area.item_targets[].drop_origins报告本身体可证份额，
+unattributed_to_body_count不按附近或物品类型自动认领。混堆部分转移可使整份来源未知，
+卸载/失踪不当拾取，未知不等于零；区间外延迟生成不作归源。
+短工具、Lua、采集与长期阶段共用，取消保留实际效果；原预算/权限不变。
+数量/明细帽、源格覆盖及原生待验边界见F2-DROP-ACCOUNTING-2026-10-16及STATUS。
+
 ## N2b 放置工作导航（2026-10-16）
 
 place_block query=true在受阻时分别返回stand_positions（原目标站位，整数x/y/z和feet_y）

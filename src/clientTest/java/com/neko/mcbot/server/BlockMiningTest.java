@@ -15,6 +15,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class BlockMiningTest {
     @BeforeAll static void registriesOnly() { bootstrap(); }
 
+    @Test void uninstrumentedNearbyEntitiesCannotProveCausalDropOrigin() {
+        Mining access = new Mining();
+        access.captureDrops = false;
+        access.gain = 1;
+        access.action = () -> {
+            access.state = Blocks.AIR.defaultBlockState();
+            access.drops.add(new Drop(new ItemStack(Items.DIAMOND)));
+        };
+        var result = new BlockMining(access).tick();
+        assertTrue(result.data().has("drop_accounting_known"),
+                "the receipt must state whether native origin evidence was available");
+        assertFalse(result.data().get("drop_accounting_known").getAsBoolean());
+        assertEquals(0, result.data().get("remaining_count").getAsInt());
+        assertTrue(result.data().getAsJsonArray("drops").isEmpty());
+    }
+
     @Test void suspensionClearsCrackAndRevalidatesWithoutKeepingPartialContactProgress() {
         Mining access = new Mining();
         var mining = new BlockMining(access);
@@ -361,8 +377,10 @@ class BlockMiningTest {
         var result = new BlockMining(access).tick();
         assertEquals(0, result.data().get("collected_count").getAsInt());
         assertEquals(40, result.data().get("remaining_count").getAsInt());
-        assertEquals(32, result.data().getAsJsonArray("leftover").size());
-        assertTrue(result.feedback().contains("最多32组"));
+        assertEquals(16, result.data().getAsJsonArray("leftover").size());
+        assertTrue(result.data().getAsJsonObject("drop_accounting").get("drops_truncated").getAsBoolean());
+        assertTrue(result.data().getAsJsonObject("drop_accounting").get("spawns_truncated").getAsBoolean());
+        assertTrue(result.feedback().contains("最多16组"));
         assertTrue(WireSize.utf8Bytes(result.feedback()) < 12_000);
     }
 }

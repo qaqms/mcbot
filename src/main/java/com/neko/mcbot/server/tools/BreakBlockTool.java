@@ -83,7 +83,8 @@ public final class BreakBlockTool implements ServerTool {
                     return MiningWork.safe(c, sampler, c.blockPosition(), cell);
                 }
                 @Override public BlockMining mining(BlockPos cell) {
-                    return BlockMining.forPlayer(c, cell, cell.equals(pos) ? expectedBlock : null);
+                    return BlockMining.forPlayer(c, cell, cell.equals(pos) ? expectedBlock : null,
+                            cell.equals(pos) ? "target" : "clearing");
                 }
                 @Override public boolean reserve(java.util.Map<String, ActionPermissions.Change> changes) {
                     return context != null && sched.reserve(c.getUUID(), changes.values().stream().map(change -> {
@@ -166,7 +167,7 @@ public final class BreakBlockTool implements ServerTool {
         private int finishTicks;
         ClearingTask(ClearingMining sequence) { this.sequence = sequence; }
         @Override public Progress tick(CompanionPlayer c) {
-            if (result != null) return ++finishTicks < 3 ? running() : new Progress.Done(result);
+            if (result != null) return ++finishTicks < 3 ? running() : new Progress.Done(sequence.refreshDrops(result));
             result = sequence.tick();
             return result == null || result.ok() ? running() : new Progress.Done(result);
         }
@@ -190,7 +191,7 @@ public final class BreakBlockTool implements ServerTool {
         @Override public Progress tick(CompanionPlayer c) {
             if (result != null) {
                 // Preserve the two running ticks between removal and the final receipt.
-                return ++finishTicks < 3 ? running() : new Progress.Done(result);
+                return ++finishTicks < 3 ? running() : new Progress.Done(mining.refreshDrops(result));
             }
             result = mining.tick();
             if (result != null && !result.data().get("removed").getAsBoolean()) return new Progress.Done(result);
@@ -203,8 +204,9 @@ public final class BreakBlockTool implements ServerTool {
             return result == null ? mining.preflight(6.5) : null;
         }
         @Override public Result interruptedResult(Result reason) {
-            if (result == null || result.data() == null) return reason;
-            return new Result(false, reason.feedback() + " 已发生的挖掘结果保留。", result.data().deepCopy());
+            var refreshed = mining.refreshDrops(result == null ? reason : result);
+            return new Result(false, reason.feedback() + (result == null ? "" : " 已发生的挖掘结果保留。"),
+                    refreshed.data());
         }
         @Override public JsonObject observation() { return mining.observation(); }
     }

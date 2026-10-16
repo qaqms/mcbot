@@ -3,6 +3,51 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## F2 共用掉落来源与结算（2026-10-16 17:34，Asia/Shanghai）
+
+- 维护者本轮要求只推进一张，现仅F2完成实现与离线验收。
+  N1/C1/F1/N2a/N2b/F2共六卡完成，16卡待实施，下一张N3；
+  未开始N3代码。上一轮N2b已提交推送702b145，本卡提交/推送以Git记录为准。
+  只改本体，宿主/连接器/参考/玩家实例未改，未安装或启动游戏/服务器/真实模型。
+- 完整参考链、内容指纹及取舍见docs/F2-DROP-ACCOUNTING-2026-10-16.md：
+  Drops/生成、破坏、并堆、take、损毁挂点，BodyDelta/PressReceipt、
+  触碰、挖掘等待/取消/超时/cleanup和GameTest场景均已只读核对；
+  未运行参考测试，不复制或翻译参考代码/文字。
+- DropTracker匹配BlockMining请求与原生destroyBlock身体/坐标区间，
+  仅认领实际接受的生成实体，原版源格区分source_cell/other_cell/operation_only。
+  target/clearing/path_clear、连带产物和历史物分开；单挖、清障、开路、Lua及长期阶段共用。
+  标准并堆/实际playerTouch/Mob基础拾取/损毁/卸载及逐刻重验进同一DropLedger。
+  混堆部分转移不任意分配，涉及份额保守未知；同UUID新身体也不记作原身体自行拾取。
+  原版take参数为原堆量、全拾取后会恢复已移除栈的旧count，故按实际存活数量减少结算。
+- break_block新增drop_accounting_known、drop_accounting、drop_spawns/drop_spawns_complete及
+  related_drops；drops仅源格当前可归源量，清障独立结算。原collected_count仍0，
+  本人/其他实体拾取、损毁、未知分别报告，最终目标仍查真实库存。
+  终态/取消刷新，不重试发出过的破坏调用；原移除后两拍窗口不延长。
+  status近期来源、scan现物份额及move_to路线账共用；路线只保留轻量令牌，
+  一次世界刷新后聚合，来源计数不补失败次数或模型/探索/动作/许可预算。
+- 每世界128来源/256实体/512份额、2400游戏刻保留；每来源16生成/16现物/8事件，
+  8192字节报告，省略/过期/未知显式声明。超大线路保留有限摘要及取消/部分效果，
+  不完整生成样本不用于来源错配推断。无钩子不回退附近实体差集；
+  未跟踪实体直接走原生动作，不额外复制栈或轮询，服务器退出清瞬态账。
+- 新增30项（核心1/客户端29；两个新测试类）。旧码f2-before-20261016.log：
+  24项1失败，证明缺少来源观察可用性声明；focused1通过，
+  focused2全过24秒，focused3全过28秒（核心该次UP-TO-DATE，客户端执行）。
+  最终强制`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`
+  见build/f2-final-20261016.log第61–62行：**40秒、20任务全部执行**。
+  XML为**1234项/142 suites**（核心331/38、根132/19、客户端771/85），
+  failures/errors/skipped全0。覆盖数量守恒、混堆部分/全量、历史/清障分离、
+  延迟/满包无变化、他人/换身体、损毁/未知/卸载、边界帽/过期/组件、
+  实际BlockMining/清障取消、runner/Lua真终态及库存核验、失败账和线路裁剪。
+- 最新build/libs/mcbot-0.1.0.jar：**1,353,843 bytes**，末写17:32:43，SHA256
+  `88f3497b9a72d5feea314e951874f78b42630fff15ead3c33c138e631431d5ff`。
+  版本0.1.0、DropLedger/DropTracker、六个掉落Mixin及配置、内嵌agent-core/LuaJ/许可已核；
+  list-java无残留，diff检查通过。旧N2b候选81636fd3为历史候选。
+- 离线运行生产账/动作组合/runner/dispatcher，事件前后样本和世界为受控边界；
+  原版注册对象、反射映射及JAR核对不证明Mixin已注入或ServerLevel真实事件已运行。
+  仅覆盖同步破坏区间内实际接受的生成；区间外延迟/模组异步、标准入口外搬运、
+  任意战斗战利品和跨退出来源恢复不宣称完成。实机补证见REAL-GAME-RETESTING的F2节。
+  accounting_complete只结算已观察集合，不证明战利品完整产生、已入包或最终目标完成。
+
 ## N2b 共用放置工作到达（2026-10-16 17:01，Asia/Shanghai）
 
 - 本轮N2a→N2b已依次独立验收；N2a已提交推送e10672f。
@@ -4949,6 +4994,18 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-16 F2本地官方映射javap、编译及实际映射反射确认（未运行世界/Mixin）：
+ServerLevel.addFreshEntity(Entity):boolean，ServerPlayerGameMode.destroyBlock(BlockPos):boolean；
+后者player为protected final ServerPlayer。ItemEntity的四参静态merge
+(ItemEntity,ItemStack,ItemEntity,ItemStack):void为private，playerTouch(Player):void公开，
+hurtServer(ServerLevel,DamageSource,float):boolean为public final。
+Entity.setRemoved(RemovalReason):void为public final；Mob.pickUpItem(ServerLevel,ItemEntity):void
+为protected。Block.popResource(Level,BlockPos,ItemStack)和popResourceFromFace
+(Level,BlockPos,Direction,ItemStack)为public static void。
+playerTouch字节码先inventory.add再take(item,原数量)，全拾取discard后把局部栈count恢复供统计；
+基础Mob拾取在take后shrink/discard。原生动画参数不是实际入包量，
+新观察包装只调用原方法一次，finally释放作用域，原生注入/事件顺序仍待实机。
 
 2026-10-16 N2b本地官方映射javap与编译确认：
 BlockItem.getPlacementState(BlockPlaceContext):BlockState、canPlace(BlockPlaceContext,BlockState):boolean

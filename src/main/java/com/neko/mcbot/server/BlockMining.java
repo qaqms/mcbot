@@ -1,30 +1,16 @@
 package com.neko.mcbot.server;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.body.CompanionPlayer;
-import com.neko.mcbot.server.tools.InventoryTool;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.game.ClientboundBlockDestructionPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.AABB;
-
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 
 /** One timed block operation, shared by explicit mining and path clearing. */
 public final class BlockMining {
-    public interface Drop {
-        Object identity();
-        ItemStack stack();
-        default JsonObject observation() { return null; }
-    }
-
     public interface Access {
         ServerTool.Result guard(double reach);
         BlockState state();
@@ -40,7 +26,7 @@ public final class BlockMining {
         int selectedSlot();
         ItemStack held();
         default HandSnapshot.Pickups handPickups() { return null; }
-        List<? extends Drop> nearbyDrops();
+        default JsonObject dropReport() { return null; }
         boolean destroy();
         void crack(int stage);
     }
@@ -52,6 +38,7 @@ public final class BlockMining {
     private int stage = -1;
     private int stalled;
     private ServerTool.Result terminal;
+    private boolean destructionStarted;
 
     public BlockMining(Access access) {
         this.access = access;
@@ -71,7 +58,11 @@ public final class BlockMining {
     }
 
     public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock) {
-        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock));
+        return forPlayer(player, pos, expectedBlock, "target");
+    }
+
+    public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock, String role) {
+        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock, role));
     }
 
     public static boolean matchesExpected(BlockState state, String expectedBlock) {
@@ -110,6 +101,13 @@ public final class BlockMining {
     /** Null means still running. Terminal results are stable and never repeat world effects. */
     public ServerTool.Result tick() {
         if (terminal != null) return terminal;
+        if (destructionStarted) {
+            var data = new JsonObject();
+            data.addProperty("removal_known", false);
+            addDropReport(data);
+            return finish(new ServerTool.Result(false,
+                    "TOOL_EXCEPTION:原破坏调用已发出，结果不完整，未重试；先核对现场。", data));
+        }
         ServerTool.Result failure = preflight(6.5);
         if (failure != null) return finish(failure);
         float gain = access.progress(target);
@@ -131,39 +129,39 @@ public final class BlockMining {
         if (progress < 1) return null;
         clearCrack();
 
-        Set<Object> oldDrops = new HashSet<>();
-        access.nearbyDrops().forEach(drop -> oldDrops.add(drop.identity()));
+        destructionStarted = true;
         boolean reported = access.destroy();
         // ServerPlayerGameMode.destroyBlock can return true even if removeBlock returned false.
         boolean removed = !access.state().is(target.getBlock());
-        if (!removed) return finish(failure("BREAK_FAILED:目标没有移除；原版可能已处理工具耐久，先核对状态，勿自动重试。"));
-
-        int remaining = 0;
-        JsonArray left = new JsonArray();
-        JsonArray drops = new JsonArray();
-        for (Drop drop : access.nearbyDrops()) {
-            if (!oldDrops.add(drop.identity())) continue;
-            ItemStack stack = drop.stack();
-            if (stack.isEmpty()) continue;
-            remaining += stack.getCount();
-            if (left.size() < 32) left.add(InventoryTool.describe(stack));
-            JsonObject observation = drop.observation();
-            if (observation != null && drops.size() < 32) drops.add(observation);
-        }
         JsonObject data = new JsonObject();
-        data.addProperty("removed", true);
+        data.addProperty("removed", removed);
         data.addProperty("reported_success", reported);
-        data.addProperty("collected_count", 0);
-        data.addProperty("remaining_count", remaining);
-        data.add("collected", new JsonArray());
-        data.add("leftover", left);
-        data.add("drops", drops);
-        String feedback = "已移除目标方块，挖掘不直接入包；移除时观测到本次地上掉落 " + remaining
-                + " 个，明细（最多32组）：" + left + "；掉落位置：" + drops
+        addDropReport(data);
+        if (!removed) return finish(new ServerTool.Result(false,
+                "BREAK_FAILED:目标没有移除；原版可能已处理耐久或产生连带效果，先核对状态，勿自动重试。", data));
+        String feedback = "已移除目标方块，挖掘不直接入包；移除时可归源地上掉落 " + data.get("remaining_count")
+                + " 个，明细（最多16组）：" + data.get("leftover") + "；目标来源掉落位置：" + data.get("drops")
+                + "；原生来源观察可用=" + data.get("drop_accounting_known")
                 + "。走近后身体自动拾取，遵守原版拾取延迟；实际入包量须重新查看背包。"
                 + "主手耐久由原版破坏流程处理。";
         if (!reported) feedback = "BREAK_FAILED:原版未报告成功，但已观察到目标移除。" + feedback + "先核对现场，勿自动重试。";
         return finish(new ServerTool.Result(reported, feedback, data));
+    }
+
+    private void addDropReport(JsonObject data) {
+        DropTracker.addReport(data, access.dropReport());
+    }
+
+    /** A fresh observation only; the terminal action and its world effects remain stable. */
+    public ServerTool.Result refreshDrops(ServerTool.Result result) {
+        if (!destructionStarted) return result;
+        var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+        addDropReport(data);
+        var observations = new DropObservations();
+        observations.record(data);
+        // Counters at removal are historical; the appended observation is the terminal state.
+        var snapshot = observations.snapshotSources(ignored -> data.getAsJsonObject("drop_accounting"));
+        return new ServerTool.Result(result.ok(), result.feedback() + DropObservations.sentence(snapshot), data);
     }
 
     public void abort() {
@@ -203,13 +201,15 @@ public final class BlockMining {
         private final ServerLevel level;
         private final BlockPos pos;
         private final String expectedBlock;
+        private final DropTracker.Request dropRequest;
         private BlockAim.Aim aim;
 
-        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock) {
+        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock, String role) {
             this.player = player;
             this.level = level;
             this.pos = pos;
             this.expectedBlock = expectedBlock;
+            this.dropRequest = DropTracker.request(player, pos, role);
         }
 
         @Override public ServerTool.Result guard(double reach) {
@@ -259,20 +259,13 @@ public final class BlockMining {
         @Override public int selectedSlot() { return player.getInventory().getSelectedSlot(); }
         @Override public ItemStack held() { return player.getMainHandItem(); }
         @Override public HandSnapshot.Pickups handPickups() { return player.handPickups(); }
-        @Override public boolean destroy() { return player.gameMode.destroyBlock(pos); }
+        @Override public boolean destroy() {
+            return DropTracker.destroy(dropRequest, () -> player.gameMode.destroyBlock(pos));
+        }
+        @Override public JsonObject dropReport() { return dropRequest.report(); }
         @Override public void crack(int stage) {
             level.getServer().getPlayerList().broadcastAll(
                     new ClientboundBlockDestructionPacket(player.getId(), pos, stage), level.dimension());
         }
-        @Override public List<? extends Drop> nearbyDrops() {
-            return level.getEntitiesOfClass(ItemEntity.class, new AABB(pos).inflate(.5),
-                    item -> item.isAlive()).stream().map(LiveDrop::new).toList();
-        }
-    }
-
-    private record LiveDrop(ItemEntity entity) implements Drop {
-        @Override public Object identity() { return entity.getUUID(); }
-        @Override public ItemStack stack() { return entity.getItem(); }
-        @Override public JsonObject observation() { return GroundItems.describe(entity); }
     }
 }

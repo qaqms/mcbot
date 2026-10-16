@@ -208,6 +208,32 @@ class ServerToolDispatcherTest {
         assertTrue(com.neko.mcbot.common.WireSize.fits(result.encode()));
     }
 
+    @Test void oversizedNativeDropReceiptKeepsBoundedOriginCountersAndExplicitlyOmitsYieldSamples() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        call(1, "break_block", "{}");
+        var data = json("{\"removed\":true,\"drop_accounting_known\":true,\"drop_spawns_complete\":true,"
+                + "\"drop_accounting\":{\"origin_id\":7,\"spawned_count\":4,\"picked_up_other_count\":2,"
+                + "\"unresolved_count\":2,\"accounting_complete\":false,\"spawns\":[\""
+                + "x".repeat(40000) + "\"]}}");
+        nextResult.complete(new ServerTool.Result(false, "CANCELLED:owner", data));
+        var result = receipts.getLast();
+        assertEquals("cancelled", result.str("phase"));
+        var kept = result.body().getAsJsonObject("data");
+        assertTrue(kept.get("receipt_truncated").getAsBoolean());
+        assertTrue(kept.get("removed").getAsBoolean());
+        assertTrue(kept.get("drop_accounting_known").getAsBoolean());
+        assertFalse(kept.get("drop_spawns_complete").getAsBoolean());
+        var origin = kept.getAsJsonObject("drop_accounting");
+        assertEquals(7, origin.get("origin_id").getAsInt());
+        assertEquals(2, origin.get("picked_up_other_count").getAsInt());
+        assertEquals(2, origin.get("unresolved_count").getAsInt());
+        assertFalse(origin.has("spawns"));
+        assertTrue(origin.get("details_omitted").getAsBoolean());
+        assertTrue(com.neko.mcbot.common.WireSize.fits(result.encode()));
+        assertEquals(List.of("break_block"), effects);
+    }
+
     @Test void companionIdentityIsScopedToTheRequestingOwnerAndClearedWhenAbsent() {
         send(sender, "companion_status", new JsonObject());
         assertEquals("companion_state", receipts.getLast().kind());

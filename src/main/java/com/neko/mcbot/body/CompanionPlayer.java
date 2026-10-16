@@ -152,6 +152,8 @@ public final class CompanionPlayer extends ServerPlayer {
         return ownerUuid;
     }
 
+    public UUID observationBodyId() { return observationBodyId; }
+
     public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }
 
     public void walkForTick(double x, double z, boolean jump) {

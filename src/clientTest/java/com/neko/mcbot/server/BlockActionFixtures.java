@@ -30,13 +30,14 @@ public final class BlockActionFixtures {
         return new Inventory(null, new EntityEquipment());
     }
 
-    public static final class Drop implements BlockMining.Drop {
+    public static final class Drop {
+        public final java.util.UUID id = java.util.UUID.randomUUID();
         public ItemStack stack;
         public int settlements;
 
         public Drop(ItemStack stack) { this.stack = stack; }
-        @Override public Object identity() { return this; }
-        @Override public ItemStack stack() { return stack; }
+        public Object identity() { return this; }
+        public ItemStack stack() { return stack; }
         public void settle(ItemStack remainder) {
             settlements++;
             stack = remainder.copy();
@@ -51,6 +52,13 @@ public final class BlockActionFixtures {
         public final List<Integer> cracks = new ArrayList<>();
         public final List<Double> reaches = new ArrayList<>();
         public final HandSnapshot.Pickups pickups = new HandSnapshot.Pickups();
+        public final DropLedger ledger = new DropLedger();
+        public final java.util.UUID actor = java.util.UUID.randomUUID(), body = java.util.UUID.randomUUID();
+        public DropLedger.Origin origin;
+        public boolean captureDrops = true;
+        public String dropRole = "target";
+        public BlockPos dropSource = BlockPos.ZERO;
+        public Runnable afterCapture = () -> {};
         public BlockState state = Blocks.STONE.defaultBlockState();
         public String expectedBlock;
         public ServerTool.Result denied;
@@ -83,8 +91,28 @@ public final class BlockActionFixtures {
         @Override public int selectedSlot() { return inventory.getSelectedSlot(); }
         @Override public ItemStack held() { return inventory.getSelectedItem(); }
         @Override public HandSnapshot.Pickups handPickups() { return pickups; }
-        @Override public List<? extends BlockMining.Drop> nearbyDrops() { return List.copyOf(drops); }
-        @Override public boolean destroy() { destroys++; action.run(); return reported; }
+        @Override public JsonObject dropReport() {
+            return origin == null ? null : ledger.report(origin);
+        }
+        @Override public boolean destroy() {
+            destroys++;
+            var existing = new java.util.HashSet<>(drops);
+            action.run();
+            if (captureDrops) {
+                origin = ledger.begin(actor, body, dropSource, dropRole, 0);
+                for (var drop : drops) {
+                    if (!existing.add(drop)) continue;
+                    var at = new JsonObject();
+                    at.addProperty("item", net.minecraft.core.registries.BuiltInRegistries.ITEM
+                            .getKey(drop.stack.getItem()).toString());
+                    at.addProperty("count", drop.stack.getCount());
+                    ledger.spawned(origin, new DropLedger.Sample(drop.id, drop.stack, at,
+                            DropLedger.Availability.LIVE), DropLedger.Relation.SOURCE_CELL);
+                }
+                afterCapture.run();
+            }
+            return reported;
+        }
         @Override public void crack(int stage) { cracks.add(stage); }
     }
 

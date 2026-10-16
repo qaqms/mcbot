@@ -55,6 +55,9 @@ class BoundedGatherTest {
         String reportedDropItem = "minecraft:dirt";
         List<String> extraReportedItems = List.of();
         boolean reportClearingDrops;
+        JsonArray nativeSpawns;
+        JsonObject nativeAccounting;
+        Boolean nativeSpawnsComplete;
         double stateX;
         Double stateXAfterFirstMining;
         boolean trackRemovedTargets;
@@ -168,6 +171,12 @@ class BoundedGatherTest {
                     }
                     if (reportClearingDrops) data.add("clearing_results", JsonParser.parseString(
                             "[{\"result\":{\"drops\":[{\"item\":\"minecraft:dirt\"}]}}]"));
+                    if (nativeSpawns != null) data.add("drop_spawns", nativeSpawns.deepCopy());
+                    if (nativeSpawnsComplete != null) data.addProperty("drop_spawns_complete", nativeSpawnsComplete);
+                    if (nativeAccounting != null) {
+                        data.addProperty("drop_accounting_known", true);
+                        data.add("drop_accounting", nativeAccounting.deepCopy());
+                    }
                     if (pickupDuringMining) automaticPickup(true);
                 }
                 case "move_to" -> {
@@ -742,6 +751,49 @@ class BoundedGatherTest {
         f.noYield = true;
         var result = f.run();
         assertTrue(result.feedback().startsWith("NO_PROGRESS:"));
+        assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
+        assertFalse(result.feedback().contains("observed_goal_item=false"));
+    }
+
+    @Test void nativeSourceSamplesOverrideRelatedLiveDropsAndNeverReplaceInventoryAcceptance() {
+        var f = new Fixture(4, 0);
+        f.noYield = true;
+        f.reportDrops = true;
+        f.nativeSpawns = JsonParser.parseString("[{\"item\":\"minecraft:acacia_log\"}]").getAsJsonArray();
+        f.nativeAccounting = JsonParser.parseString("{\"spawned_count\":64,\"picked_up_self_count\":64,"
+                + "\"picked_up_other_count\":0,\"accounting_complete\":true}").getAsJsonObject();
+        var result = f.run();
+        assertFalse(result.ok());
+        assertEquals(3, f.dug);
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+        for (var value : result.data().getAsJsonArray("source_observations")) {
+            var source = value.getAsJsonObject();
+            assertFalse(source.get("observed_goal_item").getAsBoolean());
+            assertEquals("[\"minecraft:acacia_log\"]", source.get("observed_items").toString());
+        }
+    }
+
+    @Test void unknownNativePrimarySourceCannotFallBackToAnUnverifiedRelatedYield() {
+        var f = new Fixture(4, 0);
+        f.noYield = true;
+        f.reportDrops = true;
+        f.nativeSpawns = new JsonArray();
+        var result = f.run();
+        assertFalse(result.ok());
+        assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+        assertEquals(3, f.dug);
+    }
+
+    @Test void truncatedNativeSourceSamplesCannotInventAMismatchOrRelaxTheNoProgressBudget() {
+        var f = new Fixture(4, 0);
+        f.noYield = true;
+        f.reportDrops = true;
+        f.nativeSpawns = JsonParser.parseString("[{\"item\":\"minecraft:acacia_log\"}]").getAsJsonArray();
+        f.nativeSpawnsComplete = false;
+        var result = f.run();
+        assertFalse(result.ok());
+        assertEquals(3, f.dug);
         assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
         assertFalse(result.feedback().contains("observed_goal_item=false"));
     }
