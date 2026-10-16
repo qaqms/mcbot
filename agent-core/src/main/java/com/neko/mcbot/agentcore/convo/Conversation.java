@@ -206,6 +206,18 @@ public final class Conversation {
                 && hasUsefulCompaction();
     }
 
+    /** Leave room for the next observation, tool group and the summary request itself. */
+    public boolean compactionDue(int requestTokens, String system,
+            List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history, int window) {
+        if (compactionDue(requestTokens, system, tools, history)) return true;
+        int localHistory = outboundTokens();
+        int fixed = Math.max(0, localRequestTokens(system, tools, history) - localHistory);
+        long historyTokens = Math.max(localHistory, (long) requestTokens - fixed);
+        return canAutoCompact() && requestTokens >= window - window / 4
+                && historyTokens >= Math.max(2L * keepBudgetTokens, Math.min(4096, window / 8))
+                && hasUsefulCompaction();
+    }
+
     private int localRequestTokens(String system, List<com.neko.mcbot.agentcore.llm.ToolSpec> tools, List<Msg> history) {
         long estimate = estimateTokens(system) + 32L;
         for (var spec : tools) estimate += estimateTokens(spec.name()) + estimateTokens(spec.description())
@@ -337,7 +349,8 @@ public final class Conversation {
         }
         StringBuilder old = new StringBuilder();
         String previous = summary();
-        for (Msg m : snapshot.subList(0, cut)) {
+        // Summarize the same projected receipts the model used, not obsolete full observations.
+        for (Msg m : outboundHistory().subList(0, cut)) {
             if (isSummary(m)) continue;
             old.append(m.getClass().getSimpleName()).append(": ")
                     .append(textOf(m)).append('\n');

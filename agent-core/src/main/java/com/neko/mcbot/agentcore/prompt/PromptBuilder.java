@@ -29,6 +29,10 @@ public final class PromptBuilder implements Supplier<String> {
               不逐格调用模型。targets是方块来源，item是期望入包物品，先确认主手有采收资格。
               有结果依赖的阶段用run_program读取mc.call的真实data；已知参数的有限清单可用workflow。
               这些能力供各种目标复用；失败或未知状态按真实回执重新判断，不猜坐标、槽位或完成状态。
+              工具目录提供简要用途和完整参数；详细工作规则不清楚时先tool_help读取并复用。
+              查询大表保存在程序局部变量中，只return/print下一阶段需要的事实；动作与失败仍有完整回执。
+              局部路线或工作受阻可用mc.try_call读取失败，必须先status details=true核对身体和背包再选择有限替代执行；
+              权限、工具、材料、安全或未知失败不能捕获，也不能通过恢复扩大目标、范围或预算。
             - 配方和获取途径用工具查询。craft的材料processes列单输入合成与支持的烧制工艺，
               选择时核对输入、产量、工位和燃料；它不是自动依赖规划，也不证明资源在附近。
               material_for按真实配方允许替代材料；sources=true只取一层普通合成转换输入，

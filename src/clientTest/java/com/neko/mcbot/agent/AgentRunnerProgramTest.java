@@ -104,6 +104,88 @@ class AgentRunnerProgramTest {
         assertTrue(client.sent.stream().noneMatch(e -> e.kind().contains("program")));
     }
 
+    @Test void helpUsesTheActualRunnerWithoutGameDispatchOrChangingTheNextCatalog() {
+        runner.start();
+        runner.submitTask("[只读] read the available crafting contract");
+        var before = client.engine().definitions.getFirst();
+        client.engine().tools(0, new ToolCall("help", "tool_help", "{\"names\":[\"craft\"]}"));
+        client.drain();
+        assertEquals(0, client.toolCount());
+        assertEquals(2, client.engine().responses.size());
+        var help = client.engine().histories.getLast().stream().filter(Msg.Tool.class::isInstance)
+                .map(Msg.Tool.class::cast).filter(t -> t.callId().equals("help")).findFirst().orElseThrow();
+        assertTrue(help.ok());
+        assertTrue(help.content().contains("material_index"));
+        assertTrue(help.content().contains("query成功不等于can_craft"));
+        assertEquals(before, client.engine().definitions.getLast());
+        assertEquals(ToolCatalog.MODEL_SPECS, before);
+    }
+
+    @Test void programCanLoadHelpAndUseAnUnabridgedQueryLocallyWithoutSendingItsFullTextBack() {
+        start("[只读] inspect the recipe", """
+                local help=mc.call("tool_help",{names={"craft"}})
+                assert(help.data.definitions[1].name=="craft")
+                local q=mc.call("craft",{item="stick",query=true})
+                if q.data.can_craft then return {ready=true} end
+                return {ready=false}
+                """);
+        tool("craft", 1);
+        String full = "large recipe alternatives ".repeat(600);
+        receipt(true, full, "{\"can_craft\":true}");
+        var result = outcome();
+        assertTrue(result.ok(), result.content());
+        assertTrue(result.content().contains("\"ready\":true"));
+        assertFalse(result.content().contains(full));
+        assertFalse(result.content().contains("整批能否完成"));
+        assertEquals(1, client.toolCount());
+    }
+
+    @Test void localRecoveryThroughActualRunnerStillRequiresFreshFullStatusAndOriginalPermission() {
+        start("approach the same worksite", """
+                local r=mc.try_call("move_to",{x=1,y=90,z=0,walk_only=true})
+                if not r.ok then
+                    local s=mc.call("status",{details=true}).data
+                    return {x=s.x,kept=s.inventory.slots[1].count}
+                end
+                return {arrived=true}
+                """);
+        tool("move_to", 1);
+        receipt(false, "PARTIAL:actual movement and terrain preserved", "{\"moved\":true}");
+        tool("status", 2);
+        assertTrue(client.lastTool().obj("args").get("details").getAsBoolean());
+        receipt(true, "fresh body and inventory", "{\"x\":2,\"y\":90,\"z\":0,\"dimension\":\"minecraft:overworld\","
+                + "\"inventory\":{\"slots\":[{\"slot\":0,\"count\":9}]}}");
+        var result = outcome();
+        assertTrue(result.ok(), result.content());
+        assertTrue(result.content().contains("PARTIAL:actual movement and terrain preserved"));
+        assertTrue(result.content().contains("\"kept\":9"));
+        assertEquals(2, client.toolCount());
+    }
+
+    @Test void tryCallCannotBypassReadonlyOrContinueOnADeniedAction() {
+        start("[只读] inspect only", """
+                mc.try_call("move_to",{x=1,y=90,z=0})
+                mc.call("status",{details=true})
+                """);
+        var result = outcome();
+        assertFalse(result.ok());
+        assertTrue(result.content().contains("只读"));
+        assertEquals(0, client.toolCount());
+    }
+
+    @Test void helpThenInvalidDynamicArgumentsStillReturnTheExactSchemaFieldWithoutDispatch() {
+        start("inspect movement contract", """
+                mc.call("tool_help",{names={"move_to"}})
+                mc.try_call("move_to",{x=1,y=90})
+                mc.call("inventory",{})
+                """);
+        var result = outcome();
+        assertFalse(result.ok());
+        assertTrue(result.content().contains("args.z"));
+        assertTrue(result.content().contains("缺少必要参数"));
+        assertEquals(0, client.toolCount());
+    }
+
     @Test void genericEntityDiscoveryControlsExplorationLocallyWithoutACollectionGoal() {
         start("find an observed entity", """
                 for i=1,4 do

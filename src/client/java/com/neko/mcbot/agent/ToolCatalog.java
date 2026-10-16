@@ -1,0 +1,102 @@
+package com.neko.mcbot.agent;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.neko.mcbot.agentcore.llm.ToolSpec;
+import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
+
+import java.util.List;
+
+/** Full schemas stay on the wire; extended instructions come from the same registry on demand. */
+public final class ToolCatalog {
+    private ToolCatalog() { }
+
+    public static final List<ToolSpec> MODEL_SPECS = ClientToolDefs.SPECS.stream().map(spec ->
+            new ToolSpec(spec.name(), summary(spec), spec.paramsJsonSchema())).toList();
+
+    private static String summary(ToolSpec spec) {
+        if (spec.name().equals("run_program"))
+            return "用Lua变量、条件和有界循环组合依赖步骤，mc.call(name,args)返回ok/feedback/data，失败即停。"
+                    + "语法或结果字段不清楚先tool_help读取完整说明。成功查询全文仅供程序使用，需要模型判断的事实显式return/print。"
+                    + "mc.try_call只允许读取局部移动/工作失败；继续动作前必须mc.call('status',{details=true})核对新鲜身体和背包。"
+                    + "不能捕获权限/材料/工具/安全/未知失败，不自动重试。最终目标先set_goal，材料gather用scope=subtask；"
+                    + "不能嵌套程序或反问，默认共享128原子调用预算，不按脚本行数缩小嵌套采集预算。";
+        if (spec.name().equals("tool_help")) return spec.description();
+        String text = switch (spec.name()) {
+            case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"
+                    + "首次max_steps/radius固定，与gather共享原任务预算；发现不等于入包，取消不返程。";
+            case "gather" -> "连续扫描、工作导航、挖掘、触碰拾取并核对实际背包。item是入包物品，targets是来源方块；先核对工具。"
+                    + "材料阶段scope=subtask，已有材料用mode=total；默认task登记最终目标。"
+                    + "material_for查询真实替代材料，不自动转换；explore_steps=0只在当前工区采集，原探索账不重置。";
+            case "set_goal" -> "登记不可降低的最终物品数量：additional相对任务开始净新增，total为背包总量。"
+                    + "多阶段首次设lifecycle=long_term；阶段不重开原预算，最终按新鲜背包核验。";
+            case "workflow" -> "串行执行已知参数的1-12步，整份先验证；失败或放置负预检即停，保留已完成效果。"
+                    + "不支持移动/反问/嵌套，制作及装取数量须明确；依赖结果用run_program。";
+            case "search_resource" -> "只读完整资源搜索，本地最多5页/30秒；work=true评估工作站位与采收/干燥安全。"
+                    + "候选不证明可达或入包，空结果不证明未知区域没有资源。";
+            case "find_resource" -> "单页资源查询，一般用search_resource；续页按next_offset及原scan_center，移动后从0重查。"
+                    + "work=true时先核对harvestable_with_hand及dry_work_safe，不合格不为其开路。";
+            case "craft" -> "按真实配方合成，count为至少成品数，可能整批多产；query=true只查询，须看can_craft，"
+                    + "实际成果看crafted_count和背包。material_index查询替代物品及processes；不自动补料，3×3需附近工作台。";
+            case "smelt" -> "近身熔炉query只读，load按实际背包槽装料，take取出；装料不是烧制完成，wait后query/take。"
+                    + "取消任务不熄炉，停产须取出原料。";
+            case "break_block" -> "挖一格，主手须有采收资格；按实际进度消耗耐久，掉落留地，走近后核对背包。"
+                    + "expected_block保护观测目标，clear_obstructions最多3格且须原权限；ACCEPTED等真终态，不重发。";
+            case "place_block" -> "放置到准确目标格，须真实命中可替换轮廓或邻接面；face默认up。"
+                    + "query只读，须看preflight_passed；执行重验，失败核对实际消耗/变化，不自动重试。";
+            case "move_to" -> "规划有界行走/挖穿/搭路；walk_only=true不挖放，exact=true指定脚格，"
+                    + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
+                    + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";
+            case "attack" -> "原地近战不追击；先扫描entity_id/target_uuid，确认模式NEED_CONFIRM后ask_owner取得具体授权。"
+                    + "ACCEPTED等真终态，挥击次数不等于伤害或击杀。";
+            case "collect" -> "兼容触碰拾取，身体会自动拾取；r只是查询范围，远处先走近。"
+                    + "ok=false可能已部分拾取，按新鲜背包核对成果。";
+            case "transfer" -> "近身普通容器存取，机器用smelt；ok=false可能部分搬运，未搬部分留在来源，先核对背包。";
+            default -> {
+                int end = spec.description().indexOf('。');
+                yield end < 0 ? spec.description() : spec.description().substring(0, end + 1);
+            }
+        };
+        return text
+                + " 详细规则用tool_help查询；参数以本Schema为准。";
+    }
+
+    static ToolOutcome read(String json) {
+        try {
+            if (json == null || json.length() > 1024) throw new IllegalArgumentException();
+            var args = JsonParser.parseString(json).getAsJsonObject();
+            var schema = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("tool_help"))
+                    .findFirst().orElseThrow();
+            BoundedWorkflow.validate(args, JsonParser.parseString(schema.paramsJsonSchema()).getAsJsonObject());
+            var data = new JsonObject();
+            if (!args.has("names")) {
+                var index = new JsonArray();
+                for (ToolSpec spec : ClientToolDefs.SPECS) {
+                    var entry = new JsonObject();
+                    entry.addProperty("name", spec.name());
+                    entry.addProperty("summary", summary(spec));
+                    index.add(entry);
+                }
+                data.add("tools", index);
+            } else {
+                var definitions = new JsonArray();
+                for (var name : args.getAsJsonArray("names")) {
+                    ToolSpec spec = ClientToolDefs.SPECS.stream()
+                            .filter(s -> s.name().equals(name.getAsString())).findFirst().orElse(null);
+                    if (spec == null) return new ToolOutcome(false,
+                            "DENIED:工具名不在已注册目录中；用tool_help {}查看目录，未执行游戏动作。");
+                    var definition = new JsonObject();
+                    definition.addProperty("name", spec.name());
+                    definition.addProperty("description", spec.description());
+                    definition.add("parameters", JsonParser.parseString(spec.paramsJsonSchema()));
+                    definitions.add(definition);
+                }
+                data.add("definitions", definitions);
+            }
+            return new ToolOutcome(true, "只读工具说明；不表示已经执行任何动作。\n" + data, data);
+        } catch (RuntimeException invalid) {
+            return new ToolOutcome(false, "DENIED:tool_help只接受可选names，须为1-3个已注册工具名，未执行游戏动作。");
+        }
+    }
+}

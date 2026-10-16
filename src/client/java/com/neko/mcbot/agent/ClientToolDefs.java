@@ -22,12 +22,20 @@ public final class ClientToolDefs {
                     + "max_calls同时约束mc.call次数和嵌套内部的原子调用总数，gather一次会消耗多次扫描/移动/挖掘/背包调用；"
                     + "不要按Lua里的mc.call行数给嵌套采集设置很小的预算，通常省略沿用默认值。查询大表留在局部变量，只返回所需事实。"
                     + "计算/表/字符串/输出都有独立预算，动作仍走任务权限、身体互斥与真实终态。"
-                    + "子调用反馈自动记录；print/return中完全相同的反馈文字显示为回执编号，data与脚本读值不变。"
+                    + "成功查询只记录调用编号，全文供程序读取；需要模型判断的事实须显式return/print。"
+                    + "动作与失败反馈完整记录；显式输出的查询反馈展开一次，完全相同的文字引用回执编号，data与脚本读值不变。"
+                    + "mc.try_call(name,args)仅可读取NO_PATH/NO_PROGRESS/PARTIAL/TARGET_BLOCKED/OUT_OF_REACH/TARGET_LOST局部失败，"
+                    + "失败后须status details=true核对位置/维度/完整背包，再按新事实选择同一任务内的有限替代动作。"
+                    + "权限/缺工具/缺材料/安全/取消/超时/未知失败仍立即停止，不能捕获；不自动重试，所有调用仍共享原预算与无进展帽。"
                     + "return/print只报告阶段结果，不代表主人整项任务完成；用新鲜状态验证",
                     "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16384},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
                             + "\"max_calls\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
                             + "\"required\":[\"code\"],\"additionalProperties\":false}"),
+            new ToolSpec("tool_help", "只读查询已注册工具的完整说明和参数Schema。names一次1-3项；省略返回能力目录。"
+                    + "参数或工作规则不清楚时先读说明并在同一任务复用；Lua可mc.call('tool_help',...)后显式return/print需要的说明。",
+                    "{\"type\":\"object\",\"properties\":{\"names\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":3,"
+                            + "\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":32}}},\"additionalProperties\":false}"),
             new ToolSpec("explore", "独立、通用的换区观察能力，用新鲜status核验实际位移。"
                     + "默认mode=surface只行走；mode=underground按模型选择的direction和target_y分段开阶梯，并每段完整查询targets，r默认8。"
                     + "发现即停供后续工作；mode=return按实际地下路标只行走返回。两者共享任务移动帽，外出预留返程次数，地下累计开路最多128格。"

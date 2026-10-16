@@ -1,6 +1,6 @@
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.neko.mcbot.agent.ClientToolDefs;
+import com.neko.mcbot.agent.ToolCatalog;
 import com.neko.mcbot.agentcore.llm.LlmClient;
 import com.neko.mcbot.agentcore.llm.LlmFailure;
 import com.neko.mcbot.agentcore.llm.ModelConnectionTest;
@@ -40,7 +40,7 @@ class ModelProbe {
                         SkillLoader.load(configPath.getParent().resolve("skills")));
                 var turn = engine.chat(prompt,
                         List.of(new Msg.User("查看自己的状态，然后扫描附近并简报。")),
-                        ClientToolDefs.SPECS).get(50, TimeUnit.SECONDS);
+                        ToolCatalog.MODEL_SPECS).get(50, TimeUnit.SECONDS);
                 System.out.println("task_response text_chars=" + turn.text().length()
                         + " tool_calls=" + turn.toolCalls().size()
                         + " read_only=" + (!turn.toolCalls().isEmpty()

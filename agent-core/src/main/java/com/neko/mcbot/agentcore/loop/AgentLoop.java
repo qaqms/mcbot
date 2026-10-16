@@ -572,7 +572,7 @@ public final class AgentLoop {
                 int reserve = Math.min(2048, contextWindow / 4);
                 boolean tooLarge = tokens > contextWindow - reserve;
                 if (!compactAttempted && convo.canAutoCompact() && convo.hasUsefulCompaction()
-                        && (tooLarge || convo.compactionDue(tokens, system, tools, history))) {
+                        && (tooLarge || convo.compactionDue(tokens, system, tools, history, contextWindow))) {
                     listener.onNotice("正在整理任务内历史，目标和实际进度单独保留。");
                     convo.compact((s, h, t) -> summaryRequest(s, h, t)).whenComplete((v, error) -> {
                         synchronized (AgentLoop.this) {

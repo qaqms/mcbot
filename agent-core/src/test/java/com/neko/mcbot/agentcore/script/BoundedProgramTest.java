@@ -71,6 +71,209 @@ class BoundedProgramTest {
         }
     }
 
+    @Test void largeSuccessfulQueriesStayLocalWithoutStoppingDependentWorkOrChangingTheirData() throws Exception {
+        String full = "large query fact ".repeat(700);
+        try (var f = new Fixture("""
+                local total=0
+                for i=1,4 do
+                    local q=mc.call("craft",{query=true,item="fixture",material_index=i})
+                    assert(q.feedback==q.data.exact)
+                    total=total+q.data.amount
+                end
+                if total==28 then mc.call("craft",{item="fixture",count=1}) end
+                return {amount=total}
+                """)) {
+            f.host = (name, args) -> {
+                boolean query = JsonParser.parseString(args).getAsJsonObject().has("query");
+                var data = new JsonObject();
+                data.addProperty("exact", query ? full : "crafted with real materials");
+                data.addProperty("amount", 7);
+                if (!query) data.addProperty("crafted_count", 1);
+                return CompletableFuture.completedFuture(new ToolOutcome(true,
+                        query ? full : "crafted with real materials", data));
+            };
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(5, f.calls.size());
+            assertFalse(result.feedback().contains(full));
+            assertTrue(result.feedback().contains("crafted with real materials"));
+            assertTrue(result.feedback().length() < 1000);
+            assertEquals(4, result.data().get("query_calls").getAsInt());
+            assertEquals(0, result.data().get("expanded_queries").getAsInt());
+            assertEquals(1, result.data().get("crafted_count").getAsInt());
+            assertEquals(28, result.data().getAsJsonObject("returned").get("amount").getAsInt());
+        }
+    }
+
+    @Test void localFailureCanChooseAnAlternativeOnlyAfterFreshCompleteBodyObservation() throws Exception {
+        try (var f = new Fixture("""
+                local first=mc.try_call("move_to",{x=1,y=64,z=0})
+                assert(not first.ok and first.data.partial==true)
+                local state=mc.call("status",{details=true}).data
+                if state.x==2 and state.inventory.slots[1].count==7 then
+                    return mc.call("move_to",{x=3,y=64,z=0}).data
+                end
+                return {blocked="fresh state did not permit an alternative"}
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("status")
+                    ? actual("{\"x\":2,\"y\":64,\"z\":0,\"dimension\":\"fixture:world\","
+                            + "\"inventory\":{\"slots\":[{\"count\":7}]}}")
+                    : args.contains("1.0") ? new ToolOutcome(false, "PARTIAL:changed route, arrived elsewhere",
+                    JsonParser.parseString("{\"partial\":true,\"removed_blocks\":2}").getAsJsonObject())
+                    : actual("{\"arrived\":true}"));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(3, f.calls.size());
+            assertTrue(result.feedback().contains("PARTIAL:changed route, arrived elsewhere"));
+            assertEquals(1, result.data().get("local_failures").getAsInt());
+            assertFalse(result.data().get("body_recheck_required").getAsBoolean());
+            assertTrue(result.data().getAsJsonObject("returned").get("arrived").getAsBoolean());
+        }
+    }
+
+    @Test void aCaughtFailureDoesNotPermitAnotherActionWithoutCompleteStatus() throws Exception {
+        for (String intermediate : List.of("", "mc.call('inventory',{}) ",
+                "mc.call('status',{}) ", "mc.call('status',{details=true}) ")) {
+            try (var f = new Fixture("mc.try_call('move_to',{x=1}) " + intermediate
+                    + "mc.call('break_block',{x=2})")) {
+                f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("move_to")
+                        ? new ToolOutcome(false, "NO_PATH:actual local failure") : actual("{\"x\":2,\"y\":64,\"z\":0}"));
+                var result = f.outcome();
+                assertTrue(result.feedback().startsWith("STATE_RECHECK_REQUIRED:"), result.feedback());
+                assertTrue(f.calls.stream().noneMatch(s -> s.startsWith("break_block:")));
+                assertTrue(result.feedback().contains("NO_PATH:actual local failure"));
+            }
+        }
+    }
+
+    @Test void tryCallCannotCatchPrerequisitesPermissionsUnknownErrorsOrNonlocalToolFailures() throws Exception {
+        for (String reason : List.of("NEED_CONFIRM:concrete authorization", "DENIED:readonly",
+                "WRONG_TOOL:missing prerequisite", "MISSING_MATERIALS:no input", "ENVIRONMENT_UNSAFE:water",
+                "TIMEOUT:unknown effects", "CANCELLED:owner", "INTERNAL:unknown failure",
+                "SCOPE_CHANGED:outside original range", "ACTION_LIMIT:shared budget exhausted")) {
+            try (var f = new Fixture("mc.try_call('move_to',{}) mc.call('status',{details=true})")) {
+                f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(false, reason));
+                var result = f.outcome();
+                assertTrue(result.feedback().startsWith("CHILD_STOPPED:"), result.feedback());
+                assertTrue(result.feedback().contains(reason));
+                assertEquals(1, f.calls.size());
+            }
+        }
+        try (var f = new Fixture("mc.try_call('craft',{}) mc.call('inventory',{})")) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(false, "NO_PATH:wrong tool category"));
+            assertFalse(f.outcome().ok());
+            assertEquals(1, f.calls.size());
+        }
+    }
+
+    @Test void tryCallRecoveryStillUsesTheSameCallBudgetAndDoesNotAutoRetry() throws Exception {
+        try (var f = new Fixture("""
+                mc.try_call("move_to",{})
+                mc.call("status",{details=true})
+                mc.call("move_to",{x=2})
+                """, 2)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("move_to")
+                    ? new ToolOutcome(false, "NO_PATH:local obstacle")
+                    : actual("{\"x\":0,\"y\":64,\"z\":0,\"dimension\":\"fixture:world\",\"inventory\":{\"slots\":[]}}"));
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("ACTION_LIMIT:"));
+            assertEquals(2, f.calls.size());
+        }
+    }
+
+    @Test void fullDataFromAStatusWithoutDetailsCannotClearTheRecoveryGate() throws Exception {
+        try (var f = new Fixture("""
+                mc.try_call("move_to",{})
+                mc.call("status",{})
+                mc.call("move_to",{x=2})
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("move_to")
+                    ? new ToolOutcome(false, "NO_PATH:local obstacle")
+                    : actual("{\"x\":0,\"y\":64,\"z\":0,\"dimension\":\"fixture:world\",\"inventory\":{\"slots\":[]}}"));
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("STATE_RECHECK_REQUIRED:"));
+            assertEquals(2, f.calls.size());
+        }
+    }
+
+    @Test void unchangedFailureCannotBeRetriedIndefinitelyByInterleavingFreshStatus() throws Exception {
+        try (var f = new Fixture("""
+                for i=1,20 do
+                    mc.try_call("move_to",{x=2})
+                    mc.call("status",{details=true})
+                end
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("move_to")
+                    ? new ToolOutcome(false, "NO_PATH:same local obstacle")
+                    : actual("{\"x\":0,\"y\":64,\"z\":0,\"dimension\":\"fixture:world\",\"inventory\":{\"slots\":[]}}"));
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
+            assertEquals(9, f.calls.size());
+            assertEquals(5, result.data().get("local_failures").getAsInt());
+            assertTrue(result.data().get("body_recheck_required").getAsBoolean());
+        }
+    }
+
+    @Test void cancelledRecoveryCannotConsumeALatePartialOrSendARecheck() throws Exception {
+        try (var f = new Fixture("mc.try_call('move_to',{}) mc.call('status',{details=true})")) {
+            var pending = new CompletableFuture<ToolOutcome>();
+            f.host = (name, args) -> pending;
+            f.until(() -> f.calls.size() == 1);
+            f.program.stop("CANCELLED:owner");
+            f.program.terminated().get(2, TimeUnit.SECONDS);
+            pending.complete(new ToolOutcome(false, "PARTIAL:late movement"));
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("CANCELLED:"));
+            assertEquals(1, f.calls.size());
+            assertEquals(0, result.data().get("local_failures").getAsInt());
+            assertEquals(1, f.aborted);
+        }
+    }
+
+    @Test void queryAuditKeepsNegativePreflightUnknownCoverageAndEnvironmentSignals() throws Exception {
+        try (var f = new Fixture("""
+                mc.call("place_block",{query=true})
+                mc.call("search_resource",{})
+                mc.call("status",{})
+                return {blocked=true}
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(true, "unabridged observation",
+                    JsonParser.parseString(switch (name) {
+                        case "place_block" -> "{\"preflight_passed\":false}";
+                        case "search_resource" -> "{\"no_targets\":true,\"truncated\":true,\"unknown\":17,\"coverage_complete\":false}";
+                        default -> "{\"eyes_in_water\":true,\"water_recovery\":\"seeking_air\"}";
+                    }).getAsJsonObject()));
+            var result = f.outcome();
+            assertTrue(result.ok());
+            assertTrue(result.feedback().contains("\"preflight_passed\":false"));
+            assertTrue(result.feedback().contains("\"unknown\":17"));
+            assertTrue(result.feedback().contains("\"coverage_complete\":false"));
+            assertTrue(result.feedback().contains("\"truncated\":true"));
+            assertTrue(result.feedback().contains("\"eyes_in_water\":true"));
+            assertTrue(result.feedback().contains("seeking_air"));
+            assertFalse(result.feedback().contains("unabridged observation"));
+        }
+    }
+
+    @Test void explicitQueryExpansionStillHonorsTheOutputCapAndKeepsPriorActualEffects() throws Exception {
+        try (var f = new Fixture("""
+                mc.call("craft",{})
+                local q=mc.call("inventory",{})
+                print(q.feedback)
+                mc.call("equip",{})
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(name.equals("craft")
+                    ? actual("{\"crafted_count\":4}")
+                    : new ToolOutcome(true, "x".repeat(20500)));
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("RESULT_LIMIT:"), result.feedback());
+            assertEquals(2, f.calls.size());
+            assertEquals(4, result.data().get("crafted_count").getAsInt());
+            assertEquals(0, result.data().get("expanded_queries").getAsInt());
+            assertTrue(result.feedback().length() < 1000);
+        }
+    }
+
     @Test void doesNotDispatchADependentActionUntilTheRealFutureCompletes() throws Exception {
         try (var f = new Fixture("mc.call('move_to',{}) return mc.call('break_block',{})")) {
             var movement = new CompletableFuture<ToolOutcome>();

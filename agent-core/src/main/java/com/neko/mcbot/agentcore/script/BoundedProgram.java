@@ -3,6 +3,7 @@ package com.neko.mcbot.agentcore.script;
 import com.google.gson.*;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
 import com.neko.mcbot.agentcore.loop.SearchPages;
+import com.neko.mcbot.agentcore.loop.TaskPolicy;
 import org.luaj.vm2.*;
 import org.luaj.vm2.compiler.LuaC;
 import org.luaj.vm2.lib.BaseLib;
@@ -60,6 +61,9 @@ public final class BoundedProgram {
     private final CompletableFuture<Void> terminated = new CompletableFuture<>();
     private final StringBuilder receipts = new StringBuilder();
     private final Map<String, Integer> feedbackRefs = new LinkedHashMap<>();
+    private record QueryReceipt(int number, String name) { }
+    private final Map<String, QueryReceipt> queryRefs = new LinkedHashMap<>();
+    private final Map<String, Integer> localFailureRepeats = new LinkedHashMap<>();
     private final Map<String, Long> counts = new LinkedHashMap<>();
     private volatile boolean halted;
     private volatile Thread worker;
@@ -70,6 +74,8 @@ public final class BoundedProgram {
     private volatile String lastTool = "";
     private volatile long started;
     private int instructions, slice, cells, strings, outputBytes, emptySearches, repeats;
+    private int queryCalls, expandedQueries, recoveredFailures;
+    private boolean needsBodyCheck;
     private String signature = "";
     private final SearchPages searchPages = new SearchPages();
 
@@ -121,26 +127,8 @@ public final class BoundedProgram {
             LuaC.install(globals);
             globals.debuglib = new Budget();
             var api = new LuaTable();
-            api.set("call", new VarArgFunction() {
-                @Override public Varargs invoke(Varargs args) {
-                    check();
-                    if (args.narg() != 2 || args.arg(1).type() != LuaValue.TSTRING || !args.arg(2).istable())
-                        throw new Halt("DENIED:mc.call须为工具名字符串与参数表。");
-                    String name = args.arg(1).tojstring();
-                    if (name.length() > 32) throw new Halt("DENIED:工具名无效。");
-                    JsonElement json = toJson(args.arg(2), 0, new IdentityHashMap<>(), new int[]{0});
-                    // Empty Lua tables are objects. A nonempty positional table is an array.
-                    if (!json.isJsonObject() || bytes(json.toString()) > 16384)
-                        throw new Halt("DENIED:工具参数须为有界对象。");
-                    ToolOutcome receipt = BoundedProgram.this.call(name, json.toString());
-                    var value = new JsonObject();
-                    value.addProperty("ok", receipt.ok());
-                    value.addProperty("feedback", receipt.feedback());
-                    value.add("data", receipt.data());
-                    slice = 0;
-                    return fromJson(value, 0);
-                }
-            });
+            api.set("call", bridge(false));
+            api.set("try_call", bridge(true));
             globals.set("mc", api);
             globals.set("print", new VarArgFunction() {
                 @Override public Varargs invoke(Varargs args) {
@@ -175,8 +163,33 @@ public final class BoundedProgram {
         }
     }
 
-    private ToolOutcome call(String name, String args) {
+    private VarArgFunction bridge(boolean allowLocalFailure) {
+        return new VarArgFunction() {
+            @Override public Varargs invoke(Varargs args) {
+                check();
+                if (args.narg() != 2 || args.arg(1).type() != LuaValue.TSTRING || !args.arg(2).istable())
+                    throw new Halt("DENIED:mc.call/try_call须为工具名字符串与参数表。");
+                String name = args.arg(1).tojstring();
+                if (name.length() > 32) throw new Halt("DENIED:工具名无效。");
+                JsonElement json = toJson(args.arg(2), 0, new IdentityHashMap<>(), new int[]{0});
+                if (!json.isJsonObject() || bytes(json.toString()) > 16384)
+                    throw new Halt("DENIED:工具参数须为有界对象。");
+                ToolOutcome receipt = BoundedProgram.this.call(name, json.toString(), allowLocalFailure);
+                var value = new JsonObject();
+                value.addProperty("ok", receipt.ok());
+                value.addProperty("feedback", receipt.feedback());
+                value.add("data", receipt.data());
+                slice = 0;
+                return fromJson(value, 0);
+            }
+        };
+    }
+
+    private ToolOutcome call(String name, String args, boolean allowLocalFailure) {
         check();
+        var arguments = JsonParser.parseString(args).getAsJsonObject();
+        if (needsBodyCheck && !TaskPolicy.observation(name, arguments))
+            throw new Halt("STATE_RECHECK_REQUIRED:局部失败后须先status details=true核对位置、维度和完整背包，未派发后续动作。");
         if (++calls > plan.maxCalls()) throw new Halt("ACTION_LIMIT:组合执行子调用预算已到。");
         var response = new CompletableFuture<ToolOutcome>();
         waiting = response;
@@ -214,10 +227,20 @@ public final class BoundedProgram {
                 if (amount != null && amount.isJsonPrimitive() && amount.getAsJsonPrimitive().isNumber())
                     counts.merge(key, Math.max(0, amount.getAsLong()), Long::sum);
             }
-            recordReceipt(name, receipt);
+            recordReceipt(name, arguments, receipt);
         }
-        if (!receipt.ok()) throw new Halt("CHILD_STOPPED:子调用失败或需要确认，后续动作未执行。");
         var data = receipt.data();
+        if (!receipt.ok()) {
+            if (!allowLocalFailure || !localFailure(name, receipt.feedback()))
+                throw new Halt("CHILD_STOPPED:子调用失败或需要确认，后续动作未执行。");
+            recoveredFailures++;
+            needsBodyCheck = true;
+        } else if (name.equals("status") && arguments.has("details")
+                && arguments.get("details").isJsonPrimitive()
+                && arguments.get("details").getAsJsonPrimitive().isBoolean()
+                && arguments.get("details").getAsBoolean() && completeBody(data)) {
+            needsBodyCheck = false;
+        }
         boolean progress = false;
         for (String key : COUNTS) {
             var amount = data.get(key);
@@ -238,10 +261,35 @@ public final class BoundedProgram {
             if (emptySearches >= 3) throw new Halt("NO_TARGETS:三次搜索未取得目标，停止组合执行。");
         }
         String now = name + "|" + args + "|" + receipt.feedback();
+        // Fresh observations must not let the same failed action evade the no-progress guard.
+        if (progress || receipt.ok() && !TaskPolicy.observation(name, arguments)) localFailureRepeats.clear();
+        else if (!receipt.ok() && localFailureRepeats.merge(now, 1, Integer::sum) >= 5)
+            throw new Halt("NO_PROGRESS:五次相同局部失败，刷新状态不补充恢复次数。");
         repeats = progress ? 0 : now.equals(signature) ? repeats + 1 : 1;
         signature = now;
         if (repeats >= 5) throw new Halt("NO_PROGRESS:连续五次相同调用及回执，停止组合执行。");
         return receipt;
+    }
+
+    private static boolean localFailure(String name, String feedback) {
+        if (!Set.of("move_to", "break_block", "gather", "explore").contains(name)) return false;
+        int colon = feedback.indexOf(':');
+        return colon > 0 && Set.of("NO_PATH", "NO_PROGRESS", "PARTIAL", "TARGET_BLOCKED",
+                "OUT_OF_REACH", "TARGET_LOST").contains(feedback.substring(0, colon));
+    }
+
+    private static boolean completeBody(JsonObject data) {
+        for (String key : List.of("x", "y", "z")) {
+            var value = data.get(key);
+            if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()
+                    || !Double.isFinite(value.getAsDouble())) return false;
+        }
+        var dimension = data.get("dimension");
+        var inventory = data.get("inventory");
+        return dimension != null && dimension.isJsonPrimitive() && dimension.getAsJsonPrimitive().isString()
+                && !dimension.getAsString().isBlank() && inventory != null && inventory.isJsonObject()
+                && inventory.getAsJsonObject().has("slots")
+                && inventory.getAsJsonObject().get("slots").isJsonArray();
     }
 
     private synchronized void append(String line) {
@@ -250,9 +298,24 @@ public final class BoundedProgram {
         outputBytes += size;
         receipts.append('\n').append(line);
     }
-    private synchronized void recordReceipt(String name, ToolOutcome receipt) {
-        append("回执#" + completed + " " + name + " ok=" + receipt.ok() + "：" + receipt.feedback());
-        feedbackRefs.put(receipt.feedback(), completed);
+    private synchronized void recordReceipt(String name, JsonObject args, ToolOutcome receipt) {
+        if (receipt.ok() && TaskPolicy.observation(name, args)) {
+            queryCalls++;
+            var signals = new JsonObject();
+            for (String key : List.of("no_targets", "can_craft", "preflight_passed", "truncated",
+                    "unknown", "unloaded", "scan_complete", "coverage_complete", "results_truncated",
+                    "work_truncated", "next_offset", "in_water", "eyes_in_water", "in_lava", "water_recovery")) {
+                var value = receipt.data().get(key);
+                if (value != null && value.isJsonPrimitive() && bytes(value.toString()) <= 128)
+                    signals.add(key, value);
+            }
+            append("回执#" + completed + " " + name + " ok=true（查询数据供程序使用）"
+                    + (signals.isEmpty() ? "" : " " + signals));
+            queryRefs.put(receipt.feedback(), new QueryReceipt(completed, name));
+        } else {
+            append("回执#" + completed + " " + name + " ok=" + receipt.ok() + "：" + receipt.feedback());
+            feedbackRefs.put(receipt.feedback(), completed);
+        }
     }
 
     private synchronized String display(JsonElement value) {
@@ -262,7 +325,15 @@ public final class BoundedProgram {
     // Only the display refers to text already present in this result; Lua and returned data stay intact.
     private JsonElement referenced(JsonElement value) {
         if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
-            Integer ref = feedbackRefs.get(value.getAsString());
+            String text = value.getAsString();
+            Integer ref = feedbackRefs.get(text);
+            QueryReceipt query = queryRefs.get(text);
+            if (ref == null && query != null) {
+                append("查询全文#" + query.number() + " " + query.name() + "：" + text);
+                expandedQueries++;
+                feedbackRefs.put(text, query.number());
+                ref = query.number();
+            }
             if (ref != null) return new JsonPrimitive("见回执#" + ref);
         }
         if (value.isJsonArray()) {
@@ -282,6 +353,10 @@ public final class BoundedProgram {
         var data = new JsonObject();
         data.addProperty("api_calls", calls);
         data.addProperty("terminal_calls", completed);
+        data.addProperty("query_calls", queryCalls);
+        data.addProperty("expanded_queries", expandedQueries);
+        data.addProperty("local_failures", recoveredFailures);
+        data.addProperty("body_recheck_required", needsBodyCheck);
         data.addProperty("last_tool", lastTool);
         if (last != null) {
             data.add("last_receipt", last.data());

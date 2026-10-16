@@ -228,7 +228,7 @@ public final class AgentRunner implements ToolExecutor {
         }
         // R2-B：prefix 缓存也接上了——启动读一次盘，指令边界才允许换发（链中不换=不裂前缀）。
         sessionPrompt = new PromptBuilder(() -> client.prompt(this.cfg).get());
-        loop = new AgentLoop(engine, ClientToolDefs.SPECS, this, AgentLoop.Config.defaults(),
+        loop = new AgentLoop(engine, ToolCatalog.MODEL_SPECS, this, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
                     public void onTaskStarted(long taskId) {
@@ -998,6 +998,7 @@ public final class AgentRunner implements ToolExecutor {
     @Override
     public CompletableFuture<ToolOutcome> execute(String name, String argsJson) {
         if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
+        if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(argsJson));
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
         }
@@ -1235,6 +1236,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private CompletableFuture<ToolOutcome> executeProgramChild(String name, String json) {
+        if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(json));
         if ("search_resource".equals(name)) return executeSearch(json, true);
         if ("explore".equals(name)) return executeExplore(json, true);
         if ("workflow".equals(name)) return executeWorkflow(json, true);

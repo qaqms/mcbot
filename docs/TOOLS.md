@@ -5,6 +5,26 @@
 
 ## 放置与错误诊断（2026-10-16）
 
+- 第三次测试后的工具目录共24项（15服务端+9本地）。模型常驻稳定简要说明和
+  全部原参数Schema；`tool_help {}`返回索引，`{"names":["craft","move_to"]}`返回
+  1–3项完整原说明/Schema，1024字符输入帽，不执行游戏动作或改变后续目录。
+  Lua可调用帮助，但需要模型阅读的说明须显式return/print；这不是动态减少Schema的懒加载。
+- run_program成功查询全文仅供Lua读取，自动反馈记录编号及有界负预检/覆盖/环境标记。
+  `can_craft/preflight_passed/no_targets/unknown/unloaded/scan_complete/coverage_complete/
+  results_truncated/work_truncated/next_offset/truncated/in_water/eyes_in_water/in_lava/water_recovery`
+  等仅在实际data含有时保留，不推测缺失字段。动作和失败仍完整记录。
+  显式输出精确feedback会展开一次并引用编号，Lua值和data.returned不变；输出帽仍生效。
+- `mc.call`失败即停。`mc.try_call`仅对move_to/break_block/gather/explore的
+  NO_PATH/NO_PROGRESS/PARTIAL/TARGET_BLOCKED/OUT_OF_REACH/TARGET_LOST允许读取失败，
+  不自动重发。继续修改前必须`mc.call("status",{details=true})`取得有限数值位置、
+  非空维度及inventory.slots，再按新事实选同任务内的有限替代。
+  相同无进展局部失败五次停止，插入状态查询不补次数。
+  权限/确认、工具/材料、安全/范围、取消/超时及未知错误仍立即停止；
+  调用/时间/计算/输出及嵌套原子预算不因恢复重开，不允许扩大原目标或许可。
+- 完整请求达到配置窗口75%且有足够可替换历史时提前整理；autoCompact关闭仍不整理。
+  原较低软阈值、完整工具组、近段原文、净节省与失败熔断保持。
+  摘要读取既有出站投影，成功后重新查询身体；任务目标/基线/总步帽及探索账独立保留。
+
 - 第二次测试补充：status提供on_ground/in_water/eyes_in_water/in_lava、
   air_supply/max_air_supply及water_recovery，同时写入feedback；空气值仅当前原版读数，
   未启用完整氧气/伤害生命周期。没顶或岩浆使普通挖掘/陆地路线/gather以

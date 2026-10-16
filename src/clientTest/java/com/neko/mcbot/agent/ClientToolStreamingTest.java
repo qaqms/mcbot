@@ -6,6 +6,18 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ClientToolStreamingTest {
+    @Test void reducedDescriptionsKeepProductionEarlyDispatchForProgramsAndHelp() {
+        var reader = new StreamingTurnReader(ToolCatalog.MODEL_SPECS, true);
+        reader.toolCallDelta(0, "program", "run_program", "{\"code\":\"return ");
+        assertTrue(reader.drainReady().isEmpty());
+        reader.toolCallDelta(0, null, null, "true\"}");
+        assertEquals("run_program", reader.drainReady().getFirst().call().name());
+        assertTrue(reader.drainReady().isEmpty());
+        reader.toolCallDelta(1, "help", "tool_help", "{\"names\":[\"craft\"]}");
+        assertEquals("tool_help", reader.drainReady().getFirst().call().name());
+        assertTrue(reader.drainReady().isEmpty());
+    }
+
     @Test
     void productionCatalogAllowsInventoryAndCompleteMiningAtFirstCallIndex() {
         var inventory = new StreamingTurnReader(ClientToolDefs.SPECS, true);

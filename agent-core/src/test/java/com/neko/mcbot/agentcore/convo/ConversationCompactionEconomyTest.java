@@ -25,6 +25,48 @@ class ConversationCompactionEconomyTest {
         assertFalse(c.needsCompaction(), "chain end also excludes fixed input");
     }
 
+    @Test void fullRequestHeadroomCanCompactUsefulHistoryBeforeAnExcessiveConfiguredThreshold() {
+        var c = new Conversation(60000);
+        for (int i = 0; i < 20; i++) c.add(new Msg.User("event " + i + " " + "x".repeat(1000)));
+        var tools = List.of(ToolSpec.of("large_definition", "界".repeat(18000), "{}"));
+        int tokens = c.requestTokens("system", tools, c.outboundHistory());
+        assertTrue(tokens >= 22500 && tokens < 30000);
+        assertFalse(c.compactionDue(tokens, "system", tools, c.outboundHistory()));
+        assertTrue(c.compactionDue(tokens, "system", tools, c.outboundHistory(), 30000));
+        c.configure(60000, 1500, false);
+        assertFalse(c.compactionDue(tokens, "system", tools, c.outboundHistory(), 30000));
+    }
+
+    @Test void fixedInputNearTheWindowCannotTriggerSummaryWithoutEnoughReplaceableHistory() {
+        var c = new Conversation(60000);
+        for (int i = 0; i < 20; i++) c.add(new Msg.User("short fact"));
+        var tools = List.of(ToolSpec.of("large_definition", "界".repeat(23000), "{}"));
+        int tokens = c.requestTokens("system", tools, c.outboundHistory());
+        assertTrue(tokens > 22500);
+        assertFalse(c.compactionDue(tokens, "system", tools, c.outboundHistory(), 30000));
+    }
+
+    @Test void summaryInputUsesFrozenObservationProjectionWhileKeepingActionEffects() {
+        var c = new Conversation(6000);
+        c.configure(6000, 100, true);
+        c.add(new Msg.User("original task"));
+        c.add(new Msg.Tool("old", "status", "obsolete inventory ".repeat(500), true));
+        c.add(new Msg.Tool("action", "craft", "crafted actual items ".repeat(100), true));
+        for (int i = 0; i < 16; i++) c.add(new Msg.User("event " + i + " " + "x".repeat(100)));
+        c.add(new Msg.Tool("fresh", "status", "fresh inventory", true));
+        c.onStepBoundary();
+        var raw = c.history();
+        c.compact((s, h, t) -> {
+            String request = ((Msg.User) h.getFirst()).text();
+            assertFalse(request.contains("obsolete inventory"));
+            assertTrue(request.contains("过期回执已折叠"));
+            assertTrue(request.contains("crafted actual items"));
+            return CompletableFuture.completedFuture(text("actual items crafted; task not complete"));
+        }).join();
+        assertFalse(c.summary().isBlank());
+        assertTrue(raw.get(1) instanceof Msg.Tool old && old.content().contains("obsolete inventory"));
+    }
+
     @Test void aSingleUserDirectiveCannotForceTheWholeToolHistoryToRemainVerbatim() {
         var c = new Conversation(6000);
         c.add(new Msg.User("collect resources"));
