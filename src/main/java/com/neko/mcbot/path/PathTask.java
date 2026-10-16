@@ -1073,6 +1073,24 @@ public final class PathTask extends TickTask {
         dropPlan(); // 任务作废了，别把一条已废的路留在缓存里给下一趟复用
     }
 
+    @Override public void onSuspend() {
+        stopMovement();
+        clearCrack();
+        dropPlan();
+    }
+
+    @Override public Result onResume(CompanionPlayer c) {
+        drivenBody = c;
+        if (c.level() != level) return new Result(false, "TARGET_LOST:身体已换维度。", null);
+        if (replans >= MAX_REPLAN) return new Result(false,
+                "INTERRUPTED:避险后路线须重验，原重规划次数已用完；先查看现场。", null);
+        // A reflex can move the body or change the world. Reuse the existing bounded recovery,
+        // never continue an old memo/search or restore consumed dig/place/approval counters.
+        beginReplan(c);
+        executed = 0;
+        return null;
+    }
+
     @Override public void onFinish() {
         stopMovement();
         clearCrack();

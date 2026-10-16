@@ -41,6 +41,15 @@ public abstract class TickTask {
     public void onAbort() {
     }
 
+    /** Release transient state without settling the call or resetting its counters. */
+    public void onSuspend() { }
+
+    /** A task must opt into resumption with fresh action-specific validation. */
+    public ServerTool.Result onResume(CompanionPlayer companion) {
+        return new ServerTool.Result(false,
+                "INTERRUPTED:身体曾被避险占用，当前动作不能安全续接；先核对实际状态。", null);
+    }
+
     /** Preserve completed effects when cancellation, timeout or an exception interrupts a task. */
     public ServerTool.Result interruptedResult(ServerTool.Result reason) {
         return reason;

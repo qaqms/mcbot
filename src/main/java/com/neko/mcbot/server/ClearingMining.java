@@ -148,6 +148,8 @@ public final class ClearingMining {
 
     public void abort() { if (mining != null) mining.abort(); }
 
+    public void suspend() { if (mining != null) mining.suspend(); }
+
     public JsonObject observation() {
         var data = mining == null ? new JsonObject() : mining.observation();
         data.addProperty("cleared_blocks", clears.size());

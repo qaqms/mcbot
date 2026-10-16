@@ -15,6 +15,19 @@ import static org.junit.jupiter.api.Assertions.*;
 class BlockMiningTest {
     @BeforeAll static void registriesOnly() { bootstrap(); }
 
+    @Test void suspensionClearsCrackAndRevalidatesWithoutKeepingPartialContactProgress() {
+        Mining access = new Mining();
+        var mining = new BlockMining(access);
+        for (int i = 0; i < 3; i++) assertNull(mining.tick());
+        mining.suspend();
+        assertEquals(-1, access.cracks.getLast());
+        assertNull(mining.tick(), "suspension cannot retain 75% mining charge");
+        assertEquals(0, access.destroys);
+        access.state = Blocks.DIRT.defaultBlockState();
+        assertTrue(mining.tick().feedback().startsWith("TARGET_LOST:"));
+        assertEquals(0, access.destroys);
+    }
+
     @Test void miningFacesAndSwingsOnlyDuringValidatedWork() {
         Mining access = new Mining();
         BlockMining mining = new BlockMining(access);

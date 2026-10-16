@@ -26,6 +26,17 @@ public final class CompanionPlayer extends ServerPlayer {
     private final UUID observationBodyId = UUID.randomUUID();
     private boolean observationWarning;
     private final MovementInput movementInput = new MovementInput();
+    private final BodyControl bodyControl = new BodyControl(previous -> {
+        try {
+            if (previous == BodyControl.Owner.WORK) McbotMod.scheduler().preempt(this);
+        } finally {
+            releaseMovement();
+            stopUsingItem();
+            swinging = false;
+            swingTime = 0;
+            attackAnim = oAttackAnim = 0;
+        }
+    });
     private final WaterRecovery waterRecovery = new WaterRecovery();
     private final WaterRecovery.Access waterAccess = new WaterRecovery.Access() {
         @Override public boolean allowed() {
@@ -88,7 +99,11 @@ public final class CompanionPlayer extends ServerPlayer {
             ((com.neko.mcbot.mixin.EntityFluidAccess) (net.minecraft.world.entity.Entity) CompanionPlayer.this)
                     .mcbot$updateFluidOnEyes();
         }
-        @Override public MovementInput.Frame recoveryInput() { return waterRecovery.tick(waterAccess); }
+        @Override public MovementInput.Frame recoveryInput() {
+            MovementInput.Frame frame = waterRecovery.tick(waterAccess);
+            bodyControl.reflex(frame != null);
+            return frame;
+        }
         @Override public boolean inWater() { return isInWater(); }
         @Override public void swimUp() { jumpInLiquid(net.minecraft.tags.FluidTags.WATER); }
         @Override public void travel(Vec3 input) { CompanionPlayer.this.travel(input); }
@@ -134,10 +149,12 @@ public final class CompanionPlayer extends ServerPlayer {
     public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }
 
     public void walkForTick(double x, double z, boolean jump) {
-        movementInput.renew(x, z, jump);
+        if (bodyControl.owner() == BodyControl.Owner.WORK) movementInput.renew(x, z, jump);
     }
 
     public void releaseMovement() { movementInput.clear(); }
+
+    public BodyControl bodyControl() { return bodyControl; }
 
     public String waterRecoveryState() { return waterRecovery.state(); }
 

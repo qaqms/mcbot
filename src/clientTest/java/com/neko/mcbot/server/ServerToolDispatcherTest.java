@@ -25,6 +25,7 @@ class ServerToolDispatcherTest {
     private final List<Envelope> receipts = new ArrayList<>();
     private final List<String> effects = new ArrayList<>();
     private final ToolRegistry registry = new ToolRegistry();
+    private final com.neko.mcbot.body.BodyControl control = new com.neko.mcbot.body.BodyControl(previous -> {});
     private CompletableFuture<ServerTool.Result> nextResult;
     private ActionPermissions.Context receivedContext;
     private ActionPermissions receivedPermissions;
@@ -47,6 +48,9 @@ class ServerToolDispatcherTest {
         dispatcher = new ServerToolDispatcher(registry, scheduler, new RateGuard(20, 60, clock::get),
                 new ServerToolDispatcher.ToolAccess() {
                     @Override public ServerToolDispatcher.Body companion(UUID caller) { return bodies.get(caller); }
+                    @Override public com.neko.mcbot.body.BodyControl control(ServerToolDispatcher.Body body) {
+                        return control;
+                    }
                     @Override public CompletableFuture<ServerTool.Result> run(ServerTool tool,
                             ServerToolDispatcher.Body body, JsonObject args, ActionPermissions permissions,
                             ActionPermissions.Context context) {
@@ -65,6 +69,20 @@ class ServerToolDispatcherTest {
 
     private static JsonObject json(String text) {
         return JsonParser.parseString(text).getAsJsonObject();
+    }
+
+    @Test void actualDispatcherUsesSameControlGateForSyncAndAcceptedCallsButKeepsQueriesAvailable() {
+        begin(sender, 1, false);
+        control.reflex(true);
+        for (String tool : List.of("craft", "move_to", "break_block", "attack", "wait")) {
+            assertTrue(call(1, tool, "{}").str("feedback").startsWith("BUSY:"), tool);
+        }
+        assertTrue(effects.isEmpty());
+        assertTrue(call(1, "status", "{}").bool("ok"));
+        assertTrue(call(1, "place_block", "{\"query\":true}").bool("ok"));
+        control.reflex(false);
+        assertTrue(call(1, "equip", "{}").bool("ok"));
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
     }
 
     @Test void companionIdentityIsScopedToTheRequestingOwnerAndClearedWhenAbsent() {

@@ -39,6 +39,9 @@ public final class ServerToolDispatcher {
     // Only Minecraft lookup, tool effects and packet delivery are replaced in offline tests.
     interface ToolAccess {
         Body companion(UUID owner);
+        default com.neko.mcbot.body.BodyControl control(Body body) {
+            return body.identity() instanceof CompanionPlayer cp ? cp.bodyControl() : null;
+        }
         CompletableFuture<ServerTool.Result> run(ServerTool tool, Body body, JsonObject args,
                 ActionPermissions permissions, ActionPermissions.Context context);
     }
@@ -288,7 +291,15 @@ public final class ServerToolDispatcher {
                 resourceArgs.addProperty("z", companion.z());
             }
             fut = ServerActionGate.execute(context, companion.id(), dimension, toolName, resourceArgs,
-                    scheduler, () -> access.run(tool, companion, args, permissions, context));
+                    scheduler, () -> {
+                        var control = access.control(companion);
+                        if (com.neko.mcbot.agentcore.loop.TaskPolicy.observation(toolName, args) || control == null)
+                            return access.run(tool, companion, args, permissions, context);
+                        return scheduler.controlled(companion.id(), control,
+                                () -> context != null && context.equals(permissions.current(
+                                sender.owner(), companion.id(), companion.dimension(), context.taskId(), companion.identity())),
+                                () -> access.run(tool, companion, args, permissions, context));
+                    });
         } catch (Throwable t) {
             McbotMod.LOG.error("工具 {} 派发异常", toolName, t);
             logToolTiming(toolName, t0, -1);

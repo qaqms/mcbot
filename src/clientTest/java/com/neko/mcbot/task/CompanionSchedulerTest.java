@@ -25,7 +25,8 @@ class CompanionSchedulerTest {
     }
 
     private static final class Task extends TickTask {
-        int ticks, cleanups;
+        int ticks, cleanups, suspends, resumes;
+        boolean resumeAllowed = true;
         boolean done, throwsTick, throwsCleanup;
         @Override public Progress tick(CompanionPlayer companion) {
             ticks++;
@@ -35,6 +36,11 @@ class CompanionSchedulerTest {
         @Override public void onAbort() {
             cleanups++;
             if (throwsCleanup) throw new IllegalStateException("offline cleanup");
+        }
+        @Override public void onSuspend() { suspends++; }
+        @Override public ServerTool.Result onResume(CompanionPlayer companion) {
+            resumes++;
+            return resumeAllowed ? null : new ServerTool.Result(false, "TARGET_LOST:changed", null);
         }
     }
 
@@ -175,5 +181,112 @@ class CompanionSchedulerTest {
                 .join().feedback().startsWith("BUSY:"));
         scheduler.cancel(body, null);
         freeAfter(receipt, task, "CANCELLED:");
+    }
+
+    private com.neko.mcbot.body.BodyControl controlledBody() {
+        return new com.neko.mcbot.body.BodyControl(previous -> {
+            if (previous == com.neko.mcbot.body.BodyControl.Owner.WORK) scheduler.preempt(body);
+        });
+    }
+
+    private CompletableFuture<ServerTool.Result> startControlled(Task task, int cap,
+            com.neko.mcbot.body.BodyControl control, java.util.function.BooleanSupplier valid) {
+        return scheduler.execute(body, List.of(area), () -> scheduler.controlled(body, control, valid, () -> {
+            var future = new CompletableFuture<ServerTool.Result>();
+            assertTrue(scheduler.submit(body, null, task, future, cap));
+            return future;
+        }));
+    }
+
+    @Test void reflexSuspendsImmediatelyAndResumesOnceWithOriginalElapsedBudget() {
+        var task = new Task();
+        var control = controlledBody();
+        var receipt = startControlled(task, 7, control, () -> true);
+        scheduler.tick(present);
+        control.reflex(true);
+        assertEquals(1, task.suspends);
+        scheduler.tick(present);
+        scheduler.tick(present);
+        assertEquals(1, task.ticks);
+        assertEquals(3, scheduler.observation(body).get("elapsed_ticks").getAsInt());
+        assertEquals(1, scheduler.observation(body).get("execution_ticks").getAsInt());
+        assertFalse(receipt.isDone());
+        assertTrue(scheduler.observation(body).get("suspended").getAsBoolean());
+        control.reflex(false);
+        scheduler.tick(present);
+        assertEquals(1, task.resumes);
+        assertEquals(2, task.ticks);
+        for (int i = 0; i < 3; i++) scheduler.tick(present);
+        freeAfter(receipt, task, "TIMEOUT:");
+        assertEquals(5, task.ticks);
+    }
+
+    @Test void cancelWhilePreemptedReleasesLeaseAndNeverResumesEvenWhenDangerEnds() {
+        var task = new Task();
+        var control = controlledBody();
+        var receipt = startControlled(task, 20, control, () -> true);
+        control.reflex(true);
+        scheduler.cancel(body, null);
+        freeAfter(receipt, task, "CANCELLED:");
+        control.reflex(false);
+        scheduler.tick(present);
+        assertEquals(0, task.resumes);
+        assertEquals(0, task.ticks);
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
+    }
+
+    @Test void preemptedWorkStillTimesOutAndReleasesBeforeCallbacks() {
+        var task = new Task();
+        var control = controlledBody();
+        var receipt = startControlled(task, 2, control, () -> true);
+        control.reflex(true);
+        scheduler.tick(present);
+        scheduler.tick(present);
+        freeAfter(receipt, task, "TIMEOUT:");
+        control.reflex(false);
+        assertEquals(0, task.ticks);
+        assertEquals(0, task.resumes);
+    }
+
+    @Test void revokedPermissionOrBodyReplacementStopsSuspendedWorkWithoutResuming() {
+        for (boolean revoke : new boolean[]{true, false}) {
+            var valid = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var control = controlledBody();
+            var task = new Task();
+            var receipt = startControlled(task, 20, control, valid::get);
+            control.reflex(true);
+            if (revoke) valid.set(false);
+            scheduler.tick(revoke ? present : bodies(false));
+            freeAfter(receipt, task, revoke ? "DENIED:" : "TARGET_LOST:");
+            assertEquals(0, task.ticks);
+            assertEquals(0, task.resumes);
+        }
+    }
+
+    @Test void failedFreshResumeStopsBeforeAnyNewAction() {
+        var control = controlledBody();
+        var task = new Task();
+        var receipt = startControlled(task, 20, control, () -> true);
+        scheduler.tick(present);
+        control.reflex(true);
+        task.resumeAllowed = false;
+        control.reflex(false);
+        scheduler.tick(present);
+        freeAfter(receipt, task, "TARGET_LOST:");
+        assertEquals(1, task.ticks);
+        assertEquals(1, task.resumes);
+    }
+
+    @Test void synchronousWorkCannotRunUnderReflexOwnership() {
+        var control = controlledBody();
+        control.reflex(true);
+        assertTrue(scheduler.execute(body, List.of(area), () -> scheduler.controlled(body, control,
+                () -> true, () -> { fail("reflex owns body"); return null; }))
+                .join().feedback().startsWith("BUSY:"));
+        control.reflex(false);
+        assertTrue(scheduler.execute(body, List.of(area), () -> scheduler.controlled(body, control,
+                () -> true, () -> CompletableFuture.completedFuture(new ServerTool.Result(true, "sync", null))))
+                .join().ok());
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
     }
 }

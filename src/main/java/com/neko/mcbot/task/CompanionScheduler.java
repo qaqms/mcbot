@@ -11,6 +11,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.List;
 import java.util.function.Supplier;
+import java.util.function.BooleanSupplier;
+import com.neko.mcbot.body.BodyControl;
 
 /**
  * 每同伴一个活跃任务槽（v1 不做队列；模型串行思考，并发任务留给链式组合）。
@@ -25,10 +27,40 @@ public final class CompanionScheduler {
     private final ResourceLocks locks = new ResourceLocks();
     private final Map<UUID, ResourceLocks.Lease> leases = new HashMap<>();
     private final Map<UUID, CompletableFuture<ServerTool.Result>> calls = new HashMap<>();
+    private final Map<UUID, ControlScope> controls = new HashMap<>();
 
-    private record Slot(UUID id, CompanionPlayer companion, TickTask task,
-                        CompletableFuture<ServerTool.Result> future, int capTicks,
-                        net.minecraft.server.level.ServerLevel level) {
+    private static final class ControlScope {
+        final BodyControl control;
+        final BooleanSupplier valid;
+        ControlScope(BodyControl control, BooleanSupplier valid) {
+            this.control = control;
+            this.valid = valid;
+        }
+        void close() { control.release(this); }
+    }
+
+    private static final class Slot {
+        final UUID id;
+        final CompanionPlayer companion;
+        final TickTask task;
+        final CompletableFuture<ServerTool.Result> future;
+        final int capTicks;
+        final net.minecraft.server.level.ServerLevel level;
+        final ControlScope control;
+        int elapsed;
+        boolean suspended;
+        Slot(UUID id, CompanionPlayer companion, TickTask task,
+             CompletableFuture<ServerTool.Result> future, int capTicks, ControlScope control) {
+            this.id = id; this.companion = companion; this.task = task; this.future = future;
+            this.capTicks = capTicks; this.level = companion == null ? null : companion.level();
+            this.control = control;
+        }
+        UUID id() { return id; }
+        CompanionPlayer companion() { return companion; }
+        TickTask task() { return task; }
+        CompletableFuture<ServerTool.Result> future() { return future; }
+        int capTicks() { return capTicks; }
+        net.minecraft.server.level.ServerLevel level() { return level; }
     }
 
     public boolean submit(CompanionPlayer companion, TickTask task,
@@ -41,10 +73,41 @@ public final class CompanionScheduler {
         if (active.containsKey(id)) {
             return false; // 同伴正忙——工具层应回执 BUSY 教学
         }
-        active.put(id,
-                new Slot(id, companion, task, future, capTicks <= 0 ? DEFAULT_CAP_TICKS : capTicks,
-                        companion == null ? null : companion.level()));
+        ControlScope control = controls.get(id);
+        if (control == null && companion != null) {
+            control = new ControlScope(companion.bodyControl(), () -> true);
+            if (!control.control.claim(control)) return false;
+        }
+        active.put(id, new Slot(id, companion, task, future,
+                capTicks <= 0 ? DEFAULT_CAP_TICKS : capTicks, control));
         return true;
+    }
+
+    /** Runs inside the normal permission/resource gate, for sync and tick-based work alike. */
+    public CompletableFuture<ServerTool.Result> controlled(CompanionPlayer companion, BooleanSupplier valid,
+                                                          Supplier<CompletableFuture<ServerTool.Result>> action) {
+        return controlled(companion.getUUID(), companion.bodyControl(), valid, action);
+    }
+
+    public CompletableFuture<ServerTool.Result> controlled(UUID id, BodyControl control, BooleanSupplier valid,
+                                                   Supplier<CompletableFuture<ServerTool.Result>> action) {
+        var scope = new ControlScope(control, valid);
+        if (!valid.getAsBoolean()) return completed("DENIED:原任务身份或许可已失效。");
+        if (!control.claim(scope)) return completed("BUSY:身体正由避险或其他工作控制，未派发动作。");
+        controls.put(id, scope);
+        try {
+            var future = java.util.Objects.requireNonNull(action.get());
+            future.whenComplete((result, error) -> {
+                if (controls.get(id) == scope) controls.remove(id);
+                scope.close();
+            });
+            // Cancellation must settle the original tool future, including its cleanup callbacks.
+            return future;
+        } catch (Throwable failure) {
+            if (controls.get(id) == scope) controls.remove(id);
+            scope.close();
+            throw failure;
+        }
     }
 
     public CompletableFuture<ServerTool.Result> execute(UUID companion, List<ResourceLocks.Region> regions,
@@ -97,7 +160,10 @@ public final class CompanionScheduler {
         var data = new com.google.gson.JsonObject();
         data.addProperty("busy", slot != null);
         if (slot != null) {
-            data.addProperty("elapsed_ticks", slot.task().age);
+            data.addProperty("elapsed_ticks", slot.elapsed);
+            data.addProperty("execution_ticks", slot.task().age);
+            data.addProperty("suspended", slot.suspended);
+            data.addProperty("body_owner", slot.control == null ? "WORK" : slot.control.control.owner().name());
             data.addProperty("cap_ticks", slot.capTicks());
             data.add("progress", slot.task().observation());
         }
@@ -130,6 +196,21 @@ public final class CompanionScheduler {
             future.complete(result);
         }
         return true;
+    }
+
+    /** The body calls this before the reflex emits any new input. */
+    public void preempt(CompanionPlayer companion) { preempt(companion.getUUID()); }
+
+    void preempt(UUID id) {
+        Slot slot = active.get(id);
+        if (slot == null || slot.suspended) return;
+        slot.suspended = true;
+        try {
+            slot.task().onSuspend();
+        } catch (Throwable failure) {
+            McbotMod.LOG.error("任务暂停收尾异常", failure);
+            finish(slot, new ServerTool.Result(false, "INTERNAL:暂停收尾失败，已停止原工作。", null), true);
+        }
     }
 
     /** 服务器主线程 tick。 */
@@ -167,6 +248,30 @@ public final class CompanionScheduler {
                             "TARGET_LOST:原身体已不在场、已被替换或已换维度，这个任务作废。", null), true);
                     continue;
                 }
+                slot.elapsed++;
+                if (slot.control != null && !slot.control.valid.getAsBoolean()) {
+                    finish(slot, new ServerTool.Result(false, "DENIED:原任务身份或许可已失效，未续接工作。", null), true);
+                    continue;
+                }
+                if (slot.control != null && !slot.control.control.owns(slot.control)) {
+                    preempt(slot.id());
+                    if (active.get(slot.id()) != slot) continue;
+                    if (slot.elapsed >= slot.capTicks()) finish(slot, timeout(slot), true);
+                    continue;
+                }
+                if (slot.suspended) {
+                    // The original deadline includes preemption; returning the body cannot buy a new tick.
+                    if (slot.elapsed >= slot.capTicks()) {
+                        finish(slot, timeout(slot), true);
+                        continue;
+                    }
+                    ServerTool.Result failure = slot.task().onResume(cp);
+                    if (failure != null) {
+                        finish(slot, failure, true);
+                        continue;
+                    }
+                    slot.suspended = false;
+                }
                 p = slot.task().tickSafe(cp);
             } catch (Throwable t) {
                 McbotMod.LOG.error("任务 tick 异常", t);
@@ -177,15 +282,19 @@ public final class CompanionScheduler {
             if (p instanceof TickTask.Progress.Done d) {
                 finish(slot, d.result() == null
                         ? new ServerTool.Result(false, "INTERNAL:任务没有返回结果。", null) : d.result(), false);
-            } else if (slot.task().age >= slot.capTicks()) {
+            } else if (slot.elapsed >= slot.capTicks()) {
                 // 文案必须**按实际帽算**：这里原来硬写"60 秒"，而 move_to 的帽是 3600tick=180s，
                 // 于是模型看到的是"60 秒没做完"、实际等了 3 分钟——一句自相矛盾的读数会把
                 // "到底该不该重试"的判断带偏。（效率评估 §5.6 点名的那处。）
-                finish(slot, new ServerTool.Result(false,
-                        "TIMEOUT:这件事 " + Math.max(1, slot.capTicks() / 20) + " 秒没做完，我停手了。"
-                                + "要不要换个做法？", null), true);
+                finish(slot, timeout(slot), true);
             }
         }
+    }
+
+    private static ServerTool.Result timeout(Slot slot) {
+        return new ServerTool.Result(false,
+                "TIMEOUT:这件事达到原总时限 " + slot.capTicks()
+                        + " 游戏刻（含避险暂停），已停手；先核对实际状态。", null);
     }
 
     private void finish(Slot slot, ServerTool.Result result, boolean aborted) {
@@ -205,7 +314,13 @@ public final class CompanionScheduler {
         } finally {
             ResourceLocks.Lease lease = leases.remove(slot.id());
             if (lease != null) lease.close();
-            slot.future().complete(result);
+            try {
+                if (slot.control != null) slot.control.close();
+            } catch (Throwable failure) {
+                McbotMod.LOG.error("身体输入释放异常", failure);
+            } finally {
+                slot.future().complete(result);
+            }
         }
     }
 }

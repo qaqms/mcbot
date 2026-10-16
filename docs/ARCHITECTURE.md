@@ -3,6 +3,15 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## C1 身体控制（2026-10-16）
+
+每身体BodyControl固定REFLEX→WORK→IDLE，现有WaterRecovery是首个危险驱动。
+ServerActionGate原权限/锁后统一同步和跨刻控制，工作失去控制立即释放输入/用手/裂纹；
+onResume先核原任务身份/许可及各动作前提，默认拒绝隐式恢复。PathTask消耗原重规划账，
+挖掘重验冻结目标和主手，取消/替换永不自动恢复。
+elapsed_ticks包含暂停，execution_ticks单列；原总帽和客户端等待不延长。
+1153项离线与未来触发边界见STATUS及C1-BODY-CONTROL-2026-10-16，F1接着补身体差量。
+
 ## N1 导航费用与诊断（2026-10-16）
 
 同一move_to/PathTask/DigAStar入口补有限接近清理估价和工作终点费用，

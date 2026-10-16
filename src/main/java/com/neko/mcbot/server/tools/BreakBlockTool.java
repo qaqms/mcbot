@@ -171,6 +171,11 @@ public final class BreakBlockTool implements ServerTool {
             return result == null || result.ok() ? running() : new Progress.Done(result);
         }
         @Override public void onAbort() { sequence.abort(); }
+        @Override public void onSuspend() { sequence.suspend(); }
+        @Override public Result onResume(CompanionPlayer c) {
+            // tick rechecks the live plan, original approval, hand, target and mining preflight.
+            return null;
+        }
         @Override public Result interruptedResult(Result result) { return sequence.interrupted(result.feedback()); }
         @Override public JsonObject observation() { return sequence.observation(); }
     }
@@ -193,6 +198,14 @@ public final class BreakBlockTool implements ServerTool {
         }
 
         @Override public void onAbort() { mining.abort(); }
+        @Override public void onSuspend() { mining.suspend(); }
+        @Override public Result onResume(CompanionPlayer c) {
+            return result == null ? mining.preflight(6.5) : null;
+        }
+        @Override public Result interruptedResult(Result reason) {
+            if (result == null || result.data() == null) return reason;
+            return new Result(false, reason.feedback() + " 已发生的挖掘结果保留。", result.data().deepCopy());
+        }
         @Override public JsonObject observation() { return mining.observation(); }
     }
 

@@ -171,6 +171,12 @@ public final class BlockMining {
         if (terminal == null) terminal = failure("CANCELLED:挖掘已中止，等待新指令。");
     }
 
+    public void suspend() {
+        clearCrack();
+        // Native mining progress is tied to uninterrupted contact, not a reusable resource.
+        progress = 0;
+    }
+
     private ServerTool.Result finish(ServerTool.Result result) {
         clearCrack();
         terminal = result.data() == null ? failure(result.feedback()) : result;

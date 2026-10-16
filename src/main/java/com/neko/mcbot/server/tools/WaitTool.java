@@ -54,6 +54,8 @@ public final class WaitTool implements ServerTool {
             this.targetTicks = ticks;
         }
 
+        @Override public Result onResume(CompanionPlayer c) { return null; }
+
         @Override
         public JsonObject observation() {
             var data = new JsonObject();

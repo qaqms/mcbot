@@ -222,6 +222,7 @@ public final class AttackTool implements ServerTool {
         }
         @Override public Result interruptedResult(Result reason) { return attack.interrupt(reason.feedback()); }
         @Override public JsonObject observation() { return attack.observation(); }
+        @Override public Result onResume(CompanionPlayer c) { return attack.preflight(); }
         @Override public void onAbort() { attack.interrupt("CANCELLED:攻击已中止，等待新指令。"); }
     }
 
