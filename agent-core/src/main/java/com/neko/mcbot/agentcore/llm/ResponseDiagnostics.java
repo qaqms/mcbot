@@ -6,7 +6,7 @@ public record ResponseDiagnostics(long requestId, int attempt, int http, Format 
                                   int deltaFrames, int messageFrames, int toolFrames,
                                   int reasoningFrames, int refusalFrames, int errorFrames,
                                   boolean done, Finish finish, boolean empty, boolean errorBodyTruncated,
-                                  ServiceErrorDiagnostics error) {
+                                  ServiceErrorDiagnostics error, long idleMillis, long longestGapMillis) {
     public enum Format { SSE, JSON, HTML, OTHER, UNKNOWN }
     public enum Finish { STOP, TOOL_CALLS, LENGTH, CONTENT_FILTER, FUNCTION_CALL, OTHER, ABSENT }
 
@@ -19,6 +19,7 @@ public record ResponseDiagnostics(long requestId, int attempt, int http, Format 
                 + " tools=" + toolFrames + " reasoning=" + reasoningFrames
                 + " refusal=" + refusalFrames + " errors=" + errorFrames
                 + " done=" + done + " finish=" + finish + " empty=" + empty
+                + " idle_ms=" + idleMillis + " max_byte_gap_ms=" + longestGapMillis
                 + " error_body_truncated=" + errorBodyTruncated + " " + error.summary();
     }
 }

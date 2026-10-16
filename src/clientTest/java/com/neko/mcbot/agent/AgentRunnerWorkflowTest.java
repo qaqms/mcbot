@@ -83,6 +83,24 @@ class AgentRunnerWorkflowTest {
         assertTrue(result().content().contains("4/4"));
     }
 
+    @Test void workflowFieldErrorIdentifiesTheStepWithoutDispatchingOrEchoingItsValue() {
+        start("craft", plan(INVENTORY, "{\"tool\":\"craft\",\"args\":{\"item\":\"stick\",\"count\":\"private-value\"}}"));
+        assertEquals(0, client.toolCount());
+        assertTrue(result().content().contains("steps[1].args.count"));
+        assertFalse(result().content().contains("private-value"));
+    }
+
+    @Test void shortTickWaitCrossesTheActualRunnerAndStillWaitsForATerminalReceipt() {
+        start("wait briefly", plan("{\"tool\":\"wait\",\"args\":{\"ticks\":7}}", INVENTORY));
+        assertEquals("wait", client.lastTool().str("tool"));
+        assertEquals(7, client.lastTool().obj("args").get("ticks").getAsInt());
+        assertEquals(1, client.toolCount());
+        receipt(true, "seven ticks", "{\"waited_ticks\":7,\"target_ticks\":7}");
+        assertEquals("inventory", client.lastTool().str("tool"));
+        receipt(true, "current inventory", "{}");
+        assertTrue(result().ok());
+    }
+
     @Test void gatheringAcceptedIsNotDoneAndDuplicateOrWrongSeqCannotStartCraft() {
         start("gather then craft", plan("{\"tool\":\"break_block\",\"args\":{\"x\":1,\"y\":90,\"z\":0}}",
                 "{\"tool\":\"craft\",\"args\":{\"item\":\"oak_planks\",\"count\":4}}"));

@@ -5,6 +5,19 @@
 
 ## 放置与错误诊断（2026-10-16）
 
+- 第二次测试补充：status提供on_ground/in_water/eyes_in_water/in_lava、
+  air_supply/max_air_supply及water_recovery，同时写入feedback；空气值仅当前原版读数，
+  未启用完整氧气/伤害生命周期。没顶或岩浆使普通挖掘/陆地路线/gather以
+  ENVIRONMENT_UNSAFE停止，保留实际部分效果；身体反射另有加载/权限/范围/时间帽。
+- find_resource work=true可给dry_work_safe=false，表示六邻水/岩浆/未知或目标/上方
+  重力块危险，不建议站位、不为其开路。search_resource排序/gather同步；
+  最终BlockMining每刻重验，不把旧查询当安全承诺，不支持排水/水下采掘。
+- wait严格仅选seconds整数1-60或ticks整数1-1200，不能同时填或附其他字段。
+  成功data给waited_ticks/target_ticks；墙钟时间由服务器刻速决定。
+  GroundItems增加pickup_delay_ticks；gather触碰候选等待delay+1（最多20刻），
+  无该字段兼容20刻；已知掉落隐藏时最多有限10刻再查，原UUID/无进展/总预算仍在。
+- 固定workflow的Schema错误给steps[index].args字段路径和可信类型/范围，
+  整份零派发，不回显错误值；run_program仍按既有动态子验证。
 - place_block的face表示真实点击面，默认up；先看目标轮廓及反向邻格的轮廓，
   必须首个命中block/face一致、实际够距且沿线已加载。空气/流体不能当点击锚点。
   每个点击格最多16盒、每盒9个面内样点；不再把目标空格视作合法MISS点击。

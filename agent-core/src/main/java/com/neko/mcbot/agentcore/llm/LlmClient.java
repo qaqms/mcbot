@@ -48,6 +48,12 @@ public final class LlmClient implements ChatEngine {
     private static final System.Logger LOG = System.getLogger(LlmClient.class.getName());
     private static final java.util.concurrent.atomic.AtomicLong REQUEST_IDS =
             new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.ScheduledExecutorService WATCHDOG =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                var thread = new Thread(r, "mcbot-model-deadline");
+                thread.setDaemon(true);
+                return thread;
+            });
     private final ChatProvider provider;
     private final HttpClient http;
     private final Duration timeout;
@@ -119,12 +125,28 @@ public final class LlmClient implements ChatEngine {
 
         synchronized CompletableFuture<HttpResponse<SseBodySubscriber>> send(
                 HttpClient http, HttpRequest request, HttpResponse.BodyHandler<SseBodySubscriber> handler,
-                SseBodySubscriber subscriber) {
+                SseBodySubscriber subscriber, StreamDeadline deadline) {
             if (cancelled) return CompletableFuture.failedFuture(new java.util.concurrent.CancellationException());
             body = subscriber;
             var future = http.sendAsync(request, handler);
             transport = future;
-            return future;
+            var bounded = new CompletableFuture<HttpResponse<SseBodySubscriber>>();
+            var timer = WATCHDOG.scheduleWithFixedDelay(() -> {
+                var kind = deadline.expired();
+                if (kind == null || bounded.isDone()) return;
+                // Complete the owned future with a typed failure, then abort the wire exchange.
+                // Never replay a stream that may already have dispatched a game action.
+                if (subscriber.expire(kind)) {
+                    bounded.completeExceptionally(new LlmFailure(kind, subscriber.statusCode()));
+                    future.cancel(true);
+                }
+            }, 1, 1, java.util.concurrent.TimeUnit.SECONDS);
+            bounded.whenComplete((value, error) -> timer.cancel(false));
+            future.whenComplete((value, error) -> {
+                if (error == null) bounded.complete(value);
+                else bounded.completeExceptionally(error);
+            });
+            return bounded;
         }
 
         synchronized void cancel() {
@@ -151,6 +173,8 @@ public final class LlmClient implements ChatEngine {
                                                     boolean accumulate, TurnTimings timings, Cancellation control) {
         StreamingTurnReader reader = new StreamingTurnReader(tools, accumulate);
         SseBodySubscriber body = new SseBodySubscriber(cp, reader, sink, timings);
+        StreamDeadline deadline = new StreamDeadline(timeout, clock);
+        body.deadline = deadline;
         JsonObject requestBody = cp.buildBody(systemPrompt, convo, tools);
         body.requestId = REQUEST_IDS.incrementAndGet();
         body.attempt = mayRetryV1 ? 1 : 2;
@@ -176,13 +200,14 @@ public final class LlmClient implements ChatEngine {
                     timings.markResponse();
                     body.statusCode(info.statusCode());
                     body.contentType(info.headers().firstValue("Content-Type").orElse(""));
+                    deadline.received();
                     return body;
-                }, body)
+                }, body, deadline)
                 .handle((resp, err) -> {
                     if (control.cancelled) throw new java.util.concurrent.CancellationException();
                     var snapshot = timings.snapshot();
                     reportDiagnostics(body);
-                    Throwable failure = unwrap(err);
+                    Throwable failure = body.failure() != null ? body.failure() : unwrap(err);
                     int code = body.statusCode();
                     boolean html = code != 200 && isHtml(body.lines());
                     if (failure == null && code != 200) {
@@ -365,6 +390,7 @@ public final class LlmClient implements ChatEngine {
         private final CompletableFuture<SseBodySubscriber> bodyDone = new CompletableFuture<>();
         private volatile Flow.Subscription subscription;
         private volatile boolean cancelled;
+        private StreamDeadline deadline;
 
         private volatile int statusCode;
         private long requestId;
@@ -405,12 +431,13 @@ public final class LlmClient implements ChatEngine {
                     : ResponseDiagnostics.Format.OTHER;
         }
 
-        ResponseDiagnostics diagnostics() {
+        synchronized ResponseDiagnostics diagnostics() {
             AssistantTurn turn = reader.builder().build();
             return new ResponseDiagnostics(requestId, attempt, statusCode, format, bytes, dataLines, jsonFrames,
                     malformedFrames, parseErrors, deltaFrames, messageFrames, toolFrames,
                     reasoningFrames, refusalFrames, errorFrames, done, finish,
-                    turn.text().isBlank() && turn.toolCalls().isEmpty(), diagnosticBodyTruncated, serviceError);
+                    turn.text().isBlank() && turn.toolCalls().isEmpty(), diagnosticBodyTruncated, serviceError,
+                    deadline == null ? -1 : deadline.idleMillis(), deadline == null ? -1 : deadline.longestGapMillis());
         }
 
         private void observe(JsonObject chunk) {
@@ -462,22 +489,33 @@ public final class LlmClient implements ChatEngine {
         }
 
         @Override
-        public void onSubscribe(Flow.Subscription subscription) {
+        public synchronized void onSubscribe(Flow.Subscription subscription) {
             this.subscription = subscription;
             if (cancelled) subscription.cancel();
             else subscription.request(Long.MAX_VALUE);
         }
 
-        void cancel() {
+        synchronized void cancel() {
             cancelled = true;
             var current = subscription;
             if (current != null) current.cancel();
             bodyDone.cancel(true);
         }
 
+        synchronized boolean expire(LlmFailure.Kind kind) {
+            if (cancelled || bodyDone.isDone()) return false;
+            failure = new LlmFailure(kind, statusCode);
+            cancelled = true;
+            var current = subscription;
+            if (current != null) current.cancel();
+            bodyDone.complete(this);
+            return true;
+        }
+
         @Override
-        public void onNext(List<ByteBuffer> buffers) {
+        public synchronized void onNext(List<ByteBuffer> buffers) {
             if (cancelled) return;
+            if (deadline != null && buffers.stream().anyMatch(ByteBuffer::hasRemaining)) deadline.received();
             try {
                 for (ByteBuffer in : buffers) {
                     if (cancelled) return;
@@ -490,14 +528,14 @@ public final class LlmClient implements ChatEngine {
         }
 
         @Override
-        public void onError(Throwable t) {
+        public synchronized void onError(Throwable t) {
             if (cancelled) return;
             failure = t;
             bodyDone.complete(this);
         }
 
         @Override
-        public void onComplete() {
+        public synchronized void onComplete() {
             if (cancelled) return;
             try {
                 drain(ByteBuffer.allocate(0));

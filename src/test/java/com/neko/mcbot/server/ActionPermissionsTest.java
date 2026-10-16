@@ -10,6 +10,16 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ActionPermissionsTest {
+    @Test void bodyReflexUsesTheSameReadOnlyIdentityAndDimensionBoundaries() {
+        var body = new Object();
+        assertTrue(permissions.passiveBodyActionAllowed(task.owner(), task.companion(), task.dimension(), body));
+        permissions.begin(task, body);
+        assertTrue(permissions.passiveBodyActionAllowed(task.owner(), task.companion(), task.dimension(), body));
+        assertFalse(permissions.passiveBodyActionAllowed(task.owner(), task.companion(), "other", body));
+        assertFalse(permissions.passiveBodyActionAllowed(task.owner(), task.companion(), task.dimension(), new Object()));
+        permissions.begin(new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 8, true), body);
+        assertFalse(permissions.passiveBodyActionAllowed(task.owner(), task.companion(), task.dimension(), body));
+    }
     private final AtomicLong clock = new AtomicLong(100);
     private final ActionPermissions permissions = new ActionPermissions(clock::get);
     private final ActionPermissions.Context task = new ActionPermissions.Context(

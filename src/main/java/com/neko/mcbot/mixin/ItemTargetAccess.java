@@ -10,4 +10,7 @@ import java.util.UUID;
 public interface ItemTargetAccess {
     @Accessor("target")
     UUID mcbot$getPickupTarget();
+
+    @Accessor("pickupDelay")
+    int mcbot$getPickupDelay();
 }

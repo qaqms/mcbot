@@ -74,4 +74,32 @@ class PathClearanceTest {
         assertEquals(List.of(bottom), PathTask.liveSteps(List.of(end), 66, cells).getFirst().dig());
         assertTrue(PathTask.liveSteps(List.of(), 66, cells).isEmpty());
     }
+
+    @Test void orderedPlanCannotStandOnASupportRemovedByAnEarlierStep() {
+        var cells = new Cells();
+        long removedFloor = DigAStar.pack(1, 65, 0);
+        cells.blocked.add(removedFloor);
+        var start = new DigAStar.Step(0, 64, 0, List.of(), List.of(), DigAStar.ACT_START);
+        var clear = new DigAStar.Step(1, 64, 0, List.of(removedFloor), List.of(), DigAStar.ACT_DIG);
+        var returnAbove = new DigAStar.Step(1, 66, 0, List.of(), List.of(), DigAStar.ACT_JUMP);
+        assertFalse(PathTask.editsFeasible(List.of(start, clear, returnAbove), cells),
+                "static support alone incorrectly accepts this route");
+        assertEquals(java.util.Set.of(removedFloor), cells.blocked, "validation must not change the world");
+    }
+
+    @Test void repeatedColumnsDoNotRepeatDigEntriesOrExcavateTheDepartureFloor() {
+        var cells = new Cells();
+        long shared = DigAStar.pack(1, 65, 0);
+        cells.blocked.add(shared);
+        var a = new DigAStar.Step(1, 64, 0, List.of(), List.of(), DigAStar.ACT_DIG);
+        var b = new DigAStar.Step(2, 64, 0, List.of(), List.of(), DigAStar.ACT_WALK);
+        var live = PathTask.liveSteps(List.of(a, b, a), 64, cells);
+        assertEquals(List.of(shared), live.getFirst().dig());
+        assertTrue(live.getLast().dig().isEmpty());
+        var start = new DigAStar.Step(0, 64, 0, List.of(), List.of(), DigAStar.ACT_START);
+        var down = new DigAStar.Step(0, 63, 0, List.of(DigAStar.pack(0, 63, 0)), List.of(), DigAStar.ACT_DIG);
+        assertFalse(PathTask.editsFeasible(List.of(start, down), cells));
+        var stair = new DigAStar.Step(1, 63, 0, List.of(DigAStar.pack(1, 63, 0)), List.of(), DigAStar.ACT_DIG);
+        assertTrue(PathTask.editsFeasible(List.of(start, stair), cells), "legal adjacent stairs remain valid");
+    }
 }

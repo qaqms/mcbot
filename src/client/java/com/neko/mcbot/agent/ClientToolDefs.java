@@ -112,7 +112,7 @@ public final class ClientToolDefs {
                             + "\"args\":{\"type\":\"object\"}},\"required\":[\"tool\",\"args\"],\"additionalProperties\":false}},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":300}},"
                             + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
-            new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度；details=true含背包与装备逐槽明细。耗时不等于完成率",
+            new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆与水中避险状态；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
             new ToolSpec("search_resource", "优先用此只读入口查找资源：一次调用在本地完成同中心全部分页，最多5页、30秒；"
                     + "r默认16，targets为1-8个方块ID/#标签。返回真实覆盖、未知范围及最多16个候选；"
@@ -124,6 +124,7 @@ public final class ClientToolDefs {
             new ToolSpec("find_resource", "底层单页资源查询；一般发现资源优先search_resource自动查完分页。targets为方块ID或#方块标签，如#minecraft:logs、oak_log、iron_ore。"
                     + "r默认8、最多16；每页采样4096格、最多16候选，work=true在预算内优先露出/可工作资源。"
                     + "harvestable_with_hand=false时先核对/装备工具，不为该目标移动开路。"
+                    + "dry_work_safe=false表示流体/重力/未知邻域危险，当前不进行干燥采掘，换工作面。"
                     + "offset默认0；续页须用next_offset并携带原scan_center、同一targets/r，-1为页末；身体移动后从0重查。"
                     + "frontiers=true在末页给exploration_points已加载落脚样本，路径仍须move_to walk_only=true核验。"
                     + "不强制加载、不证明可达/可挖/实际掉落；空结果不等于没有资源，采集宜gather本地分页/有界探索",
@@ -250,8 +251,11 @@ public final class ClientToolDefs {
                     + "ok=false也可能已搬一部分，先核对inventory和剩余数量再行动",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
                             + "\"dir\":{\"type\":\"string\",\"enum\":[\"in\",\"out\"]},\"item\":{\"type\":\"string\",\"maxLength\":128}},\"required\":[\"x\",\"y\",\"z\",\"dir\"]}"),
-            new ToolSpec("wait", "原地等待 seconds 秒（1-60），用于等熔炉出货、等作物长熟这类节奏，别用反复查看代替等待",
-                    "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\"}},\"required\":[\"seconds\"]}"),
+            new ToolSpec("wait", "原地等待：整数 seconds（1-60秒）或 ticks（1-1200游戏刻）二选一。短拾取延迟用ticks，长工艺用seconds；结束后核对实际结果",
+                    "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60},"
+                            + "\"ticks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1200}},"
+                            + "\"oneOf\":[{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60}},\"required\":[\"seconds\"],\"additionalProperties\":false},"
+                            + "{\"type\":\"object\",\"properties\":{\"ticks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1200}},\"required\":[\"ticks\"],\"additionalProperties\":false}],\"additionalProperties\":false}"),
             new ToolSpec("ask_owner", "拿不准就问主人（会推送给主人与 neko，等待回复最长 2 分钟；游戏内主人可用 @bot 答 <文本> 回答）。"
                     + "只在方向性决策上用：要不要卖这批货/挖这条洞/用哪个方案。别为琐碎小事滥用",
                     "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"text\"]}"));

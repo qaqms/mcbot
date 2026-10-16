@@ -47,6 +47,8 @@ public final class GroundItems {
         data.addProperty("y", entity.getY());
         data.addProperty("z", entity.getZ());
         data.addProperty("pickup_delayed", entity.hasPickUpDelay());
+        data.addProperty("pickup_delay_ticks",
+                Math.max(0, ((com.neko.mcbot.mixin.ItemTargetAccess) entity).mcbot$getPickupDelay()));
         return data;
     }
 }

@@ -181,6 +181,8 @@ public final class PathTask extends TickTask {
             onAbort();
             return terminal(new Result(false, "TARGET_LOST:身体已换维度，原路线作废。", null));
         }
+        var environment = com.neko.mcbot.server.MiningEnvironment.bodyFailure(c);
+        if (environment != null) return terminal(environment);
         if (!spec.contains(c.blockPosition().getX(), c.blockPosition().getY(), c.blockPosition().getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
         // While steering, the next landing belongs to the route, including its airborne ticks.
@@ -300,7 +302,8 @@ public final class PathTask extends TickTask {
                     "NO_PATH:只行走路线已出现需要挖放的变化，未修改世界；重新观察后换方向。", null));
         if (!editsFeasible(plan, sampler))
             return new Progress.Done(new Result(false,
-                    "NO_PATH:路线改动不满足当前工位、工作目标保护或挖放条件，未执行该方案；重新选择站位。", null));
+                    "NO_PATH:按先后改动复核，路线无法保留所需支撑或不满足当前工作保护/挖放条件；"
+                            + "未执行该方案，重新选择站位或相邻阶梯路线。", null));
         rememberPlan(c, plan);
         McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
@@ -550,6 +553,8 @@ public final class PathTask extends TickTask {
 
     static List<DigAStar.Step> liveSteps(List<DigAStar.Step> plan, int fromY, DigSampler sampler) {
         ArrayList<DigAStar.Step> out = new ArrayList<>(plan.size());
+        var removed = new java.util.HashSet<Long>();
+        var placed = new java.util.HashSet<Long>();
         for (DigAStar.Step st : plan) {
             if (st.action() == DigAStar.ACT_START) {
                 out.add(st);
@@ -558,14 +563,19 @@ public final class PathTask extends TickTask {
             ArrayList<Long> dig = new ArrayList<>(3);
             for (long cell : DigAStar.clearanceCells(fromY, st.x(), st.y(), st.z())) {
                 int cy = DigAStar.unpackY(cell);
-                if (!sampler.passable(st.x(), cy, st.z())) {
+                if (placed.contains(cell) || !removed.contains(cell) && !sampler.passable(st.x(), cy, st.z())) {
                     dig.add(cell);
+                    removed.add(cell);
+                    placed.remove(cell);
                 }
             }
             ArrayList<Long> place = new ArrayList<>(1);
-            if (!sampler.support(st.x(), st.y() - 1, st.z())
+            long floor = DigAStar.pack(st.x(), st.y() - 1, st.z());
+            if (!placed.contains(floor) && (removed.contains(floor) || !sampler.support(st.x(), st.y() - 1, st.z()))
                     && sampler.placeable(st.x(), st.y() - 1, st.z())) {
-                place.add(DigAStar.pack(st.x(), st.y() - 1, st.z()));
+                place.add(floor);
+                placed.add(floor);
+                removed.remove(floor);
             }
             out.add(new DigAStar.Step(st.x(), st.y(), st.z(), dig, place, st.action()));
             fromY = st.y();
@@ -575,17 +585,30 @@ public final class PathTask extends TickTask {
 
     static boolean editsFeasible(List<DigAStar.Step> plan, DigSampler sampler) {
         DigAStar.Step previous = null;
+        var removed = new java.util.HashSet<Long>();
+        var placed = new java.util.HashSet<Long>();
         for (var step : plan) {
             if (!sampler.inBounds(step.x(), step.y(), step.z())) return false;
             if (previous != null && (!sampler.allowsStep(previous.x(), previous.y(), previous.z(),
                     step.x(), step.y(), step.z()) || !sampler.canClear(
                     previous.x(), previous.y(), previous.z(), step.dig()))) return false;
-            for (long cell : step.dig())
+            for (long cell : step.dig()) {
+                if (previous != null && cell == DigAStar.pack(previous.x(), previous.y() - 1, previous.z()))
+                    return false;
                 if (!DigSampler.feasibleDig(sampler.digSeconds(
                         DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))) return false;
-            for (long cell : step.place())
+                removed.add(cell);
+                placed.remove(cell);
+            }
+            for (long cell : step.place()) {
                 if (!sampler.placeable(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
                         DigAStar.unpackZ(cell))) return false;
+                placed.add(cell);
+                removed.remove(cell);
+            }
+            long floor = DigAStar.pack(step.x(), step.y() - 1, step.z());
+            if (step.action() != DigAStar.ACT_START && !placed.contains(floor)
+                    && (removed.contains(floor) || !sampler.support(step.x(), step.y() - 1, step.z()))) return false;
             previous = step;
         }
         return true;

@@ -452,6 +452,8 @@ public final class AgentRunner implements ToolExecutor {
         if (loop != null && loop.compacting()) activity = TaskBubbleState.Activity.COMPACTING;
         if (activity == null) activity = loop != null && loop.awaitingModel()
                 ? TaskBubbleState.Activity.MODEL : TaskBubbleState.Activity.PROCESSING;
+        if (activity == TaskBubbleState.Activity.MODEL)
+            detail = "等待模型响应 · " + loop.modelWaitSeconds() + " 秒";
         var progress = gather != null && gatherTask == currentTask && !gather.done()
                 ? gather.goalProgress() : loop == null ? null : loop.goalProgress();
         return taskBubble.snapshot(currentTask, activity, detail, progress, questionSnapshot(), client.nowMs());
@@ -465,7 +467,8 @@ public final class AgentRunner implements ToolExecutor {
             if (gather != null && !gather.done()) return "正在采集 · " + gather.activity();
             if (surveyActive()) return "正在地下勘探或沿路标返回";
             if (parked) return "等待游戏操作完成";
-            if (loop != null && loop.awaitingModel()) return "等待模型规划下一步";
+            if (loop != null && loop.awaitingModel())
+                return "等待模型响应 · " + loop.modelWaitSeconds() + " 秒";
             return "正在处理工具和状态";
         }
         if (loop != null && loop.busy()) return "正在整理上下文";
@@ -1153,6 +1156,11 @@ public final class AgentRunner implements ToolExecutor {
                 new ToolOutcome(false, "BUSY:已有组合执行等待终态，不要重发。"));
         BoundedWorkflow.Plan plan;
         try { plan = BoundedWorkflow.parse(argsJson); }
+        catch (BoundedWorkflow.ArgumentFailure invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:流程参数无效：" + com.neko.mcbot.common.WireSize.truncateToBytes(invalid.getMessage(), 512)
+                            + "；整份未执行，请修正该字段。"));
+        }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
                     "DENIED:流程参数无效；须1-12步、时限1-300秒、请求数合计≤128，动作数量明确填写。"

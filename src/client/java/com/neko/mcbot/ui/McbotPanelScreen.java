@@ -239,7 +239,7 @@ public final class McbotPanelScreen extends Screen {
                 boolean open = preferences.foldTools() ? expandedTools.contains(entry.sequence())
                         : !expandedTools.contains(entry.sequence());
                 var rect = new PanelLayout.Rect(viewport.x() + 4, viewport.y() + y, viewport.width() - 12, 20);
-                PanelButton fold = button("工具过程 · " + (end - i) + " 项  " + (open ? "收起" : "展开"),
+                PanelButton fold = button("工具记录 · " + (end - i) + " 条  " + (open ? "收起" : "展开"),
                         rect, PanelButton.Tone.QUIET, () -> {
                             if (!expandedTools.add(entry.sequence())) expandedTools.remove(entry.sequence());
                             rebuildWidgets();

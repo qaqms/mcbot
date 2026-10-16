@@ -49,6 +49,9 @@ class BoundedGatherTest {
         int[] dropStancesAfterMining;
         boolean stableDropIdentity, touchingAfterMining;
         boolean reportDrops;
+        boolean submerged, submergedAfterMining;
+        Integer pickupDelayTicks;
+        final List<JsonObject> waitArgs = new ArrayList<>();
         String reportedDropItem = "minecraft:dirt";
         List<String> extraReportedItems = List.of();
         boolean reportClearingDrops;
@@ -99,6 +102,7 @@ class BoundedGatherTest {
                 case "status" -> {
                     data = state(count);
                     data.addProperty("x", stateX);
+                    data.addProperty("eyes_in_water", submerged);
                 }
                 case "scan_area" -> {
                     var items = new JsonArray();
@@ -111,6 +115,7 @@ class BoundedGatherTest {
                         item.addProperty("can_touch_here", touching);
                         item.addProperty("pickup_allowed", true);
                         item.addProperty("pickup_delayed", true);
+                        if (pickupDelayTicks != null) item.addProperty("pickup_delay_ticks", pickupDelayTicks);
                         items.add(item);
                     }
                     data.add("item_targets", items);
@@ -139,6 +144,7 @@ class BoundedGatherTest {
                     if (!breakFailures.isEmpty()) return CompletableFuture.completedFuture(
                             new ToolOutcome(false, breakFailures.removeFirst(), data));
                     dug++;
+                    if (submergedAfterMining) submerged = true;
                     if (dropStancesAfterMining != null) dropStances = dropStancesAfterMining;
                     if (touchingAfterMining) touching = true;
                     removedTargets.add(args.get("x").getAsInt());
@@ -184,6 +190,7 @@ class BoundedGatherTest {
                     automaticPickup(false);
                 }
                 case "wait" -> {
+                    waitArgs.add(JsonParser.parseString(json).getAsJsonObject());
                     if (waiting != null) return waiting;
                     automaticPickup(true);
                 }
@@ -228,6 +235,52 @@ class BoundedGatherTest {
         assertTrue(result.data().get("goal_satisfied").getAsBoolean());
         assertEquals(64, result.data().get("actual_progress").getAsInt());
         assertEquals(0, f.cancelled);
+    }
+
+    @Test void touchDelayUsesFreshNativeTicksAndHiddenDropSettlingIsBounded() {
+        var touching = new Fixture(1, 0);
+        touching.ground = touching.touching = true;
+        touching.pickupDelayTicks = 6;
+        assertTrue(touching.run().ok());
+        assertEquals(7, touching.waitArgs.getFirst().get("ticks").getAsInt());
+        assertEquals(1, touching.waitArgs.size());
+        assertEquals(0, touching.dug);
+        var hidden = new Fixture(1, 0);
+        hidden.reportDrops = true;
+        hidden.hiddenDropScans = 1;
+        assertTrue(hidden.run().ok());
+        assertEquals(10, hidden.waitArgs.getFirst().get("ticks").getAsInt());
+        assertEquals(1, hidden.waitArgs.size());
+    }
+
+    @Test void submersionStopsBothInitialWorkAndContinuationWithoutReplayingEffects() {
+        var initiallyWet = new Fixture(1, 0);
+        initiallyWet.submerged = true;
+        assertTrue(initiallyWet.run().feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+        assertEquals(List.of("status"), initiallyWet.calls);
+        var entered = new Fixture(2, 0);
+        entered.submergedAfterMining = true;
+        var result = entered.run();
+        assertFalse(result.ok());
+        assertTrue(result.feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+        assertEquals(1, entered.dug);
+        assertEquals(0, entered.moved);
+        assertEquals(1, result.data().get("mined_blocks").getAsInt());
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+    }
+
+    @Test void unsafeResourceDoesNotConsumeAWorkRouteOrHideAnotherSafeCandidate() {
+        var f = new Fixture(1, 0);
+        var wet = block(false);
+        wet.addProperty("dry_work_safe", false);
+        var dry = block(true);
+        dry.addProperty("x", 3);
+        dry.addProperty("dry_work_safe", true);
+        f.blockTargets = List.of(wet, dry);
+        f.pickupDuringMining = true;
+        assertTrue(f.run().ok());
+        assertEquals(0, f.moved);
+        assertEquals(3, f.breakArgs.getFirst().get("x").getAsInt());
     }
 
     @Test void clearableOccludedResourceRunsLocallyAndCountsOnlyInventoryAsGoalProgress() {

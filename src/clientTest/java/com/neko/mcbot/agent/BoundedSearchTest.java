@@ -95,4 +95,23 @@ class BoundedSearchTest {
             assertEquals(1, calls[0]); assertEquals(1, cancels[0]);
         }
     }
+
+    @Test void unsafeCandidatesCannotHideALaterSafeResourceAcrossPages() {
+        var queue = new ArrayDeque<Runnable>();
+        var search = new BoundedSearch(json("{\"targets\":[\"stone\",\"oak_log\"],\"work\":true}"), (name, text) -> {
+            int offset = json(text).get("offset").getAsInt();
+            var data = page(offset, offset == 16384);
+            if (offset < 16384) {
+                for (int i = 0; i < 16; i++) data.getAsJsonArray("targets").add(json(
+                        "{\"block\":\"minecraft:stone\",\"dry_work_safe\":false}"));
+                data.addProperty("matches_observed", 16);
+            }
+            return CompletableFuture.completedFuture(new ToolOutcome(true, "page", data));
+        }, queue::add, () -> 0, () -> fail("unexpected cancellation"));
+        var result = search.start();
+        while (!queue.isEmpty()) queue.removeFirst().run();
+        assertTrue(result.join().ok());
+        assertEquals("minecraft:oak_log", result.join().data().getAsJsonArray("targets").get(0)
+                .getAsJsonObject().get("block").getAsString());
+    }
 }

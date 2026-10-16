@@ -124,4 +124,18 @@ class CompanionPhysicsTest {
         assertNull(body.settled);
         assertNull(body.recorded);
     }
+
+    @Test void waterReflexOverridesWorkInputAndUsesNativeLiquidJumpBeforeTravel() {
+        var body = new Body() {
+            @Override public MovementInput.Frame takeInput() { return new MovementInput.Frame(1, 0, false); }
+            @Override public MovementInput.Frame recoveryInput() { return new MovementInput.Frame(0, 0, true); }
+            @Override public boolean inWater() { return true; }
+            @Override public boolean grounded() { return true; }
+            @Override public void jump() { fail("water movement must not use a ground jump"); }
+            @Override public void swimUp() { calls.add("swim"); }
+            @Override public void refreshEyes() { calls.add("eyes"); }
+        };
+        CompanionPhysics.tick(body);
+        assertEquals(List.of("fluids", "swim", "travel", "blocks", "eyes", "fall", "record"), body.calls);
+    }
 }

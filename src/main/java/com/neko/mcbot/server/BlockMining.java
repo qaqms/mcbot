@@ -28,6 +28,7 @@ public final class BlockMining {
     public interface Access {
         ServerTool.Result guard(double reach);
         BlockState state();
+        default boolean environmentSafe() { return true; }
         default String expectedBlock() { return null; }
         float hardness(BlockState state);
         boolean correctTool(BlockState state);
@@ -87,6 +88,8 @@ public final class BlockMining {
             return failure("TARGET_LOST:目标不再是观测到的方块，未挖替换物；重新查看后再决定。");
         if (current.isAir()) return failure("TARGET_LOST:那里已经是空气，重新查看目标。");
         if (!current.getFluidState().isEmpty()) return failure("DENIED:不挖液体或含水方块，先选择干燥目标。");
+        if (!access.environmentSafe()) return failure(
+                "ENVIRONMENT_UNSAFE:挖掘会暴露流体、重力方块或未知邻格，未继续破坏；先观察并选择安全工作面。");
         if (target != null && current != target) return failure("TARGET_LOST:目标方块已改变，重新查看后再决定。");
         if (access.hardness(current) < 0) return failure("UNBREAKABLE:该方块不能用生存手段破坏，换目标。");
         if (!access.mayDestroy(current)) return failure("DENIED:当前玩家或物品不能破坏这格，换目标或工具。");
@@ -205,6 +208,8 @@ public final class BlockMining {
 
         @Override public ServerTool.Result guard(double reach) {
             if (player.level() != level) return failure("TARGET_LOST:身体已换维度，原目标作废。");
+            var environment = MiningEnvironment.bodyFailure(player);
+            if (environment != null) return environment;
             if (!level.isInWorldBounds(pos) || !level.getWorldBorder().isWithinBounds(pos)) {
                 return failure("DENIED:目标超出世界范围，换位置。");
             }
@@ -221,6 +226,9 @@ public final class BlockMining {
             return null;
         }
         @Override public BlockState state() { return level.getBlockState(pos); }
+        @Override public boolean environmentSafe() {
+            return MiningEnvironment.safe(MiningEnvironment.world(level), pos);
+        }
         @Override public String expectedBlock() { return expectedBlock; }
         @Override public float hardness(BlockState state) { return state.getDestroySpeed(level, pos); }
         @Override public boolean correctTool(BlockState state) { return player.hasCorrectToolForDrops(state); }

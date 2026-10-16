@@ -16,6 +16,43 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class LlmStreamDispatchTest {
+    @Test void expiredStreamStopsTheLoopWithoutReplayingAnEarlyActionOrDispatchingPartialArguments() {
+        var engine = new StreamEngine();
+        var executed = new AtomicInteger();
+        var states = new java.util.ArrayList<AgentLoop.TaskStatus>();
+        var loop = new AgentLoop(engine,
+                List.of(ToolSpec.of("move_to", "", "{\"required\":[\"x\",\"y\",\"z\"]}")),
+                (name, args) -> {
+                    executed.incrementAndGet();
+                    return CompletableFuture.completedFuture(new ToolExecutor.ToolOutcome(true, "actual effect"));
+                }, AgentLoop.Config.defaults(), new AgentLoop.Listener() {
+                    @Override public void onTaskFinished(long id, AgentLoop.TaskStatus status, String text) {
+                        assertTrue(text.contains("总时限"));
+                        states.add(status);
+                    }
+                }, () -> "sys", 100000);
+        loop.submit("move");
+        engine.body.onNext(List.of(frame("""
+                {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"first","function":{
+                "name":"move_to","arguments":"{\\"x\\":1,\\"y\\":2,\\"z\\":3}"}}]}}]}
+                """)));
+        assertEquals(1, executed.get());
+        engine.body.onNext(List.of(frame("""
+                {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"partial","function":{
+                "name":"move_to","arguments":"{\\"x\\":9,"}}]}}]}
+                """)));
+        assertTrue(engine.body.expire(LlmFailure.Kind.DEADLINE));
+        engine.body.onNext(List.of(frame("""
+                {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{
+                "arguments":"\\"y\\":2,\\"z\\":3}"}}]}}]}
+                """)));
+        engine.body.onComplete();
+        assertEquals(1, executed.get());
+        assertEquals(1, engine.requests);
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), states);
+        assertFalse(loop.busy());
+        loop.close();
+    }
     @Test
     void realSseParserStartsNamedToolBeforeEofAndLoopRecordsItOnce() {
         var engine = new StreamEngine();
@@ -91,7 +128,10 @@ class LlmStreamDispatchTest {
                 @Override public void request(long count) { }
                 @Override public void cancel() { }
             });
-            return body.getBody().toCompletableFuture().thenApply(ignored -> reader.builder().build());
+            return body.getBody().toCompletableFuture().thenApply(ignored -> {
+                if (body.failure() != null) throw new java.util.concurrent.CompletionException(body.failure());
+                return reader.builder().build();
+            });
         }
     }
 }

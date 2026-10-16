@@ -85,6 +85,7 @@ final class BoundedSearch {
         } catch (RuntimeException failure) { stop("INTERNAL:搜索未发出有效调用。"); }
     }
     private static int rank(JsonObject target) {
+        if (target.has("dry_work_safe") && !target.get("dry_work_safe").getAsBoolean()) return 5;
         if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) return 4;
         if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean()) return 0;
         if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean()) return 1;

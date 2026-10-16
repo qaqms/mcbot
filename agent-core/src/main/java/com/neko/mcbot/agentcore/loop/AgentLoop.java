@@ -184,6 +184,7 @@ public final class AgentLoop {
     private boolean closed;
     private StepReactor activeReactor;
     private CompletableFuture<AssistantTurn> activeResponse;
+    private long modelStartedNanos;
     private boolean compacting;
     private int emptySearches;
     private final SearchPages searchPages = new SearchPages();
@@ -244,6 +245,9 @@ public final class AgentLoop {
     }
     public synchronized boolean awaitingModel() {
         return !compacting && activeResponse != null && !activeResponse.isDone();
+    }
+    public synchronized long modelWaitSeconds() {
+        return awaitingModel() ? Math.max(0, (System.nanoTime() - modelStartedNanos) / 1_000_000_000) : 0;
     }
 
     public synchronized void configureContext(int threshold, int recentBudget, boolean automatic) {
@@ -622,6 +626,7 @@ public final class AgentLoop {
 
     private void requestTurn(long stepGeneration, StepReactor reactor, List<Msg> history) {
         compacting = false;
+        modelStartedNanos = System.nanoTime();
         CompletableFuture<AssistantTurn> response;
         try {
             response = java.util.Objects.requireNonNull(

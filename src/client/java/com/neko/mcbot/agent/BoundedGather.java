@@ -327,6 +327,12 @@ final class BoundedGather {
             if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; targetGroup = 0; }
             progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
             if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
+            if (state.has("eyes_in_water") && flag(state, "eyes_in_water")
+                    || state.has("in_lava") && flag(state, "in_lava")) {
+                lastData = state.deepCopy();
+                finish(false, "ENVIRONMENT_UNSAFE:当前身体没入水中或接触岩浆，停止普通采集；先核对身体避险状态。");
+                return;
+            }
             if (goal.progress() > lastProgress) {
                 stalls = 0;
                 lastProgress = goal.progress();
@@ -370,7 +376,7 @@ final class BoundedGather {
                 dropSettlePending = false;
                 dropSettleWaits++;
                 var wait = new JsonObject();
-                wait.addProperty("seconds", 1);
+                wait.addProperty("ticks", 10);
                 call("wait", wait, settled -> {
                     if (!settled.ok()) finish(false, settled.feedback());
                     else observe();
@@ -393,7 +399,9 @@ final class BoundedGather {
             }
             // Give the server body tick time to touch a newly created or delayed item.
             var wait = new JsonObject();
-            wait.addProperty("seconds", 1);
+            // One bounded wait per observed entity; never shorten vanilla's actual delay.
+            wait.addProperty("ticks", item.has("pickup_delay_ticks")
+                    ? Math.min(20, Math.max(1, exact(item, "pickup_delay_ticks")) + 1) : 20);
             call("wait", wait, receipt -> {
                 if (!receipt.ok()) finish(false, receipt.feedback());
                 else observe();
@@ -441,6 +449,11 @@ final class BoundedGather {
                 var block = entry.getAsJsonObject();
                 if (!within(block)) { recordExclusion(excludedBlocks, block, "block"); continue; }
                 if (skippedBlocks.contains(blockKey(block))) continue;
+                if (block.has("dry_work_safe") && !flag(block, "dry_work_safe")) {
+                    skippedBlocks.add(blockKey(block));
+                    lastProblem = "候选不满足干燥采掘安全条件；未为它移动或开路。";
+                    continue;
+                }
                 if (block.has("harvestable_with_hand") && !flag(block, "harvestable_with_hand")) {
                     unharvestableBlocks.add(blockKey(block));
                     continue;

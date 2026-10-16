@@ -75,6 +75,8 @@ public final class WorkPositions {
     }
 
     public static BlockAim.Aim miningAim(CompanionPlayer player, BlockPos target) {
+        if (!MiningEnvironment.safe(MiningEnvironment.world(player.level()), target))
+            return new BlockAim.Aim(null, "ENVIRONMENT_UNSAFE:目标邻接流体、重力方块或未知区域。");
         return BlockAim.mining(BlockAim.forPlayer(player), target, Math.min(5.5, player.blockInteractionRange()));
     }
 

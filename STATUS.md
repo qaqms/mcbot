@@ -3,6 +3,63 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 模型流等待、连续采集与入水保护（2026-10-16 10:37，Asia/Shanghai）
+
+- 新现场latest.log为97233 bytes，末写09:57:04，SHA256
+  `e0e606a19212b5593a8d5f8292ca4fcb4da9dda9b015dfd9b12502117e8c888c`。
+  安装包核对为上节45ab4f27；09:49:20开始任务，09:57:02退出时请求17仍在途，
+  没有本次钻石镐完成证据。详细行号/参考链路/边界见当日日志第二次测试节。
+  request4等待45347ms后三次craft仅41/4/2ms；request9首字4985ms，
+  工具派发194882ms，随后木镐craft3ms成功，主要长停顿在模型响应链路。
+  旧日志没有每包间隔，不能再细分持续生成与中转/网络停流；reasoning仅帧数。
+- 修复HttpRequest.timeout未覆盖完整响应体：LlmClient用单个守护看门狗检查
+  90秒无字节/配置总时限（当前生产180秒），收到心跳只刷新空闲、不刷新总时限。
+  超时完成typed failure、关闭订阅/连接、拒绝晚到；不自动重试可能已早派发的流。
+  ResponseDiagnostics新增idle_ms/max_byte_gap_ms数值，保留既有无密钥/正文边界。
+  面板及气泡显示模型等待秒数，工具实际活动优先；折叠名改“工具记录N条”，
+  数字是包含受理/进度/结果的显示记录数，不是第N个动作。
+- 圆石第一次接近清理15格、目标挖0/入包0，多次支撑变化重规划；
+  第二次实际入包12，但70子调用/9页查询，木镐约1265ms每格、多次固定wait约963ms。
+  WaitTool现严格seconds或ticks互斥、回传实际刻数；GroundItems给真实pickup_delay_ticks，
+  gather触碰按delay+1最多20刻、旧字段缺失兼容20刻，已知隐藏掉落有限10刻。
+  保留同站位最多8候选、新鲜背包、UUID站位帽、三次无进展、原权限/原子/时间预算，
+  不把掉落消失当入包、不删除必要查询，不宣称离线已测实际速度收益。
+- MiningEnvironment统一资源查询/工作判据/路径挖价/实际挖掘每刻的干燥安全：
+  目标/六邻流体、未知、目标及上方重力块拒绝；work给dry_work_safe，
+  合并分页排序/gather同步，不为明确危险目标移动开路。
+  普通挖掘/陆地路线/gather没顶或岩浆即停止，清输入/裂纹并保留部分效果。
+  status提供接地/入水/眼睛没水/岩浆/空气原读数/恢复状态，旧日志不能唯一定位落水时刻。
+- CompanionPhysics在流体更新后刷新眼部状态，WaterRecovery独立按刻运行，
+  用全身体无碰撞扫掠、加载/边界/非岩浆检查，原版液体jump和travel尝试上浮；
+  封顶时有界找连通空气，沿下一路点走，不直穿墙/传送/挖洞。
+  最多128探点、水平6格/向上8格、20刻重评、单次没顶600刻帽，阻塞边不封死其他入口。
+  只读/身份失配禁主动反射；传送/维度变化丢旧路径，body-water记录状态转换。
+  trapped_or_unknown/limit不当脱险成功，实际眼睛离水才结束；原无敌/伤害不改，
+  未实现完整氧气/溺水、计划潜水/水下采掘或通用游泳导航，空气值不保证正在扣氧。
+- PathTask清单重建按先后移除/放置去重；执行前验证后段支撑不依赖前段已挖格，
+  不挖出发脚下，矛盾方案零新动作拒绝，合法相邻阶梯保留。
+  这是有序计划复核，不是完整编辑状态A*；原静态搜索可能给出被拒绝方案。
+  普通move_to地下返工作台本轮仍8001节点NO_PROGRESS，完整返程账继续挂账。
+  workflow参数拒绝现给steps[index].args可信字段/类型/范围，整份零派发、不回显错误值。
+  没有新增成品/矿种模板或第二套规划器；完整掉落事件账/独立身体批次/按需工具仍缺。
+- 新增30项离线回归。core专项stage1通过8项（16秒）；根/客户端stage1误用全局
+  --tests导致agent-core无匹配，未记通过。stage2实际649客户端仅1项旧等待文案断言失败，
+  修正为新状态后stage3三套全过（39秒）；final初次46秒成功，补传送后final2 33秒成功。
+  最后补另一入口可达的水中搜索回归后，强制全量
+  `gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/latency-water-final3-20261016.log，43秒成功、20/20任务执行。
+  XML共128 suites、**1059项**（agent-core298/根106/客户端655），
+  failures/errors/skipped全0；list-java无残留，保留既有过时API/Gradle弃用提示。
+- 新候选build/libs/mcbot-0.1.0.jar，**1,210,174 bytes**，末写10:35:49，
+  SHA256 `d9b2b58d64842ae99b4d85577478b1e792cd302d14459e8e2f986841e9f76648`。
+  核版本/新类/内嵌agent-core、LuaJ及许可，未自动安装。
+  原版BlockState/真实SSE/loop/runner及受控世界/回执通过，未创建ServerLevel执行
+  泳姿/流体/碰撞/原版playerTouch，未运行真实模型，原生专项见REAL-GAME-RETESTING顶部。
+  javap确认Entity.updateFluidOnEyes为private（用Mixin Invoker），isEyeInFluid/isInWater/
+  isInLava/getAirSupply/getMaxAirSupply为public，LivingEntity.jumpInLiquid为protected，
+  ItemEntity.pickupDelay为private int（用Accessor），映射签名不凭旧版本猜测。
+  宿主、连接器、只读参考、实例配置与世界未修改；提交推送以Git实际记录为准。
+
 ## 真实放置接触与调用诊断（2026-10-16 09:40，Asia/Shanghai）
 
 - 本轮latest.log为326589 bytes，末写09:19:04，SHA256

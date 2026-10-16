@@ -43,10 +43,15 @@ final class BoundedWorkflow {
             JsonObject args = step.getAsJsonObject("args");
             if (args == null) throw new IllegalArgumentException("每步须有args对象");
             var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals(tool)).findFirst().orElseThrow();
-            validate(args, JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
+            validate(args, JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject(),
+                    "steps[" + steps.size() + "].args");
             if (tool.equals("break_block") || tool.equals("place_block")) blocks++;
             if (tool.equals("place_block")) items++;
-            if (tool.equals("wait")) integer(args.get("seconds"), 1, 60);
+            if (tool.equals("wait")) {
+                if (args.has("seconds") == args.has("ticks")) throw new IllegalArgumentException("等待须二选一指定seconds或ticks");
+                if (args.has("seconds")) integer(args.get("seconds"), 1, 60);
+                else integer(args.get("ticks"), 1, 1200);
+            }
             if (tool.equals("scan_area") && args.has("r")) integer(args.get("r"), 1, 32);
             if (tool.equals("craft") && !args.has("query")) args.addProperty("query", false);
             if (tool.equals("craft") && !args.get("query").getAsBoolean())

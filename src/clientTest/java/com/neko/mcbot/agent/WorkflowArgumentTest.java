@@ -43,4 +43,14 @@ class WorkflowArgumentTest {
         assertDoesNotThrow(() -> BoundedWorkflow.validate(
                 JsonParser.parseString("{\"entity_id\":\"hostile_nearby\"}"), schema));
     }
+
+    @Test void workflowSupportsShortTicksWhileRejectingAmbiguousOrNonIntegerWaits() {
+        for (String args : new String[]{"{\"ticks\":5}", "{\"seconds\":60}"})
+            assertDoesNotThrow(() -> BoundedWorkflow.parse(
+                    "{\"steps\":[{\"tool\":\"wait\",\"args\":" + args + "}]}"));
+        for (String args : new String[]{"{}", "{\"ticks\":3,\"seconds\":1}", "{\"ticks\":1.2}",
+                "{\"ticks\":\"3\"}", "{\"ticks\":1201}", "{\"seconds\":0}"})
+            assertThrows(IllegalArgumentException.class, () -> BoundedWorkflow.parse(
+                    "{\"steps\":[{\"tool\":\"wait\",\"args\":" + args + "}]}"));
+    }
 }

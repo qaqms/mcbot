@@ -20,6 +20,10 @@ final class CompanionPhysics {
         default float yaw() { return 0; }
         default boolean grounded() { return false; }
         default void jump() {}
+        default MovementInput.Frame recoveryInput() { return null; }
+        default boolean inWater() { return false; }
+        default void swimUp() {}
+        default void refreshEyes() {}
     }
 
     private CompanionPhysics() {}
@@ -31,9 +35,15 @@ final class CompanionPhysics {
         if (!body.loaded(body.bounds().expandTowards(body.velocity()).inflate(1))) return;
         Vec3 before = body.position();
         body.updateFluids();
-        if (input.jump() && body.grounded()) body.jump();
+        MovementInput.Frame recovery = body.recoveryInput();
+        if (recovery != null) input = recovery;
+        if (input.jump()) {
+            if (body.inWater()) body.swimUp();
+            else if (body.grounded()) body.jump();
+        }
         body.travel(input.relativeTo(body.yaw()));
         body.applyBlockEffects();
+        body.refreshEyes();
         Vec3 movement = body.position().subtract(before);
         // Server players normally receive this settlement from movement packets.
         body.checkFall(movement);

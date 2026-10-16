@@ -176,4 +176,14 @@ class AgentRunnerTaskBubbleTest {
         client.now++;
         assertNull(runner.taskBubbleSnapshot());
     }
+
+    @Test void modelWaitIsExplicitInPanelAndBubbleWhilePrimitiveActivityKeepsPriority() {
+        start();
+        assertTrue(runner.taskState().matches("等待模型响应 · \\d+ 秒"));
+        assertTrue(runner.taskBubbleSnapshot().detail().matches("等待模型响应 · \\d+ 秒"));
+        client.engine().early(0, new ToolCall("mine", "break_block", "{\"x\":2,\"y\":90,\"z\":0}"));
+        client.drain();
+        assertEquals("正在挖掘", runner.taskBubbleSnapshot().action());
+        assertFalse(runner.taskBubbleSnapshot().detail().contains("等待模型"));
+    }
 }

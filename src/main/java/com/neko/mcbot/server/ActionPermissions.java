@@ -76,6 +76,10 @@ public final class ActionPermissions {
     public Object body(UUID owner) { return bodies.get(owner); }
 
     public boolean passivePickupAllowed(UUID owner, UUID companion, String dimension, Object body) {
+        return passiveBodyActionAllowed(owner, companion, dimension, body);
+    }
+
+    public boolean passiveBodyActionAllowed(UUID owner, UUID companion, String dimension, Object body) {
         if (owner == null) return false;
         Context context = tasks.get(owner);
         // Idle bodies behave like ordinary players; an active read-only task keeps its stronger promise.

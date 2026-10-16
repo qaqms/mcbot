@@ -88,6 +88,40 @@ class AwarenessToolTest {
         assertFalse(result.data().get("work_truncated").getAsBoolean());
         assertTrue(result.data().get("results_truncated").getAsBoolean());
     }
+
+    @Test void hazardPreflightCannotSpendWorkGeometryOrHideAnotherSafeResource() {
+        var scan = new Scan() {
+            @Override public Boolean dryWorkSafe(BlockPos pos) { return pos.getX() >= center().getX() + 4; }
+            @Override public void work(JsonObject target, BlockPos pos, com.neko.mcbot.server.BlockAim.TraceBudget budget) {
+                assertTrue(dryWorkSafe(pos), "hazards cannot consume geometry checks");
+            }
+            @Override public void stands(JsonObject target, BlockPos pos, com.neko.mcbot.server.BlockAim.TraceBudget budget) {
+                assertTrue(dryWorkSafe(pos), "hazards cannot advertise working stances");
+            }
+        };
+        for (int x = -3; x <= 3; x++) for (int z = -3; z <= 3; z++)
+            scan.cells.put(scan.center().offset(x, 0, z), Blocks.STONE.defaultBlockState());
+        scan.cells.put(scan.center().offset(4, 0, 0), Blocks.STONE.defaultBlockState());
+        var result = FindResourceTool.execute(json("{\"targets\":[\"stone\"],\"r\":5,\"work\":true}"), scan);
+        assertTrue(result.ok());
+        var targets = result.data().getAsJsonArray("targets");
+        assertTrue(targets.get(0).getAsJsonObject().get("dry_work_safe").getAsBoolean());
+        assertEquals(1, result.data().get("work_checks").getAsInt());
+        assertTrue(targets.get(1).getAsJsonObject().get("work_failure").getAsString().startsWith("ENVIRONMENT_UNSAFE:"));
+    }
+
+    @Test void statusExposesNativeWaterGroundingAndRecoveryAlongsideFreshInventory() {
+        var body = new StatusTool.Body(.5, 60, .5, "minecraft:overworld", 20, 20, false, 25,
+                false, true, true, false, 300, 300, "trapped_or_unknown");
+        var report = StatusTool.report(json("{\"details\":true}"), body,
+                new Inventory(null, new EntityEquipment()), json("{\"busy\":false}"));
+        assertTrue(report.data().get("eyes_in_water").getAsBoolean());
+        assertFalse(report.data().get("on_ground").getAsBoolean());
+        assertEquals("trapped_or_unknown", report.data().get("water_recovery").getAsString());
+        assertEquals(300, report.data().get("air_supply").getAsInt());
+        assertTrue(report.feedback().contains("trapped_or_unknown"));
+        assertTrue(report.data().has("inventory"));
+    }
     @Test void unknownCellsNeverReadAndEmptyDoesNotClaimAbsence() {
         var scan = new Scan();
         scan.loaded = false;

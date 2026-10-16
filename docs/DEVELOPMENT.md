@@ -4,6 +4,16 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-16第二次日志修复：实际回环HTTP/SSE及订阅器验证响应体看门狗、
+取消/晚到隔离、typed failure、零自动重试；实际AgentLoop验证早派发效果不重放，
+第二个半截工具不执行。WaterRecovery受控空间验证封顶连通路线、未知、搜索/时间帽、
+只读/传送/换维度，CompanionPhysics验证原版液体跳跃接线顺序。
+真实BlockState验证共用流体/重力保护及工作中危险清裂纹；
+实际FindResource/合并分页/gather/runner/workflow验证安全前置、tick等待、入水停止、
+具体字段及原成果/预算/取消；PathTask计划复核验证有序支撑与重复列。
+没有ServerLevel游泳、原版playerTouch延迟或真实模型速度验收；
+最终强制build/XML/候选见STATUS顶部，不安装或启动游戏/模型。
+
 2026-10-16放置接触卡：真实BlockAim shape/clip覆盖空气/流体无锚、
 错误面/遮挡、部分形状、未知/距离、雪/半砖轮廓及侧接。
 BlockPlacement/PathTask共享入口验证六面有界选择、一次动作及原目标接触证据，

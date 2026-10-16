@@ -11,7 +11,12 @@ import net.minecraft.world.entity.player.Inventory;
 /** status：同伴自身的"体感"汇报，回执一句人话 + data 供 UI。 */
 public final class StatusTool implements ServerTool {
     public record Body(double x, double y, double z, String dimension, float hp, int food,
-                       boolean onFire, long gameTick) {
+                       boolean onFire, long gameTick, boolean onGround, boolean inWater,
+                       boolean eyesInWater, boolean inLava, int air, int maxAir, String recovery) {
+        public Body(double x, double y, double z, String dimension, float hp, int food,
+                    boolean onFire, long gameTick) {
+            this(x, y, z, dimension, hp, food, onFire, gameTick, false, false, false, false, 300, 300, "idle");
+        }
     }
 
     @Override
@@ -30,7 +35,10 @@ public final class StatusTool implements ServerTool {
         return java.util.concurrent.CompletableFuture.completedFuture(report(args,
                 new Body(companion.getX(), companion.getY(), companion.getZ(),
                         companion.level().dimension().identifier().toString(), companion.getHealth(),
-                        companion.getFoodData().getFoodLevel(), companion.isOnFire(), companion.level().getGameTime()),
+                        companion.getFoodData().getFoodLevel(), companion.isOnFire(), companion.level().getGameTime(),
+                        companion.onGround(), companion.isInWater(),
+                        companion.isEyeInFluid(net.minecraft.tags.FluidTags.WATER), companion.isInLava(),
+                        companion.getAirSupply(), companion.getMaxAirSupply(), companion.waterRecoveryState()),
                 companion.getInventory(), scheduler.observation(companion.getUUID())));
     }
 
@@ -68,11 +76,21 @@ public final class StatusTool implements ServerTool {
         data.addProperty("held", held);
         data.addProperty("on_fire", body.onFire());
         data.addProperty("game_tick", body.gameTick());
+        data.addProperty("on_ground", body.onGround());
+        data.addProperty("in_water", body.inWater());
+        data.addProperty("eyes_in_water", body.eyesInWater());
+        data.addProperty("in_lava", body.inLava());
+        data.addProperty("air_supply", body.air());
+        data.addProperty("max_air_supply", body.maxAir());
+        data.addProperty("water_recovery", body.recovery());
         data.add("task", task.deepCopy());
         String feedback = "我在 " + body.dimension() + " (" + body.x() + "," + body.y() + "," + body.z()
                 + ")，生命 " + body.hp() + "，饥饿 " + body.food()
                 + "，背包 " + data.get("slots_used").getAsInt() + "/36 格，手持" + held
                 + (body.onFire() ? "，身上着火！" : "") + "。观测游戏刻 " + body.gameTick()
+                + "；身体接地=" + body.onGround() + "、入水=" + body.inWater()
+                + "、眼睛没水=" + body.eyesInWater() + "、岩浆=" + body.inLava()
+                + "、原版空气读数=" + body.air() + "/" + body.maxAir() + "、水中避险=" + body.recovery()
                 + "；当前身体任务 " + task + "（耗时不是完成率）。";
         if (details) {
             data.add("inventory", contents.data());

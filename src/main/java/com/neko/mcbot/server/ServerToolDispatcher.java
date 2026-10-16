@@ -82,6 +82,11 @@ public final class ServerToolDispatcher {
                 companion.level().dimension().identifier().toString(), companion);
     }
 
+    public boolean passiveBodyActionAllowed(CompanionPlayer companion) {
+        return permissions.passiveBodyActionAllowed(companion.ownerUuid(), companion.getUUID(),
+                companion.level().dimension().identifier().toString(), companion);
+    }
+
     public record ReadOnlyVerification(String status, long taskId, String tool, String feedback) {
     }
 

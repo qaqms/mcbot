@@ -26,6 +26,41 @@ public final class CompanionPlayer extends ServerPlayer {
     private final UUID observationBodyId = UUID.randomUUID();
     private boolean observationWarning;
     private final MovementInput movementInput = new MovementInput();
+    private final WaterRecovery waterRecovery = new WaterRecovery();
+    private final WaterRecovery.Access waterAccess = new WaterRecovery.Access() {
+        @Override public boolean allowed() {
+            var dispatcher = McbotMod.dispatcher();
+            return !isSpectator() && dispatcher != null && dispatcher.belongsTo(level().getServer())
+                    && dispatcher.passiveBodyActionAllowed(CompanionPlayer.this);
+        }
+        @Override public boolean submerged() { return isEyeInFluid(net.minecraft.tags.FluidTags.WATER); }
+        @Override public Object worldIdentity() { return level(); }
+        @Override public Vec3 position() { return CompanionPlayer.this.position(); }
+        @Override public WaterRecovery.Medium eyesAt(Vec3 feet) {
+            Vec3 eyes = feet.add(0, getEyeY() - getY(), 0);
+            BlockPos pos = BlockPos.containing(eyes);
+            if (!level().isInWorldBounds(pos) || !level().isLoaded(pos)) return WaterRecovery.Medium.BLOCKED;
+            var state = level().getBlockState(pos);
+            var fluid = state.getFluidState();
+            if (fluid.is(net.minecraft.tags.FluidTags.WATER) && eyes.y < pos.getY() + fluid.getHeight(level(), pos))
+                return WaterRecovery.Medium.WATER;
+            return (fluid.isEmpty() || fluid.is(net.minecraft.tags.FluidTags.WATER))
+                    && state.getCollisionShape(level(), pos).isEmpty()
+                    ? WaterRecovery.Medium.AIR : WaterRecovery.Medium.BLOCKED;
+        }
+        @Override public boolean passage(Vec3 from, Vec3 to) {
+            if (from.distanceToSqr(to) > 4 || from.distanceToSqr(position()) > 256) return false;
+            Vec3 delta = from.subtract(position());
+            var sweep = getBoundingBox().move(delta).expandTowards(to.subtract(from));
+            for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(sweep.minX, sweep.minY, sweep.minZ),
+                    BlockPos.containing(sweep.maxX, sweep.maxY, sweep.maxZ))) {
+                if (!level().isInWorldBounds(pos) || !level().getWorldBorder().isWithinBounds(pos)
+                        || !level().isLoaded(pos)
+                        || level().getFluidState(pos).is(net.minecraft.tags.FluidTags.LAVA)) return false;
+            }
+            return level().noCollision(CompanionPlayer.this, sweep);
+        }
+    };
     private final com.neko.mcbot.server.HandSnapshot.Pickups handPickups =
             new com.neko.mcbot.server.HandSnapshot.Pickups();
     private final CompanionPhysics.Access physics = new CompanionPhysics.Access() {
@@ -45,7 +80,17 @@ public final class CompanionPlayer extends ServerPlayer {
         @Override public float yaw() { return getYRot(); }
         @Override public boolean grounded() { return onGround(); }
         @Override public void jump() { jumpFromGround(); }
-        @Override public void updateFluids() { updateInWaterStateAndDoFluidPushing(); }
+        @Override public void updateFluids() {
+            updateInWaterStateAndDoFluidPushing();
+            refreshEyes();
+        }
+        @Override public void refreshEyes() {
+            ((com.neko.mcbot.mixin.EntityFluidAccess) (net.minecraft.world.entity.Entity) CompanionPlayer.this)
+                    .mcbot$updateFluidOnEyes();
+        }
+        @Override public MovementInput.Frame recoveryInput() { return waterRecovery.tick(waterAccess); }
+        @Override public boolean inWater() { return isInWater(); }
+        @Override public void swimUp() { jumpInLiquid(net.minecraft.tags.FluidTags.WATER); }
         @Override public void travel(Vec3 input) { CompanionPlayer.this.travel(input); }
         @Override public void applyBlockEffects() { applyEffectsFromBlocks(); }
         @Override public void checkFall(Vec3 movement) {
@@ -94,6 +139,8 @@ public final class CompanionPlayer extends ServerPlayer {
 
     public void releaseMovement() { movementInput.clear(); }
 
+    public String waterRecoveryState() { return waterRecovery.state(); }
+
     public void facePoint(Vec3 point) {
         if (getEyePosition().distanceToSqr(point) < 1e-10) return;
         lookAt(EntityAnchorArgument.Anchor.EYES, point);
@@ -112,7 +159,13 @@ public final class CompanionPlayer extends ServerPlayer {
         var state = meleeClock.tick(getMainHandItem(), attackStrengthTicker, itemSwapTicker);
         attackStrengthTicker = state.attackTicks();
         itemSwapTicker = state.swapTicks();
+        String previousWater = waterRecovery.state();
         CompanionPhysics.tick(physics);
+        if (!previousWater.equals(waterRecovery.state())) {
+            McbotMod.LOG.info("[body-water] companion={} state={} in_water={} eyes_in_water={} pos={} tick={}",
+                    getUUID(), waterRecovery.state(), isInWater(),
+                    isEyeInFluid(net.minecraft.tags.FluidTags.WATER), blockPosition().toShortString(), level().getGameTime());
+        }
         BodyPickup.tick(pickup);
         observeHealth(HealthObservation.Phase.AFTER_TICK);
     }

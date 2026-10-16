@@ -5,6 +5,26 @@
 
 ## 生存放置与具体回执（2026-10-16）
 
+第二次测试补模型传输/身体环境链路，现场与完整参考对照见当日日志第二次测试节：
+LlmClient在完整HTTP/SSE生命周期施加配置总时限及90秒无字节看门狗，
+心跳仅刷新空闲；typed failure取消订阅/连接，忽略晚到，不自动重放已可能派发的动作。
+ResponseDiagnostics仅记录idle_ms/max_byte_gap_ms数值；AgentLoop/runner动态显示等待秒数。
+工具折叠条数改称记录，不表示动作序号。
+
+WaitTool接受seconds或ticks互斥严格整数；GroundItems暴露原版pickupDelay，
+gather按当前延迟有限等待，不跳过原版触碰、实际背包或取消/无进展/共享预算。
+MiningEnvironment共用于资源安全事实、工作判据、路径挖价及BlockMining每刻执行；
+六邻格流体/未知、目标及上方重力方块均拒绝普通干燥采掘，危险候选不为其开路。
+PathTask重建清单时按先后移除/放置去重，并在执行前检查支撑依赖和出发脚下不得挖；
+尚不是带完整编辑状态的A*，可能拒绝静态搜索给出的方案。
+
+CompanionPhysics在流体更新后刷新眼部流体，WaterRecovery独立按刻选择有界连通空气路径，
+按实际全身体扫掠/加载/边界/非岩浆验证，用下一路点输入和原版液体jump/travel，
+不传送、不挖放。最多128探点、水平6/上8、20刻重评、没顶600刻帽；
+只读/身份失配不启动反射，传送/换维度废弃旧路线，状态转换日志与status可见。
+挖掘/普通陆地路线/采集没顶即停止并保留已发生效果；
+完整水下作业、氧气伤害生命周期及一般游泳导航仍缺，原版空气读数不作完整生存承诺。
+
 BlockAim.placementContact评估实际轮廓面、首个命中block/face、眼睛距离及已加载射线。
 BlockPlacement.preflight共用于查询和执行，真实命中交给原版BlockPlaceContext；
 删除强制getClickedPos/canPlace覆写，只在原版精确落位可替换时继续。

@@ -108,16 +108,8 @@ public final class LevelDigSampler implements DigSampler {
         if (lavaAdjacent(p)) {
             return INFEASIBLE; // HAZARD：旁边是岩浆，不送
         }
-        if (spec.underground()) {
-            if (st.getBlock() instanceof net.minecraft.world.level.block.FallingBlock
-                    || level.getBlockState(p.above()).getBlock() instanceof net.minecraft.world.level.block.FallingBlock)
-                return INFEASIBLE;
-            for (var direction : net.minecraft.core.Direction.values()) {
-                BlockPos near = p.relative(direction);
-                if (!level.isInWorldBounds(near) || !level.isLoaded(near)
-                        || !level.getBlockState(near).getFluidState().isEmpty()) return INFEASIBLE;
-            }
-        }
+        if (!com.neko.mcbot.server.MiningEnvironment.safe(
+                com.neko.mcbot.server.MiningEnvironment.world(level), p)) return INFEASIBLE;
         float hardness = st.getDestroySpeed(level, p);
         if (hardness < 0) {
             return INFEASIBLE; // UNBREAKABLE（基岩/末地石核心等生存不可破）

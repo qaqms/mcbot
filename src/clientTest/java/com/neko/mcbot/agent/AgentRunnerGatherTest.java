@@ -406,7 +406,7 @@ class AgentRunnerGatherTest {
                 .map(m -> (com.neko.mcbot.agentcore.llm.Msg.Tool) m).toList().getLast();
         assertTrue(receipt.ok(), receipt.content());
         assertTrue(receipt.content().contains("子调用=6"), "the approved reissue consumes another primitive");
-        assertEquals("等待模型规划下一步", runner.taskState());
+        assertTrue(runner.taskState().startsWith("等待模型响应 · "));
     }
 
     @Test void deniedConsentStopsGatherWithoutReplayingAnyWorldAction() {

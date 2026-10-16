@@ -9,7 +9,7 @@ import java.util.concurrent.ExecutionException;
 /** Only locally generated categories are safe to show; never echo a remote error body. */
 public final class LlmFailure extends IOException {
 
-    public enum Kind { HTTP, HTML, EMPTY_STREAM, SERVICE_ERROR }
+    public enum Kind { HTTP, HTML, EMPTY_STREAM, SERVICE_ERROR, STREAM_IDLE, DEADLINE }
 
     private final Kind kind;
     private final int status;
@@ -27,6 +27,8 @@ public final class LlmFailure extends IOException {
         this.error = error;
     }
 
+    public Kind kind() { return kind; }
+
     public static String userMessage(Throwable failure) {
         Throwable cause = failure;
         while ((cause instanceof CompletionException || cause instanceof ExecutionException)
@@ -40,6 +42,8 @@ public final class LlmFailure extends IOException {
                 case HTML -> "：端点返回网页而不是模型接口，请检查 API 地址。";
                 case EMPTY_STREAM -> "：服务未返回可识别的回答或工具调用。请重试或测试连接；这不代表模型一定不兼容。";
                 case SERVICE_ERROR -> "：服务在响应中报告错误，任务未正常完成。" + known.serviceDetail();
+                case STREAM_IDLE -> "：模型响应流长时间没有数据，已关闭连接；已执行动作保留，本任务不会自动重发。";
+                case DEADLINE -> "：模型请求超过总时限（包含响应流），已停止等待；已执行动作保留，本任务不会自动重发。";
                 case HTTP -> known.error.category() != ServiceErrorDiagnostics.Category.NONE
                         && known.error.category() != ServiceErrorDiagnostics.Category.UNKNOWN
                         ? "：服务拒绝请求。" + known.serviceDetail() : switch (known.status) {

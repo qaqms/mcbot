@@ -9,8 +9,7 @@ import com.neko.mcbot.task.TickTask;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * wait：站定等 N 秒（1-60）。等熔炉出货、等作物长熟、等怪走远这类节奏都靠它，
- * 免得模型用连发 scan 空转烧 token。
+ * Wait for a bounded number of server ticks without polling the model.
  */
 public final class WaitTool implements ServerTool {
 
@@ -21,32 +20,38 @@ public final class WaitTool implements ServerTool {
 
     @Override
     public CompletableFuture<Result> runAsync(CompanionPlayer c, JsonObject args, CompanionScheduler sched) {
-        int seconds;
+        int ticks;
         try {
-            seconds = args.get("seconds").getAsInt();
+            ticks = durationTicks(args);
         } catch (RuntimeException e) {
             return CompletableFuture.completedFuture(
-                    new Result(false, "DENIED:需要整数 seconds（1-60 秒）。", null));
-        }
-        if (seconds < 1 || seconds > 60) {
-            return CompletableFuture.completedFuture(new Result(false,
-                    "DENIED:seconds 要在 1-60 之间。更长的等待，先去干别的再回来查。", null));
+                    new Result(false, "DENIED:仅选整数 seconds（1-60）或 ticks（1-1200），不能同时填写。", null));
         }
         CompletableFuture<Result> f = new CompletableFuture<>();
-        if (!sched.submit(c, new Task(seconds), f, seconds * 20 + 100)) {
+        if (!sched.submit(c, new Task(ticks), f, ticks + 100)) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
         return f;
     }
 
-    private static final class Task extends TickTask {
-        private final int seconds;
+    static int durationTicks(JsonObject args) {
+        if (args.size() != 1 || !args.has("seconds") && !args.has("ticks"))
+            throw new IllegalArgumentException();
+        String key = args.has("ticks") ? "ticks" : "seconds";
+        var value = args.get(key);
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber())
+            throw new IllegalArgumentException();
+        int n = value.getAsBigDecimal().intValueExact();
+        if (n < 1 || n > (key.equals("ticks") ? 1200 : 60)) throw new IllegalArgumentException();
+        return key.equals("ticks") ? n : n * 20;
+    }
+
+    static final class Task extends TickTask {
         private final int targetTicks;
 
-        Task(int seconds) {
-            this.seconds = seconds;
-            this.targetTicks = seconds * 20;
+        Task(int ticks) {
+            this.targetTicks = ticks;
         }
 
         @Override
@@ -62,7 +67,7 @@ public final class WaitTool implements ServerTool {
         public Progress tick(CompanionPlayer c) {
             if (age >= targetTicks) {
                 return new Progress.Done(new Result(true,
-                        "这 " + seconds + " 秒等完了。要查结果就继续。", null));
+                        "已等待 " + targetTicks + " 游戏刻；继续查看实际结果。", observation()));
             }
             return running();
         }
