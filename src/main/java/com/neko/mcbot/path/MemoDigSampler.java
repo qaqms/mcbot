@@ -169,6 +169,8 @@ public final class MemoDigSampler implements DigSampler {
         return base.inBounds(x, y, z); // 纯算术，不 memo
     }
 
+    @Override public boolean known(int x, int y, int z) { return base.known(x, y, z); }
+
     // ---- 验尸（周期性 live 复验）----
 
     /** 验尸节拍：每 VERIFY_EVERY_MISSES 次实查抽一轮。 */

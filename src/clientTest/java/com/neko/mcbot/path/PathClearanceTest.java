@@ -143,4 +143,59 @@ class PathClearanceTest {
         var stair = new DigAStar.Step(1, 63, 0, List.of(shared, DigAStar.pack(1, 63, 0)), List.of(), DigAStar.ACT_DIG);
         assertTrue(PathTask.editsFeasible(List.of(start, stair), cells), "legal adjacent stairs remain valid");
     }
+
+    @Test void routeDiagnosticsIdentifyTheStepAndExactSupportWithoutChangingTheWorld() {
+        var cells = new Cells();
+        long floor = DigAStar.pack(0, 63, 0);
+        cells.blocked.add(floor);
+        var start = new DigAStar.Step(0, 64, 0, List.of(), List.of(), DigAStar.ACT_START);
+        var down = new DigAStar.Step(0, 63, 0, List.of(floor), List.of(), DigAStar.ACT_DIG);
+        var failure = PathTask.planFailure(List.of(start, down), cells, 128);
+        assertEquals("DEPARTURE_SUPPORT", failure.reason());
+        assertEquals(1, failure.step());
+        assertEquals(floor, failure.cell());
+        assertEquals(DigAStar.pack(0, 64, 0), failure.from());
+        assertEquals(DigAStar.pack(0, 63, 0), failure.to());
+        assertTrue(failure.summary().contains("cell=0,63,0"));
+        assertEquals(Set.of(floor), cells.blocked);
+    }
+
+    @Test void missingClearanceAndTheActualRemainingDigBudgetHaveDifferentEvidence() {
+        var cells = new Cells();
+        long top = DigAStar.pack(1, 65, 0);
+        cells.blocked.add(top);
+        var start = new DigAStar.Step(0, 64, 0, List.of(), List.of(), DigAStar.ACT_START);
+        var incomplete = new DigAStar.Step(1, 64, 0, List.of(), List.of(), DigAStar.ACT_WALK);
+        assertEquals("EDIT_LIST_CHANGED", PathTask.planFailure(List.of(start, incomplete), cells, 128).reason());
+        var complete = new DigAStar.Step(1, 64, 0, List.of(top), List.of(), DigAStar.ACT_DIG);
+        assertNull(PathTask.planFailure(List.of(start, complete), cells, 1));
+        var over = PathTask.planFailure(List.of(start, complete), cells, 0);
+        assertEquals("DIG_LIMIT", over.reason());
+        assertEquals(top, over.cell());
+    }
+
+    @Test void interruptedReceiptsKeepActualEffectsAndStructuredDiagnosticsWithoutNewSearches() throws Exception {
+        var cells = new Cells();
+        var route = PathTask.searchFor(cells, net.minecraft.core.BlockPos.ZERO,
+                new net.minecraft.core.BlockPos(40, 0, 0), true, true);
+        route.totalBudget(0);
+        route.advance(300, 0);
+        var task = new PathTask(null, net.minecraft.core.BlockPos.ZERO, null, null, null, null);
+        for (var entry : java.util.Map.of("search", route, "actualDigs", 2,
+                "planFailure", new PathFailure(1, "NO_SUPPORT", DigAStar.pack(0, 0, 0),
+                        DigAStar.pack(1, 0, 0), DigAStar.pack(1, -1, 0))).entrySet()) {
+            var field = PathTask.class.getDeclaredField(entry.getKey());
+            field.setAccessible(true);
+            field.set(task, entry.getValue());
+        }
+        int expanded = route.expanded();
+        var result = task.interruptedResult(new com.neko.mcbot.server.ServerTool.Result(false, "CANCELLED:test", null));
+        assertEquals(2, result.data().get("removed_blocks").getAsInt());
+        assertEquals("NO_SUPPORT", result.data().getAsJsonObject("path_failure").get("reason").getAsString());
+        var diagnostics = result.data().getAsJsonObject("search_diagnostics");
+        assertEquals("TIME", diagnostics.get("budget_kind").getAsString());
+        assertTrue(diagnostics.getAsJsonArray("samples").size() <= 8);
+        assertEquals(expanded, route.expanded());
+        assertTrue(result.feedback().startsWith("CANCELLED:"));
+    }
 }

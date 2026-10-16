@@ -36,7 +36,7 @@ public final class DigAStar {
 
     /**
      * 启发权重（docs/plan/R1-pathfinding.md §A，主人拍板 1.8 实测后校）：
-     * **故意不可采纳**——代价上界 ≤ W×最优，拿次优度换展开数。
+     * 加权估价优先减少展开；累计编辑状态、重用折扣和工作到达费用不提供最优界保证。
      * 旧 h=0.95×L1(到中心) 两头都错：斜步 1.4 消 2 单位（高估），挖价不进入 h（必挖区低估），
      * f 退化成按 g 的球形扩散→16 格山地撞 8000 帽。真可采纳下界只能假设挖价=0（总能声称绕行），
      * 对山体零梯度→治不了病根，故走加权而非修下界（设计卡 §A 的否决理由）。
@@ -64,12 +64,17 @@ public final class DigAStar {
     private final DigSampler s;
     private final int maxNodes;
     private final int maxDigs;
-    private final int sx, sy, sz, tx, ty, tz;
+    private final int sx, sy, sz;
     private final double hWeight;
-    private final int goalRadius;
-    /** 入目标柱的最小真实代价（脚+头挖价+放价，搜索开始算一次）；全不可行=0。 */
-    private final double goalEntryCost;
     private NavigationGoal goal;
+    private ApproachEstimate estimate;
+    private boolean prepared;
+    private Node stoppingNode;
+    private double stoppingCost = Double.POSITIVE_INFINITY;
+    private double goalCost = -1;
+    private final Map<String, Integer> rejected = new java.util.LinkedHashMap<>();
+    private final List<PathFailure> rejectionSamples = new ArrayList<>();
+    private String budgetKind;
 
     private final PriorityQueue<Node> open =
             new PriorityQueue<>((a, b) -> Double.compare(a.f, b.f));
@@ -107,16 +112,11 @@ public final class DigAStar {
         this.sx = sx;
         this.sy = sy;
         this.sz = sz;
-        this.tx = tx;
-        this.ty = ty;
-        this.tz = tz;
         this.maxNodes = maxNodes;
         this.maxDigs = maxDigs;
         this.hWeight = hWeight;
         if (goalRadius < 0 || goalRadius > 1) throw new IllegalArgumentException("Invalid goal radius");
-        this.goalRadius = goalRadius;
         this.goal = NavigationGoal.position(tx, ty, tz, goalRadius);
-        this.goalEntryCost = computeGoalEntryCost(sampler);
         Node start = start();
         best.put(start.key, start);
         open.add(start);
@@ -135,7 +135,7 @@ public final class DigAStar {
 
     private Node start() {
         return new Node(new State(pack(sx, sy, sz), 0, 0, TerrainEdits.EMPTY),
-                sx, sy, sz, 0, 0, 0, h(sx, sy, sz), null,
+                sx, sy, sz, 0, 0, 0, h(sx, sy, sz, TerrainEdits.EMPTY), null,
                 new Step(sx, sy, sz, List.of(), List.of(), ACT_START));
     }
 
@@ -154,8 +154,33 @@ public final class DigAStar {
             return true;
         }
         long t0 = System.nanoTime();
-        long sliceEnd = t0 + sliceNanos;
+        try {
         for (int i = 0; i < budget; i++) {
+            if (!prepared) {
+                if (estimate == null) {
+                    if (goal.remaining(sx, sy, sz) == 0
+                            && usedNanos + System.nanoTime() - t0 < totalBudgetNanos
+                            && goal.arrivalCost(s, sx, sy, sz, TerrainEdits.EMPTY) == 0)
+                        return arrive(start(), 0);
+                    estimate = new ApproachEstimate(s, goal, sx, sy, sz, maxDigs > 0 ? maxNodes / 4 : 0);
+                }
+                if (!estimate.done()) {
+                    // Preprocessing is optional, but its CPU, work and allocations are never free.
+                    if (usedNanos + System.nanoTime() - t0 >= totalBudgetNanos)
+                        return budgetFailure("TIME", "搜索预估与展开耗尽累计时间预算。");
+                    if (System.nanoTime() - t0 >= sliceNanos) return false;
+                    estimate.advance();
+                    continue;
+                }
+                prepared = true;
+                open.clear();
+                best.clear();
+                Node initial = start();
+                best.put(initial.key, initial);
+                open.add(initial);
+            }
+            if (stoppingNode != null && (open.isEmpty() || stoppingCost <= open.peek().f))
+                return arrive(stoppingNode, stoppingCost);
             Node cur = open.poll();
             if (cur == null) {
                 return fail("NO_PATH:搜索空间走完了也没有路——那边是封闭的。");
@@ -164,11 +189,12 @@ public final class DigAStar {
             if (b != cur) {
                 continue; // 陈旧堆项
             }
-            if (goal.reached(cur.x, cur.y, cur.z, cur.key.terrain())) {
-                goalNode = cur;
-                path = reconstruct(cur);
-                finished = true;
-                return true;
+            double arrival = goal.arrivalCost(s, cur.x, cur.y, cur.z, cur.key.terrain());
+            if (Double.isFinite(arrival) && arrival >= 0 && cur.g + arrival < stoppingCost) {
+                stoppingNode = cur;
+                stoppingCost = cur.g + arrival;
+                if (stoppingCost <= cur.f && (open.isEmpty() || stoppingCost <= open.peek().f))
+                    return arrive(cur, stoppingCost);
             }
             // 部分提交候选：只在 settled 节点里选（陈旧堆项已过滤），距体积最近、同距取 g 小
             if (bestPartial == null || l1(cur.x, cur.y, cur.z) < l1(bestPartial.x, bestPartial.y, bestPartial.z)
@@ -176,34 +202,44 @@ public final class DigAStar {
                         && cur.g < bestPartial.g)) {
                 bestPartial = cur;
             }
-            if (++expanded > maxNodes) {
-                budgetReached = true;   // 对外失败字符串不动（不破坏 [m8]/TOOLS 契约）；
-                                        // PARTIAL/NO_PROGRESS 的定性由 partialAvailable() 给调用方
-                return fail("BUDGET_EXCEEDED:搜索展开超过 " + maxNodes
+            if (++expanded + estimateExpanded() > maxNodes) {
+                return budgetFailure("NODES", "预估与路线展开超过 " + maxNodes
                         + " 节点。目标太远或地形太纠缠，请分短段移动。");
             }
             expand(cur);
-            if (storedNodes >= MAX_STORED_NODES) {
-                budgetReached = true;
-                return fail("BUDGET_EXCEEDED:路径状态存储已到上限，未证明目标无路；请重新观察并分短段移动。");
+            if (storedNodes() >= MAX_STORED_NODES) {
+                return budgetFailure("STORAGE", "路径状态存储已到上限，未证明目标无路；请重新观察并分短段移动。");
             }
             // 每 16 拓才探一次钟：nanoTime 本身不免费，粗粒度换开销（帽语义不差这 16 节点）
             if ((expanded & 15) == 0) {
                 long now = System.nanoTime();
                 if (usedNanos + (now - t0) >= totalBudgetNanos) {
-                    usedNanos = totalBudgetNanos;
-                    budgetReached = true;
-                    return fail("BUDGET_EXCEEDED:搜索耗尽了 " + (totalBudgetNanos / 1_000_000)
+                    return budgetFailure("TIME", "搜索耗尽了 " + (totalBudgetNanos / 1_000_000)
                             + "ms 时间预算（展开 " + expanded + " 节点）。目标太远或地形太纠缠，请分短段移动。");
                 }
-                if (now >= sliceEnd) {
-                    usedNanos += now - t0;
+                if (now - t0 >= sliceNanos) {
                     return false; // 本拍切片用尽，下拍续（未出结果）
                 }
             }
         }
-        usedNanos += System.nanoTime() - t0;
         return false;
+        } finally {
+            usedNanos += System.nanoTime() - t0;
+        }
+    }
+
+    private boolean arrive(Node node, double cost) {
+        goalNode = node;
+        goalCost = cost;
+        path = reconstruct(node);
+        finished = true;
+        return true;
+    }
+
+    private boolean budgetFailure(String kind, String why) {
+        budgetReached = true;
+        budgetKind = kind;
+        return fail("BUDGET_EXCEEDED:" + why);
     }
 
     /** 累计搜索 CPU 预算（纳秒）；PathTask 传 SEARCH_TOTAL_NS。越界后与节点帽同位撞帽。 */
@@ -240,8 +276,14 @@ public final class DigAStar {
     }
 
     public int storedNodes() {
-        return storedNodes;
+        return storedNodes + (estimate == null ? 0 : estimate.admitted());
     }
+
+    public int estimateExpanded() { return estimate == null ? 0 : estimate.expanded(); }
+    public int estimateSeedProbes() { return estimate == null ? 0 : estimate.seedProbes(); }
+    public String budgetKind() { return budgetKind; }
+    public Map<String, Integer> rejections() { return Map.copyOf(rejected); }
+    public List<PathFailure> rejectionSamples() { return List.copyOf(rejectionSamples); }
 
     /** 是否因节点预算帽而结束（区别于 open 空的真 NO_PATH）。 */
     public boolean budgetReached() {
@@ -272,7 +314,7 @@ public final class DigAStar {
 
     /** 成功路径的总代价 g（抑抖断言/观测用）；未成功为 -1。 */
     public double pathCost() {
-        return goalNode == null ? -1 : goalNode.g;
+        return goalNode == null ? -1 : goalCost;
     }
 
     public int dugCount() {
@@ -318,18 +360,25 @@ public final class DigAStar {
     }
 
     private void relax(Node cur, int dx, int dy, int dz) {
-        if (storedNodes >= MAX_STORED_NODES) return;
+        if (storedNodes() >= MAX_STORED_NODES) return;
         int bx = cur.x + dx, by = cur.y + dy, bz = cur.z + dz;
-        var plan = PathTransition.evaluate(s, cur.key.terrain(), cur.x, cur.y, cur.z, bx, by, bz,
+        var check = PathTransition.check(s, cur.key.terrain(), cur.x, cur.y, cur.z, bx, by, bz,
                 maxDigs - cur.digs, s.maxPlaces() - cur.places);
-        if (plan == null) return;
+        if (check.plan() == null) {
+            int seen = rejected.merge(check.reason(), 1, Integer::sum);
+            if (seen == 1 && rejectionSamples.size() < 8)
+                rejectionSamples.add(new PathFailure(-1, check.reason(), cur.key.position(),
+                        pack(bx, by, bz), check.cell()));
+            return;
+        }
+        var plan = check.plan();
         long destKey = pack(bx, by, bz);
         // 抑抖（R1-S3）：旧路线上的落脚格本步基础价先打折，后面逐项再打
         double cost = (MOVE_BASE + (dx != 0 && dz != 0 ? MOVE_DIAG : 0))
                 * (reuse != null && reuse.contains(destKey) ? BIAS_REUSE : 1.0);
         for (long dc : plan.dig()) {
             double sec = s.digSeconds(unpackX(dc), unpackY(dc), unpackZ(dc));
-            cost += (sec + DIG_OVERHEAD) * (reuse != null && reuse.contains(dc) ? BIAS_REUSE : 1.0);
+            cost += digCost(sec) * (reuse != null && reuse.contains(dc) ? BIAS_REUSE : 1.0);
         }
         for (long pc : plan.place()) {
             cost += s.placeCost(bx, by - 1, bz)
@@ -348,17 +397,18 @@ public final class DigAStar {
             return;
         }
         var step = new Step(bx, by, bz, plan.dig(), plan.place(), classify(cur, bx, by, bz, plan.dig(), plan.place()));
-        Node n = new Node(key, bx, by, bz, digs, places, g, g + h(bx, by, bz), cur, step);
+        Node n = new Node(key, bx, by, bz, digs, places, g, g + h(bx, by, bz, plan.terrain()), cur, step);
         storedNodes++;
         best.put(key, n);
         open.add(n);
     }
 
-    private double h(int x, int y, int z) {
+    private double h(int x, int y, int z, TerrainEdits edits) {
         // 距目标**体积**（3×3×3，与 isGoal 同口径）而非距中心：旧 h 到中心在体积边缘最多多算 3，
         // 与体积终点判据不自洽也是噪声源。详见 H_WEIGHT 注释：加权是**故意**的，不可采纳。
         double l = l1(x, y, z);
-        return l == 0 ? 0 : hWeight * H_UNIT * l + goalEntryCost;
+        return l == 0 ? 0 : hWeight * (H_UNIT * l + (estimate == null ? 0
+                : estimate.cost(x, y, z, edits) * (reuse == null ? 1 : BIAS_REUSE)));
     }
 
     /** 到目标体积的 L1（体积内=0）。部分提交用它做"推进量"口径，与 h 同一把尺。 */
@@ -366,49 +416,7 @@ public final class DigAStar {
         return goal.remaining(x, y, z);
     }
 
-    /**
-     * 入柱价：目标柱 27 格里"能站进去"的最小真实代价（脚+头挖价+支撑放价），搜索开始算一次。
-     * 全不可行（如基岩封死）返 0——不拿启发式炸天，让搜索自然穷尽到 NO_PATH；
-     * 这个"只当启发式不当承诺"的口径与快照设计一致（设计卡 §B）。
-     */
-    private double computeGoalEntryCost(DigSampler sampler) {
-        double min = Double.MAX_VALUE;
-        for (int dx = -goalRadius; dx <= goalRadius; dx++) {
-            for (int dy = -goalRadius; dy <= goalRadius; dy++) {
-                for (int dz = -goalRadius; dz <= goalRadius; dz++) {
-                    double c = cellEntryCost(tx + dx, ty + dy, tz + dz);
-                    if (c >= 0 && c < min) {
-                        min = c;
-                    }
-                }
-            }
-        }
-        return min == Double.MAX_VALUE ? 0 : min;
-    }
-
-    /** 单格入位代价（脚+头+支撑）；不可行返 -1。用 relax 同源公式，不另起一套。 */
-    private double cellEntryCost(int x, int y, int z) {
-        if (!s.inBounds(x, y, z)) {
-            return -1;
-        }
-        double c = MOVE_BASE;
-        for (int cy = y; cy <= y + 1; cy++) {
-            if (!s.passable(x, cy, z)) {
-                double sec = s.digSeconds(x, cy, z);
-                if (!DigSampler.feasibleDig(sec)) {
-                    return -1;
-                }
-                c += sec + DIG_OVERHEAD;
-            }
-        }
-        if (!s.support(x, y - 1, z)) {
-            if (!s.placeable(x, y - 1, z)) {
-                return -1;
-            }
-            c += s.placeCost(x, y - 1, z);
-        }
-        return c;
-    }
+    public static double digCost(double seconds) { return seconds + DIG_OVERHEAD; }
 
     /** Parent objects retain the exact edit history even when a cheaper sibling replaces a map entry. */
     private List<Step> reconstruct(Node goal) {

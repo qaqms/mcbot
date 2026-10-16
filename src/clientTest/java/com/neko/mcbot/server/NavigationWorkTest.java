@@ -108,6 +108,33 @@ class NavigationWorkTest {
         assertFalse(goal.reached(0, 0, 0));
     }
 
+    @Test void workArrivalPaysForObstructionsAndCanLeaveAnExpensiveInitialStance() {
+        var world = new BlockAimTest.Grid();
+        world.blocks.put(new BlockPos(1, 1, 0), Blocks.STONE.defaultBlockState());
+        var goal = NavigationWork.goal(world, BlockAimTest.TARGET, 1.62, 4.5, true, p -> true);
+        assertTrue(goal.reached(0, 0, 0), "the starting stance can work after clearing");
+        DigSampler terrain = new DigSampler() {
+            @Override public boolean passable(int x, int y, int z) {
+                return y >= 0 && !world.blocks.containsKey(new BlockPos(x, y, z));
+            }
+            @Override public double digSeconds(int x, int y, int z) { return 3; }
+            @Override public boolean support(int x, int y, int z) { return y == -1; }
+            @Override public boolean placeable(int x, int y, int z) { return false; }
+            @Override public double placeCost(int x, int y, int z) { return 1; }
+            @Override public int maxPlaces() { return 0; }
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x >= -1 && x <= 4 && y >= -1 && y <= 3 && Math.abs(z) <= 3;
+            }
+        };
+        var route = new DigAStar(terrain, 0, 0, 0, 2, 1, 0, 1000, 0, goal);
+        while (!route.advance(100)) { }
+        assertNull(route.failure());
+        assertTrue(route.path().size() > 1, "a short walk is cheaper than clearing from the initial stance");
+        var end = route.path().getLast();
+        var direct = NavigationWork.goal(world, BlockAimTest.TARGET, 1.62, 4.5, false, p -> false);
+        assertTrue(direct.reached(end.x(), end.y(), end.z()), "the chosen stance needs no clearing");
+    }
+
     @Test void undergroundStairCanBeClearedInOrderAndWalkedBackWithoutMoreEdits() {
         var world = new BlockAimTest.Grid();
         world.blocks.clear();

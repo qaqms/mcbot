@@ -183,6 +183,11 @@ public final class LevelDigSampler implements DigSampler {
         return spec.allowsStep(fx, fy, fz, x, y, z);
     }
 
+    @Override public boolean known(int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
+        return level.isInWorldBounds(pos) && level.isLoaded(pos);
+    }
+
     @Override public boolean canClear(int x, int y, int z, java.util.List<Long> cells) {
         return canClear(x, y, z, cells, TerrainEdits.EMPTY);
     }

@@ -64,6 +64,12 @@ public final class NavigationWork {
     public static NavigationGoal goal(BlockAim.Access world, BlockPos target, double eyeHeight, double reach,
                                       boolean clear, Predicate<BlockPos> safe) {
         return new NavigationGoal() {
+            @Override public Bounds estimateBounds() {
+                int radius = (int) Math.ceil(reach + .87);
+                double feetY = target.getY() + .5 - eyeHeight;
+                return new Bounds(target.getX() - radius, (int) Math.floor(feetY - radius), target.getZ() - radius,
+                        target.getX() + radius, (int) Math.ceil(feetY + radius), target.getZ() + radius);
+            }
             @Override public double remaining(int x, int y, int z) {
                 double dx = x + .5 - (target.getX() + .5);
                 double dy = y + eyeHeight - (target.getY() + .5);
@@ -74,16 +80,35 @@ public final class NavigationWork {
                 return reached(x, y, z, TerrainEdits.EMPTY);
             }
             @Override public boolean reached(int x, int y, int z, TerrainEdits edits) {
-                if (remaining(x, y, z) > 0) return false;
+                return plan(x, y, z, edits).ok();
+            }
+            @Override public double arrivalCost(com.neko.mcbot.path.DigSampler terrain,
+                                                int x, int y, int z, TerrainEdits edits) {
+                var plan = plan(x, y, z, edits);
+                if (!plan.ok()) return Double.POSITIVE_INFINITY;
+                double cost = 0;
+                var view = edits.view(terrain);
+                for (var blocker : plan.blockers()) {
+                    double seconds = view.digSeconds(blocker.getX(), blocker.getY(), blocker.getZ());
+                    if (!com.neko.mcbot.path.DigSampler.feasibleDig(seconds)) return Double.POSITIVE_INFINITY;
+                    cost += DigAStar.digCost(seconds);
+                }
+                return cost;
+            }
+            private BlockAim.MiningPlan plan(int x, int y, int z, TerrainEdits edits) {
+                if (remaining(x, y, z) > 0) return failed();
                 BlockPos feet = new BlockPos(x, y, z);
-                if (feet.equals(target) || feet.above().equals(target)) return false;
+                if (feet.equals(target) || feet.above().equals(target)) return failed();
                 var removed = positions(edits.removed());
                 removed.add(feet); removed.add(feet.above());
                 var view = view(world, new Vec3(x + .5, y + eyeHeight, z + .5),
                         removed, positions(edits.placed()));
                 return clear ? BlockAim.miningPlan(view, target, reach,
-                        pos -> !pos.equals(feet.below()) && !pos.equals(target.below()) && safe.test(pos)).ok()
-                        : BlockAim.mining(view, target, reach).ok();
+                        pos -> !pos.equals(feet.below()) && !pos.equals(target.below()) && safe.test(pos))
+                        : new BlockAim.MiningPlan(BlockAim.mining(view, target, reach), List.of());
+            }
+            private BlockAim.MiningPlan failed() {
+                return new BlockAim.MiningPlan(new BlockAim.Aim(null, "NO_WORK_STANCE"), List.of());
             }
         };
     }

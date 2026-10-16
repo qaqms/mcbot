@@ -119,6 +119,7 @@ public final class PathTask extends TickTask {
 
     private PathSteering steering;
     private CompanionPlayer drivenBody;
+    private PathFailure planFailure;
 
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
                     ActionPermissions.Context context, ActionPermissions.Scope approved,
@@ -214,15 +215,59 @@ public final class PathTask extends TickTask {
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
+        if (!result.ok()) addDiagnostics(data);
         var dropSnapshot = drops.snapshot(level);
         dropSnapshot.entrySet().forEach(entry -> data.add(entry.getKey(), entry.getValue()));
         String feedback = result.feedback();
+        if (!result.ok() && planFailure != null) feedback += "路线复核证据：" + planFailure.summary() + "。";
+        else if (!result.ok() && !result.feedback().startsWith("NEED_CONFIRM:")
+                && search != null && !search.rejectionSamples().isEmpty())
+            feedback += "局部拒绝样本（不代表全部路线的原因）："
+                    + search.rejectionSamples().getFirst().summary() + "。";
         if (!result.ok() && !feedback.startsWith("PARTIAL:") && actualDigs + actualPlaces > 0) {
             feedback += "本趟实际挖 " + actualDigs + " 格、放 " + actualPlaces
                     + " 格；已完成的改动不回滚。";
         }
         feedback += DropObservations.sentence(dropSnapshot);
         return new Progress.Done(new Result(result.ok(), feedback, data));
+    }
+
+    private void addDiagnostics(JsonObject data) {
+        if (search != null) {
+            var diagnostics = new JsonObject();
+            diagnostics.addProperty("expanded", search.expanded());
+            diagnostics.addProperty("estimate_expanded", search.estimateExpanded());
+            diagnostics.addProperty("estimate_seed_probes", search.estimateSeedProbes());
+            diagnostics.addProperty("stored_nodes", search.storedNodes());
+            diagnostics.addProperty("elapsed_ms", search.elapsedMillis());
+            if (search.budgetKind() != null) diagnostics.addProperty("budget_kind", search.budgetKind());
+            var counts = new JsonObject();
+            search.rejections().forEach(counts::addProperty);
+            diagnostics.add("rejected_edges", counts);
+            var samples = new JsonArray();
+            search.rejectionSamples().forEach(sample -> samples.add(failureData(sample)));
+            diagnostics.add("samples", samples);
+            data.add("search_diagnostics", diagnostics);
+        }
+        if (planFailure != null) data.add("path_failure", failureData(planFailure));
+    }
+
+    private static JsonObject failureData(PathFailure failure) {
+        var data = new JsonObject();
+        data.addProperty("step", failure.step());
+        data.addProperty("reason", failure.reason());
+        data.add("from", cellData(failure.from()));
+        data.add("to", cellData(failure.to()));
+        if (failure.cell() != null) data.add("cell", cellData(failure.cell()));
+        return data;
+    }
+
+    private static JsonObject cellData(long cell) {
+        var data = new JsonObject();
+        data.addProperty("x", DigAStar.unpackX(cell));
+        data.addProperty("y", DigAStar.unpackY(cell));
+        data.addProperty("z", DigAStar.unpackZ(cell));
+        return data;
     }
 
     @Override public Result interruptedResult(Result reason) {
@@ -269,6 +314,8 @@ public final class PathTask extends TickTask {
             }
             McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
                     target.toShortString(), search.failure(), memoStats());
+            McbotMod.LOG.info("[path] 原搜索局部拒绝 counts={} samples={}", search.rejections(),
+                    search.rejectionSamples().stream().map(PathFailure::summary).toList());
             // 撞帽但推进不足下限：不再冒充 BUDGET，换成对模型有行动意义的 NO_PROGRESS（§C）；
             // open 空的真 NO_PATH 永不降级（D 基岩笼场景钉死）
             String lead = wasReplan ? "路被改变后重规划失败：" : "";
@@ -302,10 +349,13 @@ public final class PathTask extends TickTask {
         if (walkOnly && (digs > 0 || places > 0))
             return new Progress.Done(new Result(false,
                     "NO_PATH:只行走路线已出现需要挖放的变化，未修改世界；重新观察后换方向。", null));
-        if (!editsFeasible(plan, sampler))
+        planFailure = planFailure(plan, sampler, spec.maxDigs() - actualDigs);
+        if (planFailure != null) {
+            McbotMod.LOG.info("[path] 计划复核拒绝 {}", planFailure.summary());
             return new Progress.Done(new Result(false,
                     "NO_PATH:按先后改动复核，路线无法保留所需支撑或不满足当前工作保护/挖放条件；"
                             + "未执行该方案，重新选择站位或相邻阶梯路线。", null));
+        }
         rememberPlan(c, plan);
         McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
@@ -422,7 +472,10 @@ public final class PathTask extends TickTask {
         // 采样器仍要建（执行期 mineOne/placeOne/复核都用它 live 读世界），但**不必重搜**
         sampler = samplerFor(c, c.blockPosition());
         path = liveify(p.path);
-        if (!editsFeasible(path, sampler)) {
+        planFailure = planFailure(path, sampler, spec.maxDigs() - actualDigs);
+        if (planFailure != null) {
+            McbotMod.LOG.info("[path] 缓存复核拒绝 {}", planFailure.summary());
+            planFailure = null; // A cache miss is not the eventual new search's failure.
             dropPlan();
             return false;
         }
@@ -583,38 +636,52 @@ public final class PathTask extends TickTask {
     }
 
     static boolean editsFeasible(List<DigAStar.Step> plan, DigSampler sampler) {
+        return planFailure(plan, sampler, MAX_DIGS) == null;
+    }
+
+    static PathFailure planFailure(List<DigAStar.Step> plan, DigSampler sampler, int maxDigs) {
         DigAStar.Step previous = null;
         TerrainEdits edits = TerrainEdits.EMPTY;
         int digs = 0, places = 0;
-        for (var step : plan) {
-            if (!sampler.inBounds(step.x(), step.y(), step.z())) return false;
+        for (int index = 0; index < plan.size(); index++) {
+            var step = plan.get(index);
+            long to = DigAStar.pack(step.x(), step.y(), step.z());
+            long from = previous == null ? to : DigAStar.pack(previous.x(), previous.y(), previous.z());
+            if (!sampler.inBounds(step.x(), step.y(), step.z()))
+                return new PathFailure(index, "OUT_OF_BOUNDS", from, to, to);
             if (step.action() == DigAStar.ACT_START) {
-                if (previous != null || !step.dig().isEmpty() || !step.place().isEmpty()) return false;
+                if (previous != null || !step.dig().isEmpty() || !step.place().isEmpty())
+                    return new PathFailure(index, "INVALID_START", from, to, to);
                 previous = step;
                 continue;
             }
-            if (previous == null) return false;
+            if (previous == null) return new PathFailure(index, "MISSING_START", from, to, to);
             DigSampler terrain = edits.view(sampler);
             for (long cell : step.dig()) {
                 if (cell == DigAStar.pack(previous.x(), previous.y() - 1, previous.z()))
-                    return false;
+                    return new PathFailure(index, "DEPARTURE_SUPPORT", from, to, cell);
+                if (!terrain.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
+                    return new PathFailure(index, "UNKNOWN_TERRAIN", from, to, cell);
                 if (!DigSampler.feasibleDig(terrain.digSeconds(
-                        DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))) return false;
+                        DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))))
+                    return new PathFailure(index, "DIG_UNAVAILABLE", from, to, cell);
             }
-            var expected = PathTransition.evaluate(sampler, edits, previous.x(), previous.y(), previous.z(),
-                    step.x(), step.y(), step.z(), MAX_DIGS - digs, sampler.maxPlaces() - places);
-            if (expected == null) return false;
+            var check = PathTransition.check(sampler, edits, previous.x(), previous.y(), previous.z(),
+                    step.x(), step.y(), step.z(), maxDigs - digs, sampler.maxPlaces() - places);
+            if (check.plan() == null) return new PathFailure(index, check.reason(), from, to, check.cell());
+            var expected = check.plan();
             var neededDig = step.dig().stream().filter(cell -> !terrain.passable(
                     DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))).toList();
             var neededPlace = step.place().stream().filter(cell -> !terrain.support(
                     DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))).toList();
-            if (!expected.dig().equals(neededDig) || !expected.place().equals(neededPlace)) return false;
+            if (!expected.dig().equals(neededDig) || !expected.place().equals(neededPlace))
+                return new PathFailure(index, "EDIT_LIST_CHANGED", from, to, null);
             edits = expected.terrain();
             digs += neededDig.size();
             places += neededPlace.size();
             previous = step;
         }
-        return true;
+        return null;
     }
 
     private LevelDigSampler samplerFor(CompanionPlayer c, BlockPos from) {
@@ -628,9 +695,11 @@ public final class PathTask extends TickTask {
         if (search == null) {
             return "memo=reuse(未搜索)";
         }
-        return memo == null ? "memo=off(验尸超限)" : "[memo] expanded=" + search.expanded()
+        String preparation = " prep=" + search.estimateExpanded() + "/" + search.estimateSeedProbes()
+                + " stored=" + search.storedNodes();
+        return memo == null ? "memo=off(验尸超限)" + preparation : "[memo] expanded=" + search.expanded()
                 + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()
-                + " 验尸不符=" + memo.staleCount() + " 耗时=" + search.elapsedMillis() + "ms";
+                + " 验尸不符=" + memo.staleCount() + " 耗时=" + search.elapsedMillis() + "ms" + preparation;
     }
 
     private static String unpackShort(long cell) {
@@ -731,14 +800,18 @@ public final class PathTask extends TickTask {
         }
 
         // Newly blocked cells must replan before the body enters them.
-        if (DigAStar.clearanceCells(path.get(Math.max(0, cursor - 1)).y(),
+        Long blocked = DigAStar.clearanceCells(path.get(Math.max(0, cursor - 1)).y(),
                 next.x(), next.y(), next.z()).stream()
-                .anyMatch(cell -> !sampler.passable(DigAStar.unpackX(cell),
-                        DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
-                || !sampler.support(next.x(), next.y() - 1, next.z())) {
+                .filter(cell -> !sampler.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))
+                        || !sampler.passable(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
+                .findFirst().orElse(null);
+        if (blocked != null || !sampler.support(next.x(), next.y() - 1, next.z())) {
+            long cell = blocked != null ? blocked : DigAStar.pack(next.x(), next.y() - 1, next.z());
+            recordFailure(cursor, !sampler.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
+                    DigAStar.unpackZ(cell)) ? "UNKNOWN_TERRAIN" : blocked != null ? "NEXT_CLEARANCE" : "NO_SUPPORT", cell);
             if (replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
                     "NO_PATH:下一落脚格已变化，重规划上限已到；已停止移动。", null));
-            replanBadKey = DigAStar.pack(next.x(), next.y(), next.z());
+            replanBadKey = cell;
             replanBadSet = true;
             beginReplan(c);
             executed = 0;
@@ -788,6 +861,7 @@ public final class PathTask extends TickTask {
 
     private Progress stuck(CompanionPlayer c, DigAStar.Step next) {
         stopMovement();
+        recordFailure(cursor, "MOVEMENT_STALLED", null);
         if (!c.onGround() || replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
                 "NO_PATH:身体未能实际走到下一落脚点，已释放输入；重新观察地形再选路。", null));
         replanBadKey = DigAStar.pack(next.x(), next.y(), next.z());
@@ -799,6 +873,14 @@ public final class PathTask extends TickTask {
 
     private boolean atTarget(DigAStar.Step step) {
         return step.x() == target.getX() && step.y() == target.getY() && step.z() == target.getZ();
+    }
+
+    private void recordFailure(int index, String reason, Long cell) {
+        var before = path.get(Math.max(0, index - 1));
+        var step = path.get(index);
+        planFailure = new PathFailure(index, reason, DigAStar.pack(before.x(), before.y(), before.z()),
+                DigAStar.pack(step.x(), step.y(), step.z()), cell);
+        McbotMod.LOG.info("[path] 活体步骤拒绝 {}", planFailure.summary());
     }
 
     private void stopMovement() {
@@ -852,6 +934,7 @@ public final class PathTask extends TickTask {
         sampler = samplerFor(c, from);
         replans++;
         wasReplan = true;
+        planFailure = null;
         partialTail = false;
         reusePending = reuseCells();
         path = null;
@@ -899,6 +982,7 @@ public final class PathTask extends TickTask {
             for (long cell : st.dig()) {
                 int x = DigAStar.unpackX(cell), y = DigAStar.unpackY(cell), z = DigAStar.unpackZ(cell);
                 if (!level.hasChunkAt(new BlockPos(x, y, z))) {
+                    recordFailure(i, "UNKNOWN_TERRAIN", cell);
                     replanBadKey = cell; // 区块卸载，假设失效
                     replanBadSet = true;
                     return false;
@@ -908,6 +992,7 @@ public final class PathTask extends TickTask {
             edits = edits.after(st.dig(), st.place());
             if (!edits.view(sampler).support(st.x(), st.y() - 1, st.z())
                     && i > cursor) {
+                recordFailure(i, "NO_SUPPORT", DigAStar.pack(st.x(), st.y() - 1, st.z()));
                 replanBadKey = DigAStar.pack(st.x(), st.y() - 1, st.z()); // 原支撑被拆了
                 replanBadSet = true;
                 return false;

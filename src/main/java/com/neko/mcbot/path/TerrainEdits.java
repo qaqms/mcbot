@@ -51,6 +51,7 @@ public record TerrainEdits(Set<Long> removed, Set<Long> placed) {
             }
             @Override public double placeCost(int x, int y, int z) { return base.placeCost(x, y, z); }
             @Override public boolean inBounds(int x, int y, int z) { return base.inBounds(x, y, z); }
+            @Override public boolean known(int x, int y, int z) { return base.known(x, y, z); }
             @Override public int maxPlaces() { return base.maxPlaces(); }
             @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
                 return base.allowsStep(fx, fy, fz, x, y, z);

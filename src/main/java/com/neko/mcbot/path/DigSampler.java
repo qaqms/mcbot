@@ -36,6 +36,9 @@ public interface DigSampler {
     /** 坐标是否处于可搜索范围（世界边界 + 维度高度 + 起点的搜索半径盒）。 */
     boolean inBounds(int x, int y, int z);
 
+    /** Observed terrain only; false must never be interpreted as air or an editable obstacle. */
+    default boolean known(int x, int y, int z) { return true; }
+
     /** 全程可放的方块总数上限（=背包可用方块存量）：放格与挖格一样要预算化。 */
     int maxPlaces();
 
