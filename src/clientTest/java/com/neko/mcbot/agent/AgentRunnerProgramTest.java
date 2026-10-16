@@ -542,6 +542,64 @@ class AgentRunnerProgramTest {
         assertEquals(2, client.toolCount());
     }
 
+    private static final String PLACE_AFTER_WORK = """
+            local q=mc.call("place_block",{x=2,y=90,z=0,item="cobblestone",query=true})
+            if not q.data.preflight_passed then
+              local m=mc.call("move_to",{x=2,y=90,z=0,exact=true,arrival="work",
+                work_target={x=2,y=90,z=0},place_item="cobblestone",face="up",walk_only=true})
+              if not m.data.can_work_here then return {blocked=true} end
+            end
+            return mc.call("place_block",{x=2,y=90,z=0,item="cobblestone",face="up"})
+            """;
+
+    @Test void exactPlacementUsesTheTrueWorkTerminalAndKeepsTheOriginalTargetInOneModelTurn() {
+        start("place at the specified cell", PLACE_AFTER_WORK);
+        tool("place_block", 1);
+        receipt(true, "target blocked by own body", "{\"preflight_passed\":false,\"stand_positions\":["
+                + "{\"x\":1,\"y\":90,\"z\":0,\"feet_y\":90.5}],\"alternatives\":[{\"x\":3,\"y\":90,\"z\":0}]}");
+        tool("move_to", 2);
+        assertEquals("cobblestone", client.lastTool().obj("args").get("place_item").getAsString());
+        assertEquals(2, client.lastTool().obj("args").get("x").getAsInt());
+        long seq = client.lastTool().num("seq", -1);
+        ack("placement-work");
+        assertEquals(2, client.toolCount(), "ack cannot authorize dependent placement");
+        terminal(seq, "placement-work", "{\"can_work_here\":true,\"work_kind\":\"place\",\"x\":1,\"feet_y\":90.5}");
+        tool("place_block", 3);
+        assertEquals(2, client.lastTool().obj("args").get("x").getAsInt());
+        assertEquals(1, client.engine().responses.size());
+        receipt(true, "actual single placement", "{\"changed\":true,\"consumed_count\":1}");
+        assertTrue(outcome().ok(), outcome().content());
+        assertEquals(3, client.toolCount());
+    }
+
+    @Test void cancelledPlacementApproachNeverPlacesAfterALateSuccessfulTerminal() {
+        start("place at the specified cell", PLACE_AFTER_WORK);
+        tool("place_block", 1);
+        receipt(true, "not currently workable", "{\"preflight_passed\":false}");
+        tool("move_to", 2);
+        long seq = client.lastTool().num("seq", -1);
+        ack("placement-work");
+        assertTrue(runner.cancelTask(0));
+        client.drain();
+        terminal(seq, "placement-work", "{\"can_work_here\":true}");
+        runner.submitTask("inspect current facts");
+        client.drain();
+        assertEquals(2, client.toolCount());
+        assertTrue(outcome().content().contains("CANCELLED:"));
+    }
+
+    @Test void aNegativeFreshWorkTerminalCannotTriggerPlacement() {
+        start("place at the specified cell", PLACE_AFTER_WORK);
+        tool("place_block", 1);
+        receipt(true, "not currently workable", "{\"preflight_passed\":false}");
+        tool("move_to", 2);
+        ack("placement-work");
+        terminal(client.lastTool().num("seq", -1), "placement-work", "{\"can_work_here\":false}");
+        assertTrue(outcome().ok(), outcome().content());
+        assertEquals(2, client.toolCount());
+        assertTrue(outcome().content().contains("\"blocked\":true"));
+    }
+
     @Test void cannotNestProgramsOrUseOwnerQuestionsOrGoalMutation() {
         start("inspect", "return mc.call('set_goal',{item='dirt',count=1})");
         assertFalse(outcome().ok());

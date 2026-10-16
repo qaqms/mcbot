@@ -13,6 +13,41 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MoveToWorkTest {
+    @org.junit.jupiter.api.BeforeAll static void registries() {
+        com.neko.mcbot.server.BlockActionFixtures.bootstrap();
+    }
+
+    @Test void placementIntentReusesExactTargetAndSinglePlacementItemAndFaceParsing() {
+        var args = json("{\"x\":2,\"y\":0,\"z\":0,\"exact\":true,\"arrival\":\"work\","
+                + "\"work_target\":{\"x\":2,\"y\":0,\"z\":0},\"place_item\":\"cobblestone\",\"face\":\"east\"}");
+        var placement = MoveToTool.placement(args, MoveToTool.workTarget(args));
+        assertEquals(net.minecraft.world.item.Items.COBBLESTONE, placement.item());
+        assertEquals(net.minecraft.core.Direction.EAST, placement.face());
+        args.remove("face");
+        assertEquals(net.minecraft.core.Direction.UP, MoveToTool.placement(args, MoveToTool.workTarget(args)).face());
+        assertNull(MoveToTool.placement(new JsonObject(), null));
+    }
+
+    @Test void invalidPlacementIntentIsRejectedBeforeAccessingTheBodyOrWorld() {
+        var valid = json("{\"x\":2,\"y\":0,\"z\":0,\"exact\":true,\"arrival\":\"work\","
+                + "\"work_target\":{\"x\":2,\"y\":0,\"z\":0},\"place_item\":\"cobblestone\"}");
+        var variants = new java.util.ArrayList<JsonObject>();
+        for (String field : java.util.List.of("work_target", "arrival", "exact")) {
+            var args = valid.deepCopy(); args.remove(field); variants.add(args);
+        }
+        for (String item : java.util.List.of("stick", "missing_item", "")) {
+            var args = valid.deepCopy(); args.addProperty("place_item", item); variants.add(args);
+        }
+        var mismatch = valid.deepCopy(); mismatch.addProperty("x", 3); variants.add(mismatch);
+        var clear = valid.deepCopy(); clear.addProperty("clear_obstructions", true); variants.add(clear);
+        var badFace = valid.deepCopy(); badFace.addProperty("face", "side"); variants.add(badFace);
+        var numeric = valid.deepCopy(); numeric.addProperty("place_item", 2); variants.add(numeric);
+        var orphanFace = valid.deepCopy(); orphanFace.remove("place_item");
+        orphanFace.addProperty("face", "up"); variants.add(orphanFace);
+        for (var args : variants)
+            assertTrue(new MoveToTool().runAsync(null, args, null).join().feedback().startsWith("DENIED:"), args.toString());
+    }
+
     @Test void walkOnlyUsesStrictBooleansAndRejectsMalformedModeBeforeBodyAccess() {
         assertFalse(MoveToTool.walkOnly(new JsonObject()));
         assertTrue(MoveToTool.walkOnly(JsonParser.parseString("{\"walk_only\":true}").getAsJsonObject()));

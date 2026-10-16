@@ -6,6 +6,7 @@ import com.neko.mcbot.path.PathTask;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.ActionPermissions;
 import com.neko.mcbot.server.BlockAim;
+import com.neko.mcbot.server.BlockPlacement;
 import com.neko.mcbot.server.WorkPositions;
 import com.neko.mcbot.server.MiningWork;
 import com.neko.mcbot.task.CompanionScheduler;
@@ -82,6 +83,13 @@ public final class MoveToTool implements ServerTool {
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:clear_obstructions须为布尔。", null));
         }
+        com.neko.mcbot.server.PlacementWork placement;
+        try { placement = placement(args, workTarget); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:place_item须为方块物品ID并提供exact=true、arrival=work及work_target；"
+                            + "face仅up/down/north/south/east/west，不与clear_obstructions=true组合。", null));
+        }
         if (args.has("exact") && (!args.get("exact").isJsonPrimitive()
                 || !args.get("exact").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:exact 须为布尔。", null));
@@ -119,14 +127,37 @@ public final class MoveToTool implements ServerTool {
                     "TARGET_LOST:(" + to.toShortString() + ") 不在已加载区域，先往那个方向走一段。",
                     null));
         }
+        if (placement != null) {
+            var failure = placement.ready(c);
+            if (failure != null) return CompletableFuture.completedFuture(failure);
+        }
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         if (!sched.submit(c, new PathTask(level, to, permissions, context, scope, sched,
-                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec), f, capTicks(args))) {
+                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement), f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
-        return f.thenApply(moved -> finishWork(moved, workTarget == null ? null
+        return f.thenApply(moved -> placement != null
+                ? com.neko.mcbot.server.PlacementWork.finish(moved, () -> placement.assess(c, workTarget))
+                : finishWork(moved, workTarget == null ? null
                 : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget)));
+    }
+
+    static com.neko.mcbot.server.PlacementWork placement(JsonObject args, BlockPos target) {
+        if (!args.has("place_item")) {
+            if (args.has("face")) throw new IllegalArgumentException();
+            return null;
+        }
+        if (target == null || !args.has("arrival") || !"work".equals(args.get("arrival").getAsString())
+                || !target.equals(BreakBlockTool.readPos(args)) || BreakBlockTool.clearObstructions(args))
+            throw new IllegalArgumentException();
+        var input = new JsonObject();
+        input.addProperty("x", target.getX()); input.addProperty("y", target.getY()); input.addProperty("z", target.getZ());
+        input.add("item", args.get("place_item"));
+        if (args.has("face")) input.add("face", args.get("face"));
+        var parsed = PlaceBlockTool.arguments(input);
+        if (parsed == null || !BlockPlacement.supported(parsed.item())) throw new IllegalArgumentException();
+        return new com.neko.mcbot.server.PlacementWork(parsed.item(), parsed.face());
     }
 
     static boolean walkOnly(JsonObject args) {

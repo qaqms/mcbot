@@ -110,6 +110,7 @@ public final class PathTask extends TickTask {
     private final boolean walkOnly;
     private final BlockPos workTarget;
     private final PathSpec spec;
+    private final com.neko.mcbot.server.PlacementWork placement;
 
     // 挖掘子状态
     private BlockPos digPos;
@@ -149,6 +150,13 @@ public final class PathTask extends TickTask {
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
                     ActionPermissions.Context context, ActionPermissions.Scope approved,
                     CompanionScheduler scheduler, boolean exact, boolean walkOnly, BlockPos workTarget, PathSpec spec) {
+        this(level, target, permissions, context, approved, scheduler, exact, walkOnly, workTarget, spec, null);
+    }
+
+    public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
+                    ActionPermissions.Context context, ActionPermissions.Scope approved,
+                    CompanionScheduler scheduler, boolean exact, boolean walkOnly, BlockPos workTarget, PathSpec spec,
+                    com.neko.mcbot.server.PlacementWork placement) {
         this.level = level;
         this.target = target;
         this.permissions = permissions;
@@ -159,6 +167,7 @@ public final class PathTask extends TickTask {
         this.walkOnly = walkOnly;
         this.workTarget = workTarget == null ? null : workTarget.immutable();
         this.spec = spec;
+        this.placement = placement;
     }
 
     @Override
@@ -563,7 +572,8 @@ public final class PathTask extends TickTask {
         } else {
             memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
         }
-        NavigationGoal goal = spec.workArrival()
+        NavigationGoal goal = spec.workArrival() && placement != null
+                ? placement.goal(drivenBody, workTarget, sampler.geometry()) : spec.workArrival()
                 ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
                 workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
                 Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),

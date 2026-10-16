@@ -3,6 +3,24 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## N2b 放置工作导航（2026-10-16）
+
+place_block query=true在受阻时分别返回stand_positions（原目标站位，整数x/y/z和feet_y）
+与alternatives（改选目标格，x/y/z/face），各最多6个。不得把后者当原目标的站位。
+checked_positions仍只计最多75个目标格检查；站位另用45格/最多24次工作检查。
+查询不移动或消费，候选不是可达保证，执行仍重新核对。
+
+move_to可在exact=true、arrival=work、work_target下增加place_item=物品ID和face（默认up）；
+外层坐标须等于work_target，不与clear_obstructions=true组合。
+寻路选择目标格外且满足真实面/落位预检的站位；终态work_kind=place、
+can_work_here及placement_preflight是当前事实，尚未放置，随后仍须原place_block动作。
+支持投影的类别为原版普通方块/原木/半砖/楼梯/工作台/炉，拒绝状态组件和多格/特殊类别。
+到站前现场变化可失败并保留实际移动效果；失败/取消不自动放置或续投。
+路线垫块同样检查本步清障之后的实际可执行点击前提。
+目标邻域有未落地计划挖放、实际站位仍被占用时保守拒绝，尚不支持探身/搭柱。
+导航是修改工具，query字段不授予只读能力；原范围/时间/材料/许可/探索账保持。
+细则见N2B-PLACEMENT-WORK-2026-10-16.md及STATUS。
+
 ## N2a 实际脚高（2026-10-16）
 
 move_to输入仍是整数脚格；x/y/z表示实际脚高所在格，碰撞浮点误差统一处理。
@@ -11,7 +29,8 @@ move_to输入仍是整数脚格；x/y/z表示实际脚高所在格，碰撞浮�
 源支撑与目标支撑不会为路线自动拆掉，未知/动态复杂形状保守拒绝，
 同格内掉落也会重验旧路线，原最多两次重规划和挖放/材料/许可/总预算保持。
 没有改变拾取延迟/归属/背包核验，实际入包仍由原版playerTouch决定；
-持续行为触发与边沿探身/完整放置到达尚待后续卡。证据与边界见STATUS和N2A-STANDING-GEOMETRY。
+持续行为触发与边沿探身尚待后续卡；放置到达见上方N2b的有限边界。
+证据与边界见STATUS和N2A-STANDING-GEOMETRY。
 
 ## F1 身体区间观察（2026-10-16）
 

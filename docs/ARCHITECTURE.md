@@ -3,6 +3,17 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## N2b 共用放置工作（2026-10-16）
+
+PlacementWork将目标/材料/面交给原NavigationGoal与PathTask，不另建导航器；
+站位用StandingGeometry并拒绝整个身体占目标格。BlockPlacement的只读投影、
+单放查询/执行和路线支撑共用预检；实际终态再按真实身体/库存/世界验当前可工作。
+到站不自动放置；Lua可据真终态组合原place_block，取消迟到不续发。
+查询分别给原目标stand_positions与改选目标alternatives；路线canPlaceFrom在本步清障后、
+待放支撑前验证点击前提。原生上下文不读取计划世界，邻域未落地编辑保守拒绝。
+投影仅支持有限原版单格类别，不含探身/搭柱/任意动态模组状态；
+原控制/事实/预算与许可保持。完整边界和离线/原生区分见N2B-PLACEMENT-WORK及STATUS。
+
 ## N2a 共用站立几何（2026-10-16）
 
 实际同伴的LevelDigSampler经NavigationGeometry读取StandingGeometry，
@@ -12,7 +23,7 @@ PathSteering驱动原版travel并按实际脚高站稳，PathGrounding识别同�
 工作射线不抹去同格支撑，末点新鲜支撑/净空再验。
 每次64格/256盒/每格16盒/16段扫掠有界，未知/危险/动态复杂形状保守拒绝；
 原导航/材料/许可/取消预算保持。详见N2A-STANDING-GEOMETRY及STATUS，
-尚无边沿探身或原生运动/拾取验收，完整放置到达接N2b。
+尚无边沿探身或原生运动/拾取验收，放置到达见上方N2b的有限支持边界。
 
 ## F1 共用身体事实（2026-10-16）
 

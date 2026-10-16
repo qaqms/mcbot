@@ -106,6 +106,8 @@ public final class BlockActionFixtures {
         public java.util.function.Function<BlockPos, ServerTool.Result> prepareAt;
         public java.util.function.BiFunction<BlockPos, Direction, ServerTool.Result> sightAt;
         public JsonObject contactData;
+        public final com.google.gson.JsonArray stands = new com.google.gson.JsonArray();
+        public BlockPos standTarget;
 
         @Override public ServerTool.Result guard(BlockPos pos) { return denied; }
         @Override public Container inventory() { return inventory; }
@@ -114,6 +116,10 @@ public final class BlockActionFixtures {
             return sightAt == null ? sightFailure : sightAt.apply(pos, face);
         }
         @Override public JsonObject contact() { return contactData; }
+        @Override public com.google.gson.JsonArray standingPositions(BlockPos pos, int slot, Direction face) {
+            standTarget = pos;
+            return stands;
+        }
         @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) {
             prepared.add(pos);
             return prepareAt == null ? prepareFailure : prepareAt.apply(pos);

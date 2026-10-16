@@ -12,7 +12,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.entity.player.Inventory;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -72,15 +71,7 @@ public final class PlaceBlockTool implements ServerTool {
         if (input == null) return new Result(false,
                 "DENIED:需要整数 x/y/z 和方块物品 ID；face 可选 up/down/north/south/east/west，query须为布尔。", null);
         if (busy && !input.query()) return new Result(false, "BUSY:身体正忙，任务结束或取消后再放置。", null);
-        int slot = -1;
-        var inventory = access.inventory();
-        for (int i = 0; i < Math.min(Inventory.INVENTORY_SIZE, inventory.getContainerSize()); i++) {
-            var stack = inventory.getItem(i);
-            if (!stack.isEmpty() && stack.is(input.item())) {
-                slot = i;
-                break;
-            }
-        }
+        int slot = BlockPlacement.findSlot(access.inventory(), input.item());
         return input.query() ? BlockPlacement.query(access, input.pos(), slot, input.face())
                 : BlockPlacement.place(access, input.pos(), slot, input.face());
     }

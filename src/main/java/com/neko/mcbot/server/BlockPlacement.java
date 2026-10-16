@@ -3,6 +3,8 @@ package com.neko.mcbot.server;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.path.DigAStar;
+import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -37,6 +39,7 @@ public final class BlockPlacement {
         /** Read-only preflight; the same context is consumed only by place. */
         default ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) { return null; }
         default JsonObject contact() { return null; }
+        default JsonArray standingPositions(BlockPos pos, int slot, Direction face) { return new JsonArray(); }
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
     }
 
@@ -54,7 +57,42 @@ public final class BlockPlacement {
     }
 
     public static Access forPlayer(CompanionPlayer player) {
-        return new PlayerAccess(player);
+        return new PlayerAccess(player, null, null, TerrainEdits.EMPTY);
+    }
+
+    public static int findSlot(Container inventory, net.minecraft.world.item.Item item) {
+        for (int i = 0; i < Math.min(Inventory.INVENTORY_SIZE, inventory.getContainerSize()); i++)
+            if (!inventory.getItem(i).isEmpty() && inventory.getItem(i).is(item)) return i;
+        return -1;
+    }
+
+    public static boolean occupiesWorkTarget(AABB body, BlockPos target) { return body.intersects(new AABB(target)); }
+
+    /** Null is a passed read-only preflight, never an executed placement. */
+    public static ServerTool.Result assess(Access access, BlockPos pos, int slot, Direction face) {
+        return preflight(access, pos, slot, face);
+    }
+
+    public static ServerTool.Result assessAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
+                                             Vec3 eye, AABB body, TerrainEdits edits) {
+        if (pendingNativeTerrain(pos, edits))
+            return failed("TARGET_BLOCKED:放置邻域依赖尚未落地的路线改动，先完成该段再按现场查询。", false, 0);
+        return preflight(new PlayerAccess(player, eye, body, edits), pos, slot, face);
+    }
+
+    static boolean pendingNativeTerrain(BlockPos pos, TerrainEdits edits) {
+        for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
+            long cell = DigAStar.pack(near.getX(), near.getY(), near.getZ());
+            if (edits.removed().contains(cell) || edits.placed().contains(cell)) return true;
+        }
+        return false;
+    }
+
+    public static boolean attachedAt(CompanionPlayer player, BlockPos pos, int slot,
+                                     Vec3 eye, AABB body, TerrainEdits edits) {
+        for (Direction face : Direction.values())
+            if (assessAt(player, pos, slot, face, eye, body, edits) == null) return true;
+        return false;
     }
 
     public static boolean supported(BlockItem item) {
@@ -168,10 +206,13 @@ public final class BlockPlacement {
         }
         data.addProperty("checked_positions", checked);
         data.add("alternatives", alternatives);
+        var stands = failure == null ? new JsonArray() : access.standingPositions(pos, slot, face);
+        data.add("stand_positions", stands);
         return new ServerTool.Result(true, "仅查询放置预检，未转头、移动、挖放或消耗。目标 "
                 + pos.toShortString() + (failure == null ? " 通过当前预检。" : " 受阻：" + failure.feedback())
                 + " 其他通过预检的位置（同face，最多6个）：" + alternatives
                 + "。精确目标不能自行换格；若任务允许选址，再选择其中一格执行。"
+                + "原目标的站位建议（整数脚格，最多6个）：" + stands + "；到位后须重查放置条件。"
                 + "query.ok仅表示查询完成；执行前必须检查data.preflight_passed=true。"
                 + "预检不保证原版物品最终接受，执行仍重新核对世界并以实际变化/消耗为准。", data);
     }
@@ -237,12 +278,22 @@ public final class BlockPlacement {
 
     private static final class PlayerAccess implements Access {
         private final CompanionPlayer player;
+        private final Vec3 eye;
+        private final AABB bounds;
+        private final boolean projected;
+        private final TerrainEdits edits;
         private final List<BlockHitResult> contacts = new ArrayList<>(2);
         private BlockHitResult hit;
         private JsonObject contact;
         private BlockPlaceContext context;
 
-        private PlayerAccess(CompanionPlayer player) { this.player = player; }
+        private PlayerAccess(CompanionPlayer player, Vec3 eye, AABB bounds, TerrainEdits edits) {
+            this.player = player;
+            this.projected = eye != null;
+            this.eye = projected ? eye : player.getEyePosition();
+            this.bounds = projected ? bounds : player.getBoundingBox();
+            this.edits = edits;
+        }
         @Override public ServerTool.Result guard(BlockPos pos) {
             var level = player.level();
             // Vanilla doors/beds and support/collision queries also read adjacent cells.
@@ -256,6 +307,8 @@ public final class BlockPlacement {
             if (!player.gameMode.isSurvival() || !player.getAbilities().mayBuild) {
                 return failed("DENIED:当前玩家模式不允许生存放置。", false, 0);
             }
+            if (projected && !level.noCollision(player, bounds))
+                return failed("TARGET_BLOCKED:假想站位被实际方块或实体占用，须重新观察。", false, 0);
             return null;
         }
         @Override public Container inventory() { return player.getInventory(); }
@@ -266,7 +319,8 @@ public final class BlockPlacement {
             hit = null;
             contact = null;
             BlockAim.Contact failure = null;
-            var world = BlockAim.forPlayer(player);
+            var world = projected ? NavigationWork.view(BlockAim.forPlayer(player), eye,
+                    positions(edits.removed()), positions(edits.placed())) : BlockAim.forPlayer(player);
             // The native context decides whether the clicked cell is replaced or placement is adjacent.
             for (BlockPos clicked : List.of(pos, pos.relative(face.getOpposite()))) {
                 var contact = BlockAim.placementContact(world, clicked, face,
@@ -281,6 +335,15 @@ public final class BlockPlacement {
             return new ServerTool.Result(false, failure.failure(), data);
         }
         @Override public ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) {
+            if (projected && occupiesWorkTarget(bounds, pos)) {
+                var data = new JsonObject();
+                data.addProperty("placement_failure", "standing_in_target");
+                return new ServerTool.Result(false, "TARGET_BLOCKED:工作站位占用请求的放置格，须站到目标格外。", data);
+            }
+            BlockItem item = (BlockItem) stack.getItem();
+            if (projected && !projectable(item, stack))
+                return failed("TARGET_BLOCKED:该物品的多格、组件或特殊状态尚不支持假想站位预检，"
+                        + "到合适站位后直接query核对原版条件。", false, 0);
             if (!player.mayUseItemAt(pos, face, stack))
                 return failed("DENIED:当前物品或玩家规则不允许在此放置。", false, 0);
             for (BlockHitResult candidate : contacts) {
@@ -304,10 +367,9 @@ public final class BlockPlacement {
             contact.addProperty("z", clicked.getZ());
             contact.addProperty("face", hit.getDirection().getName());
             contact.addProperty("block", BuiltInRegistries.BLOCK.getKey(state(clicked).getBlock()).toString());
-            BlockItem item = (BlockItem) stack.getItem();
-            // The item's native selector can choose a wall variant instead of getBlock().
-            if (item instanceof StandingAndWallBlockItem) return null;
-            BlockState desired = item.getBlock().getStateForPlacement(context);
+            BlockState desired = item instanceof StandingAndWallBlockItem
+                    ? ((com.neko.mcbot.mixin.BlockItemPlacementAccess) item).mcbot$placementState(context)
+                    : item.getBlock().getStateForPlacement(context);
             return checkSite(pos, new Site() {
                 @Override public BlockState current() { return state(pos); }
                 @Override public boolean replaceable() { return context.canPlace(); }
@@ -317,7 +379,7 @@ public final class BlockPlacement {
                     return desired.getCollisionShape(player.level(), pos, CollisionContext.of(player))
                             .move(pos.getX(), pos.getY(), pos.getZ()).toAabbs();
                 }
-                @Override public AABB body() { return player.getBoundingBox(); }
+                @Override public AABB body() { return bounds; }
                 @Override public boolean entityClear() {
                     return player.level().isUnobstructed(player, desired
                             .getCollisionShape(player.level(), pos, CollisionContext.of(player))
@@ -328,7 +390,7 @@ public final class BlockPlacement {
         private BlockPlaceContext placementContext(ItemStack stack, BlockHitResult clickHit) {
             Vec3 click = clickHit.getLocation();
             Direction face = clickHit.getDirection();
-            Vec3 toward = click.subtract(player.getEyePosition());
+            Vec3 toward = click.subtract(eye);
             var look = Look.toward(toward.lengthSqr() < 1e-10 ? player.getLookAngle() : toward);
             return new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack, clickHit) {
                 @Override public Direction getHorizontalDirection() { return look.horizontal(); }
@@ -346,13 +408,59 @@ public final class BlockPlacement {
             };
         }
         @Override public JsonObject contact() { return contact; }
+        @Override public JsonArray standingPositions(BlockPos pos, int slot, Direction face) {
+            var result = new JsonArray();
+            var points = WorkPositions.miningCandidates(pos, new WorkPositions.Access() {
+                @Override public boolean standable(BlockPos feet) { return WorkPositions.standable(player, feet); }
+                @Override public double distanceSquared(BlockPos feet) {
+                    return player.distanceToSqr(feet.getX() + .5, feet.getY(), feet.getZ() + .5);
+                }
+                @Override public boolean workable(BlockPos feet) {
+                    var geometry = StandingGeometry.forPlayer(player);
+                    var foot = geometry.standing(feet.getX(), feet.getY(), feet.getZ(), TerrainEdits.EMPTY);
+                    return foot != null && assessAt(player, pos, slot, face,
+                            new Vec3(feet.getX() + .5, foot.height() + player.getEyeHeight(), feet.getZ() + .5),
+                            geometry.body(feet.getX(), foot.height(), feet.getZ()), TerrainEdits.EMPTY) == null;
+                }
+            });
+            for (var feet : points) {
+                var foot = WorkPositions.foot(player, feet);
+                if (foot == null) continue;
+                var data = new JsonObject();
+                data.addProperty("x", feet.getX()); data.addProperty("y", feet.getY()); data.addProperty("z", feet.getZ());
+                data.addProperty("feet_y", foot.height());
+                result.add(data);
+            }
+            return result;
+        }
         @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
+            if (projected) throw new IllegalStateException("a projected placement is read-only");
             player.facePoint(hit.getLocation());
             // Invoke placement directly: using a block must not open its menu or eat an item.
             InteractionResult result = ((BlockItem) stack.getItem()).place(context);
             if (result.consumesAction()) player.swing(InteractionHand.MAIN_HAND);
             return result;
         }
+    }
+
+    private static java.util.Set<BlockPos> positions(java.util.Set<Long> cells) {
+        var out = new java.util.HashSet<BlockPos>();
+        for (long cell : cells)
+            out.add(new BlockPos(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)));
+        return out;
+    }
+
+    public static boolean projectable(BlockItem item, ItemStack stack) {
+        if (!stack.getOrDefault(net.minecraft.core.component.DataComponents.BLOCK_STATE,
+                net.minecraft.world.item.component.BlockItemStateProperties.EMPTY).isEmpty()) return false;
+        var block = item.getBlock();
+        if (!BuiltInRegistries.BLOCK.getKey(block).getNamespace().equals("minecraft")) return false;
+        return block.getClass() == net.minecraft.world.level.block.Block.class
+                || block instanceof net.minecraft.world.level.block.RotatedPillarBlock
+                || block instanceof net.minecraft.world.level.block.SlabBlock
+                || block instanceof net.minecraft.world.level.block.StairBlock
+                || block instanceof net.minecraft.world.level.block.CraftingTableBlock
+                || block instanceof net.minecraft.world.level.block.AbstractFurnaceBlock;
     }
 
 }

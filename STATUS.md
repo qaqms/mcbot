@@ -3,6 +3,43 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## N2b 共用放置工作到达（2026-10-16 17:01，Asia/Shanghai）
+
+- 本轮N2a→N2b已依次独立验收；N2a已提交推送e10672f。
+  当前N1/C1/F1/N2a/N2b五卡完成离线验收，17卡待实施，下一组F2→N3；
+  本轮不开始第三张。机制/参考链及保守边界见docs/N2B-PLACEMENT-WORK-2026-10-16.md。
+  只改本体，宿主/连接器/参考/玩家实例未改，未安装或启动游戏/服务器/真实模型。
+- PlacementWork将原目标/物品/面接入现有NavigationGoal/PathTask；
+  N2a真实脚高/净空/眼睛与整个目标格占位前置，BlockPlacement.assess/assessAt与
+  单放查询/执行共用真实接触面、原版精确落位、状态/支撑/碰撞判据。
+  move_to须exact=true、arrival=work、work_target与外层坐标一致，可加place_item/face，
+  不与clear_obstructions=true组合；非法输入在访问身体前拒绝，缺料在消费路线许可前停止。
+- place_block query分别给原目标stand_positions与替代目标alternatives，各最多6个；
+  原75格替代目标帽保持，站位复用45格/最多24个工作检查。建议不自动移动或换目标。
+  导航真终态按实际身体/库存/世界重验can_work_here和placement_preflight，到站不放置。
+  Lua可查询→移动→真终态→原单放动作，受理不推进、取消迟到不续发；部分移动/挖放保留。
+- 路线canPlaceFrom在本步清障后、加入支撑前检查放置前提，memo/累计地形与
+  PathTransition两个分支、活体计划/执行复核贯通；不能拿待放支撑作自身锚点。
+  墙/地面两用物品的实际预检改为原生状态选择器加公共Site检查，Mixin注入仍待游戏验证。
+  原身体控制/差量/失败账、最终目标和8000/32768/400ms/6ms、材料/许可/探索/模型预算保持。
+  不增加成品名链、依赖规划器、自动找料或自动重试。
+- 假想投影仅支持有限原版普通Block/原木/半砖/楼梯/工作台/炉类，拒绝BLOCK_STATE组件。
+  原版上下文仍读实际Level，目标±1邻域有未落地计划挖放或实际站位仍被占用时保守拒绝；
+  特殊/多格、任意动态模组形状、边沿探身/搭柱及连续待放锚点未实现，不宣称完整建筑能力。
+  持续行为尚无跟随/自卫触发，本卡提供可复用底层，不把该入口记为完成。
+- 新增16项客户端回归。旧实现build/n2b-before-20261016.log复现20项中1失败；
+  focused1初始接线通过，补齐后build/n2b-focused2-20261016.log通过，32秒。
+  最终强制`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/n2b-final-20261016.log第61行BUILD SUCCESSFUL，40秒，20/20任务全部执行。
+  实际XML140 suites，**1204项**（核心330/根132/客户端742），failures/errors/skipped全0。
+  覆盖生产A*/真实shape及clip、目标占位/分数脚高/距离、材料/现场变化、
+  邻域计划拒绝、路径两分支/memo/累计前缀、严格参数/只读及实际runner/Lua真终态与取消隔离。
+  原生世界上下文/实体占位/执行回调受控，不冒充真实BlockItem.place或travel通过。
+- 最新候选build/libs/mcbot-0.1.0.jar为**1,313,887 bytes**，末写17:00:09，SHA256
+  `81636fd3587b997e1478fd98d4158bf673c77528d951561dc1e8145922fe8144`。
+  已核0.1.0元数据、PlacementWork/BlockPlacement/Mixin类及配置、内嵌agent-core/LuaJ和许可；
+  list-java无残留。实机补证见REAL-GAME-RETESTING新增N2b节，提交推送以实际Git记录为准。
+
 ## N2a 共用分数脚高与触碰几何（2026-10-16 16:37，Asia/Shanghai）
 
 - 本轮按N2a→N2b依赖顺序推进；N2a现完成离线验收，累计N1/C1/F1/N2a四卡，
@@ -4912,6 +4949,15 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-16 N2b本地官方映射javap与编译确认：
+BlockItem.getPlacementState(BlockPlaceContext):BlockState、canPlace(BlockPlaceContext,BlockState):boolean
+为protected；StandingAndWallBlockItem覆写前者选择墙/地面状态。
+新增BlockItemPlacementAccess invoker用于实际两用物品只读预检，再共用Site检查；
+Mixin注入和原版世界规则尚未实机运行。BlockPlaceContext原构造/getClickedPos/canPlace/
+replacingClickedOnBlock公开，投影只覆写朝向，不强制落位。
+下表旧“该类沿原路径不预测”按10-15历史阅读，N2b实际查询已接原生选择器，
+新假想工作投影仍拒绝特殊/多格类别。
 
 2026-10-16 N2a本地官方映射javap与编译确认：
 Entity.maxUpStep():float、Block.hasDynamicShape():boolean均public；

@@ -45,6 +45,8 @@ public interface DigSampler {
     /** Live adapters supply shape facts; abstract unit-cell samplers retain their grid contract. */
     default NavigationGeometry geometry() { return null; }
 
+    default boolean canPlaceFrom(int x, int y, int z, long target, TerrainEdits edits) { return true; }
+
     /** Ordered work within one edge, viewed from hypothetical departure feet. */
     default boolean canClear(int fromX, int fromY, int fromZ, java.util.List<Long> cells) {
         return true;

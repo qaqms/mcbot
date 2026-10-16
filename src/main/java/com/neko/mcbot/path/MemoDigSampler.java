@@ -153,6 +153,9 @@ public final class MemoDigSampler implements DigSampler {
     }
 
     @Override public NavigationGeometry geometry() { return base.geometry(); }
+    @Override public boolean canPlaceFrom(int x, int y, int z, long target, TerrainEdits edits) {
+        return base.canPlaceFrom(x, y, z, target, edits);
+    }
 
     @Override public boolean canClear(int x, int y, int z, List<Long> cells) {
         return base.canClear(x, y, z, cells);

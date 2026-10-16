@@ -24,6 +24,15 @@ class ServerActionGateTest {
         return CompletableFuture.completedFuture(new ServerTool.Result(true, "observed", null));
     }
 
+    @Test void placementWorkNavigationCannotBecomeReadonlyThroughAQueryField() {
+        var args = JsonParser.parseString("{\"x\":2,\"y\":90,\"z\":0,\"exact\":true,\"arrival\":\"work\","
+                + "\"work_target\":{\"x\":2,\"y\":90,\"z\":0},\"place_item\":\"cobblestone\",\"query\":true}")
+                .getAsJsonObject();
+        assertFalse(ServerActionGate.execute(readonly, body, "world", "move_to", args,
+                scheduler, this::action).join().ok());
+        assertEquals(0, actions.get());
+    }
+
     @Test void readonlyGateDeniesAllMutatorsRegardlessOfModelFields() {
         pos.addProperty("may_alter_terrain", true);
         pos.addProperty("read_only", false);

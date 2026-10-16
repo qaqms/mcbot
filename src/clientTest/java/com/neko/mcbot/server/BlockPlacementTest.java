@@ -27,6 +27,46 @@ class BlockPlacementTest {
         return access;
     }
 
+    @Test void blockedPlacementQueryDistinguishesStandingSuggestionsForTheOriginalTarget() {
+        var access = access();
+        var point = new com.google.gson.JsonObject();
+        point.addProperty("x", 1); point.addProperty("y", 90); point.addProperty("z", -4);
+        point.addProperty("feet_y", 90.5);
+        access.stands.add(point);
+        var reason = new com.google.gson.JsonObject();
+        reason.addProperty("placement_failure", "self_collision");
+        access.prepareFailure = new ServerTool.Result(false, "TARGET_BLOCKED:self", reason);
+        var query = BlockPlacement.query(access, POS, 13, Direction.UP);
+        assertFalse(query.data().get("preflight_passed").getAsBoolean());
+        assertTrue(query.data().has("stand_positions"),
+                "changing the requested block cell is different from moving the body out of it");
+        assertEquals(POS.getX(), query.data().get("x").getAsInt());
+        assertEquals(POS, access.standTarget);
+        assertEquals(point, query.data().getAsJsonArray("stand_positions").get(0));
+        assertTrue(query.data().getAsJsonArray("alternatives").isEmpty());
+        assertEquals(75, query.data().get("checked_positions").getAsInt());
+        assertEquals(3, access.inventory.getItem(13).getCount());
+        assertEquals(0, access.calls);
+    }
+
+    @Test void projectedFamiliesAreConservativeAndReuseOnlyTheExistingStorageSlots() {
+        for (var item : java.util.List.of(Items.COBBLESTONE, Items.OAK_LOG, Items.OAK_SLAB,
+                Items.OAK_STAIRS, Items.CRAFTING_TABLE, Items.FURNACE))
+            assertTrue(BlockPlacement.projectable((BlockItem) item, new ItemStack(item)));
+        for (var item : java.util.List.of(Items.OAK_DOOR, Items.RED_BED, Items.TORCH, Items.SCAFFOLDING))
+            assertFalse(BlockPlacement.projectable((BlockItem) item, new ItemStack(item)));
+        var slab = new ItemStack(Items.OAK_SLAB);
+        slab.set(DataComponents.BLOCK_STATE, new net.minecraft.world.item.component.BlockItemStateProperties(
+                java.util.Map.of("type", "top")));
+        assertFalse(BlockPlacement.projectable((BlockItem) Items.OAK_SLAB, slab));
+        var inventory = inventory();
+        inventory.setItem(36, new ItemStack(Items.COBBLESTONE));
+        assertEquals(-1, BlockPlacement.findSlot(inventory, Items.COBBLESTONE));
+        inventory.setItem(29, new ItemStack(Items.COBBLESTONE, 4));
+        assertEquals(29, BlockPlacement.findSlot(inventory, Items.COBBLESTONE));
+        assertEquals(4, inventory.getItem(29).getCount());
+    }
+
     @Test void sightRefusalNeverPlacesOrConsumesTheSourceStack() {
         Placement access = access();
         access.sightFailure = new ServerTool.Result(false, "TARGET_BLOCKED:wall", null);

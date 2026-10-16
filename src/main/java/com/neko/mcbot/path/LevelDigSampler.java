@@ -176,6 +176,19 @@ public final class LevelDigSampler implements DigSampler {
 
     @Override public NavigationGeometry geometry() { return geometry; }
 
+    @Override public boolean canPlaceFrom(int x, int y, int z, long target, TerrainEdits edits) {
+        if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body) || geometry == null) return false;
+        var foot = geometry.foot(x, y, z, edits);
+        if (foot == null) return false;
+        var bounds = body.getBoundingBox().move(x + .5 - body.getX(),
+                foot.height() - body.getY(), z + .5 - body.getZ());
+        return com.neko.mcbot.server.BlockPlacement.attachedAt(body,
+                new BlockPos(DigAStar.unpackX(target), DigAStar.unpackY(target), DigAStar.unpackZ(target)),
+                PathMaterials.find(body.getInventory()),
+                new net.minecraft.world.phys.Vec3(x + .5, foot.height() + body.getEyeHeight(), z + .5),
+                bounds, edits);
+    }
+
     @Override
     public boolean inBounds(int x, int y, int z) {
         if (y < minY || y >= maxY) {

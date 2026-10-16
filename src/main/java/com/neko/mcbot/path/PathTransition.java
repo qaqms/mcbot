@@ -56,6 +56,8 @@ final class PathTransition {
         if (!terrain.support(x, y - 1, z)) {
             if (remainingPlaces < 1) return Check.refused("PLACE_LIMIT", floor);
             if (!terrain.placeable(x, y - 1, z)) return Check.refused("NO_SUPPORT", floor);
+            if (!base.canPlaceFrom(fx, fy, fz, floor, edits.after(dig, List.of())))
+                return Check.refused("PLACEMENT_PRECONDITION", floor);
             place = List.of(floor);
         }
         List<Long> clearing = List.copyOf(dig);
@@ -94,6 +96,8 @@ final class PathTransition {
             if (remainingPlaces < 1) return Check.refused("PLACE_LIMIT", floor);
             if (!terrain.known(x, y - 1, z)) return Check.refused("UNKNOWN_TERRAIN", floor);
             if (!terrain.placeable(x, y - 1, z)) return Check.refused("NO_SUPPORT", floor);
+            if (!base.canPlaceFrom(fx, fy, fz, floor, edits.after(dig, List.of())))
+                return Check.refused("PLACEMENT_PRECONDITION", floor);
             place = List.of(floor);
         }
         var after = edits.after(dig, place);
