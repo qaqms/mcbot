@@ -11,7 +11,7 @@ public final class MiningWork {
     private MiningWork() { }
 
     public static BlockAim.MiningPlan plan(CompanionPlayer body, BlockPos target) {
-        return plan(body, target, body.getEyePosition(), body.blockPosition());
+        return plan(body, target, body.getEyePosition(), StandingGeometry.feetCell(body));
     }
 
     public static BlockAim.MiningPlan plan(CompanionPlayer body, BlockPos target, Vec3 eye, BlockPos feet) {
@@ -31,7 +31,12 @@ public final class MiningWork {
 
     public static boolean safe(CompanionPlayer body, LevelDigSampler sampler, BlockPos feet, BlockPos pos) {
         var level = body.level();
-        if (pos.equals(feet.below()) || !level.isLoaded(pos)
+        var foot = sampler.geometry() == null ? null : sampler.geometry().foot(
+                feet.getX(), feet.getY(), feet.getZ(), com.neko.mcbot.path.TerrainEdits.EMPTY);
+        if (sampler.geometry() != null && foot == null) return false;
+        boolean support = foot == null ? pos.equals(feet.below())
+                : foot.support() == com.neko.mcbot.path.DigAStar.pack(pos.getX(), pos.getY(), pos.getZ());
+        if (support || !level.isLoaded(pos)
                 || !DigSampler.feasibleDig(sampler.digSeconds(pos.getX(), pos.getY(), pos.getZ()))
                 || !level.mayInteract(body, pos)
                 || body.blockActionRestricted(level, pos, body.gameMode.getGameModeForPlayer())) return false;

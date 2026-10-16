@@ -6,6 +6,14 @@ import static com.neko.mcbot.path.PathGrounding.Decision.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PathGroundingTest {
+    @Test void fractionalDisplacementWithinTheSameCellAlsoInvalidatesTheRoute() {
+        var state = new PathGrounding();
+        assertEquals(READY, state.poll(true, 65.5));
+        assertEquals(WAIT, state.poll(false, 65.3));
+        assertEquals(REPLAN, state.poll(true, 65.125));
+        state.committed(65.75);
+        assertEquals(READY, state.poll(true, 65.75 + 1e-7));
+    }
     @Test void anAirborneSpawnWaitsForTheRealFirstLanding() {
         var state = new PathGrounding();
         assertEquals(WAIT, state.poll(false, 80));

@@ -2,6 +2,7 @@ package com.neko.mcbot.server;
 
 import com.neko.mcbot.path.DigAStar;
 import com.neko.mcbot.path.NavigationGoal;
+import com.neko.mcbot.path.NavigationGeometry;
 import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
@@ -49,10 +50,22 @@ public final class NavigationWork {
 
     public static boolean canClear(BlockAim.Access world, BlockPos feet, double eyeHeight, double reach,
                                    List<Long> cells, TerrainEdits edits) {
+        return canClear(world, feet, eyeHeight, reach, cells, edits, null);
+    }
+
+    public static boolean canClear(BlockAim.Access world, BlockPos feet, double eyeHeight, double reach,
+                                   List<Long> cells, TerrainEdits edits, NavigationGeometry geometry) {
         var removed = positions(edits.removed());
         var placed = positions(edits.placed());
-        removed.add(feet); removed.add(feet.above());
-        Vec3 eye = new Vec3(feet.getX() + .5, feet.getY() + eyeHeight, feet.getZ() + .5);
+        double height = feet.getY();
+        if (geometry == null) {
+            removed.add(feet); removed.add(feet.above());
+        } else {
+            var foot = geometry.foot(feet.getX(), feet.getY(), feet.getZ(), edits);
+            if (foot == null) return false;
+            height = foot.height();
+        }
+        Vec3 eye = new Vec3(feet.getX() + .5, height + eyeHeight, feet.getZ() + .5);
         for (long cell : cells) {
             BlockPos pos = new BlockPos(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell));
             if (!BlockAim.mining(view(world, eye, removed, placed), pos, reach).ok()) return false;
@@ -63,16 +76,22 @@ public final class NavigationWork {
 
     public static NavigationGoal goal(BlockAim.Access world, BlockPos target, double eyeHeight, double reach,
                                       boolean clear, Predicate<BlockPos> safe) {
+        return goal(world, target, eyeHeight, reach, clear, safe, null);
+    }
+
+    public static NavigationGoal goal(BlockAim.Access world, BlockPos target, double eyeHeight, double reach,
+                                      boolean clear, Predicate<BlockPos> safe, NavigationGeometry geometry) {
         return new NavigationGoal() {
             @Override public Bounds estimateBounds() {
                 int radius = (int) Math.ceil(reach + .87);
                 double feetY = target.getY() + .5 - eyeHeight;
-                return new Bounds(target.getX() - radius, (int) Math.floor(feetY - radius), target.getZ() - radius,
+                return new Bounds(target.getX() - radius, (int) Math.floor(feetY - radius - (geometry == null ? 0 : 1)), target.getZ() - radius,
                         target.getX() + radius, (int) Math.ceil(feetY + radius), target.getZ() + radius);
             }
             @Override public double remaining(int x, int y, int z) {
                 double dx = x + .5 - (target.getX() + .5);
-                double dy = y + eyeHeight - (target.getY() + .5);
+                double dy = geometry == null ? y + eyeHeight - (target.getY() + .5)
+                        : Math.max(0, Math.abs(y + .5 + eyeHeight - (target.getY() + .5)) - .5);
                 double dz = z + .5 - (target.getZ() + .5);
                 return Math.max(0, Math.sqrt(dx * dx + dy * dy + dz * dz) - reach - .87);
             }
@@ -100,11 +119,22 @@ public final class NavigationWork {
                 BlockPos feet = new BlockPos(x, y, z);
                 if (feet.equals(target) || feet.above().equals(target)) return failed();
                 var removed = positions(edits.removed());
-                removed.add(feet); removed.add(feet.above());
-                var view = view(world, new Vec3(x + .5, y + eyeHeight, z + .5),
+                double height = y;
+                BlockPos support = feet.below();
+                if (geometry == null) {
+                    removed.add(feet); removed.add(feet.above());
+                } else {
+                    var foot = geometry.foot(x, y, z, edits);
+                    if (foot == null) return failed();
+                    height = foot.height();
+                    support = new BlockPos(DigAStar.unpackX(foot.support()), DigAStar.unpackY(foot.support()),
+                            DigAStar.unpackZ(foot.support()));
+                }
+                BlockPos protectedSupport = support;
+                var view = view(world, new Vec3(x + .5, height + eyeHeight, z + .5),
                         removed, positions(edits.placed()));
                 return clear ? BlockAim.miningPlan(view, target, reach,
-                        pos -> !pos.equals(feet.below()) && !pos.equals(target.below()) && safe.test(pos))
+                        pos -> !pos.equals(protectedSupport) && !pos.equals(target.below()) && safe.test(pos))
                         : new BlockAim.MiningPlan(BlockAim.mining(view, target, reach), List.of());
             }
             private BlockAim.MiningPlan failed() {

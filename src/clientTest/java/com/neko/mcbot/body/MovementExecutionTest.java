@@ -12,6 +12,27 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MovementExecutionTest {
+    @Test void fractionalLandingRequiresItsActualHeightAndDoesNotJumpWhenTheGeometrySaysStep() {
+        var route = new PathSteering(1, .5, 0, false);
+        var first = route.tick(new PathSteering.Body(.5, 0, .5, 0, 0, true));
+        assertFalse(first.jump());
+        assertFalse(first.arrived());
+        assertFalse(route.settled(new PathSteering.Body(1.5, 0, .5, 0, 0, true)));
+        assertFalse(route.settled(new PathSteering.Body(1.5, .5, .5, 0, 0, false)));
+        assertTrue(route.settled(new PathSteering.Body(1.5, .5, .5, 0, 0, true)));
+        var body = new Body();
+        body.position = new Vec3(.5, .5, .5);
+        body.obstacles = List.of(Shapes.box(-4, -1, -4, 8, .5, 8));
+        PathSteering.Command command = null;
+        for (int tick = 0; tick < 100; tick++) {
+            command = body.drive(route);
+            if (command.arrived() || command.stuck()) break;
+        }
+        assertNotNull(command);
+        assertTrue(command.arrived());
+        assertEquals(.5, body.position.y);
+        assertEquals(0, body.jumps);
+    }
     /** Controlled acceleration/gravity, with actual vanilla voxel collision. Not native travel. */
     private static class Body extends CompanionPhysicsTest.Body {
         final MovementInput input = new MovementInput();

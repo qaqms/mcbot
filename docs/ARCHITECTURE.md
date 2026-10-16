@@ -3,6 +3,17 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## N2a 共用站立几何（2026-10-16）
+
+实际同伴的LevelDigSampler经NavigationGeometry读取StandingGeometry，
+与WorkPositions/探索/工作眼睛/拾取接触共享原版碰撞脚高及支撑身份。
+PathTransition统一搜索、累计编辑、计划/缓存及逐刻复核；每步保留feetY/jump，
+PathSteering驱动原版travel并按实际脚高站稳，PathGrounding识别同脚格内下落。
+工作射线不抹去同格支撑，末点新鲜支撑/净空再验。
+每次64格/256盒/每格16盒/16段扫掠有界，未知/危险/动态复杂形状保守拒绝；
+原导航/材料/许可/取消预算保持。详见N2A-STANDING-GEOMETRY及STATUS，
+尚无边沿探身或原生运动/拾取验收，完整放置到达接N2b。
+
 ## F1 共用身体事实（2026-10-16）
 
 每身体BodyChangeLog供逐刻观察、status.body_changes及动作终态body_delta共用。

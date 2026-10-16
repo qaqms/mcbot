@@ -42,6 +42,9 @@ public interface DigSampler {
     /** 全程可放的方块总数上限（=背包可用方块存量）：放格与挖格一样要预算化。 */
     int maxPlaces();
 
+    /** Live adapters supply shape facts; abstract unit-cell samplers retain their grid contract. */
+    default NavigationGeometry geometry() { return null; }
+
     /** Ordered work within one edge, viewed from hypothetical departure feet. */
     default boolean canClear(int fromX, int fromY, int fromZ, java.util.List<Long> cells) {
         return true;

@@ -3,31 +3,29 @@ package com.neko.mcbot.server;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Nearby full-floor standing candidates. The normal path tool still decides reachability. */
+/** Nearby collision-supported standing candidates. The normal path tool decides reachability. */
 public final class WorkPositions {
     public static final int MAX_POSITIONS = 6;
     public static final int MAX_MINING_CHECKS = 24;
     private WorkPositions() { }
     public static boolean standable(CompanionPlayer player, BlockPos pos) {
+        return foot(player, pos) != null;
+    }
+
+    public static com.neko.mcbot.path.NavigationGeometry.Foot foot(CompanionPlayer player, BlockPos pos) {
         var level = player.level();
-        for (BlockPos cell : List.of(pos.below(), pos, pos.above())) {
-            if (!level.isInWorldBounds(cell) || !level.getWorldBorder().isWithinBounds(cell)
-                    || level.getChunkSource().getChunkNow(cell.getX() >> 4, cell.getZ() >> 4) == null)
-                return false;
-            if (!level.getBlockState(cell).getFluidState().isEmpty()) return false;
-        }
-        if (!level.getBlockState(pos.below()).isFaceSturdy(level, pos.below(), Direction.UP)) return false;
-        var box = player.getBoundingBox().move(pos.getX() + .5 - player.getX(),
-                pos.getY() - player.getY(), pos.getZ() + .5 - player.getZ());
-        return level.noCollision(player, box);
+        var geometry = StandingGeometry.forPlayer(player);
+        var foot = geometry.standing(pos.getX(), pos.getY(), pos.getZ(), TerrainEdits.EMPTY);
+        return foot != null && level.noCollision(player, geometry.body(pos.getX(), foot.height(), pos.getZ()))
+                ? foot : null;
     }
     public interface Access {
         boolean standable(BlockPos pos);
@@ -88,11 +86,15 @@ public final class WorkPositions {
         var points = pickupCandidates(item.blockPosition(), new Access() {
             @Override public boolean standable(BlockPos pos) { return WorkPositions.standable(player, pos); }
             @Override public double distanceSquared(BlockPos pos) {
-                return player.distanceToSqr(pos.getX() + .5, pos.getY(), pos.getZ() + .5);
+                var foot = WorkPositions.foot(player, pos);
+                return foot == null ? Double.POSITIVE_INFINITY
+                        : player.distanceToSqr(pos.getX() + .5, foot.height(), pos.getZ() + .5);
             }
             @Override public boolean workable(BlockPos pos) {
+                var foot = WorkPositions.foot(player, pos);
+                if (foot == null) return false;
                 var bounds = player.getBoundingBox().move(pos.getX() + .5 - player.getX(),
-                        pos.getY() - player.getY(), pos.getZ() + .5 - player.getZ());
+                        foot.height() - player.getY(), pos.getZ() + .5 - player.getZ());
                 return GroundItems.touches(bounds, item.getBoundingBox());
             }
         });
@@ -102,6 +104,8 @@ public final class WorkPositions {
             point.addProperty("x", pos.getX());
             point.addProperty("y", pos.getY());
             point.addProperty("z", pos.getZ());
+            var foot = WorkPositions.foot(player, pos);
+            if (foot != null) point.addProperty("feet_y", foot.height());
             result.add(point);
         }
         return result;
@@ -127,10 +131,14 @@ public final class WorkPositions {
                 return WorkPositions.standable(player, pos);
             }
             @Override public double distanceSquared(BlockPos pos) {
-                return player.distanceToSqr(pos.getX() + .5, pos.getY(), pos.getZ() + .5);
+                var foot = WorkPositions.foot(player, pos);
+                return foot == null ? Double.POSITIVE_INFINITY
+                        : player.distanceToSqr(pos.getX() + .5, foot.height(), pos.getZ() + .5);
             }
             @Override public boolean workable(BlockPos pos) {
-                var eye = new Vec3(pos.getX() + .5, pos.getY() + eyeHeight, pos.getZ() + .5);
+                var foot = WorkPositions.foot(player, pos);
+                if (foot == null) return false;
+                var eye = new Vec3(pos.getX() + .5, foot.height() + eyeHeight, pos.getZ() + .5);
                 return MiningWork.plan(player, target, eye, pos, budget).ok();
             }
             @Override public boolean available() { return budget.available(); }
@@ -141,6 +149,8 @@ public final class WorkPositions {
             point.addProperty("x", pos.getX());
             point.addProperty("y", pos.getY());
             point.addProperty("z", pos.getZ());
+            var foot = WorkPositions.foot(player, pos);
+            if (foot != null) point.addProperty("feet_y", foot.height());
             positions.add(point);
         }
         return positions;

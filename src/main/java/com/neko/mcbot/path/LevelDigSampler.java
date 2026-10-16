@@ -42,6 +42,7 @@ public final class LevelDigSampler implements DigSampler {
     private final int placeStock;
     private final BlockPos workTarget;
     private final PathSpec spec;
+    private final NavigationGeometry geometry;
 
     public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
                            int placeStock) {
@@ -64,6 +65,9 @@ public final class LevelDigSampler implements DigSampler {
         var dt = level.dimensionType();
         this.minY = dt.minY();
         this.maxY = dt.minY() + dt.height();
+        this.geometry = companion instanceof com.neko.mcbot.body.CompanionPlayer body
+                ? com.neko.mcbot.server.StandingGeometry.forPlayer(body,
+                pos -> inBounds(pos.getX(), pos.getY(), pos.getZ())) : null;
     }
 
     @Override
@@ -91,7 +95,9 @@ public final class LevelDigSampler implements DigSampler {
         }
         if (preserved(workTarget, p)) return INFEASIBLE;
         // 起点脚下不挖：不从自己站的地方开始掘坟
-        if (x == start.getX() && z == start.getZ() && y == start.getY() - 1) {
+        var startFoot = geometry == null ? null : geometry.foot(start.getX(), start.getY(), start.getZ(), TerrainEdits.EMPTY);
+        if (startFoot == null ? x == start.getX() && z == start.getZ() && y == start.getY() - 1
+                : startFoot.support() == DigAStar.pack(x, y, z)) {
             return INFEASIBLE;
         }
         var st = level.getBlockState(p);
@@ -168,6 +174,8 @@ public final class LevelDigSampler implements DigSampler {
         return placeStock;
     }
 
+    @Override public NavigationGeometry geometry() { return geometry; }
+
     @Override
     public boolean inBounds(int x, int y, int z) {
         if (y < minY || y >= maxY) {
@@ -197,7 +205,7 @@ public final class LevelDigSampler implements DigSampler {
         return com.neko.mcbot.server.NavigationWork.canClear(
                 com.neko.mcbot.server.BlockAim.forPlayer(body), new BlockPos(x, y, z),
                 companion.getEyePosition().y - companion.getY(),
-                Math.min(5.5, companion.blockInteractionRange()), cells, edits);
+                Math.min(5.5, companion.blockInteractionRange()), cells, edits, geometry);
     }
 
     // ---- 供执行器/确认流使用的工具方法 ----

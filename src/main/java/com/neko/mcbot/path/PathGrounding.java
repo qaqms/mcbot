@@ -4,16 +4,16 @@ package com.neko.mcbot.path;
 public final class PathGrounding {
     public enum Decision { WAIT, READY, REPLAN }
 
-    private Integer expectedFeetY;
+    private Double expectedFeetY;
 
-    public Decision poll(boolean onGround, int feetY) {
+    public Decision poll(boolean onGround, double feetY) {
         if (!onGround) return Decision.WAIT;
-        boolean displaced = expectedFeetY != null && expectedFeetY != feetY;
+        boolean displaced = expectedFeetY != null && Math.abs(expectedFeetY - feetY) > .08;
         expectedFeetY = feetY;
         return displaced ? Decision.REPLAN : Decision.READY;
     }
 
-    public void committed(int feetY) {
+    public void committed(double feetY) {
         expectedFeetY = feetY;
     }
 }

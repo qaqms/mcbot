@@ -3,6 +3,37 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## N2a 共用分数脚高与触碰几何（2026-10-16 16:37，Asia/Shanghai）
+
+- 本轮按N2a→N2b依赖顺序推进；N2a现完成离线验收，累计N1/C1/F1/N2a四卡，
+  18卡待实施。前置验收通过后本轮接N2b，尚不记N2b完成。
+  完整参考链、取舍和有限边界见docs/N2A-STANDING-GEOMETRY-2026-10-16.md。
+  只改本体，宿主/连接器/参考/玩家实例未改；未安装或启动游戏/服务器/真实模型。
+- StandingGeometry从原版碰撞箱取得实际支撑/脚高/净空，用原版Shapes.collide做有界扫掠；
+  共享NavigationGeometry供搜索、活体计划/缓存/逐刻复核，冻结每步feetY和jump。
+  半砖/雪层/楼梯不使用种类高度表；楼梯正面步行、背面需跳，
+  源支撑/目标支撑和低顶保护贯通，不为了站位挖掉自己的支撑或偷偷清起跳头顶。
+  原版travel继续执行身体运动，末点按新鲜支撑/净空和实际脚高站稳验收。
+- WorkPositions、工作眼睛、拾取触碰和探索候选共用脚高；工作射线不抹掉同脚格的支撑。
+  返回整数x/y/z为脚格，可另含feet_y实际高度；原move_to参数及Lua/长短阶段入口保持。
+  PathGrounding记录double，同格内掉落也消耗原重规划账；C1控制/F1事实/取消不变。
+  不加成品升级链或依赖规划器，不补模型/探索/材料/许可/挖放/时间预算。
+- 几何收集每次最多64格/256盒，每格16盒，扫掠16段；原8000展开/32768状态/
+  400ms累计/6ms切片保持。未知、危险、流体、实体相关动态形状及过于复杂形状保守停止；
+  尚无边沿探身、任意动态模组形状、梯子/游泳或持续跟随/自卫触发。
+  抽象单位网格夹具保持旧DigSampler契约，实际同伴必接同源形状；原生运动待实机。
+- 新增17项（根1/客户端16）。旧实现先复现半砖/雪层2失败：
+  build/n2a-before-20261016.log。focused2门场景的朝向夹具错误已纠正，focused3通过，
+  未削弱断言；随后补生产形状端口的隧道清理/零编辑返程与起跳低顶保护回归。
+  最终强制`gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/n2a-final2-20261016.log第61行BUILD SUCCESSFUL，47秒、20/20任务执行。
+  实际XML138 suites，**1188项**（核心330/根132/客户端726），failures/errors/skipped全0。
+  旧全量n2a-final也通过，但补充两项回归后以final2为本卡收尾证据。
+- 最新候选build/libs/mcbot-0.1.0.jar为**1,300,398 bytes**，末写16:36:42，SHA256
+  `068e28fe77f9406691134abea18f4029bda446301c43badf71c76623e9f70b6e`。
+  原版注册表/碰撞/clip和生产A*/计划复核参与，身体运动/世界/网络受控，
+  不冒充原生travel、playerTouch入包或实际地形速度已验。N2b通过后候选再更新。
+
 ## F1 共用动作与身体差量（2026-10-16 16:07，Asia/Shanghai）
 
 - 本轮C1→F1依次实现、独立验收；C1已提交推送027d703，前序N1为033af8c。
@@ -4881,6 +4912,12 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-16 N2a本地官方映射javap与编译确认：
+Entity.maxUpStep():float、Block.hasDynamicShape():boolean均public；
+Shapes.collide(Direction.Axis,AABB,Iterable&lt;VoxelShape&gt;,double):double为public static。
+BlockState.getCollisionShape(BlockGetter,BlockPos)返回VoxelShape；
+身体实际尺寸用getBbWidth/getBbHeight，运动仍由原版travel落地，不新增位置写入。
 
 C1/F1新增核对（10-16本地官方映射javap/编译，未运行真实身体）：
 LivingEntity.onEquippedItemBroken(Item,EquipmentSlot):void、getItemBySlot(EquipmentSlot):ItemStack、

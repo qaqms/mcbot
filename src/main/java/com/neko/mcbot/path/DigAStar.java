@@ -22,7 +22,11 @@ import java.util.PriorityQueue;
 public final class DigAStar {
 
     /** 一格=打包 long（见 pack()）。一步落点：坐标 + 本步要挖/要放的格子。 */
-    public record Step(int x, int y, int z, List<Long> dig, List<Long> place, byte action) {
+    public record Step(int x, int y, int z, List<Long> dig, List<Long> place, byte action,
+                       double feetY, boolean jump) {
+        public Step(int x, int y, int z, List<Long> dig, List<Long> place, byte action) {
+            this(x, y, z, dig, place, action, y, action == ACT_JUMP || action == ACT_PILLAR);
+        }
     }
 
     /** 动作仅作播报语义；执行逻辑统一为 挖→放→落位。 */
@@ -134,9 +138,10 @@ public final class DigAStar {
     }
 
     private Node start() {
+        var foot = prepared && s.geometry() != null ? s.geometry().foot(sx, sy, sz, TerrainEdits.EMPTY) : null;
         return new Node(new State(pack(sx, sy, sz), 0, 0, TerrainEdits.EMPTY),
                 sx, sy, sz, 0, 0, 0, h(sx, sy, sz, TerrainEdits.EMPTY), null,
-                new Step(sx, sy, sz, List.of(), List.of(), ACT_START));
+                new Step(sx, sy, sz, List.of(), List.of(), ACT_START, foot == null ? sy : foot.height(), false));
     }
 
     /** 分帧推进（不限时，单测/兼容用）。 */
@@ -396,7 +401,8 @@ public final class DigAStar {
         if (old != null && old.g <= g) {
             return;
         }
-        var step = new Step(bx, by, bz, plan.dig(), plan.place(), classify(cur, bx, by, bz, plan.dig(), plan.place()));
+        var step = new Step(bx, by, bz, plan.dig(), plan.place(),
+                classify(cur, bx, by, bz, plan.dig(), plan.place()), plan.feetY(), plan.jump());
         Node n = new Node(key, bx, by, bz, digs, places, g, g + h(bx, by, bz, plan.terrain()), cur, step);
         storedNodes++;
         best.put(key, n);

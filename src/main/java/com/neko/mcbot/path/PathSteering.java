@@ -6,14 +6,20 @@ public final class PathSteering {
     public record Command(double x, double z, boolean jump, boolean arrived, boolean stuck) {}
 
     private final double x, y, z;
+    private final boolean jumping;
     private double best = Double.POSITIVE_INFINITY;
     private int staleTicks;
     private int ticks;
 
     public PathSteering(int x, int y, int z) {
+        this(x, y, z, true);
+    }
+
+    public PathSteering(int x, double y, int z, boolean jumping) {
         this.x = x + .5;
         this.y = y;
         this.z = z + .5;
+        this.jumping = jumping;
     }
 
     public Command tick(Body body) {
@@ -39,7 +45,7 @@ public final class PathSteering {
         double ix = through ? dx / Math.max(distance, 1e-6) : dx * 3 - body.vx() * 5;
         double iz = through ? dz / Math.max(distance, 1e-6) : dz * 3 - body.vz() * 5;
         double scale = Math.max(1, Math.hypot(ix, iz));
-        boolean jump = body.grounded() && height > .3 && distance <= 1.5;
+        boolean jump = jumping && body.grounded() && height > .3 && distance <= 1.5;
         return new Command(ix / scale, iz / scale, jump, false, false);
     }
 

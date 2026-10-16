@@ -53,7 +53,7 @@ public final class ClientToolDefs {
                     + "建议已做有界预检，不必再次遍历邻域，执行前仍重验。"
                     + "native_validation_pending表示原版尚待执行，changed=false/consumed_count=0不是已放置。"
                     + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
-            case "move_to" -> "真正终态data.x/y/z为实际落脚，arrival为position或work，"
+            case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position或work，"
                     + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
                     + "拾取用scan_area.item_targets[].stand_positions及exact=true；工作用arrival=work。"
                     + "失败数据可能仅含已知部分效果，须status details=true重新核对，不假定到了请求格。";

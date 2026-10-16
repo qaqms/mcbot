@@ -9,6 +9,7 @@ import com.neko.mcbot.server.BlockPlacement;
 import com.neko.mcbot.server.PathMaterials;
 import com.neko.mcbot.server.ActionPermissions;
 import com.neko.mcbot.server.DropObservations;
+import com.neko.mcbot.server.StandingGeometry;
 import com.neko.mcbot.task.CompanionScheduler;
 import com.neko.mcbot.task.ResourceLocks.Region;
 import com.neko.mcbot.server.ServerTool.Result;
@@ -184,11 +185,12 @@ public final class PathTask extends TickTask {
         }
         var environment = com.neko.mcbot.server.MiningEnvironment.bodyFailure(c);
         if (environment != null) return terminal(environment);
-        if (!spec.contains(c.blockPosition().getX(), c.blockPosition().getY(), c.blockPosition().getZ()))
+        BlockPos current = StandingGeometry.feetCell(c);
+        if (!spec.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
         // While steering, the next landing belongs to the route, including its airborne ticks.
         PathGrounding.Decision grounded = steering == null
-                ? grounding.poll(c.onGround(), c.blockPosition().getY()) : PathGrounding.Decision.READY;
+                ? grounding.poll(c.onGround(), c.getY()) : PathGrounding.Decision.READY;
         if (grounded == PathGrounding.Decision.WAIT) {
             clearCrack();
             return running();
@@ -204,7 +206,7 @@ public final class PathTask extends TickTask {
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
         Progress progress = phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
-        if (c.onGround() && steering == null) grounding.committed(c.blockPosition().getY());
+        if (c.onGround() && steering == null) grounding.committed(c.getY());
         return progress instanceof Progress.Done done ? terminal(done.result()) : progress;
     }
 
@@ -288,7 +290,7 @@ public final class PathTask extends TickTask {
             McbotMod.LOG.info("[path] 未复用 lastPlan（{}），照常重搜", PLANS.lastMiss());
         }
         if (search == null) {
-            BlockPos from = c.blockPosition();
+            BlockPos from = StandingGeometry.feetCell(c);
             sampler = samplerFor(c, from);
             search = newSearch(from);
         }
@@ -298,7 +300,7 @@ public final class PathTask extends TickTask {
                 McbotMod.LOG.info("[path] 验尸超限 stale={}，丢弃旧图重开搜索（第 {} 次）",
                         memo.staleCount(), memoRestarts + 1);
                 memoRestarts++;
-                search = newSearch(c.blockPosition());
+                search = newSearch(StandingGeometry.feetCell(c));
             }
             return running(); // 还在算（分帧）
         }
@@ -447,7 +449,7 @@ public final class PathTask extends TickTask {
             return;
         }
         cacheKey = c.getUUID();
-        PLANS.put(cacheKey, c.blockPosition(), target, plan, System.currentTimeMillis());
+        PLANS.put(cacheKey, StandingGeometry.feetCell(c), target, plan, System.currentTimeMillis());
     }
 
     /**
@@ -464,13 +466,13 @@ public final class PathTask extends TickTask {
         if (c == null) {
             return false;
         }
-        PlanCache.Entry p = PLANS.take(c.getUUID(), c.blockPosition(), target, System.currentTimeMillis());
+        PlanCache.Entry p = PLANS.take(c.getUUID(), StandingGeometry.feetCell(c), target, System.currentTimeMillis());
         if (p == null) {
             return false;
         }
         if (exact && (p.path.isEmpty() || !atTarget(p.path.getLast()))) return false;
         // 采样器仍要建（执行期 mineOne/placeOne/复核都用它 live 读世界），但**不必重搜**
-        sampler = samplerFor(c, c.blockPosition());
+        sampler = samplerFor(c, StandingGeometry.feetCell(c));
         path = liveify(p.path);
         planFailure = planFailure(path, sampler, spec.maxDigs() - actualDigs);
         if (planFailure != null) {
@@ -565,7 +567,7 @@ public final class PathTask extends TickTask {
                 ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
                 workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
                 Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),
-                pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, sampler, from, pos))
+                pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, sampler, from, pos), sampler.geometry())
                 : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
         DigAStar d = new DigAStar(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(),
@@ -598,7 +600,9 @@ public final class PathTask extends TickTask {
 
     private List<DigAStar.Step> liveify(List<DigAStar.Step> plan, int fromY) {
         long t0 = System.nanoTime();
-        List<DigAStar.Step> out = liveSteps(plan, fromY, sampler);
+        List<DigAStar.Step> out = sampler.geometry() == null ? liveSteps(plan, fromY, sampler)
+                : liveShapeSteps(plan, plan.isEmpty() || plan.getFirst().action() == DigAStar.ACT_START
+                ? null : path.get(Math.max(0, cursor - 1)), sampler);
         planDigs = out.stream().mapToInt(st -> st.dig().size()).sum();
         planPlaces = out.stream().mapToInt(st -> st.place().size()).sum();
         McbotMod.LOG.info("[brain] liveify nodes={} {}ms", plan.size(),
@@ -607,6 +611,7 @@ public final class PathTask extends TickTask {
     }
 
     static List<DigAStar.Step> liveSteps(List<DigAStar.Step> plan, int fromY, DigSampler sampler) {
+        if (sampler.geometry() != null) return liveShapeSteps(plan, null, sampler);
         ArrayList<DigAStar.Step> out = new ArrayList<>(plan.size());
         TerrainEdits edits = TerrainEdits.EMPTY;
         for (DigAStar.Step st : plan) {
@@ -635,6 +640,35 @@ public final class PathTask extends TickTask {
         return out;
     }
 
+    private static List<DigAStar.Step> liveShapeSteps(List<DigAStar.Step> plan, DigAStar.Step previous,
+                                                     DigSampler sampler) {
+        var out = new ArrayList<DigAStar.Step>(plan.size());
+        var edits = TerrainEdits.EMPTY;
+        for (var step : plan) {
+            if (step.action() == DigAStar.ACT_START) {
+                var foot = sampler.geometry().foot(step.x(), step.y(), step.z(), edits);
+                previous = new DigAStar.Step(step.x(), step.y(), step.z(), List.of(), List.of(),
+                        step.action(), foot == null ? step.feetY() : foot.height(), false);
+                out.add(previous);
+                continue;
+            }
+            if (previous == null) return List.copyOf(plan);
+            var check = PathTransition.check(sampler, edits, previous.x(), previous.y(), previous.z(),
+                    step.x(), step.y(), step.z(), MAX_DIGS, sampler.maxPlaces());
+            if (check.plan() == null) {
+                // Preserve the proposed route so the common validation reports its actual refusal.
+                out.addAll(plan.subList(out.size(), plan.size()));
+                return out;
+            }
+            var p = check.plan();
+            previous = new DigAStar.Step(step.x(), step.y(), step.z(), p.dig(), p.place(),
+                    step.action(), p.feetY(), p.jump());
+            out.add(previous);
+            edits = p.terrain();
+        }
+        return out;
+    }
+
     static boolean editsFeasible(List<DigAStar.Step> plan, DigSampler sampler) {
         return planFailure(plan, sampler, MAX_DIGS) == null;
     }
@@ -652,13 +686,20 @@ public final class PathTask extends TickTask {
             if (step.action() == DigAStar.ACT_START) {
                 if (previous != null || !step.dig().isEmpty() || !step.place().isEmpty())
                     return new PathFailure(index, "INVALID_START", from, to, to);
+                if (sampler.geometry() != null) {
+                    var foot = sampler.geometry().foot(step.x(), step.y(), step.z(), edits);
+                    if (foot == null || Math.abs(foot.height() - step.feetY()) > 1e-5)
+                        return new PathFailure(index, "DEPARTURE_FOOTING", from, to, to);
+                }
                 previous = step;
                 continue;
             }
             if (previous == null) return new PathFailure(index, "MISSING_START", from, to, to);
             DigSampler terrain = edits.view(sampler);
             for (long cell : step.dig()) {
-                if (cell == DigAStar.pack(previous.x(), previous.y() - 1, previous.z()))
+                var foot = sampler.geometry() == null ? null : sampler.geometry().foot(
+                        previous.x(), previous.y(), previous.z(), edits);
+                if (cell == (foot == null ? DigAStar.pack(previous.x(), previous.y() - 1, previous.z()) : foot.support()))
                     return new PathFailure(index, "DEPARTURE_SUPPORT", from, to, cell);
                 if (!terrain.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
                     return new PathFailure(index, "UNKNOWN_TERRAIN", from, to, cell);
@@ -670,6 +711,9 @@ public final class PathTask extends TickTask {
                     step.x(), step.y(), step.z(), maxDigs - digs, sampler.maxPlaces() - places);
             if (check.plan() == null) return new PathFailure(index, check.reason(), from, to, check.cell());
             var expected = check.plan();
+            if (sampler.geometry() != null
+                    && (Math.abs(step.feetY() - expected.feetY()) > 1e-5 || step.jump() != expected.jump()))
+                return new PathFailure(index, "FOOTING_CHANGED", from, to, to);
             var neededDig = step.dig().stream().filter(cell -> !terrain.passable(
                     DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))).toList();
             var neededPlace = step.place().stream().filter(cell -> !terrain.support(
@@ -774,7 +818,7 @@ public final class PathTask extends TickTask {
                 return p; // 还在挖或终局失败
             }
             path.set(cursor, new DigAStar.Step(next.x(), next.y(), next.z(),
-                    next.dig().subList(1, next.dig().size()), next.place(), next.action()));
+                    next.dig().subList(1, next.dig().size()), next.place(), next.action(), next.feetY(), next.jump()));
             return running();
         }
 
@@ -783,7 +827,7 @@ public final class PathTask extends TickTask {
             if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不放置。", null));
             if (next.x() == c.blockPosition().getX() && next.z() == c.blockPosition().getZ()
                     && next.y() > c.getY() + .02) {
-                if (steering == null) steering = new PathSteering(next.x(), next.y(), next.z());
+                if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
                 var command = steering.tick(bodyState(c));
                 if (command.stuck()) return stuck(c, next);
                 c.walkForTick(0, 0, c.onGround());
@@ -795,20 +839,28 @@ public final class PathTask extends TickTask {
                 return p;
             }
             path.set(cursor, new DigAStar.Step(next.x(), next.y(), next.z(),
-                    next.dig(), next.place().subList(1, next.place().size()), next.action()));
+                    next.dig(), next.place().subList(1, next.place().size()), next.action(), next.feetY(), next.jump()));
             return running();
         }
 
         // Newly blocked cells must replan before the body enters them.
-        Long blocked = DigAStar.clearanceCells(path.get(Math.max(0, cursor - 1)).y(),
+        Long blocked = sampler.geometry() != null ? null : DigAStar.clearanceCells(path.get(Math.max(0, cursor - 1)).y(),
                 next.x(), next.y(), next.z()).stream()
                 .filter(cell -> !sampler.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))
                         || !sampler.passable(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
                 .findFirst().orElse(null);
-        if (blocked != null || !sampler.support(next.x(), next.y() - 1, next.z())) {
+        boolean shapeChanged = false;
+        if (sampler.geometry() != null) {
+            var before = path.get(Math.max(0, cursor - 1));
+            var check = PathTransition.check(sampler, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),
+                    next.x(), next.y(), next.z(), 0, 0);
+            shapeChanged = check.plan() == null || Math.abs(check.plan().feetY() - next.feetY()) > 1e-5;
+        }
+        if (shapeChanged || blocked != null || sampler.geometry() == null && !sampler.support(next.x(), next.y() - 1, next.z())) {
             long cell = blocked != null ? blocked : DigAStar.pack(next.x(), next.y() - 1, next.z());
             recordFailure(cursor, !sampler.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
-                    DigAStar.unpackZ(cell)) ? "UNKNOWN_TERRAIN" : blocked != null ? "NEXT_CLEARANCE" : "NO_SUPPORT", cell);
+                    DigAStar.unpackZ(cell)) ? "UNKNOWN_TERRAIN" : shapeChanged ? "MOVEMENT_GEOMETRY"
+                    : blocked != null ? "NEXT_CLEARANCE" : "NO_SUPPORT", cell);
             if (replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
                     "NO_PATH:下一落脚格已变化，重规划上限已到；已停止移动。", null));
             replanBadKey = cell;
@@ -823,7 +875,7 @@ public final class PathTask extends TickTask {
         if (Math.hypot(facingX, facingZ) > 1e-5) {
             c.facePoint(new net.minecraft.world.phys.Vec3(next.x() + .5, c.getEyeY(), next.z() + .5));
         }
-        if (steering == null) steering = new PathSteering(next.x(), next.y(), next.z());
+        if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
         boolean through = canPassStraight();
         var command = steering.tick(bodyState(c), through);
         if (command.stuck()) return stuck(c, next);
@@ -850,6 +902,8 @@ public final class PathTask extends TickTask {
                 && here.dig().isEmpty() && here.place().isEmpty()
                 && after.dig().isEmpty() && after.place().isEmpty()
                 && before.y() == here.y() && here.y() == after.y()
+                && Math.abs(before.feetY() - here.feetY()) < 1e-5
+                && Math.abs(here.feetY() - after.feetY()) < 1e-5 && !here.jump() && !after.jump()
                 && here.x() - before.x() == after.x() - here.x()
                 && here.z() - before.z() == after.z() - here.z();
     }
@@ -889,10 +943,18 @@ public final class PathTask extends TickTask {
     }
 
     private Progress arrived(CompanionPlayer c) {
-        BlockPos at = c.blockPosition();
+        BlockPos at = StandingGeometry.feetCell(c);
         if (path.isEmpty()) return new Progress.Done(new Result(false, "NO_PATH:没有可执行的实际落点。", null));
         var end = path.getLast();
-        if (!new PathSteering(end.x(), end.y(), end.z()).settled(bodyState(c))) {
+        if (sampler.geometry() != null) {
+            var foot = sampler.geometry().foot(end.x(), end.y(), end.z(), TerrainEdits.EMPTY);
+            var clear = foot == null ? null : sampler.geometry().clearance(end.x(), foot.height(), end.z(),
+                    end.x(), foot.height(), end.z(), TerrainEdits.EMPTY);
+            if (foot == null || Math.abs(foot.height() - end.feetY()) > 1e-5 || !clear.known()
+                    || !clear.blockers().isEmpty())
+                return new Progress.Done(new Result(false, "NO_PATH:末节点的支撑或净空已经变化，未认定到达。", null));
+        }
+        if (!new PathSteering(end.x(), end.feetY(), end.z(), end.jump()).settled(bodyState(c))) {
             return new Progress.Done(new Result(false,
                     "NO_PATH:路线结束但身体没有在末节点站稳，重新观察当前位置。", null));
         }
@@ -916,6 +978,7 @@ public final class PathTask extends TickTask {
                             + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。"), data));
         }
         data.addProperty("arrival", spec.workArrival() ? "work" : "position");
+        data.addProperty("feet_y", c.getY());
         data.addProperty("x", at.getX()); data.addProperty("y", at.getY()); data.addProperty("z", at.getZ());
         String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
                 + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
@@ -930,7 +993,7 @@ public final class PathTask extends TickTask {
     private void beginReplan(CompanionPlayer c) {
         stopMovement();
         clearCrack();
-        BlockPos from = c.blockPosition();
+        BlockPos from = StandingGeometry.feetCell(c);
         sampler = samplerFor(c, from);
         replans++;
         wasReplan = true;
@@ -976,6 +1039,20 @@ public final class PathTask extends TickTask {
     private boolean validateAhead(CompanionPlayer c) {
         replanBadSet = false;
         int end = Math.min(path.size(), cursor + RECHECK_AHEAD);
+        if (sampler.geometry() != null && cursor > 0) {
+            var before = path.get(cursor - 1);
+            var remaining = new ArrayList<DigAStar.Step>();
+            remaining.add(new DigAStar.Step(before.x(), before.y(), before.z(), List.of(), List.of(),
+                    DigAStar.ACT_START, before.feetY(), false));
+            remaining.addAll(path.subList(cursor, end));
+            var failure = planFailure(remaining, sampler, Math.max(0, spec.maxDigs() - actualDigs));
+            if (failure == null) return true;
+            int index = Math.min(end - 1, cursor + Math.max(0, failure.step() - 1));
+            recordFailure(index, failure.reason(), failure.cell());
+            replanBadKey = failure.cell() == null ? failure.to() : failure.cell();
+            replanBadSet = true;
+            return false;
+        }
         TerrainEdits edits = TerrainEdits.EMPTY;
         for (int i = cursor; i < end; i++) {
             DigAStar.Step st = path.get(i);

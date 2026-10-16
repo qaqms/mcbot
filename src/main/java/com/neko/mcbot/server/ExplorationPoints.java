@@ -29,7 +29,7 @@ public final class ExplorationPoints {
     }
 
     public static JsonArray describe(CompanionPlayer player, int distance) {
-        return candidates(player.blockPosition(), pos -> {
+        return candidates(StandingGeometry.feetCell(player), pos -> {
             if (!WorkPositions.standable(player, pos)) return false;
             for (BlockPos cell : java.util.List.of(pos.below(), pos, pos.above()))
                 if (HAZARDS.contains(player.level().getBlockState(cell).getBlock())) return false;
