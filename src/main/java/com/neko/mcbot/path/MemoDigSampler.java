@@ -156,6 +156,10 @@ public final class MemoDigSampler implements DigSampler {
         return base.canClear(x, y, z, cells);
     }
 
+    @Override public boolean canClear(int x, int y, int z, List<Long> cells, TerrainEdits edits) {
+        return base.canClear(x, y, z, cells, edits);
+    }
+
     @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
         return base.allowsStep(fx, fy, fz, x, y, z);
     }

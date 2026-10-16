@@ -4,17 +4,57 @@ import com.neko.mcbot.path.DigAStar;
 import com.neko.mcbot.path.DigSampler;
 import com.neko.mcbot.path.PathSpec;
 import com.neko.mcbot.path.NavigationGoal;
+import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationWorkTest {
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
+
+    @Test void laterWorkRaysSeeAllEarlierRemovalsAndPlannedSupports() {
+        var world = new BlockAimTest.Grid();
+        world.wall();
+        long opening = DigAStar.pack(1, 1, 0);
+        var removed = TerrainEdits.EMPTY.after(List.of(opening), List.of());
+        var goal = NavigationWork.goal(world, BlockAimTest.TARGET, 1.62, 4.5, false, p -> false);
+        assertFalse(goal.reached(0, 0, 0));
+        assertTrue(goal.reached(0, 0, 0, removed), "a real opening from an earlier step exposes the target");
+        assertTrue(NavigationWork.canClear(world, BlockPos.ZERO, 1.62, 4.5,
+                List.of(DigAStar.pack(2, 1, 0)), removed));
+        var filled = removed.after(List.of(), List.of(opening));
+        assertFalse(goal.reached(0, 0, 0, filled), "planned full-cube supports must occlude work rays");
+        assertFalse(NavigationWork.canClear(world, BlockPos.ZERO, 1.62, 4.5,
+                List.of(DigAStar.pack(2, 1, 0)), filled));
+        assertTrue(world.blocks.containsKey(new BlockPos(1, 1, 0)), "native clip runs without changing the world");
+    }
+
+    @Test void editedGeometryNeverTurnsUnknownCellsIntoObservedAir() {
+        var world = new BlockAimTest.Grid();
+        world.wall();
+        BlockPos unknown = new BlockPos(1, 1, 0);
+        world.unknown.add(unknown);
+        var edits = TerrainEdits.EMPTY.after(List.of(DigAStar.pack(1, 1, 0)), List.of());
+        var goal = NavigationWork.goal(world, BlockAimTest.TARGET, 1.62, 4.5, false, p -> false);
+        assertFalse(goal.reached(0, 0, 0, edits));
+        assertFalse(NavigationWork.canClear(world, BlockPos.ZERO, 1.62, 4.5,
+                List.of(DigAStar.pack(2, 1, 0)), edits));
+    }
+
+    @Test void clippingAnEditedViewUsesTheNativePlacedBlockOutline() {
+        var world = new BlockAimTest.Grid();
+        var eye = world.eye();
+        var view = NavigationWork.view(world, eye, Set.of(), Set.of(new BlockPos(1, 1, 0)));
+        assertFalse(BlockAim.mining(view, BlockAimTest.TARGET, 4.5).ok());
+        assertTrue(BlockAim.mining(view, new BlockPos(1, 1, 0), 4.5).ok());
+        assertEquals(1, world.blocks.size());
+    }
 
     @Test void realClipChecksEachClearingCellInTheRequestedOrder() {
         var world = new BlockAimTest.Grid();
@@ -95,6 +135,9 @@ class NavigationWorkTest {
             }
             @Override public boolean canClear(int x, int y, int z, List<Long> cells) {
                 return NavigationWork.canClear(world, new BlockPos(x, y, z), 1.62, 4.5, cells);
+            }
+            @Override public boolean canClear(int x, int y, int z, List<Long> cells, TerrainEdits edits) {
+                return NavigationWork.canClear(world, new BlockPos(x, y, z), 1.62, 4.5, cells, edits);
             }
         };
         assertFalse(spec.allowsStep(0, 5, 0, 1, 2, 0), "a drop must not become a returnable stair");

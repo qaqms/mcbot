@@ -26,6 +26,9 @@ public final class BlockAim {
         default BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
             return ignored.isEmpty() ? trace(from, to) : null;
         }
+        default BlockHitResult traceEdited(Vec3 from, Vec3 to, Set<BlockPos> removed, Set<BlockPos> placed) {
+            return placed.isEmpty() ? traceIgnoring(from, to, removed) : null;
+        }
     }
 
     public record Aim(Vec3 point, String failure) {
@@ -79,6 +82,9 @@ public final class BlockAim {
             @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
                 return clipIgnoring(level, from, to, CollisionContext.of(player), ignored);
             }
+            @Override public BlockHitResult traceEdited(Vec3 from, Vec3 to, Set<BlockPos> removed, Set<BlockPos> placed) {
+                return clipEdited(level, from, to, CollisionContext.of(player), removed, placed);
+            }
         };
     }
 
@@ -92,22 +98,32 @@ public final class BlockAim {
             @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
                 return world.traceIgnoring(from, to, ignored);
             }
+            @Override public BlockHitResult traceEdited(Vec3 from, Vec3 to, Set<BlockPos> removed, Set<BlockPos> placed) {
+                return world.traceEdited(from, to, removed, placed);
+            }
         };
     }
 
     /** Only admitted cells disappear in this read-only view; real mining never uses it. */
     public static BlockHitResult clipIgnoring(BlockGetter world, Vec3 from, Vec3 to,
                                               CollisionContext context, Set<BlockPos> ignored) {
+        return clipEdited(world, from, to, context, ignored, Set.of());
+    }
+
+    /** Path materials are full cubes; planned supports must also occlude later work rays. */
+    public static BlockHitResult clipEdited(BlockGetter world, Vec3 from, Vec3 to, CollisionContext context,
+                                             Set<BlockPos> removed, Set<BlockPos> placed) {
         BlockGetter view = new BlockGetter() {
             @Override public net.minecraft.world.level.block.state.BlockState getBlockState(BlockPos pos) {
-                return ignored.contains(pos) ? net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()
-                        : world.getBlockState(pos);
+                if (removed.contains(pos)) return net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+                if (placed.contains(pos)) return net.minecraft.world.level.block.Blocks.COBBLESTONE.defaultBlockState();
+                return world.getBlockState(pos);
             }
             @Override public net.minecraft.world.level.material.FluidState getFluidState(BlockPos pos) {
                 return getBlockState(pos).getFluidState();
             }
             @Override public net.minecraft.world.level.block.entity.BlockEntity getBlockEntity(BlockPos pos) {
-                return ignored.contains(pos) ? null : world.getBlockEntity(pos);
+                return removed.contains(pos) || placed.contains(pos) ? null : world.getBlockEntity(pos);
             }
             @Override public int getHeight() { return world.getHeight(); }
             @Override public int getMinY() { return world.getMinY(); }
@@ -200,7 +216,7 @@ public final class BlockAim {
         }
         if (!access.loaded(pos) || !loadedSegment(access, access.eye(), point)) return unloaded();
         BlockHitResult hit = access.trace(access.eye(), point);
-        if (hit.getType() != HitResult.Type.BLOCK || !pos.equals(hit.getBlockPos())) {
+        if (hit == null || hit.getType() != HitResult.Type.BLOCK || !pos.equals(hit.getBlockPos())) {
             return failed("TARGET_BLOCKED:当前视线未命中指定方块，先查看或调整站位。");
         }
         if (access.eye().distanceToSqr(hit.getLocation()) > reach * reach) {
@@ -235,7 +251,7 @@ public final class BlockAim {
                 Vec3 inside = surface.subtract(normal.scale(1e-4));
                 if (!loadedSegment(access, eye, inside)) { unknown = true; continue; }
                 var hit = access.trace(eye, inside);
-                if (hit.getType() == HitResult.Type.BLOCK && clicked.equals(hit.getBlockPos())
+                if (hit != null && hit.getType() == HitResult.Type.BLOCK && clicked.equals(hit.getBlockPos())
                         && hit.getDirection() == face && eye.distanceToSqr(hit.getLocation()) <= reach * reach)
                     return new Contact(hit, null);
             }

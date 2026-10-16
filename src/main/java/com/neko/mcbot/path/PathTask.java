@@ -273,7 +273,9 @@ public final class PathTask extends TickTask {
             // open 空的真 NO_PATH 永不降级（D 基岩笼场景钉死）
             String lead = wasReplan ? "路被改变后重规划失败：" : "";
             String why = search.budgetReached()
-                    ? "NO_PROGRESS:" + lead + "搜索预算用尽（展开 " + search.expanded()
+                    ? "NO_PROGRESS:" + lead
+                            + (search.storedNodes() >= DigAStar.MAX_STORED_NODES ? "路径状态存储到上限；" : "")
+                            + "搜索预算用尽（展开 " + search.expanded()
                             + " 节点/" + search.elapsedMillis() + "ms）而没能向目标实质推进。"
                             + "换条路绕开或分更短的段，别硬撞同一方向。"
                     : "NO_PATH:" + lead + search.failure();
@@ -553,31 +555,28 @@ public final class PathTask extends TickTask {
 
     static List<DigAStar.Step> liveSteps(List<DigAStar.Step> plan, int fromY, DigSampler sampler) {
         ArrayList<DigAStar.Step> out = new ArrayList<>(plan.size());
-        var removed = new java.util.HashSet<Long>();
-        var placed = new java.util.HashSet<Long>();
+        TerrainEdits edits = TerrainEdits.EMPTY;
         for (DigAStar.Step st : plan) {
             if (st.action() == DigAStar.ACT_START) {
                 out.add(st);
                 continue;
             }
+            DigSampler terrain = edits.view(sampler);
             ArrayList<Long> dig = new ArrayList<>(3);
             for (long cell : DigAStar.clearanceCells(fromY, st.x(), st.y(), st.z())) {
                 int cy = DigAStar.unpackY(cell);
-                if (placed.contains(cell) || !removed.contains(cell) && !sampler.passable(st.x(), cy, st.z())) {
+                if (!terrain.passable(st.x(), cy, st.z())) {
                     dig.add(cell);
-                    removed.add(cell);
-                    placed.remove(cell);
                 }
             }
             ArrayList<Long> place = new ArrayList<>(1);
             long floor = DigAStar.pack(st.x(), st.y() - 1, st.z());
-            if (!placed.contains(floor) && (removed.contains(floor) || !sampler.support(st.x(), st.y() - 1, st.z()))
-                    && sampler.placeable(st.x(), st.y() - 1, st.z())) {
+            if (!terrain.support(st.x(), st.y() - 1, st.z())
+                    && terrain.placeable(st.x(), st.y() - 1, st.z())) {
                 place.add(floor);
-                placed.add(floor);
-                removed.remove(floor);
             }
             out.add(new DigAStar.Step(st.x(), st.y(), st.z(), dig, place, st.action()));
+            edits = edits.after(dig, place);
             fromY = st.y();
         }
         return out;
@@ -585,30 +584,34 @@ public final class PathTask extends TickTask {
 
     static boolean editsFeasible(List<DigAStar.Step> plan, DigSampler sampler) {
         DigAStar.Step previous = null;
-        var removed = new java.util.HashSet<Long>();
-        var placed = new java.util.HashSet<Long>();
+        TerrainEdits edits = TerrainEdits.EMPTY;
+        int digs = 0, places = 0;
         for (var step : plan) {
             if (!sampler.inBounds(step.x(), step.y(), step.z())) return false;
-            if (previous != null && (!sampler.allowsStep(previous.x(), previous.y(), previous.z(),
-                    step.x(), step.y(), step.z()) || !sampler.canClear(
-                    previous.x(), previous.y(), previous.z(), step.dig()))) return false;
+            if (step.action() == DigAStar.ACT_START) {
+                if (previous != null || !step.dig().isEmpty() || !step.place().isEmpty()) return false;
+                previous = step;
+                continue;
+            }
+            if (previous == null) return false;
+            DigSampler terrain = edits.view(sampler);
             for (long cell : step.dig()) {
-                if (previous != null && cell == DigAStar.pack(previous.x(), previous.y() - 1, previous.z()))
+                if (cell == DigAStar.pack(previous.x(), previous.y() - 1, previous.z()))
                     return false;
-                if (!DigSampler.feasibleDig(sampler.digSeconds(
+                if (!DigSampler.feasibleDig(terrain.digSeconds(
                         DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))) return false;
-                removed.add(cell);
-                placed.remove(cell);
             }
-            for (long cell : step.place()) {
-                if (!sampler.placeable(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
-                        DigAStar.unpackZ(cell))) return false;
-                placed.add(cell);
-                removed.remove(cell);
-            }
-            long floor = DigAStar.pack(step.x(), step.y() - 1, step.z());
-            if (step.action() != DigAStar.ACT_START && !placed.contains(floor)
-                    && (removed.contains(floor) || !sampler.support(step.x(), step.y() - 1, step.z()))) return false;
+            var expected = PathTransition.evaluate(sampler, edits, previous.x(), previous.y(), previous.z(),
+                    step.x(), step.y(), step.z(), MAX_DIGS - digs, sampler.maxPlaces() - places);
+            if (expected == null) return false;
+            var neededDig = step.dig().stream().filter(cell -> !terrain.passable(
+                    DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))).toList();
+            var neededPlace = step.place().stream().filter(cell -> !terrain.support(
+                    DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))).toList();
+            if (!expected.dig().equals(neededDig) || !expected.place().equals(neededPlace)) return false;
+            edits = expected.terrain();
+            digs += neededDig.size();
+            places += neededPlace.size();
             previous = step;
         }
         return true;
@@ -890,6 +893,7 @@ public final class PathTask extends TickTask {
     private boolean validateAhead(CompanionPlayer c) {
         replanBadSet = false;
         int end = Math.min(path.size(), cursor + RECHECK_AHEAD);
+        TerrainEdits edits = TerrainEdits.EMPTY;
         for (int i = cursor; i < end; i++) {
             DigAStar.Step st = path.get(i);
             for (long cell : st.dig()) {
@@ -901,7 +905,8 @@ public final class PathTask extends TickTask {
                 }
                 // 挖过的应该还是空的（被人补上=变了）；没挖的仍待挖，不算坏
             }
-            if (!sampler.support(st.x(), st.y() - 1, st.z()) && st.place().isEmpty()
+            edits = edits.after(st.dig(), st.place());
+            if (!edits.view(sampler).support(st.x(), st.y() - 1, st.z())
                     && i > cursor) {
                 replanBadKey = DigAStar.pack(st.x(), st.y() - 1, st.z()); // 原支撑被拆了
                 replanBadSet = true;

@@ -52,8 +52,13 @@ public final class DigAStar {
      * 同地形重搜必原路复现；不复用 open/best（旧 g/f 建在旧地形上，复用会带进失效代价）。 */
     public static final double BIAS_REUSE = 0.7;
 
-    private record Node(long key, int x, int y, int z, int digs, int places,
-                        double g, double f, long prev) {
+    /** Search memory is bounded independently of the number of settled nodes. */
+    public static final int MAX_STORED_NODES = 32_768;
+
+    private record State(long position, int digs, int places, TerrainEdits terrain) { }
+
+    private record Node(State key, int x, int y, int z, int digs, int places,
+                        double g, double f, Node prev, Step step) {
     }
 
     private final DigSampler s;
@@ -68,7 +73,8 @@ public final class DigAStar {
 
     private final PriorityQueue<Node> open =
             new PriorityQueue<>((a, b) -> Double.compare(a.f, b.f));
-    private final Map<Long, Node> best = new HashMap<>();
+    private final Map<State, Node> best = new HashMap<>();
+    private int storedNodes = 1;
 
     private int expanded;
     /** 累计搜索 CPU 时长（验尸/双帽口径用）；totalBudgetNanos 到点即撞帽，与节点帽同位。 */
@@ -111,7 +117,7 @@ public final class DigAStar {
         this.goalRadius = goalRadius;
         this.goal = NavigationGoal.position(tx, ty, tz, goalRadius);
         this.goalEntryCost = computeGoalEntryCost(sampler);
-        Node start = new Node(pack(sx, sy, sz), sx, sy, sz, 0, 0, 0, h(sx, sy, sz), 0);
+        Node start = start();
         best.put(start.key, start);
         open.add(start);
     }
@@ -122,9 +128,15 @@ public final class DigAStar {
         this.goal = java.util.Objects.requireNonNull(goal);
         // Replace the initial priority, whose estimate used the positional constructor.
         open.clear();
-        Node start = new Node(pack(sx, sy, sz), sx, sy, sz, 0, 0, 0, h(sx, sy, sz), 0);
+        Node start = start();
         best.put(start.key, start);
         open.add(start);
+    }
+
+    private Node start() {
+        return new Node(new State(pack(sx, sy, sz), 0, 0, TerrainEdits.EMPTY),
+                sx, sy, sz, 0, 0, 0, h(sx, sy, sz), null,
+                new Step(sx, sy, sz, List.of(), List.of(), ACT_START));
     }
 
     /** 分帧推进（不限时，单测/兼容用）。 */
@@ -152,7 +164,7 @@ public final class DigAStar {
             if (b != cur) {
                 continue; // 陈旧堆项
             }
-            if (isGoal(cur.x, cur.y, cur.z)) {
+            if (goal.reached(cur.x, cur.y, cur.z, cur.key.terrain())) {
                 goalNode = cur;
                 path = reconstruct(cur);
                 finished = true;
@@ -171,18 +183,22 @@ public final class DigAStar {
                         + " 节点。目标太远或地形太纠缠，请分短段移动。");
             }
             expand(cur);
+            if (storedNodes >= MAX_STORED_NODES) {
+                budgetReached = true;
+                return fail("BUDGET_EXCEEDED:路径状态存储已到上限，未证明目标无路；请重新观察并分短段移动。");
+            }
             // 每 16 拓才探一次钟：nanoTime 本身不免费，粗粒度换开销（帽语义不差这 16 节点）
             if ((expanded & 15) == 0) {
                 long now = System.nanoTime();
-                if (now >= sliceEnd) {
-                    usedNanos += now - t0;
-                    return false; // 本拍切片用尽，下拍续（未出结果）
-                }
                 if (usedNanos + (now - t0) >= totalBudgetNanos) {
                     usedNanos = totalBudgetNanos;
                     budgetReached = true;
                     return fail("BUDGET_EXCEEDED:搜索耗尽了 " + (totalBudgetNanos / 1_000_000)
                             + "ms 时间预算（展开 " + expanded + " 节点）。目标太远或地形太纠缠，请分短段移动。");
+                }
+                if (now >= sliceEnd) {
+                    usedNanos += now - t0;
+                    return false; // 本拍切片用尽，下拍续（未出结果）
                 }
             }
         }
@@ -221,6 +237,10 @@ public final class DigAStar {
 
     public int expanded() {
         return expanded;
+    }
+
+    public int storedNodes() {
+        return storedNodes;
     }
 
     /** 是否因节点预算帽而结束（区别于 open 空的真 NO_PATH）。 */
@@ -285,11 +305,6 @@ public final class DigAStar {
         return true;
     }
 
-    /** 目标体积默认半径一格；精确站位的半径为零。 */
-    private boolean isGoal(int x, int y, int z) {
-        return goal.reached(x, y, z);
-    }
-
     private void expand(Node cur) {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
@@ -303,74 +318,38 @@ public final class DigAStar {
     }
 
     private void relax(Node cur, int dx, int dy, int dz) {
+        if (storedNodes >= MAX_STORED_NODES) return;
         int bx = cur.x + dx, by = cur.y + dy, bz = cur.z + dz;
-        if (!s.inBounds(bx, by, bz) || !s.allowsStep(cur.x, cur.y, cur.z, bx, by, bz)) {
-            return;
-        }
-        // A jump also sweeps the head above the departure column.
-        if (dy > 0 && !s.passable(cur.x, cur.y + 2, cur.z)) return;
-        // 斜向：两个共享邻格必须已可通行（不挖角落，斜路只走现成缝）
-        if (dx != 0 && dz != 0) {
-            if (!s.passable(cur.x + dx, cur.y, cur.z) || !s.passable(cur.x, cur.y, cur.z + dz)
-                    || !s.passable(cur.x + dx, cur.y + 1, cur.z)
-                    || !s.passable(cur.x, cur.y + 1, cur.z + dz)) {
-                return;
-            }
-        }
-
-        // Descending sweeps the destination column before the feet reach its lower landing.
+        var plan = PathTransition.evaluate(s, cur.key.terrain(), cur.x, cur.y, cur.z, bx, by, bz,
+                maxDigs - cur.digs, s.maxPlaces() - cur.places);
+        if (plan == null) return;
         long destKey = pack(bx, by, bz);
         // 抑抖（R1-S3）：旧路线上的落脚格本步基础价先打折，后面逐项再打
         double cost = (MOVE_BASE + (dx != 0 && dz != 0 ? MOVE_DIAG : 0))
                 * (reuse != null && reuse.contains(destKey) ? BIAS_REUSE : 1.0);
-        int newDigs = 0;
-        List<Long> clearing = new ArrayList<>(3);
-        int places;
-        for (int cy = clearanceTop(cur.y, by); cy >= by; cy--) {
-            if (s.passable(bx, cy, bz)) {
-                continue;
-            }
-            double sec = s.digSeconds(bx, cy, bz);
-            if (!DigSampler.feasibleDig(sec)) {
-                return;
-            }
-            newDigs++;
-            if (cur.digs + newDigs > maxDigs) {
-                return;
-            }
-            long dc = pack(bx, cy, bz);
-            clearing.add(dc);
+        for (long dc : plan.dig()) {
+            double sec = s.digSeconds(unpackX(dc), unpackY(dc), unpackZ(dc));
             cost += (sec + DIG_OVERHEAD) * (reuse != null && reuse.contains(dc) ? BIAS_REUSE : 1.0);
         }
-        if (!clearing.isEmpty() && !s.canClear(cur.x, cur.y, cur.z, clearing)) return;
-        // 2) 支撑：没有现成实心就放一块（PILLAR=直上、BRIDGE=横移补脚 都由此派生），
-        //    放格同挖格一样累计预算（=背包存量），不够就无效——防"规划靠 0 库存的路"
-        List<Long> place = new ArrayList<>(1);
-        if (!s.support(bx, by - 1, bz)) {
-            if (!s.placeable(bx, by - 1, bz) || cur.places + 1 > s.maxPlaces()) {
-                return;
-            }
-            long pc = pack(bx, by - 1, bz);
+        for (long pc : plan.place()) {
             cost += s.placeCost(bx, by - 1, bz)
                     * (reuse != null && reuse.contains(pc) ? BIAS_REUSE : 1.0);
-            places = cur.places + 1;
-            place.add(pc);
-        } else {
-            places = cur.places;
         }
         // 3) 下落风险
         if (dy < 0) {
             cost += FALL_PENALTY * dy * dy;
         }
 
-        long key = destKey;
+        int digs = cur.digs + plan.dig().size(), places = cur.places + plan.place().size();
+        State key = new State(destKey, digs, places, plan.terrain());
         double g = cur.g + cost;
         Node old = best.get(key);
         if (old != null && old.g <= g) {
             return;
         }
-        Node n = new Node(key, bx, by, bz, cur.digs + newDigs, places, g, g + h(bx, by, bz),
-                cur.key);
+        var step = new Step(bx, by, bz, plan.dig(), plan.place(), classify(cur, bx, by, bz, plan.dig(), plan.place()));
+        Node n = new Node(key, bx, by, bz, digs, places, g, g + h(bx, by, bz), cur, step);
+        storedNodes++;
         best.put(key, n);
         open.add(n);
     }
@@ -431,34 +410,11 @@ public final class DigAStar {
         return c;
     }
 
-    /** 回溯路径并按"当下世界状态"补齐每步的挖/放清单（搜索期世界不变，重放即一致）。 */
+    /** Parent objects retain the exact edit history even when a cheaper sibling replaces a map entry. */
     private List<Step> reconstruct(Node goal) {
-        ArrayList<Node> chain = new ArrayList<>();
-        for (Node n = goal; n != null; n = best.get(n.prev)) {
-            chain.add(n);
-        }
-        Collections.reverse(chain);
-        List<Step> steps = new ArrayList<>(chain.size());
-        for (int i = 0; i < chain.size(); i++) {
-            Node n = chain.get(i);
-            if (i == 0) {
-                steps.add(new Step(n.x, n.y, n.z, List.of(), List.of(), ACT_START));
-                continue;
-            }
-            List<Long> dig = new ArrayList<>(3);
-            List<Long> place = new ArrayList<>(1);
-            for (long cell : clearanceCells(chain.get(i - 1).y, n.x, n.y, n.z)) {
-                int cy = unpackY(cell);
-                if (!s.passable(n.x, cy, n.z)) {
-                    dig.add(cell);
-                }
-            }
-            if (!s.support(n.x, n.y - 1, n.z) && s.placeable(n.x, n.y - 1, n.z)) {
-                place.add(pack(n.x, n.y - 1, n.z));
-            }
-            steps.add(new Step(n.x, n.y, n.z, dig, place,
-                    classify(chain.get(i - 1), n, dig, place)));
-        }
+        List<Step> steps = new ArrayList<>();
+        for (Node n = goal; n != null; n = n.prev) steps.add(n.step);
+        Collections.reverse(steps);
         return steps;
     }
 
@@ -475,8 +431,8 @@ public final class DigAStar {
         return Math.max(fromY, toY) + 1;
     }
 
-    private byte classify(Node from, Node to, List<Long> dig, List<Long> place) {
-        int dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+    private byte classify(Node from, int x, int y, int z, List<Long> dig, List<Long> place) {
+        int dx = x - from.x, dy = y - from.y, dz = z - from.z;
         boolean vert = dx == 0 && dz == 0;
         if (!place.isEmpty()) {
             return vert ? ACT_PILLAR : ACT_BRIDGE;

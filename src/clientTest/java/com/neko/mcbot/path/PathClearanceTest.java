@@ -9,6 +9,44 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PathClearanceTest {
+    @Test void productionSearchAndLiveValidationAgreeOnDescendingWorkAndWalkingBack() {
+        var blocks = new HashSet<Long>();
+        for (int x = 0; x < 4; x++) for (int y = 0; y < 4; y++) blocks.add(DigAStar.pack(x, y, 0));
+        DigSampler hill = new DigSampler() {
+            @Override public boolean passable(int x, int y, int z) {
+                return inBounds(x, y, z) && !blocks.contains(DigAStar.pack(x, y, z));
+            }
+            @Override public double digSeconds(int x, int y, int z) {
+                return inBounds(x, y, z) && y > 0 ? 1 : INFEASIBLE;
+            }
+            @Override public boolean support(int x, int y, int z) { return blocks.contains(DigAStar.pack(x, y, z)); }
+            @Override public boolean placeable(int x, int y, int z) { return false; }
+            @Override public double placeCost(int x, int y, int z) { return INFEASIBLE; }
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x >= 0 && x < 4 && y >= 0 && y <= 5 && z == 0;
+            }
+            @Override public int maxPlaces() { return 0; }
+        };
+        var from = new net.minecraft.core.BlockPos(0, 4, 0);
+        var target = new net.minecraft.core.BlockPos(3, 1, 0);
+        var walk = PathTask.searchFor(hill, from, target, true, true);
+        while (!walk.advance(300)) { }
+        assertNotNull(walk.failure());
+        var down = PathTask.searchFor(hill, from, target, true, false);
+        while (!down.advance(300)) { }
+        assertNull(down.failure());
+        var fresh = PathTask.liveSteps(down.path(), from.getY(), hill);
+        assertEquals(down.path().stream().map(DigAStar.Step::dig).toList(),
+                fresh.stream().map(DigAStar.Step::dig).toList());
+        assertTrue(PathTask.editsFeasible(fresh, hill), "a selected route must pass the real pre-execution gate");
+        for (var step : fresh) for (long cell : step.dig()) assertTrue(blocks.remove(cell));
+        var up = PathTask.searchFor(hill, target, from, true, true);
+        while (!up.advance(300)) { }
+        assertNull(up.failure());
+        assertTrue(up.path().stream().allMatch(step -> step.dig().isEmpty() && step.place().isEmpty()));
+        assertTrue(PathTask.editsFeasible(PathTask.liveSteps(up.path(), target.getY(), hill), hill));
+    }
+
     @Test void theProductionWalkOnlySearchCannotDigThroughACorridor() {
         DigSampler corridor = new DigSampler() {
             @Override public boolean passable(int x, int y, int z) { return inBounds(x, y, z) && x != 1; }
@@ -99,7 +137,10 @@ class PathClearanceTest {
         var start = new DigAStar.Step(0, 64, 0, List.of(), List.of(), DigAStar.ACT_START);
         var down = new DigAStar.Step(0, 63, 0, List.of(DigAStar.pack(0, 63, 0)), List.of(), DigAStar.ACT_DIG);
         assertFalse(PathTask.editsFeasible(List.of(start, down), cells));
-        var stair = new DigAStar.Step(1, 63, 0, List.of(DigAStar.pack(1, 63, 0)), List.of(), DigAStar.ACT_DIG);
+        cells.blocked.add(DigAStar.pack(1, 63, 0));
+        var missingHead = new DigAStar.Step(1, 63, 0, List.of(DigAStar.pack(1, 63, 0)), List.of(), DigAStar.ACT_DIG);
+        assertFalse(PathTask.editsFeasible(List.of(start, missingHead), cells), "swept clearance cannot be omitted");
+        var stair = new DigAStar.Step(1, 63, 0, List.of(shared, DigAStar.pack(1, 63, 0)), List.of(), DigAStar.ACT_DIG);
         assertTrue(PathTask.editsFeasible(List.of(start, stair), cells), "legal adjacent stairs remain valid");
     }
 }

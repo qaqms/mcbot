@@ -55,6 +55,10 @@ class BlockAimTest {
             traces++;
             return BlockAim.clipIgnoring(this, from, to, CollisionContext.empty(), ignored);
         }
+        @Override public BlockHitResult traceEdited(Vec3 from, Vec3 to, Set<BlockPos> removed, Set<BlockPos> placed) {
+            traces++;
+            return BlockAim.clipEdited(this, from, to, CollisionContext.empty(), removed, placed);
+        }
         @Override public BlockState getBlockState(BlockPos pos) {
             assertTrue(loaded(pos), "unknown blocks must never be read");
             reads++;

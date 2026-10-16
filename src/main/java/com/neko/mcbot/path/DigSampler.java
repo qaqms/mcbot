@@ -44,6 +44,10 @@ public interface DigSampler {
         return true;
     }
 
+    default boolean canClear(int fromX, int fromY, int fromZ, java.util.List<Long> cells, TerrainEdits edits) {
+        return canClear(fromX, fromY, fromZ, cells);
+    }
+
     default boolean allowsStep(int fromX, int fromY, int fromZ, int x, int y, int z) {
         return true;
     }

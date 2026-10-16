@@ -184,11 +184,15 @@ public final class LevelDigSampler implements DigSampler {
     }
 
     @Override public boolean canClear(int x, int y, int z, java.util.List<Long> cells) {
+        return canClear(x, y, z, cells, TerrainEdits.EMPTY);
+    }
+
+    @Override public boolean canClear(int x, int y, int z, java.util.List<Long> cells, TerrainEdits edits) {
         if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)) return false;
         return com.neko.mcbot.server.NavigationWork.canClear(
                 com.neko.mcbot.server.BlockAim.forPlayer(body), new BlockPos(x, y, z),
                 companion.getEyePosition().y - companion.getY(),
-                Math.min(5.5, companion.blockInteractionRange()), cells);
+                Math.min(5.5, companion.blockInteractionRange()), cells, edits);
     }
 
     // ---- 供执行器/确认流使用的工具方法 ----

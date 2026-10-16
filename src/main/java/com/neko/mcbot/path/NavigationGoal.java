@@ -5,6 +5,10 @@ public interface NavigationGoal {
     boolean reached(int x, int y, int z);
     double remaining(int x, int y, int z);
 
+    default boolean reached(int x, int y, int z, TerrainEdits edits) {
+        return reached(x, y, z);
+    }
+
     static NavigationGoal position(int tx, int ty, int tz, int radius) {
         return new NavigationGoal() {
             @Override public boolean reached(int x, int y, int z) { return remaining(x, y, z) == 0; }
