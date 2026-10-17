@@ -14,6 +14,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BlockMiningTest {
     @BeforeAll static void registriesOnly() { bootstrap(); }
+    @Test void exhaustedSharedWorksiteAccountStopsTheOriginalMiningCoreBeforeNativeDestruction() {
+        var access=new Mining(); access.gain=1;
+        access.attemptFailure=new ServerTool.Result(false,"ACTION_LIMIT:original worksite account",null);
+        var mining=new BlockMining(access);
+        assertNull(mining.preflight(5.5)); assertEquals(0,access.attempts);
+        var result=mining.tick();
+        assertFalse(result.ok()); assertEquals(1,access.attempts); assertEquals(0,access.destroys);
+        assertSame(result,mining.tick()); assertEquals(1,access.attempts);
+        assertEquals(-1,access.cracks.getLast());
+    }
 
     @Test void uninstrumentedNearbyEntitiesCannotProveCausalDropOrigin() {
         Mining access = new Mining();

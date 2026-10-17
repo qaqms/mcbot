@@ -96,6 +96,7 @@ public final class McbotMod implements ModInitializer {
             tools.register(new com.neko.mcbot.server.tools.PlaceBlockTool());
             tools.register(new com.neko.mcbot.server.tools.BuildDiffTool());
             tools.register(new com.neko.mcbot.server.tools.BuildNearbyTool());
+            tools.register(new com.neko.mcbot.server.tools.BuildSiteTool());
             tools.register(new com.neko.mcbot.server.tools.MoveToTool());
             tools.register(new com.neko.mcbot.server.tools.TransferTool());
             tools.register(new com.neko.mcbot.server.tools.WaitTool());

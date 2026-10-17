@@ -26,6 +26,7 @@ public final class BuildSurvey {
         boolean near(BlockPos pos);
         BlockPlacement.Access placement();
         JsonObject terrain();
+        default boolean clearable(BuildTarget.Cell cell) { return false; }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -57,6 +58,7 @@ public final class BuildSurvey {
         long start = clock.getAsLong();
         var before = access.terrain();
         var rows = new ArrayList<Row>();
+        var observation = new StringBuilder(target.revision());
         var bills = new TreeMap<String, Bill>();
         boolean observationComplete = true, billComplete = true, budgetExhausted = false;
         for (var cell : target.cells()) {
@@ -72,6 +74,7 @@ public final class BuildSurvey {
             BlockState actual = inBounds && inTime ? access.state(cell.pos()) : null;
             budgetExhausted |= !inTime;
             boolean matches = cell.matches(actual);
+            observation.append('|').append(actual);
             data.addProperty("matches_actual", matches);
             if (actual != null) {
                 data.addProperty("actual_block", BuiltInRegistries.BLOCK.getKey(actual.getBlock()).toString());
@@ -89,9 +92,18 @@ public final class BuildSurvey {
                 data.addProperty("unsupported_reason", material.reason());
             }
             data.addProperty("state", state);
+            data.addProperty("clear_allowed", state.equals("needs_clear") && access.clearable(cell));
+            if (material.item() != null)
+                data.addProperty("item", BuiltInRegistries.ITEM.getKey(material.item()).toString());
             rows.add(new Row(cell, material, data));
         }
-        for (var bill : bills.values()) bill.available = BuildInventory.available(access.placement().inventory(), bill.item);
+        for (var bill : bills.values()) {
+            bill.available = BuildInventory.available(access.placement().inventory(), bill.item);
+            observation.append('|').append(BuiltInRegistries.ITEM.getKey(bill.item)).append(':').append(bill.available);
+        }
+        for (var row : rows) row.data().addProperty("material_available", row.material().item() == null
+                ? row.material().supported() : bills.get(BuiltInRegistries.ITEM.getKey(row.material().item()).toString()).available
+                >= row.material().units());
         int checks = 0;
         for (int index = offset; index < Math.min(rows.size(), offset + PAGE); index++) {
             if (!assessWork) break;
@@ -188,6 +200,11 @@ public final class BuildSurvey {
         data.addProperty("observation_complete", observationComplete && stable);
         data.addProperty("spatial_stable", stable);
         if (after != null) data.add("spatial_facts", after);
+        observation.append('|').append(after);
+        try {
+            data.addProperty("observation_key", java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(observation.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
         data.addProperty("work_assessment_complete", !budgetExhausted && counts.get("not_assessed").getAsInt() == 0
                 && counts.get("unknown").getAsInt() == 0 && stable);
         data.addProperty("budget_exhausted", budgetExhausted);

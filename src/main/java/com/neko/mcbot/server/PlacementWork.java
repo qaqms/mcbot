@@ -11,7 +11,8 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /** A placement intent supplies a work predicate to the existing route, never an extra action. */
-public record PlacementWork(BlockItem item, Direction face) {
+public record PlacementWork(BlockItem item, Direction face, String temporaryPurpose) {
+    public PlacementWork(BlockItem item, Direction face) { this(item, face, null); }
     @FunctionalInterface public interface Assessor {
         ServerTool.Result assess(Vec3 eye, AABB bounds, TerrainEdits edits);
     }
@@ -29,7 +30,7 @@ public record PlacementWork(BlockItem item, Direction face) {
         return goal(target, geometry, body.getEyeHeight(), body.getBbWidth(), body.getBbHeight(),
                 Math.min(6.5, body.blockInteractionRange()),
                 (eye, bounds, edits) -> BlockPlacement.assessAt(body, target,
-                        BlockPlacement.findSlot(body.getInventory(), item), face, eye, bounds, edits));
+                        BlockPlacement.findSlot(body.getInventory(), item), face, eye, bounds, edits, temporaryPurpose));
     }
 
     public static NavigationGoal goal(BlockPos target, NavigationGeometry geometry, double eyeHeight,
@@ -65,7 +66,7 @@ public record PlacementWork(BlockItem item, Direction face) {
     public ServerTool.Result assess(CompanionPlayer body, BlockPos target) {
         if (BlockPlacement.occupiesWorkTarget(body.getBoundingBox(), target))
             return new ServerTool.Result(false, "TARGET_BLOCKED:身体占用了放置目标格，未认定工作到达。", null);
-        var access = BlockPlacement.forPlayer(body);
+        var access = temporaryPurpose == null ? BlockPlacement.forPlayer(body) : BlockPlacement.forTemporary(body, temporaryPurpose);
         var failure = BlockPlacement.assess(access, target, BlockPlacement.findSlot(body.getInventory(), item), face);
         if (failure != null) return failure;
         var data = new com.google.gson.JsonObject();

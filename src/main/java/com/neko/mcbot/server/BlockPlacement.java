@@ -42,6 +42,8 @@ public final class BlockPlacement {
         default JsonObject contact() { return null; }
         default JsonArray standingPositions(BlockPos pos, int slot, Direction face) { return new JsonArray(); }
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
+        default ServerTool.Result beforePlace() { return null; }
+        default void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) { }
     }
 
     interface Site {
@@ -59,6 +61,11 @@ public final class BlockPlacement {
 
     public static Access forPlayer(CompanionPlayer player) {
         return new PlayerAccess(player, null, null, TerrainEdits.EMPTY);
+    }
+    public static Access forTemporary(CompanionPlayer player, String purpose) {
+        var access = new PlayerAccess(player, null, null, TerrainEdits.EMPTY);
+        access.temporaryPurpose = purpose;
+        return access;
     }
 
     public static int findSlot(Container inventory, net.minecraft.world.item.Item item) {
@@ -88,9 +95,15 @@ public final class BlockPlacement {
 
     public static ServerTool.Result assessAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
                                              Vec3 eye, AABB body, TerrainEdits edits) {
+        return assessAt(player, pos, slot, face, eye, body, edits, null);
+    }
+    public static ServerTool.Result assessAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
+                                             Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
         if (pendingNativeTerrain(pos, edits))
             return failed("TARGET_BLOCKED:放置邻域依赖尚未落地的路线改动，先完成该段再按现场查询。", false, 0);
-        return preflight(new PlayerAccess(player, eye, body, edits), pos, slot, face);
+        var access = new PlayerAccess(player, eye, body, edits);
+        access.temporaryPurpose = temporaryPurpose;
+        return preflight(access, pos, slot, face);
     }
 
     static boolean pendingNativeTerrain(BlockPos pos, TerrainEdits edits) {
@@ -103,8 +116,12 @@ public final class BlockPlacement {
 
     public static boolean attachedAt(CompanionPlayer player, BlockPos pos, int slot,
                                      Vec3 eye, AABB body, TerrainEdits edits) {
+        return attachedAt(player, pos, slot, eye, body, edits, null);
+    }
+    public static boolean attachedAt(CompanionPlayer player, BlockPos pos, int slot,
+                                     Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
         for (Direction face : Direction.values())
-            if (assessAt(player, pos, slot, face, eye, body, edits) == null) return true;
+            if (assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose) == null) return true;
         return false;
     }
 
@@ -133,6 +150,8 @@ public final class BlockPlacement {
             neighborhood.put(near.immutable(), access.state(near));
         int count = stack.getCount();
         JsonObject contact = access.contact();
+        failure = access.beforePlace();
+        if (failure != null) return failure;
         InteractionResult result;
         boolean threw = false;
         try {
@@ -143,6 +162,7 @@ public final class BlockPlacement {
         }
         BlockState after = access.state(pos);
         int consumed = Math.max(0, count - stack.getCount());
+        access.recorded(pos, before, after, consumed);
         boolean changed = before != after;
         inventory.setChanged();
         JsonObject data = new JsonObject();
@@ -343,6 +363,7 @@ public final class BlockPlacement {
         private JsonObject contact;
         private BlockPlaceContext context;
         private BlockState proposedState;
+        private String temporaryPurpose;
 
         private PlayerAccess(CompanionPlayer player, Vec3 eye, AABB bounds, TerrainEdits edits) {
             this.player = player;
@@ -366,6 +387,10 @@ public final class BlockPlacement {
             }
             if (projected && !level.noCollision(player, bounds))
                 return failed("TARGET_BLOCKED:假想站位被实际方块或实体占用，须重新观察。", false, 0);
+            if (temporaryPurpose != null) {
+                var failure = player.buildSite().temporaryGuard(pos, temporaryPurpose, new BuildSiteAccess(player));
+                if (failure != null) return failure;
+            }
             return null;
         }
         @Override public Container inventory() { return player.getInventory(); }
@@ -429,6 +454,12 @@ public final class BlockPlacement {
                     ? ((com.neko.mcbot.mixin.BlockItemPlacementAccess) item).mcbot$placementState(context)
                     : item.getBlock().getStateForPlacement(context);
             proposedState = desired;
+            var siteFailure = player.buildSite().placementGuard(pos, desired, new BuildSiteAccess(player), temporaryPurpose != null);
+            if (siteFailure != null) return siteFailure;
+            if (temporaryPurpose != null && (!projectable(item, stack)
+                    || !com.neko.mcbot.building.BuildSite.plainCube(desired)
+                    || WorksiteProtection.facility(desired, desired.hasBlockEntity()) != temporaryPurpose.equals("workstation")))
+                return failed("DENIED:临时工程只支持无组件的稳定单格整方块；workstation须无方块实体工位，support不可冒充工位。", false, 0);
             return checkSite(pos, new Site() {
                 @Override public BlockState current() { return state(pos); }
                 @Override public boolean replaceable() { return context.canPlace(); }
@@ -467,6 +498,11 @@ public final class BlockPlacement {
             };
         }
         @Override public JsonObject contact() { return contact; }
+        @Override public ServerTool.Result beforePlace() { return player.buildSite().charge(); }
+        @Override public void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) {
+            if (temporaryPurpose != null && consumed == 1)
+                player.buildSite().placedTemporary(pos, before, after, temporaryPurpose, new BuildSiteAccess(player));
+        }
         @Override public BlockState proposedState() { return proposedState; }
         @Override public JsonArray standingPositions(BlockPos pos, int slot, Direction face) {
             var result = new JsonArray();

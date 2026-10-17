@@ -3,6 +3,19 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## B3 多站位施工与临时工程（2026-10-17）
+
+build_site显式登记任务内目标、水平进出通道及冻结范围；BuildSite的完整128格目标保护
+独立于原64格WorkTargets。NavigationTrail的实际接地记录保护经过格及地板，原256帽/
+观察缺口继续限制施工；LevelDigSampler规划/缓存重验和原挖放核共同执行保护。
+run_program内置construction.lua的mc.build/cleanup_temporary，只组合原diff、move_to、
+build_nearby和break/place，沿原Lua/原子预算等真终态，最后全目标独立重查。
+工地move_to共原NavigationBudget，轮次/改动/临时来源不因换程序补额。
+BlockPlacement实际动作后才记临时用途/状态/区块/CellWitness；原地形钩子逐格失效，
+相同方块替换也不继承回收权。清理仍走原BlockMining/F2账及新鲜依赖/许可检查。
+未增加材料规划器或成品链；任务对象/身体/世界隔离，B4持久实例与L1外层建筑目标另卡。
+完整有限支持、参考链和原生待验见B3-MULTI-STANCE-CONSTRUCTION及STATUS。
+
 ## D2 身体威胁与有限自保（2026-10-17）
 
 ThreatFacts统一可信来源、原生攻击盒/实际爬行者爆炸半径和身体AABB；

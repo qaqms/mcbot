@@ -130,6 +130,64 @@ class AgentRunnerProgramTest {
             mc.call("build_nearby",{target=t,expected_revision=q.data.target_revision,max_actions=2})
             return mc.call("wait",{seconds=1})
             """;
+    private static final String SITE_BUILD = """
+            return mc.build({anchor={x=4,y=90,z=0},cells={{x=0,y=0,z=0,block="stone"}}},
+                {access_route={{x=0,y=90,z=0},{x=1,y=90,z=0}},max_actions=2,max_rounds=2})
+            """;
+    private static String siteFacts() {
+        return "{\"active\":true,\"target_revision\":\""+"a".repeat(64)+"\","
+                +"\"bounds\":{\"x\":0,\"y\":90,\"z\":0,\"radius\":32},\"temporary\":[]}";
+    }
+    private static String siteDiff(String state,boolean satisfied) {
+        return """
+                {"target_revision":"%s","observation_key":"actual","goal_satisfied":%s,
+                "observation_complete":true,"spatial_stable":true,"material_bill_complete":true,
+                "budget_exhausted":false,"offset":0,"next_offset":-1,
+                "cells":[{"x":4,"y":90,"z":0,"state":"%s","item":"minecraft:stone","material_available":true}]}
+                """.formatted("a".repeat(64),satisfied,state);
+    }
+    @Test void bundledConstructionUsesRealRunnerSchemasAndWaitsForMovementAndBuildingTerminals() {
+        start("build the selected worksite",SITE_BUILD,20);
+        tool("build_site",1); receipt(true,"original worksite",siteFacts());
+        tool("status",2); receipt(true,"fresh body","{}");
+        tool("build_diff",3); receipt(true,"far target",siteDiff("out_of_reach",false));
+        tool("build_site",4); receipt(true,"original checkpoint",siteFacts());
+        tool("move_to",5);
+        long moveSeq=client.lastTool().num("seq",-1); ack("site-move");
+        assertEquals(5,client.toolCount());
+        terminal(moveSeq,"site-move","{\"can_work_here\":true}");
+        tool("status",6); receipt(true,"fresh body","{}");
+        tool("build_diff",7); receipt(true,"ready target",siteDiff("ready",false));
+        tool("build_site",8); receipt(true,"next checkpoint",siteFacts());
+        tool("build_nearby",9);
+        long buildSeq=client.lastTool().num("seq",-1); ack("site-build");
+        assertEquals(9,client.toolCount());
+        terminal(buildSeq,"site-build","{\"placed_blocks\":1,\"consumed_count\":1,\"goal_satisfied\":false}");
+        tool("build_diff",10); receipt(true,"independent whole target",siteDiff("satisfied",true));
+        var result=outcome();
+        assertTrue(result.ok(),result.content());
+        assertTrue(result.content().contains("\"goal_satisfied\":true"));
+        assertTrue(result.content().contains("\"outer_goal_verified\":false"));
+        assertTrue(result.content().contains("实际原子调用=11"));
+    }
+    @Test void cancellationOfBundledConstructionNeverReopensItsWorksiteOrContinuesALateMovement() {
+        start("build selected worksite",SITE_BUILD,20);
+        tool("build_site",1); receipt(true,"site",siteFacts());
+        tool("status",2); receipt(true,"body","{}");
+        tool("build_diff",3); receipt(true,"far",siteDiff("out_of_reach",false));
+        tool("build_site",4); receipt(true,"checkpoint",siteFacts());
+        tool("move_to",5);
+        long seq=client.lastTool().num("seq",-1); ack("cancel-site");
+        runner.cancelTask(0); client.drain();
+        terminal(seq,"cancel-site","{\"can_work_here\":true}");
+        runner.submitTask("inspect current world"); client.drain();
+        assertFalse(outcome().ok()); assertEquals(5,client.toolCount());
+    }
+    @Test void readOnlyTaskCannotRegisterAWorksiteThroughTheLuaHelper() {
+        start("[只读] inspect selected worksite",SITE_BUILD,20);
+        assertFalse(outcome().ok());
+        assertEquals(0,client.toolCount());
+    }
 
     @Test void constructionReservesEveryDeclaredActionAndWaitsForTerminalBeforeContinuing() {
         start("build selected cells", BUILD, 3);

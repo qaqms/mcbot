@@ -45,10 +45,22 @@ public final class BreakBlockTool implements ServerTool {
         if (pos == null) return CompletableFuture.completedFuture(
                 new Result(false, "DENIED:参数需要数值整数坐标 x/y/z。", null));
         String expectedBlock;
+        String siteRevision;
+        boolean cleanup;
         try { expectedBlock = expectedBlock(args); }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:expected_block须为带命名空间的方块ID字符串。", null));
+        }
+        try {
+            siteRevision = args.has("site_revision") ? com.neko.mcbot.building.BuildTarget.string(args.get("site_revision"), 64) : null;
+            if (siteRevision != null && !siteRevision.matches("[0-9a-f]{64}")) throw new IllegalArgumentException();
+            cleanup = args.has("temporary_cleanup") && strictBoolean(args, "temporary_cleanup");
+            if (cleanup && siteRevision == null || siteRevision != null && (expectedBlock == null || clearObstructions(args)))
+                throw new IllegalArgumentException();
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:工地清理须site_revision/expected_block，不与清遮挡组合；temporary_cleanup须布尔且有工地修订。", null));
         }
         boolean clear;
         String id;
@@ -110,7 +122,8 @@ public final class BreakBlockTool implements ServerTool {
                 return CompletableFuture.completedFuture(new Result(false, "BUSY:身体任务槽已占用。", null));
             return future;
         }
-        BlockMining mining = BlockMining.forPlayer(c, pos, expectedBlock);
+        BlockMining mining = BlockMining.forPlayer(c, pos, expectedBlock, cleanup ? "temporary_cleanup" : "target",
+                siteRevision, cleanup);
         Result failure = mining.preflight(5.5);
         if (failure != null) return CompletableFuture.completedFuture(failure);
         CompletableFuture<Result> future = new CompletableFuture<>();
@@ -149,6 +162,12 @@ public final class BreakBlockTool implements ServerTool {
     static boolean clearObstructions(JsonObject args) {
         if (!args.has("clear_obstructions")) return false;
         var value = args.get("clear_obstructions");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) throw new IllegalArgumentException();
+        return value.getAsBoolean();
+    }
+
+    private static boolean strictBoolean(JsonObject args, String key) {
+        var value = args.get(key);
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) throw new IllegalArgumentException();
         return value.getAsBoolean();
     }

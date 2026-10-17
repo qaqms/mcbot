@@ -27,7 +27,9 @@ public final class BoundedProgram {
     public static final String LANGUAGE_GUIDE =
             "支持Lua变量/表/函数/条件/循环和assert/error/ipairs/pairs/next/tonumber/tostring/type/print；"
             + "不提供string/table/math库、pcall、require、元表或外部访问。"
-            + "追加列表用t[#t+1]=v；查看表直接print(t)或return t，不用tostring(t)。";
+            + "追加列表用t[#t+1]=v；查看表直接print(t)或return t，不用tostring(t)。"
+            + "mc.build(target,{access_route=世界脚格列表,bounds?,max_rounds?,max_actions?,temporary?})"
+            + "提供同预算有限多站位施工；mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
             if (json == null || bytes(json) > 20000) throw new IllegalArgumentException();
@@ -154,6 +156,12 @@ public final class BoundedProgram {
                     return LuaValue.NONE;
                 }
             });
+            try (var source = BoundedProgram.class.getResourceAsStream("construction.lua")) {
+                if (source == null) throw new IllegalStateException("missing construction helper");
+                byte[] text = source.readNBytes(16385);
+                if (text.length > 16384) throw new IllegalStateException("oversized construction helper");
+                globals.load(new String(text, StandardCharsets.UTF_8), "construction-helper").call();
+            } catch (java.io.IOException unavailable) { throw new IllegalStateException(unavailable); }
             check();
             var chunk = globals.load(plan.code(), "task-program");
             compiled = true;
@@ -224,6 +232,8 @@ public final class BoundedProgram {
                 var value = new JsonObject();
                 value.addProperty("ok", receipt.ok());
                 value.addProperty("feedback", receipt.feedback());
+                String kind = receipt.feedback().split(":", 2)[0];
+                value.addProperty("failure_kind", receipt.ok() || !kind.matches("[A-Z_]{1,32}") ? "" : kind);
                 value.add("data", receipt.data());
                 slice = 0;
                 return fromJson(value, 0);

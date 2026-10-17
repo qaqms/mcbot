@@ -199,7 +199,7 @@ public final class LevelDigSampler implements DigSampler {
                 new BlockPos(DigAStar.unpackX(target), DigAStar.unpackY(target), DigAStar.unpackZ(target)),
                 PathMaterials.find(body.getInventory()),
                 new net.minecraft.world.phys.Vec3(x + .5, foot.height() + body.getEyeHeight(), z + .5),
-                bounds, edits);
+                bounds, edits, body.buildSite().active() ? "support" : null);
     }
 
     @Override
@@ -210,12 +210,16 @@ public final class LevelDigSampler implements DigSampler {
         return Math.abs(x - start.getX()) <= RADIUS_XZ
                 && Math.abs(z - start.getZ()) <= RADIUS_XZ
                 && Math.abs(y - start.getY()) <= RADIUS_Y && spec.contains(x, y, z)
-                && outerScope.contains(x, y, z);
+                && outerScope.contains(x, y, z)
+                && (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)
+                || body.buildSite().inScope(new BlockPos(x, y, z)));
     }
 
     @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
         // Underground routes keep a full floor and an adjacent horizontal stair for the way back.
         return spec.allowsStep(fx, fy, fz, x, y, z) && outerScope.allowsStep(fx, fy, fz, x, y, z)
+                && (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)
+                || body.buildSite().allowsStanding(new BlockPos(x,y,z)))
                 && stepConstraint.test(new BlockPos(fx, fy, fz), new BlockPos(x, y, z));
     }
 
@@ -275,7 +279,8 @@ public final class LevelDigSampler implements DigSampler {
 
     private boolean protectedWork(BlockPos cell) {
         return preserved(workTarget, cell) || companion instanceof com.neko.mcbot.body.CompanionPlayer body
-                && body.workTargets().protects(cell);
+                && (body.workTargets().protects(cell) || body.buildSite().protects(cell)
+                || body.buildSite().active() && body.navigationTrail().protectsPassage(cell));
     }
 
     static boolean isSacred(BlockState st) {

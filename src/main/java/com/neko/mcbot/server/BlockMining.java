@@ -28,6 +28,7 @@ public final class BlockMining {
         default HandSnapshot.Pickups handPickups() { return null; }
         default JsonObject dropReport() { return null; }
         boolean destroy();
+        default ServerTool.Result beforeDestroy() { return null; }
         void crack(int stage);
     }
 
@@ -62,7 +63,12 @@ public final class BlockMining {
     }
 
     public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock, String role) {
-        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock, role));
+        return forPlayer(player, pos, expectedBlock, role, null, false);
+    }
+
+    public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock, String role,
+                                       String siteRevision, boolean cleanup) {
+        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock, role, siteRevision, cleanup));
     }
 
     public static boolean matchesExpected(BlockState state, String expectedBlock) {
@@ -129,6 +135,8 @@ public final class BlockMining {
         if (progress < 1) return null;
         clearCrack();
 
+        failure = access.beforeDestroy();
+        if (failure != null) return finish(failure);
         destructionStarted = true;
         boolean reported = access.destroy();
         // ServerPlayerGameMode.destroyBlock can return true even if removeBlock returned false.
@@ -202,14 +210,19 @@ public final class BlockMining {
         private final BlockPos pos;
         private final String expectedBlock;
         private final DropTracker.Request dropRequest;
+        private final String siteRevision;
+        private final boolean cleanup;
         private BlockAim.Aim aim;
 
-        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock, String role) {
+        private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock, String role,
+                             String siteRevision, boolean cleanup) {
             this.player = player;
             this.level = level;
             this.pos = pos;
             this.expectedBlock = expectedBlock;
             this.dropRequest = DropTracker.request(player, pos, role);
+            this.siteRevision = siteRevision;
+            this.cleanup = cleanup;
         }
 
         @Override public ServerTool.Result guard(double reach) {
@@ -220,6 +233,8 @@ public final class BlockMining {
                 return failure("DENIED:目标超出世界范围，换位置。");
             }
             if (!level.isLoaded(pos)) return failure("TARGET_LOST:目标未加载，先靠近。");
+            var siteFailure = player.buildSite().miningGuard(pos, siteRevision, cleanup, new BuildSiteAccess(player));
+            if (siteFailure != null) return siteFailure;
             for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
                 if (!level.isInWorldBounds(near) || !level.isLoaded(near)) {
                     return failure("TARGET_LOST:挖掘邻域未加载或超出世界范围，换目标或先靠近。");
@@ -260,8 +275,11 @@ public final class BlockMining {
         @Override public ItemStack held() { return player.getMainHandItem(); }
         @Override public HandSnapshot.Pickups handPickups() { return player.handPickups(); }
         @Override public boolean destroy() {
-            return DropTracker.destroy(dropRequest, () -> player.gameMode.destroyBlock(pos));
+            boolean result = DropTracker.destroy(dropRequest, () -> player.gameMode.destroyBlock(pos));
+            if (cleanup && state().isAir()) player.buildSite().removedTemporary(pos);
+            return result;
         }
+        @Override public ServerTool.Result beforeDestroy() { return player.buildSite().charge(); }
         @Override public JsonObject dropReport() { return dropRequest.report(); }
         @Override public void crack(int stage) {
             level.getServer().getPlayerList().broadcastAll(

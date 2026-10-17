@@ -48,6 +48,9 @@ public final class ClientToolDefs {
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
+            case "build_site" -> "data.active/task_scoped/target_revision/bounds为当前任务工地；"
+                    + "checkpoints/edit_attempts及navigation_*累计不重开，temporary含实际来源与cleanup_allowed；"
+                    + "登记不改世界或授予许可，return_guaranteed=false；只保护声明通道，不证明全局逃生。";
             case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
                     + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
                     + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
@@ -100,7 +103,9 @@ public final class ClientToolDefs {
                     + "shortfall是差额；allocated仅当前明细页通过原版预检的份数，未预留，consumed始终0。"
                     + "material_bill_complete=false有未知或不支持缺口，不能把缺行当零需求。"
                     + "not_assessed表示当前页外或工作预算未查，unknown表示现场不完整；"
-                    + "ready仅近身状态预检，不证明实际放置。observation_complete/spatial_stable和预算字段必须核对。";
+                    + "ready仅近身状态预检，不证明实际放置。observation_complete/spatial_stable和预算字段必须核对。"
+                    + "observation_key供跨页核同一次世界/材料事实；cells.item/material_available供选择有限工作，"
+                    + "clear_allowed仅已登记同修订工地的当前安全清障提示，真实挖掘仍重验。";
             case "build_nearby" -> "ACCEPTED只表示受理，等真终态。action_attempts为本批尝试，placed_blocks/"
                     + "consumed_count为实际结果，placement_results含逐格效果；失败可能已改变世界或扣料。"
                     + "survey是收尾重查全目标，仍有cells/materials分页；final_verified=false不可验收。"
@@ -282,6 +287,24 @@ public final class ClientToolDefs {
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
                     "required":["target"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
+            new ToolSpec("build_site", "登记任务内工地、完整目标与明确进出通道，供所有原挖放和路线共用保护。"
+                    + "operation=query只读；begin提供target和2-64格无重复水平相邻世界脚格access_route，必须包含当前脚格，"
+                    + "每格空气净空及完整整格地板，非空气目标不得封路，至少一个通道端点须伸出全目标水平包围范围。"
+                    + "实际经过格及地板也保护，原路线256条帽/观察缺口时停工。bounds可显式限原范围，默认首次脚格64半径，任务内冻结。"
+                    + "同任务只选一份目标与通道，begin重复不重开16轮/128次原生修改尝试和8000节点/32768记录/400ms/2重算导航账。"
+                    + "checkpoint带expected_revision按整目标真实状态与站位检重复往返；失败不重开原模型/探索/许可。"
+                    + "run_program内mc.build(target,{access_route=...,bounds?,max_rounds?,max_actions?,temporary?})"
+                    + "有限组合原查询/只行走工作导航/清障/近身施工；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
+                    + "purpose为support/workstation。mc.cleanup_temporary(revision)另行有界回收，依赖未解除保留。"
+                    + "不自动找料、合成、生成支撑或解依赖；外层建筑目标验收仍另行执行。任务结束不自动清理或跨任务认领。",
+                    """
+                    {"type":"object","properties":{"operation":{"type":"string","enum":["query","begin","checkpoint"]},
+                    "target":%s,"access_route":{"type":"array","minItems":2,"maxItems":64,"items":%s},
+                    "bounds":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},
+                    "radius":{"type":"integer","minimum":1,"maximum":64}},"required":["x","y","z","radius"],"additionalProperties":false},
+                    "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
+                    "required":["operation"],"additionalProperties":false}
+                    """.formatted(BUILD_TARGET, BUILD_ANCHOR)),
             new ToolSpec("build_nearby", "在原地对build_diff同一target/expected_revision的指定16格页施工。"
                     + "每刻最多一次原版放置，max_actions默认12/最多12；每格重新核材料、接触、目标状态、区域锁及任务控制权。"
                     + "不移动、不挖、不自动找料或补全依赖；支撑随实际放置重新评估，缺口单独报告。"
@@ -363,6 +386,8 @@ public final class ClientToolDefs {
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("break_block", "挖一格干燥方块，需主手有采收资格；先inventory/equip选工具。"
                     + "expected_block可填写最新观测的完整方块ID，目标被替换则停止；gather自动携带。"
+                    + "工地障碍显式site_revision并带expected_block，只清非成品且有替换材料、无支撑依赖的目标；"
+                    + "temporary_cleanup=true回收实际来源仍有效且依赖解除的临时格，不与clear_obstructions组合。"
                     + "clear_obstructions=true可先清理射线上最多3格安全遮挡，clear_limit为0-3剩余清理预算；"
                     + "确认模式需ask_owner批准服务端完整清单，再带authorization_id重发；自主模式复用主人当前权限。"
                     + "按真实进度耗时，原版处理破坏/耐久；返回有界来源、并堆/拾取/损毁结算与当前掉落位置，不直接塞包。"
@@ -371,6 +396,7 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
                             + "\"expected_block\":{\"type\":\"string\",\"maxLength\":128},\"clear_obstructions\":{\"type\":\"boolean\"},"
                             + "\"clear_limit\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3},"
+                            + "\"site_revision\":{\"type\":\"string\",\"minLength\":64,\"maxLength\":64},\"temporary_cleanup\":{\"type\":\"boolean\"},"
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("attack", "普通近战锁定一个目标；默认原地不追击。approach=true允许在初始脚格锚点6.5格范围内只行走接近，"
                     + "不挖放、不换目标、不自动换工具；不主动拾取掉落，身体原版触碰拾取仍运行。"
@@ -403,9 +429,12 @@ public final class ClientToolDefs {
                     + "选址不确定时先query=true，只读核对可替换/视线/支撑/实体占位；受阻时分别给原目标站位stand_positions和改选目标格alternatives，各最多6个。"
                     + "query.ok仅表示查询完成，执行须检查data.preflight_passed==true；通过仍不保证原版最终接受。"
                     + "查询不转头/挖放/消耗；精确指定目标不能自行改选其他格。"
+                    + "temporary_purpose可为support/workstation，仅当前登记工地内稳定无组件单格整方块；实际放置后记录来源，"
+                    + "有方块实体工位不作临时工程，不把自放当成以后可任意拆。"
                     + "暂不支持脚手架/告示牌等特殊物品；忙时先等待或取消。失败查看实际消耗和目标变化，勿自动重试",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
-                            + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"query\":{\"type\":\"boolean\"},\"face\":{\"type\":\"string\","
+                            + "\"item\":{\"type\":\"string\",\"maxLength\":128},\"query\":{\"type\":\"boolean\"},"
+                            + "\"temporary_purpose\":{\"type\":\"string\",\"enum\":[\"support\",\"workstation\"]},\"face\":{\"type\":\"string\","
                             + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。"
                     + "walk_only=true只走路/跳跃/下落，规划/重规划与执行均不挖放，探索使用此模式。"
@@ -429,6 +458,7 @@ public final class ClientToolDefs {
                             + "\"work_target\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"}},"
                             + "\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false},"
                             + "\"place_item\":{\"type\":\"string\",\"maxLength\":128},"
+                            + "\"temporary_purpose\":{\"type\":\"string\",\"enum\":[\"support\",\"workstation\"]},"
                             + "\"face\":{\"type\":\"string\",\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]},"
                             + "\"clear_obstructions\":{\"type\":\"boolean\"},"
                             + "\"arrival\":{\"type\":\"string\",\"enum\":[\"work\"]},\"underground\":{\"type\":\"boolean\"},"

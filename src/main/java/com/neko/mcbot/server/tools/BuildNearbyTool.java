@@ -42,9 +42,13 @@ public final class BuildNearbyTool implements ServerTool {
                     "DENIED:须提供有效target和匹配的expected_revision；offset为16的倍数，max_actions为1-12。", null));
         }
         var level = body.level();
+        if (body.buildSite().active() && !body.buildSite().same(input.target().revision()))
+            return CompletableFuture.completedFuture(new Result(false, "TARGET_REVISION_CHANGED:不能用另一目标改动已登记工地。", null));
         var work = new BuildWork(input.target(), new BuildWork.Access() {
             @Override public BuildSurvey.Access survey() { return BuildDiffTool.access(body, input.target()); }
             @Override public Result valid() {
+                var siteFailure = body.buildSite().active() ? body.buildSite().live(new com.neko.mcbot.server.BuildSiteAccess(body)) : null;
+                if (siteFailure != null) return siteFailure;
                 return context != null && context.equals(permissions.current(context.owner(), body.getUUID(),
                         context.dimension(), context.taskId(), body)) && body.level() == level
                         && body.bodyControl().owner() == BodyControl.Owner.WORK
@@ -53,13 +57,15 @@ public final class BuildNearbyTool implements ServerTool {
             }
             @Override public boolean reserve(BuildTarget.Cell cell) {
                 var p = cell.pos();
-                return body.workTargets().canAdd(p) && scheduler.reserve(body.getUUID(), java.util.List.of(new ResourceLocks.Region(
+                return (body.buildSite().same(input.target().revision()) || body.workTargets().canAdd(p))
+                        && scheduler.reserve(body.getUUID(), java.util.List.of(new ResourceLocks.Region(
                         context.dimension(), p.getX() - 1, p.getY() - 1, p.getZ() - 1,
                         p.getX() + 1, p.getY() + 1, p.getZ() + 1)));
             }
             @Override public void recorded(BuildTarget.Cell cell, Result result) {
                 if (result.data() != null && result.data().has("changed")
-                        && result.data().get("changed").getAsBoolean()) body.workTargets().add(cell.pos());
+                        && result.data().get("changed").getAsBoolean()
+                        && !body.buildSite().same(input.target().revision())) body.workTargets().add(cell.pos());
             }
         }, input.offset(), input.maxActions(), System::nanoTime);
         var future = new CompletableFuture<Result>();

@@ -22,17 +22,31 @@ public final class PlaceBlockTool implements ServerTool {
 
     @Override public String name() { return "place_block"; }
     @Override public Result run(CompanionPlayer c, JsonObject args) {
-        return place(BlockPlacement.forPlayer(c), args, McbotMod.scheduler().busy(c.getUUID()));
+        return place(playerAccess(c, args), args, McbotMod.scheduler().busy(c.getUUID()));
     }
     @Override public CompletableFuture<Result> runAsync(CompanionPlayer c, JsonObject args,
                                                         CompanionScheduler scheduler) {
-        return CompletableFuture.completedFuture(place(BlockPlacement.forPlayer(c), args, scheduler.busy(c.getUUID())));
+        return CompletableFuture.completedFuture(place(playerAccess(c, args), args, scheduler.busy(c.getUUID())));
+    }
+    private static BlockPlacement.Access playerAccess(CompanionPlayer body, JsonObject args) {
+        String purpose;
+        try { purpose = temporaryPurpose(args); }
+        catch (RuntimeException invalid) { return BlockPlacement.forPlayer(body); }
+        return purpose == null ? BlockPlacement.forPlayer(body) : BlockPlacement.forTemporary(body, purpose);
+    }
+    static String temporaryPurpose(JsonObject args) {
+        if (!args.has("temporary_purpose")) return null;
+        var value = args.get("temporary_purpose");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                || !java.util.Set.of("support", "workstation").contains(value.getAsString())) throw new IllegalArgumentException();
+        return value.getAsString();
     }
 
     static Arguments arguments(JsonObject args) {
         BlockPos pos = BreakBlockTool.readPos(args);
         if (pos == null) return null;
         try {
+            temporaryPurpose(args);
             var value = args.get("item");
             if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) return null;
             String name = value.getAsString();

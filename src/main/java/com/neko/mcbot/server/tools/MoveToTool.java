@@ -127,7 +127,7 @@ public final class MoveToTool implements ServerTool {
             });
             if (failure != null) return CompletableFuture.completedFuture(failure);
         }
-        if (workTarget != null && !c.workTargets().add(workTarget))
+        if (workTarget != null && !c.buildSite().protects(workTarget) && !c.workTargets().add(workTarget))
             return CompletableFuture.completedFuture(new Result(false,
                     "ACTION_LIMIT:当前任务工作目标保护集合已满，未淘汰旧保护或继续开路。", null));
         BlockPos from = com.neko.mcbot.server.StandingGeometry.feetCell(c);
@@ -150,8 +150,10 @@ public final class MoveToTool implements ServerTool {
             if (failure != null) return CompletableFuture.completedFuture(failure);
         }
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
-        if (!sched.submit(c, new PathTask(level, to, permissions, context, scope, sched,
-                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement), f, capTicks(args))) {
+        var path = new PathTask(level, to, permissions, context, scope, sched,
+                args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement);
+        if (c.buildSite().active()) path.limitTo(c.buildSite().scope()).usingBudget(c.buildSite().navigation());
+        if (!sched.submit(c, path, f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
@@ -163,7 +165,7 @@ public final class MoveToTool implements ServerTool {
 
     static com.neko.mcbot.server.PlacementWork placement(JsonObject args, BlockPos target) {
         if (!args.has("place_item")) {
-            if (args.has("face")) throw new IllegalArgumentException();
+            if (args.has("face") || args.has("temporary_purpose")) throw new IllegalArgumentException();
             return null;
         }
         if (target == null || !args.has("arrival") || !"work".equals(args.get("arrival").getAsString())
@@ -173,9 +175,10 @@ public final class MoveToTool implements ServerTool {
         input.addProperty("x", target.getX()); input.addProperty("y", target.getY()); input.addProperty("z", target.getZ());
         input.add("item", args.get("place_item"));
         if (args.has("face")) input.add("face", args.get("face"));
+        if (args.has("temporary_purpose")) input.add("temporary_purpose", args.get("temporary_purpose"));
         var parsed = PlaceBlockTool.arguments(input);
         if (parsed == null || !BlockPlacement.supported(parsed.item())) throw new IllegalArgumentException();
-        return new com.neko.mcbot.server.PlacementWork(parsed.item(), parsed.face());
+        return new com.neko.mcbot.server.PlacementWork(parsed.item(), parsed.face(), PlaceBlockTool.temporaryPurpose(input));
     }
 
     static boolean walkOnly(JsonObject args) {

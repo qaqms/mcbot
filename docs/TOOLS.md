@@ -23,7 +23,21 @@ attack新增严格布尔approach，默认false保持原地；true在固定初始
 
 ## B2 近身施工（2026-10-17）
 
-新增build_nearby，当前26项（17服务端+9本地）。输入同build_diff的target，
+新增B3 build_site，当前27项（18服务端+9本地）。query严格只读；begin提供B1 target、
+2-64格水平明确通道和可选bounds，完整目标/实际经过格与支撑贯通规划、执行保护。
+范围、16轮checkpoint/128次改动尝试、16条临时来源和原导航账不重开，登记不授予挖放许可。
+run_program内mc.build(target,{access_route=...,bounds?,max_rounds?,max_actions?,temporary?})
+有限组合原差异/只行走工作导航/清障/近身施工，最后独立核全目标；目标已满足不搭临时工程。
+原mc.try_call门不变，未知、权限、安全、预算与取消停止；failure_kind为桥回执的有限原因码。
+place_block及放置工作move_to可带temporary_purpose=support/workstation；
+工地路线实际垫块同源记录，须实际消费/落地后才有来源。只支持稳定无组件单格整块，
+临时工位不含方块实体。break_block的site_revision/expected_block显式选工地清障，
+temporary_cleanup=true另选回收，逐刻复核确切状态、区块/逐格见证、依赖及原许可。
+mc.cleanup_temporary(revision)只回收当前可拆记录，保留承重/通道/未知或被替换部分；
+取消不自动拆，task_scoped事实不作为B4永久实例或L1外层建筑目标验收。
+完整用法与保守限制见docs/B3-MULTI-STANCE-CONSTRUCTION-2026-10-17.md。
+
+下方B2检查点：新增build_nearby，当时26项（17服务端+9本地）。输入同build_diff的target，
 必带expected_revision；offset为当前16格页，max_actions默认/最多12，可显式1-12。
 不移动/挖掘/找料，逐格复用原版放置和新鲜目标/材料/权限/控制/区域锁。
 ACCEPTED只受理，真终态给action_attempts/placed_blocks/consumed_count/placement_results，

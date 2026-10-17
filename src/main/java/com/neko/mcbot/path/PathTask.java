@@ -131,6 +131,11 @@ public final class PathTask extends TickTask {
         outerScope = java.util.Objects.requireNonNull(original);
         return this;
     }
+    public PathTask usingBudget(NavigationBudget budget) {
+        if (sharedBudget != null && sharedBudget != budget) throw new IllegalStateException("original navigation account");
+        sharedBudget = java.util.Objects.requireNonNull(budget);
+        return this;
+    }
 
     public PathTask constrainSteps(java.util.function.BiPredicate<BlockPos, BlockPos> constraint) {
         stepConstraint = java.util.Objects.requireNonNull(constraint);
@@ -224,6 +229,10 @@ public final class PathTask extends TickTask {
         if (environment != null) return terminal(environment);
         BlockPos current = StandingGeometry.feetCell(c);
         c.bindSpatialTask(context);
+        if (c.buildSite().active() && sharedBudget == c.buildSite().navigation()) {
+            var siteFailure = c.buildSite().live(new com.neko.mcbot.server.BuildSiteAccess(c));
+            if (siteFailure != null) return terminal(siteFailure);
+        }
         if (!spec.contains(current.getX(), current.getY(), current.getZ())
                 || !outerScope.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
@@ -1199,7 +1208,8 @@ public final class PathTask extends TickTask {
         if (permission != null) return permission;
         if (!sampler.placeable(x, y, z)) return new Progress.Done(new Result(false,
                 "NO_PATH:计划的搭路格现在不可安全放置；重新查看路线。", null));
-        Result result = BlockPlacement.placeAttached(BlockPlacement.forPlayer(c), pos,
+        Result result = BlockPlacement.placeAttached(c.buildSite().active()
+                ? BlockPlacement.forTemporary(c, "support") : BlockPlacement.forPlayer(c), pos,
                 PathMaterials.find(c.getInventory()));
         if (result.data() != null && result.data().has("changed") && result.data().get("changed").getAsBoolean()) {
             actualPlaces++;

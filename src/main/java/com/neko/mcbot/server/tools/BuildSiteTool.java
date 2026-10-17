@@ -1,0 +1,76 @@
+package com.neko.mcbot.server.tools;
+
+import com.google.gson.JsonObject;
+import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.building.BuildSite;
+import com.neko.mcbot.building.BuildTarget;
+import com.neko.mcbot.server.*;
+import com.neko.mcbot.task.CompanionScheduler;
+import net.minecraft.core.BlockPos;
+
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+
+public final class BuildSiteTool implements ServerTool {
+    record Arguments(String operation, BuildTarget target, String revision, List<BlockPos> route,
+                     com.neko.mcbot.path.PathSpec scope) { }
+    static Arguments arguments(JsonObject args) {
+        String operation = BuildTarget.string(args.get("operation"), 16);
+        return switch (operation) {
+            case "query" -> {
+                BuildTarget.keys(args, Set.of("operation"));
+                yield new Arguments(operation, null, null, List.of(), null);
+            }
+            case "begin" -> {
+                BuildTarget.keys(args, Set.of("operation", "target", "access_route", "bounds"));
+                var target = BuildTarget.parse(args.getAsJsonObject("target"));
+                var values = args.getAsJsonArray("access_route");
+                if (values.size() < 2 || values.size() > BuildSite.ROUTE_LIMIT) throw new IllegalArgumentException();
+                var route = new ArrayList<BlockPos>();
+                for (var value : values) {
+                    var p = value.getAsJsonObject();
+                    BuildTarget.keys(p, Set.of("x", "y", "z"));
+                    route.add(new BlockPos(BuildTarget.integer(p.get("x"), -29999984, 29999984),
+                            BuildTarget.integer(p.get("y"), -2048, 2047),
+                            BuildTarget.integer(p.get("z"), -29999984, 29999984)));
+                }
+                yield new Arguments(operation, target, target.revision(), List.copyOf(route),
+                        args.has("bounds") ? com.neko.mcbot.path.PathSpec.parse(args) : null);
+            }
+            case "checkpoint" -> {
+                BuildTarget.keys(args, Set.of("operation", "expected_revision"));
+                String revision = BuildTarget.string(args.get("expected_revision"), 64);
+                if (!revision.matches("[0-9a-f]{64}")) throw new IllegalArgumentException();
+                yield new Arguments(operation, null, revision, List.of(), null);
+            }
+            default -> throw new IllegalArgumentException();
+        };
+    }
+    @Override public String name() { return "build_site"; }
+    @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer body, JsonObject args,
+            CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {
+        Arguments input;
+        try { input = arguments(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:build_site须query、begin(target/access_route)或checkpoint(expected_revision)，不接受额外字段。", null));
+        }
+        if (!"query".equals(input.operation()) && (context == null
+                || !context.equals(permissions.current(context.owner(), body.getUUID(), context.dimension(), context.taskId(), body))
+                || !ActionPermissions.allowed(context, name(), args)))
+            return CompletableFuture.completedFuture(new Result(false, "DENIED:工地登记须原任务、身体及动作许可。", null));
+        body.bindSpatialTask(context);
+        var site = body.buildSite();
+        var access = new BuildSiteAccess(body);
+        Result failure = switch (input.operation()) {
+            case "begin" -> site.begin(input.target(), input.route(), StandingGeometry.feetCell(body),
+                    input.scope() != null ? input.scope() : site.active() ? site.scope()
+                    : new com.neko.mcbot.path.PathSpec(false, false, false, 128, StandingGeometry.feetCell(body), 64), access);
+            case "checkpoint" -> site.checkpoint(input.revision(), StandingGeometry.feetCell(body), access);
+            default -> null;
+        };
+        return CompletableFuture.completedFuture(new Result(failure == null, failure == null
+                ? "工地事实已核对；登记不改世界、不授予挖放许可，通道仅覆盖声明格，不保证全局逃生。"
+                : failure.feedback(), site.report(access)));
+    }
+}

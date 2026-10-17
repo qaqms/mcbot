@@ -20,6 +20,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class BlockPlacementTest {
     private static final BlockPos POS = new BlockPos(2, 90, -4);
     @BeforeAll static void registriesOnly() { bootstrap(); }
+    @Test void queryNeverSpendsTheSharedEditAccountAndItsExhaustionPreventsNativePlacement() {
+        var access=access();
+        BlockPlacement.assess(access,POS,13,Direction.UP);
+        assertEquals(0,access.attempts);
+        access.attemptFailure=new ServerTool.Result(false,"ACTION_LIMIT:original worksite account",null);
+        assertFalse(BlockPlacement.place(access,POS,13,Direction.UP).ok());
+        assertEquals(1,access.attempts); assertEquals(0,access.calls); assertEquals(0,access.recorded);
+        assertEquals(3,access.inventory.getItem(13).getCount());
+        access.attemptFailure=null;
+        assertTrue(BlockPlacement.place(access,POS,13,Direction.UP).ok());
+        assertEquals(2,access.attempts); assertEquals(1,access.calls); assertEquals(1,access.recorded);
+    }
 
     private Placement access() {
         Placement access = new Placement();

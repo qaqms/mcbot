@@ -61,6 +61,8 @@ public final class StatusTool implements ServerTool {
         companion.bindSpatialTask(context);
         return runAsync(companion, args, scheduler).thenApply(result -> {
             if (result.ok()) result.data().add("navigation_trail", companion.navigationTrail().report());
+            if (result.ok()) result.data().add("build_site", companion.buildSite().report(
+                    new com.neko.mcbot.server.BuildSiteAccess(companion)));
             return permissionReport(result, context);
         });
     }

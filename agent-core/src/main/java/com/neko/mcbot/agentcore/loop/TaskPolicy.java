@@ -23,6 +23,9 @@ public final class TaskPolicy {
                     "build_diff" -> true;
             case "craft", "place_block" -> args.has("query") && args.get("query").isJsonPrimitive()
                     && args.get("query").getAsJsonPrimitive().isBoolean() && args.get("query").getAsBoolean();
+            case "build_site" -> args.size() == 1 && args.has("operation")
+                    && args.get("operation").isJsonPrimitive() && args.get("operation").getAsJsonPrimitive().isString()
+                    && "query".equals(args.get("operation").getAsString());
             case "smelt" -> !args.has("action") || (args.get("action").isJsonPrimitive()
                     && args.get("action").getAsJsonPrimitive().isString()
                     && "query".equals(args.get("action").getAsString()));

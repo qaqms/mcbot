@@ -11,13 +11,14 @@ public final class NavigationTrail {
     public record Point(long id, int x, int y, int z, double feetY, PathSpec scope) { }
     private final List<Point> points = new ArrayList<>();
     private final List<JsonObject> edits = new ArrayList<>();
+    private final java.util.Set<net.minecraft.core.BlockPos> passage = new java.util.HashSet<>();
     private Object task, world;
     private long sequence;
     private boolean truncated, gap;
 
     public void bind(Object nextTask, Object nextWorld) {
         if (!java.util.Objects.equals(task, nextTask) || world != nextWorld) {
-            points.clear(); edits.clear(); truncated = gap = false;
+            points.clear(); edits.clear(); passage.clear(); truncated = gap = false;
             task = nextTask; world = nextWorld;
         }
     }
@@ -40,7 +41,12 @@ public final class NavigationTrail {
             return;
         }
         points.add(new Point(++sequence, x, y, z, feetY, scope));
+        int bottom = (int) Math.floor(feetY), top = (int) Math.ceil(feetY + 1.8) - 1;
+        for (int height = bottom - 1; height <= top; height++)
+            passage.add(new net.minecraft.core.BlockPos(x, height, z));
     }
+    public boolean protectsPassage(net.minecraft.core.BlockPos cell) { return passage.contains(cell); }
+    public boolean passageComplete() { return !truncated && !gap; }
 
     public void edited(String operation, int x, int y, int z) {
         if (task == null) return;

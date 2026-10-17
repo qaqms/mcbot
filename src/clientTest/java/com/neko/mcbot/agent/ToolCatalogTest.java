@@ -10,6 +10,19 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void constructionHelperAndTemporaryEngineeringAreDiscoverableInTheActualCatalog() {
+        var help=ToolCatalog.read("{\"names\":[\"build_site\",\"run_program\",\"place_block\"]}");
+        assertTrue(help.ok(),help.feedback());
+        assertTrue(help.feedback().contains("mc.build"));
+        assertTrue(help.feedback().contains("temporary_purpose"));
+        for(String name:List.of("break_block","place_block","move_to")) {
+            var spec=ClientToolDefs.SPECS.stream().filter(s->s.name().equals(name)).findFirst().orElseThrow();
+            var properties=JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject().getAsJsonObject("properties");
+            assertTrue(properties.has(name.equals("break_block")?"site_revision":"temporary_purpose"));
+        }
+        var site=ToolCatalog.MODEL_SPECS.stream().filter(s->s.name().equals("build_site")).findFirst().orElseThrow();
+        assertTrue(site.description().contains("mc.build"));
+    }
     @Test void nearbyConstructionIsABoundedActionUsingTheSameTargetSchema() {
         var help = ToolCatalog.read("{\"names\":[\"build_nearby\"]}");
         assertTrue(help.ok(), help.feedback());

@@ -5,6 +5,17 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationTrailTest {
+    @org.junit.jupiter.api.Test void actualPassageKeepsFractionalHeadroomAndFloorUntilTaskChanges() {
+        var trail=new NavigationTrail(); var world=new Object();
+        trail.bind("task",world); trail.observe(1,90,2,90.5,true);
+        for(int y=89;y<=92;y++) org.junit.jupiter.api.Assertions.assertTrue(
+                trail.protectsPassage(new net.minecraft.core.BlockPos(1,y,2)));
+        org.junit.jupiter.api.Assertions.assertTrue(trail.passageComplete());
+        trail.observe(8,90,2,90.5,true);
+        org.junit.jupiter.api.Assertions.assertFalse(trail.passageComplete());
+        trail.bind("next",world);
+        org.junit.jupiter.api.Assertions.assertFalse(trail.protectsPassage(new net.minecraft.core.BlockPos(1,90,2)));
+    }
     @Test void onlyGroundedObservationsCreateRecordsAndNeverPromiseAReturn() {
         var trail = new NavigationTrail();
         var world = new Object();

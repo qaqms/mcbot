@@ -74,6 +74,9 @@ public final class BlockActionFixtures {
         public int turns;
         public int swings;
         public Runnable action = () -> state = Blocks.AIR.defaultBlockState();
+        public ServerTool.Result attemptFailure;
+        public int attempts;
+        @Override public ServerTool.Result beforeDestroy() { attempts++; return attemptFailure; }
 
         public Mining() {
             inventory.setItem(0, new ItemStack(Items.IRON_PICKAXE));
@@ -130,6 +133,10 @@ public final class BlockActionFixtures {
         public int consume = 1;
         public int calls;
         public int reads;
+        public ServerTool.Result attemptFailure;
+        public int attempts, recorded;
+        @Override public ServerTool.Result beforePlace() { attempts++; return attemptFailure; }
+        @Override public void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) { recorded++; }
         public final List<BlockPos> prepared = new ArrayList<>();
         public java.util.function.Function<BlockPos, ServerTool.Result> prepareAt;
         public java.util.function.BiFunction<BlockPos, Direction, ServerTool.Result> sightAt;
