@@ -16,6 +16,76 @@ import static org.junit.jupiter.api.Assertions.*;
 class EntityAttackTest {
     @BeforeAll static void registriesOnly() { BlockActionFixtures.bootstrap(); }
 
+    @Test void movementAndNativeStrikeEligibilityAreIndependentOnTheSameTick() {
+        var access = new Access();
+        access.approach = true;
+        access.guard = new ServerTool.Result(false, "OUT_OF_REACH:walk", null);
+        var attack = new EntityAttack(access, 2);
+        assertNull(attack.tick());
+        assertEquals(1, access.moves);
+        assertEquals(0, access.strikes);
+        access.movement = () -> access.guard = null;
+        assertNull(attack.tick());
+        assertEquals(1, access.strikes, "movement reaching native range must not suppress this tick's strike");
+        access.guard = new ServerTool.Result(false, "OCCLUDED:moved behind wall", null);
+        access.movement = () -> {};
+        assertNull(attack.tick());
+        assertEquals(1, access.strikes, "projection or old range does not authorize striking through a wall");
+        access.guard = null;
+        assertTrue(attack.tick().ok());
+        assertEquals(2, access.strikes);
+    }
+
+    @Test void hardPreconditionsAreCheckedBeforeMovementAndAgainBeforeStrike() {
+        for (int mode = 0; mode < 5; mode++) {
+            var access = new Access();
+            access.approach = true;
+            access.guard = new ServerTool.Result(false, "OUT_OF_REACH:walk", null);
+            var attack = new EntityAttack(access, 2);
+            assertNull(attack.preflight());
+            final int change = mode;
+            access.movement = () -> {
+                access.guard = null;
+                switch (change) {
+                    case 0 -> access.uuid = UUID.randomUUID();
+                    case 1 -> access.protectedTarget = true;
+                    case 2 -> access.permission = new ServerTool.Result(false, "DENIED:revoked", null);
+                    case 3 -> access.inventory.setSelectedSlot(1);
+                    case 4 -> access.reserved = false;
+                }
+            };
+            assertFalse(attack.tick().ok());
+            assertEquals(0, access.strikes);
+            assertTrue(access.stops > 0);
+        }
+        for (String prefix : new String[]{"DENIED:", "TARGET_LOST:", "UNSAFE_SWEEP:", "WRONG_TOOL:", "SCOPE_LIMIT:"}) {
+            var access = new Access();
+            access.approach = true;
+            access.guard = new ServerTool.Result(false, prefix + "blocked", null);
+            assertTrue(new EntityAttack(access, 1).tick().feedback().startsWith(prefix));
+            assertEquals(0, access.moves);
+            assertEquals(0, access.strikes);
+        }
+    }
+
+    @Test void suspensionAndMovementFailurePreservePriorEffectsAndNeverReplay() {
+        var access = new Access();
+        access.approach = true;
+        var attack = new EntityAttack(access, 3);
+        assertNull(attack.tick());
+        attack.suspend();
+        assertNull(attack.preflight());
+        assertNull(attack.tick());
+        access.movementFailure = new ServerTool.Result(false, "NO_PATH:changed world", null);
+        var result = attack.tick();
+        assertTrue(result.feedback().startsWith("NO_PATH:"));
+        assertEquals(2, result.data().get("strikes").getAsInt());
+        assertEquals(6, result.data().get("observed_health_loss").getAsFloat());
+        assertSame(result, attack.tick());
+        assertSame(result, attack.interrupt("CANCELLED:late"));
+        assertEquals(2, access.strikes);
+    }
+
     @Test void cooldownWaitsAndOneHitIsNotAClaimOfDeath() {
         var access = new Access();
         access.ready = false;

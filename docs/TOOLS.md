@@ -3,6 +3,14 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## D1 动态近战（2026-10-17）
+
+attack新增严格布尔approach，默认false保持原地；true在固定初始脚格锚点6.5格内
+只行走接近同一实体，不挖放或换目标，400刻/1–10次原帽保持。
+授权绑定模式与原锚点，原地许可不能升级；移动前与出手前都核保护/世界/任务及实际几何。
+迟滞、原累计导航账、真实效果及未覆盖见D1-DYNAMIC-MELEE，字段详见§2.7；
+工具仍26项，不另加依赖规划器或持续自卫触发。
+
 ## B2 近身施工（2026-10-17）
 
 新增build_nearby，当前26项（17服务端+9本地）。输入同build_diff的target，
@@ -643,7 +651,7 @@ status的实际服务端回执包含permission_mode=confirm/autonomous/read_only
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
 | `scan_area` | `r`(1-32，默认16),`items_only?,item?,frontiers?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落，frontiers=true另给最多8个探索落脚样本。不保证候选可达，泥土/沙用find_resource定向查 |
 | `break_block` | `x,y,z,expected_block?,clear_obstructions?,clear_limit?,authorization_id?` | 异步(≤60s) | 默认单格；可选射线安全清理≤3格，走原批准/自主模式与实际BlockMining；目标移除和遮挡清理分列，不直接入包；每拍核验目标/主手/距离/视线，原生视觉待测 |
-| `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?` | 异步(≤20s) | 原地普通近战，指定实体编号+UUID或 hostile_nearby；默认1次、最多10次，满冷却/恢复后出手；逐次确认模式的中立/命名目标需批准，自主模式免批准，仍拒绝玩家/宠物/同队及不安全横扫 |
+| `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?,approach?` | 异步(≤20s) | 默认原地，approach=true允许固定原6.5格范围内只行走接近同一目标；默认1次、最多10次，满冷却/恢复后出手；中立/命名目标沿原批准/自主模式，拒绝保护目标及不安全横扫 |
 | `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
 | `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
 | `move_to` | `x,y,z,exact?,walk_only?,work_target?,clear_obstructions?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；walk_only=true从搜索/缓存/活体计划/执行共同禁用挖放。work_target={x,y,z}要求exact=true，终态按最新视线/距离验工作，clear_obstructions=true允许按安全清理计划评估，不额外执行目标清理；失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。确认模式改世界先给具体批准方案；自主模式由主人任务放行。搜索预算8000节点/128挖/放≤背包存量；新增改动复核许可 |
@@ -950,21 +958,27 @@ collect 的中心需在身体6.5格内；实际候选同时在请求球体和身
 生产调用原版playerTouch处理实际拾取/余量，统计/成就、动画和真实Mixin加载仍待验。
 离线范围、测试与真实待验见 DEVELOPMENT §3.7 / STATUS。
 
-### 2.7 有界近战（C4 实现与离线验证，真实战斗待验）
+### 2.7 有界近战（C4/D1 实现与离线验证，真实战斗待验）
 
 先 scan_area 取得 entity_id 与 target_uuid，再用
 `attack {"entity_id":47,"target_uuid":"00000000-0000-0000-0000-000000000047","max_hits":2}`。
 整数编号必须为正并配合规范 UUID，避免旧编号重用误伤；
 或者 `attack {"entity_id":"hostile_nearby"}`，从身体6.5格查询盒内最多64个最近候选中，
 选择一只实际原版攻击距离内、可见、未命名且未受保护的 Enemy。
-此选择只发生一次；后续锁定原实体引用/编号/UUID，不追击、不换目标或自动打分裂产物。
+此选择只发生一次；后续锁定原实体引用/编号/UUID，不换目标或自动打分裂产物。
+approach默认false保持原地；显式true可选择原范围内暂不可出手的目标，再只行走接近。
+身体/目标始终受固定初始脚格锚点6.5格三维球约束，路径另有保守6格节点球；
+不挖放或自动换工具。目标位移明显才有界换路线，瞬时边缘变化不每刻重搜。
+换路线、memo失效、地形重规划和暂停恢复共用原8000节点/32768记录/400ms协作CPU/
+2次重规划；余额不够即停。工作到达按真实碰撞脚高、眼睛至目标AABB的AttackRange及射线，
+出手仍须原版实际范围/视线，移动推进后同刻可合法挥击。详见D1-DYNAMIC-MELEE。
 max_hits 是**调用原版攻击的上限**，默认1、范围1-10；整个任务400tick（20秒，低TPS会更久）。
 ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发或轮询。
 
 参数拒绝保留 `DENIED:` 前缀，反馈现在包含固定原因码、字段及修正建议；
 可选data附 `argument_error: {code, field, expected}`，三项均由本地固定定义生成。
 不回显未知字段名、原始编号/UUID/授权值或完整参数，不新增自动重试。
-按固定顺序报告第一个问题：未知字段 → entity_id → 对应target_uuid → max_hits → authorization_id；
+按固定顺序报告第一个问题：未知字段 → entity_id → 对应target_uuid → max_hits → authorization_id → approach；
 修正一个问题后仍须通过后续校验，不因参数合法而跳过保护/距离/授权。
 
 | 原因码 | 字段/含义 |
@@ -974,6 +988,7 @@ ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发�
 | `TARGET_UUID_REQUIRED` / `TARGET_UUID_TYPE` / `TARGET_UUID_FORMAT` | 显式编号缺UUID、UUID非字符串、不是标准小写36字符UUID；仍必须与扫描所得实体身份匹配。 |
 | `NEARBY_TARGET_UUID` / `NEARBY_AUTHORIZATION` | hostile_nearby与显式UUID或具体目标授权不兼容。 |
 | `MAX_HITS_TYPE` / `MAX_HITS_VALUE` | 挥击上限非数字、不是1-10的整数。 |
+| `APPROACH_TYPE` | approach不是JSON布尔，不将字符串或数字自动转换。 |
 | `AUTHORIZATION_ID_TYPE` / `AUTHORIZATION_ID_VALUE` | 授权编号非字符串、空白或长度超过64；通过格式校验不等于已获许可。 |
 
 例如数字字符串编号会返回 `[ENTITY_ID_TYPE]`，提示显式编号不能加引号；
@@ -993,9 +1008,10 @@ ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发�
 玩家（含主人/同伴）、非Mob实体、同队、已驯服动物/马或有 owner reference 的生物始终拒绝。
 未命名 Enemy 可直接执行；逐次确认模式的其余中立或命名Mob先返回 NEED_CONFIRM 和完整服务端清单。
 主人选择的自主模式由同一服务端任务判据免去批准，仍先拒绝受保护目标，详见§1.3。
-沿用 ask_owner/authorize，明确批准后重新携带相同编号、UUID、max_hits及authorization_id调用；
+沿用 ask_owner/authorize，明确批准后重新携带相同编号、UUID、max_hits、approach及authorization_id调用；
 hostile_nearby 不能携带批准编号，不能把具体目标许可改成自动选择许可。
-许可绑定任务/身体/维度、目标编号/UUID/类型、Enemy/命名标志及挥击预算，沿用180s/一次使用。
+许可绑定任务/身体/维度、目标编号/UUID/类型、Enemy/命名标志、挥击预算及approach/原锚点，
+沿用180s/一次使用；批准后的原锚点由服务端恢复，不使用重发时新位置放大范围。
 中途身份或命名分类变化重新检查；只读不能升级。
 实体UUID资源锁独立于位置，目标走开不能让另一同伴认领同一只；
 移动后的目标邻域仍须原子扩展区域锁，不与本插件其他动作抢区域。
@@ -1003,7 +1019,9 @@ hostile_nearby 不能携带批准编号，不能把具体目标许可改成自�
 data/feedback 同时给 strikes/max_hits、observed_health_loss/observed_absorption_loss、
 entity_id/target_uuid/target_type、最后记录的 health/absorption/target_dead，以及 observation_known。
 strikes 表示已经进入原版调用的次数，不等于命中数；生命/吸收减少是前后观测差，
-不做独占伤害或击杀归因。上限完成可以 ok=true 且目标仍活着；死亡则停止，不收掉落。
+不做独占伤害或击杀归因。上限完成可以 ok=true 且目标仍活着；死亡则停止，不主动追捡掉落，
+身体原版触碰拾取照旧。显式接近另有data.approach：固定anchor脚格{x,y,z}/radius、
+moving/search_nodes/search_records/search_nanos/replans/walk_only；不是伤害或击杀证据。
 没有观测到生命或吸收减少则 ATTACK_FAILED，停止剩余挥击，不能自动重投。
 取消/超时/异常通过 interruptedResult 保留此前出手计数，释放锁；原版回调抛错时
 observation_known=false，最后一次结果未知，可能已有副作用，不回滚。

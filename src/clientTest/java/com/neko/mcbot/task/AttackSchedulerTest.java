@@ -73,6 +73,41 @@ class AttackSchedulerTest {
         assertReleased();
     }
 
+    @Test void approachingAttackStopsOnReflexAndSuspensionConsumesItsOriginalTotalCap() {
+        var access = new AttackFixtures.Access();
+        access.approach = true;
+        access.guard = new ServerTool.Result(false, "OUT_OF_REACH:approach", null);
+        var control = new com.neko.mcbot.body.BodyControl(previous -> {
+            if (previous == com.neko.mcbot.body.BodyControl.Owner.WORK) scheduler.preempt(body);
+        });
+        var receipt = scheduler.execute(body, List.of(), () ->
+                scheduler.controlled(body, control, () -> true, () -> {
+                    var future = new CompletableFuture<ServerTool.Result>();
+                    assertTrue(scheduler.submit(body, null,
+                            new AttackTool.Task(new EntityAttack(access, 10)), future, 6));
+                    return future;
+                }));
+        scheduler.tick(present);
+        assertEquals(1, access.moves);
+        control.reflex(true);
+        assertEquals(1, access.stops);
+        scheduler.tick(present);
+        scheduler.tick(present);
+        assertEquals(1, access.moves);
+        assertEquals(3, scheduler.observation(body).get("elapsed_ticks").getAsInt());
+        control.reflex(false);
+        scheduler.tick(present);
+        assertEquals(2, access.moves);
+        scheduler.tick(present);
+        scheduler.tick(present);
+        assertTrue(receipt.join().feedback().startsWith("TIMEOUT:"));
+        assertEquals(0, access.strikes);
+        int moves = access.moves;
+        scheduler.tick(present);
+        assertEquals(moves, access.moves);
+        assertFalse(scheduler.busy(body));
+    }
+
     @Test void bodyReplacementAndDimensionChangeStopBeforeAnyStrike() {
         for (boolean dimension : new boolean[]{false, true}) {
             var access = new AttackFixtures.Access();

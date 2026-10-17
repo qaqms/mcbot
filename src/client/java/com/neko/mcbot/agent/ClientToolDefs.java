@@ -119,6 +119,11 @@ public final class ClientToolDefs {
                     + "navigation_trail.waypoints最多16项含原起点/近期实际路标{id,x,y,z,feet_y,bounds?,underground}；"
                     + "return_waypoint引用本任务ID，沿用原bounds/underground并exact=true、walk_only=true重新导航，不能据路标保证零编辑可返。"
                     + "失败数据可能仅含已知部分效果，须status details=true重新核对，不假定到了请求格。";
+            case "attack" -> "ACCEPTED只表示受理；终态strikes/max_hits是原版尝试次数/上限，"
+                    + "observed_health_loss/observed_absorption_loss为实际前后观测，不作独占归因。"
+                    + "target_dead仅目标存活事实，达到挥击上限不代表击杀；observation_known=false可能已有未知副作用，不重投。"
+                    + "approach仅显式接近时存在，moving/search_nodes/search_records/search_nanos/replans是原累计导航账，"
+                    + "walk_only=true，anchor为固定脚格{x,y,z}、radius为原6.5格范围；路线到达或停步不代表出手/击杀。";
             case "gather" -> "data.goal_satisfied、actual_progress、scope、mined_blocks、cleared_blocks、"
                     + "primitive_calls、skipped_blocks/skipped_items及last_observation。"
                     + "成果是实际背包增量/总量，mined_blocks或source_observations不是入包数。"
@@ -365,12 +370,14 @@ public final class ClientToolDefs {
                             + "\"expected_block\":{\"type\":\"string\",\"maxLength\":128},\"clear_obstructions\":{\"type\":\"boolean\"},"
                             + "\"clear_limit\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3},"
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
-            new ToolSpec("attack", "原地普通近战，只攻击一个目标，不追击、不自动换工具、不拾取掉落。"
-                    + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby选一只可够到的未命名敌对生物。"
+            new ToolSpec("attack", "普通近战锁定一个目标；默认原地不追击。approach=true允许在初始脚格锚点6.5格范围内只行走接近，"
+                    + "不挖放、不换目标、不自动换工具；不主动拾取掉落，身体原版触碰拾取仍运行。"
+                    + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby一次选择原范围内未命名敌对生物。"
+                    + "目标移动/暂停沿用原8000节点/32768记录/400ms协作搜索帽及共2次重规划，不每刻重搜。"
                     + "max_hits为挥击上限1-10，默认1，最多20秒；等满冷却与目标受伤恢复后出手。"
                     + "玩家/同伴/宠物/同队目标拒绝；最新服务端观测为自主执行时可直接调用，"
                     + "确认模式的中立或命名目标收到NEED_CONFIRM后才用ask_owner携带服务端authorization_id确认，"
-                    + "再用同一实体编号/UUID/max_hits和批准编号调用。剑横扫范围有其他活物时拒绝；"
+                    + "再用同一实体编号/UUID/max_hits/approach和批准编号调用，原接近锚点随授权保留。剑横扫范围有其他活物时拒绝；"
                     + "穿刺/动能武器和重锤不支持。ACCEPTED只是受理，等终态；挥击次数不等于伤害或击杀，"
                     + "看实际生命/吸收减少及target_dead，失败不自动重投。"
                     + "参数拒绝会给原因码和字段；按回执核对扫描身份/类型/上限，不猜目标或授权",
@@ -378,6 +385,7 @@ public final class ClientToolDefs {
                             + "{\"type\":\"string\",\"enum\":[\"hostile_nearby\"]}]},"
                             + "\"target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
                             + "\"max_hits\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10},"
+                            + "\"approach\":{\"type\":\"boolean\"},"
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},"
                             + "\"required\":[\"entity_id\"],\"additionalProperties\":false}"),
             new ToolSpec("collect", "兼容工具：立即尝试原版触碰拾取；身体平时会自动拾取，无需挖后逐次调用。"

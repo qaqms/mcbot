@@ -10,7 +10,8 @@ public final class EntityAttack {
                          boolean protectedTarget, boolean alive, float health, float absorption) {
     }
 
-    public record Approval(UUID uuid, String type, boolean hostile, boolean named, int maxHits) {
+    public record Approval(UUID uuid, String type, boolean hostile, boolean named, int maxHits,
+                           boolean approach, long anchor) {
     }
 
     public interface Access {
@@ -22,6 +23,10 @@ public final class EntityAttack {
         boolean ready();
         boolean reserve();
         void strike();
+        default boolean canApproach() { return false; }
+        default ServerTool.Result approach() { return null; }
+        default void stopMoving() { }
+        default com.google.gson.JsonObject movement() { return null; }
     }
 
     private final Access access;
@@ -32,6 +37,7 @@ public final class EntityAttack {
     private float healthLoss, absorptionLoss;
     private boolean observationKnown = true;
     private ServerTool.Result terminal;
+    private ServerTool.Result strikeGuard;
 
     public EntityAttack(Access access, int maxHits) {
         if (maxHits < 1 || maxHits > 10) throw new IllegalArgumentException("maxHits");
@@ -40,17 +46,33 @@ public final class EntityAttack {
     }
 
     public static Approval approval(Target target, int maxHits) {
-        return new Approval(target.uuid(), target.type(), target.hostile(), target.named(), maxHits);
+        return approval(target, maxHits, false, 0);
+    }
+
+    public static Approval approval(Target target, int maxHits, boolean approach, long anchor) {
+        return new Approval(target.uuid(), target.type(), target.hostile(), target.named(), maxHits,
+                approach, approach ? anchor : 0);
     }
 
     public static ActionPermissions.Change change(Target target, int maxHits) {
         return new ActionPermissions.Change("attack", target.id(), approval(target, maxHits));
     }
 
+    public static ActionPermissions.Change change(Target target, int maxHits, boolean approach, long anchor) {
+        return new ActionPermissions.Change("attack", target.id(), approval(target, maxHits, approach, anchor));
+    }
+
+    public static boolean geometricFailure(ServerTool.Result result) {
+        return result != null && (result.feedback().startsWith("OUT_OF_REACH:")
+                || result.feedback().startsWith("OCCLUDED:"));
+    }
+
     public ServerTool.Result preflight() {
         if (terminal != null) return terminal;
         ServerTool.Result failure = access.guard();
-        if (failure != null) return finish(false, failure.feedback(), failure.data());
+        strikeGuard = failure;
+        if (failure != null && !(access.canApproach() && geometricFailure(failure)))
+            return finish(false, failure.feedback(), failure.data());
         Target fresh = access.target();
         if (target != null && (fresh.id() != target.id() || !fresh.uuid().equals(target.uuid()))) {
             return finish(false, "TARGET_LOST:实体身份已改变，先重新扫描，不能沿用旧编号。", null);
@@ -76,6 +98,13 @@ public final class EntityAttack {
     public ServerTool.Result tick() {
         ServerTool.Result failure = preflight();
         if (failure != null) return failure;
+        if (access.canApproach()) {
+            failure = access.approach();
+            if (failure != null) return finish(false, failure.feedback(), failure.data());
+            failure = preflight();
+            if (failure != null) return failure;
+            if (strikeGuard != null) return null;
+        }
         if (!access.ready()) return null;
         Target before = access.target();
         strikes++;
@@ -104,22 +133,29 @@ public final class EntityAttack {
         return terminal;
     }
 
+    public void suspend() { access.stopMoving(); }
+
     public com.google.gson.JsonObject observation() {
         var data = new com.google.gson.JsonObject();
         data.addProperty("action", "attack");
         data.addProperty("strikes", strikes);
         data.addProperty("max_hits", maxHits);
         data.addProperty("observation_known", observationKnown);
+        var movement = access.movement();
+        if (movement != null) data.add("approach", movement);
         return data;
     }
 
     private ServerTool.Result finish(boolean ok, String feedback, com.google.gson.JsonObject extra) {
+        access.stopMoving();
         var data = extra == null ? new com.google.gson.JsonObject() : extra.deepCopy();
         data.addProperty("strikes", strikes);
         data.addProperty("max_hits", maxHits);
         data.addProperty("observed_health_loss", healthLoss);
         data.addProperty("observed_absorption_loss", absorptionLoss);
         data.addProperty("observation_known", observationKnown);
+        var movement = access.movement();
+        if (movement != null) data.add("approach", movement);
         if (target != null) {
             data.addProperty("entity_id", target.id());
             data.addProperty("target_uuid", target.uuid().toString());
@@ -131,7 +167,7 @@ public final class EntityAttack {
         }
         terminal = new ServerTool.Result(ok, feedback + " 本次调用原版攻击 " + strikes + "/" + maxHits
                 + " 次，已观察生命减少 " + healthLoss + "、吸收减少 " + absorptionLoss
-                + "；死亡不等于本次独占击杀归因，未自动拾取掉落。"
+                + "；死亡不等于本次独占击杀归因，未主动追捡掉落，身体触碰仍按原规则处理。"
                 + (observationKnown ? "" : " 最后一次出手结果未知，可能已有副作用，不能重投。"), data);
         return terminal;
     }

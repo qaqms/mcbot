@@ -111,6 +111,19 @@ public final class PathTask extends TickTask {
     private final BlockPos workTarget;
     private final PathSpec spec;
     private final com.neko.mcbot.server.PlacementWork placement;
+    private NavigationGoal suppliedGoal;
+    private NavigationBudget sharedBudget;
+    private Result navigationFailure;
+
+    /** A dynamic caller supplies only an arrival predicate and a shared account, never movement actions. */
+    public static PathTask approach(ServerLevel level, BlockPos target, ActionPermissions permissions,
+            ActionPermissions.Context context, CompanionScheduler scheduler, PathSpec spec,
+            NavigationGoal goal, NavigationBudget budget) {
+        var task = new PathTask(level, target, permissions, context, null, scheduler, false, true, null, spec);
+        task.suppliedGoal = java.util.Objects.requireNonNull(goal);
+        task.sharedBudget = java.util.Objects.requireNonNull(budget);
+        return task;
+    }
 
     // 挖掘子状态
     private BlockPos digPos;
@@ -188,6 +201,7 @@ public final class PathTask extends TickTask {
     public Progress tick(CompanionPlayer c) {
         drivenBody = c;
         c.releaseMovement();
+        if (navigationFailure != null) return terminal(navigationFailure);
         if (c.level() != level) {
             onAbort();
             return terminal(new Result(false, "TARGET_LOST:身体已换维度，原路线作废。", null));
@@ -213,6 +227,7 @@ public final class PathTask extends TickTask {
             beginReplan(c);
             executed = 0;
         }
+        if (navigationFailure != null) return terminal(navigationFailure);
         if (++tickWarmup < 2) {
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
@@ -313,10 +328,17 @@ public final class PathTask extends TickTask {
             BlockPos from = StandingGeometry.feetCell(c);
             sampler = samplerFor(c, from);
             search = newSearch(from);
+            if (search == null) return new Progress.Done(new Result(false,
+                    "ACTION_LIMIT:动态接近的原累计搜索预算已耗尽，未重开。", null));
         }
-        if (!search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS)) {
+        boolean finished;
+        try { finished = search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS); }
+        finally { if (sharedBudget != null) sharedBudget.observe(search); }
+        if (!finished) {
             // 分帧搜索跨多拍，中途世界会被别人改：验尸超限则丢旧图，从当前位置重开
             if (memo != null && memo.worldChanged()) {
+                if (sharedBudget != null && !sharedBudget.takeReplan())
+                    return terminal(new Result(false, "ACTION_LIMIT:动态接近原重规划/搜索账已耗尽，未重开。", null));
                 McbotMod.LOG.info("[path] 验尸超限 stale={}，丢弃旧图重开搜索（第 {} 次）",
                         memo.staleCount(), memoRestarts + 1);
                 memoRestarts++;
@@ -583,17 +605,23 @@ public final class PathTask extends TickTask {
         } else {
             memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
         }
-        NavigationGoal goal = spec.workArrival() && placement != null
+        if (sharedBudget != null) {
+            sharedBudget.observe(search);
+            if (sharedBudget.exhausted()) return null;
+        }
+        NavigationGoal goal = suppliedGoal != null ? suppliedGoal : spec.workArrival() && placement != null
                 ? placement.goal(drivenBody, workTarget, sampler.geometry()) : spec.workArrival()
                 ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
                 workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
                 Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),
                 pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, sampler, from, pos), sampler.geometry())
                 : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
-        DigAStar d = new DigAStar(memo != null ? memo : sampler,
+        DigAStar d = sharedBudget != null ? sharedBudget.search(memo != null ? memo : sampler,
+                from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(), goal)
+                : new DigAStar(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(),
                 MAX_NODES, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs), goal);
-        d.totalBudget(SEARCH_TOTAL_NS);
+        if (sharedBudget == null) d.totalBudget(SEARCH_TOTAL_NS);
         if (reusePending != null) {
             d.reuseBias(reusePending);
         }
@@ -980,9 +1008,11 @@ public final class PathTask extends TickTask {
                     "NO_PATH:路线结束但身体没有在末节点站稳，重新观察当前位置。", null));
         }
         int radius = exact ? 0 : 1;
-        if (!c.onGround() || !spec.workArrival() && (Math.abs(at.getX() - target.getX()) > radius
+        boolean reached = suppliedGoal != null ? suppliedGoal.reached(at.getX(), at.getY(), at.getZ())
+                : spec.workArrival() || !(Math.abs(at.getX() - target.getX()) > radius
                 || Math.abs(at.getY() - target.getY()) > radius
-                || Math.abs(at.getZ() - target.getZ()) > radius)) {
+                || Math.abs(at.getZ() - target.getZ()) > radius);
+        if (!c.onGround() || !reached) {
             if (!partialTail) return new Progress.Done(new Result(false,
                     "NO_PATH:路线结束但身体未实际到达目标范围，重新观察当前位置。", null));
         }
@@ -1014,6 +1044,10 @@ public final class PathTask extends TickTask {
     private void beginReplan(CompanionPlayer c) {
         stopMovement();
         clearCrack();
+        if (sharedBudget != null && !sharedBudget.takeReplan()) {
+            navigationFailure = new Result(false, "ACTION_LIMIT:动态接近原重规划/搜索账已耗尽，未重开。", null);
+            return;
+        }
         BlockPos from = StandingGeometry.feetCell(c);
         sampler = samplerFor(c, from);
         replans++;

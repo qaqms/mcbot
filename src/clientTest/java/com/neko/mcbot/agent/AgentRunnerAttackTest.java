@@ -11,6 +11,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -18,8 +20,18 @@ class AgentRunnerAttackTest {
     private final OfflineAgentClient client = new OfflineAgentClient();
     private final AgentRunner runner = client.create();
     private static final String ARGS = "{\"entity_id\":47,\"target_uuid\":\"00000000-0000-0000-0000-000000000047\",\"max_hits\":2}";
+    private static final String MOVING_ARGS = "{\"entity_id\":47,\"target_uuid\":\"00000000-0000-0000-0000-000000000047\",\"max_hits\":2,\"approach\":true}";
 
     @AfterEach void close() { runner.close(); client.drain(); }
+
+    private void until(BooleanSupplier condition) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            client.drain();
+            java.util.concurrent.locks.LockSupport.parkNanos(100000);
+        }
+        assertTrue(condition.getAsBoolean(), "runner/program did not settle");
+    }
 
     private void call(int turn, String name, String args) {
         client.engine().tools(turn, new ToolCall("c" + turn, name, args));
@@ -63,6 +75,7 @@ class AgentRunnerAttackTest {
                 .findFirst().orElseThrow();
         var schema = JsonParser.parseString(attack.paramsJsonSchema()).getAsJsonObject();
         assertEquals(10, schema.getAsJsonObject("properties").getAsJsonObject("max_hits").get("maximum").getAsInt());
+        assertEquals("boolean", schema.getAsJsonObject("properties").getAsJsonObject("approach").get("type").getAsString());
         assertFalse(schema.get("additionalProperties").getAsBoolean());
         assertTrue(attack.description().contains("不追击"));
         assertTrue(attack.description().contains("target_uuid"));
@@ -71,6 +84,52 @@ class AgentRunnerAttackTest {
         var scan = client.engine().definitions.getFirst().stream().filter(s -> s.name().equals("scan_area"))
                 .findFirst().orElseThrow();
         assertTrue(scan.description().contains("entity_id/target_uuid"));
+    }
+
+    @Test void luaApproachWaitsForTrueTerminalAndKeepsTheSameArguments() {
+        runner.start();
+        runner.submitTask("approach one scanned mob then inspect inventory");
+        call(0, "run_program", "{\"code\":\"local r=mc.call('attack',{entity_id=47,target_uuid='00000000-0000-0000-0000-000000000047',max_hits=2,approach=true}); local b=mc.call('inventory',{}); return r.data.strikes\"}");
+        until(() -> client.toolCount() >= 1);
+        assertEquals(1, client.toolCount());
+        assertEquals(JsonParser.parseString(MOVING_ARGS), client.lastTool().obj("args"));
+        long seq = client.lastTool().num("seq", -1);
+        runner.handleS2c(ack(seq));
+        client.drain();
+        assertEquals(1, client.toolCount());
+        var data = new JsonObject();
+        data.addProperty("strikes", 2);
+        var terminal = done(seq, true, "observed two attempts");
+        terminal.body().add("data", data);
+        runner.handleS2c(terminal);
+        until(() -> client.toolCount() >= 2);
+        assertEquals(2, client.toolCount());
+        assertEquals("inventory", client.lastTool().str("tool"));
+        receipt(client.lastTool().num("seq", -1), true, "actual inventory", new JsonObject());
+        until(() -> client.engine().responses.size() >= 2);
+        assertEquals(2, client.engine().responses.size());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m -> m instanceof Msg.Tool t
+                && t.ok() && t.content().contains("返回值=2")));
+    }
+
+    @Test void cancelledLuaApproachNeverRunsDependentActionOnLateArrival() {
+        runner.start();
+        long task = runner.submitTask("old approach");
+        call(0, "run_program", "{\"code\":\"mc.call('attack',{entity_id='hostile_nearby',approach=true}); mc.call('equip',{slot=1})\"}");
+        until(() -> client.toolCount() >= 1);
+        assertEquals(1, client.toolCount());
+        long seq = client.lastTool().num("seq", -1);
+        runner.handleS2c(ack(seq));
+        client.drain();
+        assertTrue(runner.cancelTask(task));
+        client.drain();
+        runner.handleS2c(done(seq, true, "late arrival"));
+        client.drain();
+        assertEquals(1, client.toolCount());
+        runner.submitTask("[只读]inspect actual body");
+        until(() -> client.engine().responses.size() >= 2);
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m -> m instanceof Msg.Tool t
+                && t.content().startsWith("CANCELLED:")));
     }
 
     @Test void acceptedAttackBlocksSameTurnFollowupUntilActualTerminal() {

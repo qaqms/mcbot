@@ -15,9 +15,26 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AttackToolOperationsTest {
+    @Test void dynamicApproachRequiresAnExplicitBooleanAndKeepsTheOriginalHitAndTimeCaps() {
+        assertNotNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"approach\":true,\"max_hits\":2}")));
+        for (String invalid : new String[]{"\"true\"", "1", "null", "[]"})
+            assertNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"approach\":" + invalid + "}")));
+        assertEquals(400, new AttackTool().capTicks(json("{\"approach\":true}")));
+    }
     @BeforeAll static void registriesOnly() { BlockActionFixtures.bootstrap(); }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     private final String uuid = UUID.randomUUID().toString();
+
+    @Test void fixedScopeRejectsFollowingTargetOrBodyOutsideOriginalThreeDimensionalSphere() {
+        var anchor = net.minecraft.core.BlockPos.ZERO;
+        var origin = new net.minecraft.world.phys.Vec3(.5, 0, .5);
+        assertTrue(AttackTool.withinApproachScope(anchor, origin, origin.add(6.5, 0, 0)));
+        assertFalse(AttackTool.withinApproachScope(anchor, origin, origin.add(6.501, 0, 0)));
+        assertFalse(AttackTool.withinApproachScope(anchor, origin.add(5, 5, 0), origin.add(5, 5, 0)));
+        assertFalse(AttackTool.withinApproachScope(anchor, origin.add(7, 0, 0), origin.add(6, 0, 0)));
+        assertFalse(AttackTool.withinApproachScope(anchor, origin, new net.minecraft.world.phys.Vec3(Double.NaN, 0, 0)));
+        assertFalse(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\"}")).approach());
+    }
 
     @Test void explicitIdentityAndNearbySelectorHaveStrictDistinctContracts() {
         var input = AttackTool.arguments(json("{\"entity_id\":47,\"target_uuid\":\"" + uuid + "\",\"max_hits\":10}"));
@@ -113,6 +130,33 @@ class AttackToolOperationsTest {
         var renamed = new EntityAttack.Target(47, UUID.fromString(uuid), "minecraft:pig",
                 false, true, false, true, 20, 0);
         assertTrue(AttackTool.permission(permissions, context, approved, renamed, 2).feedback().startsWith("NEED_CONFIRM:"));
+    }
+
+    @Test void approvalBindsApproachModeAndOriginalAnchorWithoutUpgradingStationaryApproval() {
+        var permissions = new ActionPermissions();
+        var context = new ActionPermissions.Context(UUID.randomUUID(), UUID.randomUUID(), "world", 3, false);
+        permissions.begin(context);
+        var target = new EntityAttack.Target(47, UUID.fromString(uuid), "minecraft:pig",
+                false, false, false, true, 20, 0);
+        long anchor = new net.minecraft.core.BlockPos(2, 64, 3).asLong();
+        var proposal = AttackTool.permission(permissions, context, new ActionPermissions.Execution(null),
+                target, 2, true, anchor);
+        assertTrue(proposal.data().get("authorization_summary").getAsString().contains("初始6.5格"));
+        String token = proposal.data().get("authorization_id").getAsString();
+        assertTrue(permissions.approve(context, token));
+        var approved = new ActionPermissions.Execution(permissions.take(context, token, 47));
+        assertNull(AttackTool.permission(permissions, context, approved, target, 2, true, anchor));
+        assertTrue(AttackTool.permission(permissions, context, approved, target, 2, true, anchor + 1)
+                .feedback().startsWith("NEED_CONFIRM:"));
+        assertTrue(AttackTool.permission(permissions, context, approved, target, 2, false, 0)
+                .feedback().startsWith("NEED_CONFIRM:"));
+        var stationary = EntityAttack.change(target, 2);
+        token = permissions.propose(new ActionPermissions.Scope(context, 47,
+                java.util.Map.of(ActionPermissions.key(stationary), stationary)));
+        assertTrue(permissions.approve(context, token));
+        var original = new ActionPermissions.Execution(permissions.take(context, token, 47));
+        assertTrue(AttackTool.permission(permissions, context, original, target, 2, true, anchor)
+                .feedback().startsWith("NEED_CONFIRM:"));
     }
 
     @Test void namedHostileNeedsApprovalButProtectedTargetCannotBeApproved() {

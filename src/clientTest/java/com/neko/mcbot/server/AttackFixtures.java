@@ -18,8 +18,12 @@ public final class AttackFixtures {
         public boolean hostile = true, named, protectedTarget, alive = true, ready = true, reserved = true;
         public float health = 20, absorption;
         public int strikes, reservations;
+        public boolean approach;
+        public int moves, stops;
         public ServerTool.Result guard, permission;
         public Runnable effect = () -> health -= 3;
+        public Runnable movement = () -> {};
+        public ServerTool.Result movementFailure;
 
         public Access() { inventory.setItem(0, new ItemStack(Items.IRON_SWORD)); }
         @Override public EntityAttack.Target target() {
@@ -32,5 +36,8 @@ public final class AttackFixtures {
         @Override public boolean ready() { return ready; }
         @Override public boolean reserve() { reservations++; return reserved; }
         @Override public void strike() { strikes++; effect.run(); }
+        @Override public boolean canApproach() { return approach; }
+        @Override public ServerTool.Result approach() { moves++; movement.run(); return movementFailure; }
+        @Override public void stopMoving() { stops++; }
     }
 }

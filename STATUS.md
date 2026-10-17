@@ -3,6 +3,41 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## D1 共用动态接近与近战（2026-10-17 10:15，Asia/Shanghai）
+
+- 本轮B2→D1逐卡完成离线验收，B2已提交推送303f9ee；D1独立提交/推送以Git为准。
+  当前十卡完成、12卡待实施，下一D2威胁触发、自卫与撤退，本轮不启第三卡。
+  历史交接快照不覆盖此STATUS；完整机制/参考链/边界见docs/D1-DYNAMIC-MELEE-2026-10-17.md。
+- attack新增严格布尔approach，默认false原地；true将稳定实体和原脚格锚点交EntityApproach，
+  仍复用PathTask/Steering/StandingGeometry及EntityAttack原版近战。固定6.5格三维范围，
+  路径另保守6格节点球，只行走、不挖放/换目标/自动配装。
+  真实AttackRange/AABB/脚高/已加载射线选择工作站位，真正出手仍走原版范围/视线/满冷却。
+  移动和出手分别逐刻判断，移动推进后当刻可以合法挥击，不因接近阶段漏出手。
+- 原身份/许可/保护/武器/世界规则/横扫门先于可恢复几何失败，移动后再完整重验。
+  批准绑定模式、原锚点及原实体/次数，原地许可不能升级移动许可；
+  换维度/身体/目标、主手变化、租约冲突及取消均停，区域锁使用原context维度。
+  三刻外缘迟滞、目标≥2格且计划相隔≥10执行刻才替换运行路线。
+  NavigationBudget跨动态换路、memo/地形重算、丢弃及暂停恢复累计原8000节点/
+  32768记录/400ms协作搜索和2次重规划；原400刻含暂停及1–10挥击帽保持。
+  Lua/短任务/长期阶段走同动作、原预算及真终态入口，后续自卫复用执行器；
+  未提高模型/探索/范围/许可或增加依赖规划器。
+- 新增21项/3类。before复现缺approach输入契约1失败（18秒）；
+  首次生产编译/参数专项通过24秒。focused1两个新Lua测试未等后台执行，focused2
+  一个返回值断言误用JSON展示；按原工装实际口径修正，未放宽产品门。
+  首次强制全量1314项通过43秒；收尾修正原拾取文案、补固定范围回执后再强制全量：
+  build/d1-final2-20261017.log第61–62行，**47秒、20任务全部执行**。
+  XML **1314项/154 suites**（核心336/39、根136/20、客户端842/95），
+  failures/errors/skipped全0。累计预算、稳定目标/迟滞、原生形状/clip和生产A*绕墙、
+  同刻出手/硬门变更/部分效果、批准/固定范围、scheduler抢占总帽和runner/Lua终态/迟到已验。
+- build/libs/mcbot-0.1.0.jar：**1,431,471 bytes**，末写10:13:33；SHA256
+  `1edc2936fcd9efec1c21706832967340731f783dc644f2c7d31b7801eec04020`。
+  已核NavigationBudget/EntityApproach/MeleeWork及既有EntityAttack、新旧建筑类、
+  内嵌agent-core/LuaJ、许可及0.1.0元数据；提交前核暂存、diff与密钥/机器路径/产物。
+  list-java无输出。只改本体，未安装或启动/停止游戏/服务器/模型，未改无敌/玩家配置；
+  宿主/连接器/只读参考/玩家实例保持。原日志目录本环境不可用，无新增实机证据。
+  世界/身体/原版伤害回调及模型/网络受控，真实运动/伤害/横扫仍待补证；
+  D2威胁/自卫/撤退、D3持续跟随、远程/盾和自动配装未在D1实现。
+
 ## B2 近身有界施工（2026-10-17 09:50，Asia/Shanghai）
 
 - 本轮按两卡模式B2→D1推进，B2已独立完成离线验收；九卡完成、13卡待实施，
@@ -5103,6 +5138,15 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-17 D1本地官方映射javap/编译及原生形状离线调用确认，未运行真实战斗：
+Player.isWithinAttackRange(AABB,double):boolean委托LivingEntity.entityAttackRange():AttackRange；
+后者读取当前有效物品ATTACK_RANGE组件，否则用AttackRange.defaultFor(entity)。
+AttackRange为六float记录(minRange,maxRange,minCreativeRange,maxCreativeRange,hitboxMargin,mobFactor)；
+对生存玩家，isInRange的原生距离为sqrt(AABB.distanceToSqr(eye))，上下界为
+(minRange-hitboxMargin)-padding与(maxRange+hitboxMargin)+padding，均包含端点。
+float范围加减后再提升double；不把格心距离、扩大最小臂长或参考版本旧常量代替实际原生门。
+投影仅支持当前生存近战，实际出手继续调用原生方法。
 
 2026-10-17 N3/B1本地官方映射javap、编译及注册对象离线调用确认（未运行真实世界/注入）：
 LevelChunk.setBlockState(BlockPos,BlockState,int):BlockState；

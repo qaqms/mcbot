@@ -3,6 +3,16 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## D1 共用动态接近与近战（2026-10-17）
+
+attack显式approach=true经EntityApproach协调原PathTask与EntityAttack，不新增动作核。
+固定实体/锚点，范围6.5格、只行走；原生AttackRange和StandingGeometry/BlockAim决定
+可工作站位，真实出手仍走原版距离/视线/满冷却和效果核对。移动不阻断同刻合法出手。
+NavigationBudget在换路线、地形重算与暂停恢复间累计原节点/记录/协作CPU及2次重规划，
+原400刻总帽含暂停；默认原地模式保留，批准绑定模式和原锚点。
+短任务/长期阶段及Lua走同入口，后续自卫复用同一执行器，D2触发与撤退尚未实现。
+完整机制、支持范围和原生待验见D1-DYNAMIC-MELEE及STATUS。
+
 ## B2 共用近身施工（2026-10-17）
 
 build_nearby将同一B1目标/修订/指定页交给BuildWork身体任务，复用Survey/Inventory、
@@ -803,13 +813,16 @@ RG6在CompanionPlayer/SummonService/status读取处补 `[body-health]` 观测：
 不补血或改无敌/移动/存档，不调用完整doTick。采样不能覆盖所有直接写值或间隔内恢复，
 没有来源的变化不猜伤因；说明及真实待验见RG6-HEALTH-WORLD-OBSERVATIONS/STATUS。
 
-### 7.1 有界近战（C4）
+### 7.1 有界近战（C4，D1扩展）
 
 AttackTool 以实体编号+UUID或一次近身Enemy选择构造 EntityAttack，交给现有调度器，
 最多10次挥击/400tick；默认1次。每tick检查身份/保护/范围/视线/主手与资源，
-满冷却且目标恢复后调用原版 Player.attack/swing；不追击、换目标、自动换装备或拾取。
+满冷却且目标恢复后调用原版 Player.attack/swing；默认不追击。
+approach=true使用上方D1有界只行走接近；不换目标/自动换装备或主动追捡，
+身体原版触碰拾取仍运行。
 玩家/同伴/宠物/同队拒绝，中立/命名目标沿用服务端具体确认。
-许可包括目标身份/类型/Enemy及命名标志、挥击预算，无法借旧批准扩大次数或改目标。
+许可包括目标身份/类型/Enemy及命名标志、挥击预算、approach与原锚点，
+无法借旧批准扩大次数、改目标或将原地许可升级为移动许可。
 身体/实体UUID/目标区域租约到终态释放；实体移动后仍占其UUID，再扩展新的区域。
 TickTask.interruptedResult 让取消/超时/异常保留已完成出手与未知效果标志，其他旧任务默认回原结果。
 主手变更需停手；本次原版攻击的耐久/破损由原版负责，可在回调后更新快照。

@@ -57,7 +57,8 @@ public final class ToolCatalog {
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
                     + "拾取须用新鲜stand_positions和exact=true；默认相邻到达不保证触碰。"
                     + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";
-            case "attack" -> "原地近战不追击；先扫描entity_id/target_uuid，确认模式NEED_CONFIRM后ask_owner取得具体授权。"
+            case "attack" -> "默认原地不追击；approach=true在初始6.5格范围只走路接近同一目标，原搜索/重规划/20秒帽不重开。"
+                    + "先扫描entity_id/target_uuid，确认模式NEED_CONFIRM后ask_owner取得具体授权，保持approach。"
                     + "ACCEPTED等真终态，挥击次数不等于伤害或击杀。";
             case "collect" -> "兼容触碰拾取，身体会自动拾取；r只是查询范围，远处先走近。"
                     + "ok=false可能已部分拾取，按新鲜背包核对成果。";

@@ -31,18 +31,18 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-/** Stationary native melee with a task-bound identity and finite strike budget. */
+/** Shared native melee; optional bounded approach uses the same path and strike implementations. */
 public final class AttackTool implements ServerTool {
     public static final int CAP_TICKS = 400;
     public static final double LOCAL_RADIUS = 6.5;
 
-    public record Input(Integer entityId, UUID uuid, int maxHits, String authorizationId) {
+    public record Input(Integer entityId, UUID uuid, int maxHits, String authorizationId, boolean approach) {
         public boolean nearby() { return entityId == null; }
     }
 
     private enum ArgumentError {
         ARGUMENTS_REQUIRED("args", "JSON 对象", "传入 attack 参数对象。"),
-        UNKNOWN_FIELD("args", "仅 entity_id、target_uuid、max_hits、authorization_id",
+        UNKNOWN_FIELD("args", "仅 entity_id、target_uuid、max_hits、authorization_id、approach",
                 "移除其他字段，不用模型字段代替任务权限。"),
         ENTITY_ID_REQUIRED("entity_id", "扫描所得正整数编号，或字符串 hostile_nearby",
                 "先 scan_area 取得目标身份；不要猜编号。"),
@@ -62,6 +62,8 @@ public final class AttackTool implements ServerTool {
                 "用数字填写挥击上限，不加引号；省略时默认 1。"),
         MAX_HITS_VALUE("max_hits", "1-10 的整数",
                 "将挥击上限设为 1-10，不用小数或溢出数值。"),
+        APPROACH_TYPE("approach", "JSON 布尔值",
+                "true允许原范围内有限只行走接近，false或省略保持原地。"),
         AUTHORIZATION_ID_TYPE("authorization_id", "服务端授权编号字符串",
                 "原样携带服务端清单经 ask_owner 确认的编号，不转换类型或伪造。"),
         AUTHORIZATION_ID_VALUE("authorization_id", "非空且不超过 64 字符的字符串",
@@ -111,7 +113,7 @@ public final class AttackTool implements ServerTool {
         if (args == null) return ParsedArguments.invalid(ArgumentError.ARGUMENTS_REQUIRED);
         // Only fixed schema fields enter diagnostics; an unknown key may itself contain private text.
         for (String key : args.keySet()) {
-            if (!List.of("entity_id", "target_uuid", "max_hits", "authorization_id").contains(key)) {
+            if (!List.of("entity_id", "target_uuid", "max_hits", "authorization_id", "approach").contains(key)) {
                 return ParsedArguments.invalid(ArgumentError.UNKNOWN_FIELD);
             }
         }
@@ -172,7 +174,14 @@ public final class AttackTool implements ServerTool {
         }
         // An approval is for one concrete identity, never another nearby selection.
         if (id == null && authorization != null) return ParsedArguments.invalid(ArgumentError.NEARBY_AUTHORIZATION);
-        return new ParsedArguments(new Input(id, uuid, hits, authorization), null);
+        boolean approach = false;
+        if (args.has("approach")) {
+            var value = args.get("approach");
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
+                return ParsedArguments.invalid(ArgumentError.APPROACH_TYPE);
+            approach = value.getAsBoolean();
+        }
+        return new ParsedArguments(new Input(id, uuid, hits, authorization, approach), null);
     }
 
     @Override public CompletableFuture<Result> runAsync(CompanionPlayer player, JsonObject args,
@@ -193,17 +202,27 @@ public final class AttackTool implements ServerTool {
                             mob -> mob instanceof Enemy && mob.isAlive() && !mob.hasCustomName() && !protectedTarget(player, mob))
                     .stream().sorted(Comparator.comparingDouble((Mob mob) -> player.distanceToSqr(mob))
                             .thenComparingInt(Mob::getId)).limit(64)
-                    .filter(mob -> guard(player, player.level(), mob) == null).findFirst()
+                    .filter(mob -> {
+                        var failure = guard(player, player.level(), mob);
+                        return failure == null || input.approach() && EntityAttack.geometricFailure(failure);
+                    }).findFirst()
                     .orElse(null);
         } else {
             var found = player.level().getEntity(input.entityId());
             entity = found instanceof LivingEntity living && input.uuid().equals(living.getUUID()) ? living : null;
         }
         if (entity == null) return completed("TARGET_LOST:没有可用的指定目标或近身敌对目标；先扫描，不追击或自动改目标。");
-        var execution = new ActionPermissions.Execution(permissions == null || input.authorizationId() == null
-                ? null : permissions.take(context, input.authorizationId(), entity.getId()));
+        var approved = permissions == null || input.authorizationId() == null
+                ? null : permissions.take(context, input.authorizationId(), entity.getId());
+        var anchor = com.neko.mcbot.server.StandingGeometry.feetCell(player);
+        if (input.approach() && approved != null) {
+            var change = approved.changes().get("attack:" + entity.getId());
+            if (change != null && change.expectedState() instanceof EntityAttack.Approval permit && permit.approach())
+                anchor = BlockPos.of(permit.anchor());
+        }
+        var execution = new ActionPermissions.Execution(approved);
         var attack = new EntityAttack(new PlayerAccess(player, player.level(), entity, scheduler,
-                permissions, context, execution), input.maxHits());
+                permissions, context, execution, input.approach(), anchor), input.maxHits());
         Result failure = attack.preflight();
         if (failure != null) return CompletableFuture.completedFuture(failure);
         var future = new CompletableFuture<Result>();
@@ -223,6 +242,7 @@ public final class AttackTool implements ServerTool {
         @Override public Result interruptedResult(Result reason) { return attack.interrupt(reason.feedback()); }
         @Override public JsonObject observation() { return attack.observation(); }
         @Override public Result onResume(CompanionPlayer c) { return attack.preflight(); }
+        @Override public void onSuspend() { attack.suspend(); }
         @Override public void onAbort() { attack.interrupt("CANCELLED:攻击已中止，等待新指令。"); }
     }
 
@@ -249,25 +269,24 @@ public final class AttackTool implements ServerTool {
         if (protectedTarget(player, entity)) return failed("DENIED:不攻击玩家、同伴、宠物或同队目标。");
         if (!entity.isAlive()) return null;
         if (!entity.isAttackable() || entity.isInvulnerable()) return failed("DENIED:目标当前不可攻击或无敌，换目标。");
-        if (player.distanceToSqr(entity) > LOCAL_RADIUS * LOCAL_RADIUS
-                || !player.isWithinAttackRange(entity.getBoundingBox(), 0)) {
-            return failed("OUT_OF_REACH:超出当前原版攻击距离，先显式 move_to 靠近；本次不追击。");
-        }
+        if (!supportedWeapon(player.getMainHandItem()))
+            return failed("WRONG_TOOL:当前工具不支持穿刺、动能武器或重锤，先 equip 普通近战工具。");
         if (!loadedArea(level, player.getBoundingBox().minmax(entity.getBoundingBox()).inflate(1))) {
             return failed("TARGET_LOST:攻击及视线邻域未加载或超出边界，不强制加载。");
         }
         if (!level.mayInteract(player, entity.blockPosition())) return failed("DENIED:世界规则不允许操作目标位置。");
-        if (!player.hasLineOfSight(entity)) return failed("OCCLUDED:目标被遮挡，先重新观察或显式移动；不隔墙攻击。");
         ItemStack held = player.getMainHandItem();
-        if (!supportedWeapon(held)) {
-            return failed("WRONG_TOOL:当前工具不支持穿刺、动能武器或重锤，先 equip 普通近战工具。");
-        }
         // This is conservative even when current motion would prevent a vanilla sweep.
         if (held.is(ItemTags.SWORDS) && !level.getEntitiesOfClass(LivingEntity.class,
                 entity.getBoundingBox().inflate(1, .25, 1),
                 other -> other != player && other != entity && other.isAlive()).isEmpty()) {
             return failed("UNSAFE_SWEEP:剑的横扫范围有其他活物，先更换非横扫工具或等待目标分开。");
         }
+        if (player.distanceToSqr(entity) > LOCAL_RADIUS * LOCAL_RADIUS
+                || !player.isWithinAttackRange(entity.getBoundingBox(), 0)) {
+            return failed("OUT_OF_REACH:超出当前原版攻击距离；仅approach=true允许原范围内只行走接近。");
+        }
+        if (!player.hasLineOfSight(entity)) return failed("OCCLUDED:目标被遮挡，不隔墙攻击。");
         return null;
     }
 
@@ -278,6 +297,13 @@ public final class AttackTool implements ServerTool {
 
     public static boolean ready(float charge, int invulnerableTicks, boolean itemBlocked) {
         return Float.isFinite(charge) && charge >= 1 && invulnerableTicks <= 10 && !itemBlocked;
+    }
+
+    public static boolean withinApproachScope(BlockPos anchor, net.minecraft.world.phys.Vec3 body,
+                                              net.minecraft.world.phys.Vec3 target) {
+        var origin = new net.minecraft.world.phys.Vec3(anchor.getX() + .5, anchor.getY(), anchor.getZ() + .5);
+        return body.distanceToSqr(origin) <= LOCAL_RADIUS * LOCAL_RADIUS
+                && target.distanceToSqr(origin) <= LOCAL_RADIUS * LOCAL_RADIUS;
     }
 
     private static boolean loadedArea(ServerLevel level, AABB box) {
@@ -292,13 +318,70 @@ public final class AttackTool implements ServerTool {
         return true;
     }
 
-    private record PlayerAccess(CompanionPlayer player, ServerLevel level, LivingEntity entity,
-            CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context,
-            ActionPermissions.Execution execution) implements EntityAttack.Access {
+    private static final class PlayerAccess implements EntityAttack.Access {
+        private final CompanionPlayer player;
+        private final ServerLevel level;
+        private final LivingEntity entity;
+        private final CompanionScheduler scheduler;
+        private final ActionPermissions permissions;
+        private final ActionPermissions.Context context;
+        private final ActionPermissions.Execution execution;
+        private final boolean approach;
+        private final BlockPos anchor;
+        private final com.neko.mcbot.server.EntityApproach movement;
+
+        PlayerAccess(CompanionPlayer player, ServerLevel level, LivingEntity entity,
+                     CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context,
+                     ActionPermissions.Execution execution, boolean approach, BlockPos anchor) {
+            this.player = player; this.level = level; this.entity = entity; this.scheduler = scheduler;
+            this.permissions = permissions; this.context = context; this.execution = execution;
+            this.approach = approach; this.anchor = anchor.immutable();
+            this.movement = approach ? new com.neko.mcbot.server.EntityApproach(new com.neko.mcbot.server.EntityApproach.Access() {
+                @Override public net.minecraft.world.phys.Vec3 targetPosition() { return entity.position(); }
+                @Override public boolean canStrike() { return AttackTool.guard(player, level, entity) == null; }
+                @Override public TickTask route(com.neko.mcbot.path.NavigationBudget budget) {
+                    return com.neko.mcbot.path.PathTask.approach(level, entity.blockPosition(), permissions, context,
+                            scheduler, new com.neko.mcbot.path.PathSpec(false, false, false, 0, anchor, 6),
+                            com.neko.mcbot.server.MeleeWork.goal(player, entity), budget);
+                }
+                @Override public TickTask.Progress advance(TickTask route) { return route.tickSafe(player); }
+                @Override public void stopInput() { player.releaseMovement(); }
+            }) : null;
+        }
         @Override public EntityAttack.Target target() { return describe(player, entity); }
-        @Override public Result guard() { return AttackTool.guard(player, level, entity); }
+        @Override public Result guard() {
+            if (context == null || permissions == null || !context.equals(permissions.current(context.owner(),
+                    player.getUUID(), context.dimension(), context.taskId(), player))
+                    || !ActionPermissions.allowed(context, "attack", new JsonObject())
+                    || approach && !ActionPermissions.allowed(context, "move_to", new JsonObject()))
+                return failed("DENIED:原任务/身体许可已失效，未移动或攻击。");
+            var current = AttackTool.guard(player, level, entity);
+            if (current != null && !EntityAttack.geometricFailure(current)) return current;
+            if (!entity.isAlive()) return current;
+            if (approach) {
+                if (!withinApproachScope(anchor, player.position(), entity.position()))
+                    return failed("SCOPE_LIMIT:身体或原目标已离开初始6.5格范围，未追出原范围。");
+                var environment = com.neko.mcbot.server.MiningEnvironment.bodyFailure(player);
+                if (environment != null) return environment;
+            }
+            return current;
+        }
         @Override public Result permission(EntityAttack.Target target, int maxHits) {
-            return AttackTool.permission(permissions, context, execution, target, maxHits);
+            return AttackTool.permission(permissions, context, execution, target, maxHits, approach, anchor.asLong());
+        }
+        @Override public boolean canApproach() { return approach; }
+        @Override public Result approach() { return movement == null ? null : movement.tick(); }
+        @Override public void stopMoving() { if (movement != null) movement.stop(); }
+        @Override public JsonObject movement() {
+            if (movement == null) return null;
+            var data = movement.observation();
+            var point = new JsonObject();
+            point.addProperty("x", anchor.getX());
+            point.addProperty("y", anchor.getY());
+            point.addProperty("z", anchor.getZ());
+            data.add("anchor", point);
+            data.addProperty("radius", LOCAL_RADIUS);
+            return data;
         }
         @Override public int selectedSlot() { return player.getInventory().getSelectedSlot(); }
         @Override public ItemStack held() { return player.getMainHandItem(); }
@@ -307,7 +390,7 @@ public final class AttackTool implements ServerTool {
             return AttackTool.ready(charge, entity.invulnerableTime, player.cannotAttackWithItem(held(), 0));
         }
         @Override public boolean reserve() {
-            String dimension = level.dimension().toString();
+            String dimension = context.dimension();
             AABB box = entity.getBoundingBox().inflate(1);
             var region = new ResourceLocks.Region(dimension, (int) Math.floor(box.minX), (int) Math.floor(box.minY),
                     (int) Math.floor(box.minZ), (int) Math.floor(box.maxX), (int) Math.floor(box.maxY), (int) Math.floor(box.maxZ));
@@ -323,12 +406,19 @@ public final class AttackTool implements ServerTool {
 
     static Result permission(ActionPermissions permissions, ActionPermissions.Context context,
             ActionPermissions.Execution execution, EntityAttack.Target target, int maxHits) {
+        return permission(permissions, context, execution, target, maxHits, false, 0);
+    }
+
+    static Result permission(ActionPermissions permissions, ActionPermissions.Context context,
+            ActionPermissions.Execution execution, EntityAttack.Target target, int maxHits, boolean approach, long anchor) {
         if (target.protectedTarget()) return failed("DENIED:不攻击玩家、同伴、宠物或同队目标。");
         if (target.hostile() && !target.named()) return null;
-        var change = EntityAttack.change(target, maxHits);
+        var change = EntityAttack.change(target, maxHits, approach, anchor);
         if (permissions != null && permissions.allowsChange(context, execution, change)) return null;
         String summary = "确认对实体 " + target.type() + "（entity_id=" + target.id() + "，target_uuid="
-                + target.uuid() + "）在当前位置执行原版近战，最多挥击 " + maxHits
+                + target.uuid() + "）" + (approach ? "以" + BlockPos.of(anchor).toShortString()
+                + "为固定脚格锚点，在初始6.5格范围内只行走接近并执行" : "在当前位置执行")
+                + "原版近战，最多挥击 " + maxHits
                 + " 次、最多20秒；可能伤害或杀死该目标，已完成攻击不能撤销。";
         if (com.neko.mcbot.common.WireSize.utf8Bytes(summary) > 12000) {
             return failed("DENIED:目标确认清单超出长度限制，不能批准截断清单。");
@@ -342,7 +432,7 @@ public final class AttackTool implements ServerTool {
         }
         return new Result(false, "NEED_CONFIRM:中立或命名目标须主人明确确认。" + summary
                 + (id == null ? " 当前没有可用任务授权。" : "用 ask_owner 携带 authorization_id=" + id
-                + " 确认；再携带相同实体编号/UUID/max_hits和授权编号调用 attack。"), data);
+                + " 确认；再携带相同实体编号/UUID/max_hits/approach和授权编号调用 attack。"), data);
     }
 
     private static Result failed(String feedback) { return new Result(false, feedback, null); }

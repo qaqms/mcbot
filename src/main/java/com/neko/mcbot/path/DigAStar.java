@@ -84,6 +84,7 @@ public final class DigAStar {
             new PriorityQueue<>((a, b) -> Double.compare(a.f, b.f));
     private final Map<State, Node> best = new HashMap<>();
     private int storedNodes = 1;
+    private int maxStoredNodes = MAX_STORED_NODES;
 
     private int expanded;
     /** 累计搜索 CPU 时长（验尸/双帽口径用）；totalBudgetNanos 到点即撞帽，与节点帽同位。 */
@@ -207,12 +208,13 @@ public final class DigAStar {
                         && cur.g < bestPartial.g)) {
                 bestPartial = cur;
             }
-            if (++expanded + estimateExpanded() > maxNodes) {
+            if (expanded + estimateExpanded() >= maxNodes) {
                 return budgetFailure("NODES", "预估与路线展开超过 " + maxNodes
                         + " 节点。目标太远或地形太纠缠，请分短段移动。");
             }
+            expanded++;
             expand(cur);
-            if (storedNodes() >= MAX_STORED_NODES) {
+            if (storedNodes() >= maxStoredNodes) {
                 return budgetFailure("STORAGE", "路径状态存储已到上限，未证明目标无路；请重新观察并分短段移动。");
             }
             // 每 16 拓才探一次钟：nanoTime 本身不免费，粗粒度换开销（帽语义不差这 16 节点）
@@ -251,6 +253,15 @@ public final class DigAStar {
     public void totalBudget(long nanos) {
         this.totalBudgetNanos = nanos;
     }
+
+    public void storageBudget(int records) {
+        if (records < 1 || records > MAX_STORED_NODES) throw new IllegalArgumentException("records");
+        // A reduced account is currently used only by walk-only dynamic routes.
+        if (maxDigs > 0 || prepared || estimate != null) throw new IllegalStateException("search already prepared or editable");
+        maxStoredNodes = records;
+    }
+
+    public long elapsedNanos() { return usedNanos; }
 
     /** 旧路线格降权集（R1-S3 §D）；在建好 start 之后、首次 advance 之前调一次。 */
     public void reuseBias(java.util.Set<Long> cells) {
@@ -365,7 +376,7 @@ public final class DigAStar {
     }
 
     private void relax(Node cur, int dx, int dy, int dz) {
-        if (storedNodes() >= MAX_STORED_NODES) return;
+        if (storedNodes() >= maxStoredNodes) return;
         int bx = cur.x + dx, by = cur.y + dy, bz = cur.z + dz;
         var check = PathTransition.check(s, cur.key.terrain(), cur.x, cur.y, cur.z, bx, by, bz,
                 maxDigs - cur.digs, s.maxPlaces() - cur.places);

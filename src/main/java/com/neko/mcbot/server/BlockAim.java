@@ -262,7 +262,7 @@ public final class BlockAim {
                 + "核对face、邻接方块或调整站位，再查询放置。");
     }
 
-    private static boolean loadedSegment(Access access, Vec3 from, Vec3 to) {
+    static boolean loadedSegment(Access access, Vec3 from, Vec3 to) {
         // Check exactly the ray's cells before vanilla clip can read any block or fluid state.
         return BlockGetter.traverseBlocks(from, to, access,
                 (view, pos) -> view.loaded(pos) ? null : Boolean.FALSE, view -> Boolean.TRUE);
