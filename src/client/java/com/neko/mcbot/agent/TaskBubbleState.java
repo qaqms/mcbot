@@ -14,7 +14,8 @@ public final class TaskBubbleState {
         MINING("正在挖掘"), PLACING("正在放置"), CRAFTING("正在制作"),
         SMELTING("正在烧制"), EQUIPPING("正在整理装备"), WAITING("正在等待"),
         COLLECTING("正在拾取"), TRANSFERRING("正在搬运物品"), ATTACKING("正在战斗"),
-        RECIPES("正在查看配方"), SURVEY("正在地下勘探"), RETURNING("正在沿路标返回");
+        RECIPES("正在查看配方"), SURVEY("正在地下勘探"), RETURNING("正在沿路标返回"),
+        FOLLOWING("正在跟随");
 
         private final String label;
         Activity(String label) { this.label = label; }
@@ -34,6 +35,7 @@ public final class TaskBubbleState {
                 case "collect" -> COLLECTING;
                 case "transfer" -> TRANSFERRING;
                 case "attack" -> ATTACKING;
+                case "follow" -> FOLLOWING;
                 default -> PROCESSING;
             };
         }

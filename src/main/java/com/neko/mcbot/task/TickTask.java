@@ -28,6 +28,12 @@ public abstract class TickTask {
 
     public abstract Progress tick(CompanionPlayer companion);
 
+    /** Read facts and settle lifecycle only. Runs even during dormancy/reflex; must not emit input. */
+    public Progress poll(CompanionPlayer companion, int elapsedTicks) { return running(); }
+
+    /** State selected by poll; false releases input, not the task slot, lease or deadline. */
+    public boolean wantsBody() { return true; }
+
     /** Actual counters only; elapsed ticks do not establish a completion percentage. */
     public com.google.gson.JsonObject observation() {
         return new com.google.gson.JsonObject();

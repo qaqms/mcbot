@@ -65,6 +65,9 @@ public final class ToolCatalog {
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
                     + "拾取须用新鲜stand_positions和exact=true；默认相邻到达不保证触碰。"
                     + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";
+            case "follow" -> "持续只行走跟随主人或扫描所得target_uuid；distance默认3、seconds默认30最多60。"
+                    + "到位休眠不结束，拉开2格才唤醒；固定32格范围交原工地、原搜索账及期限含休眠/避险不重开。"
+                    + "ACCEPTED等真终态，期限结束仅行为结束，goal_satisfied=false，取消不恢复。";
             case "attack" -> "默认原地不追击；approach=true在初始6.5格范围只走路接近同一目标，原搜索/重规划/20秒帽不重开。"
                     + "先扫描entity_id/target_uuid，确认模式NEED_CONFIRM后ask_owner取得具体授权，保持approach。"
                     + "ACCEPTED等真终态，挥击次数不等于伤害或击杀。";
@@ -75,7 +78,7 @@ public final class ToolCatalog {
             case "inventory" -> "读取data.slots[{slot,item,count}]和selected_slot；列表从1起，"
                     + "entry.slot是equip使用的0-35槽号。";
             case "scan_area" -> "只读附近摘要：data.item_targets为掉落/触碰站位，entity_targets为活物，"
-                    + "entity_id/target_uuid供attack，不可猜编号；special_blocks为近圈坐标文字列表。"
+                    + "entity_id/target_uuid供attack，target_uuid也供follow，不可猜身份；special_blocks为近圈坐标文字列表。"
                     + "没有blocks字段。指定方块用search_resource。";
             case "inspect_block" -> "只读6.5格内精确方块，data.block是ID字符串；容器看slots及next_offset，"
                     + "区域搜索用search_resource，不逐格inspect。";

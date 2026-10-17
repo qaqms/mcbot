@@ -3,6 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## D3 有界持续跟随（2026-10-17）
+
+新增follow，当前30工具（21服务端+9本地）。仅可选target_uuid、distance整数2-6、
+seconds整数1-60，默认主人/3格/30秒。只行走、固定初始32格球，已有工地内保守收缩。
+到位休眠不发终态，distance+2迟滞唤醒；原UUID、范围、租约、导航账与期限含避险不重开。
+主人暂不在且原任务仍有效才等待；指定实体丢失、无路、范围或许可失败立即交回。
+ACCEPTED等真终态；behavior_ended只表示持续行为结束，goal_satisfied=false，不验收外层目标。
+in_band仅in_band_known=true时可用；取消终态也重查当前距离，automatic_resume=false。
+status.task.progress沿原观察报告阶段/固定范围/计数与导航账，休眠身体IDLE而槽仍busy。
+直接/Lua/长期阶段同原入口、原子预算与失败账；具体参考取舍和边界见D3-CONTINUOUS-FOLLOW。
+下方工具数量按历史检查点阅读。
+
 ## B5 双格门续卡（2026-10-17）
 
 普通原版DoorBlock门现在可经同build_blueprint/build_record/build_diff/build_site/build_nearby/

@@ -3,6 +3,17 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## D3 共用休眠与持续跟随（2026-10-17）
+
+TickTask只读poll/wantsBody在原CompanionScheduler的身份/许可门内决定是否需要身体；
+BodyControl保留原工作令牌而退到IDLE，原槽/租约/期限/预算不变，REFLEX仍优先。
+唤醒重验，清理回调取消后不推进旧槽；默认任务行为保持。
+follow经FollowWork复用原EntityApproach/PathTask/StandingGeometry，不增加另一套寻路。
+稳定UUID、固定32格范围在工地内保守收缩，到位休眠，distance+2迟滞唤醒；
+主人暂离和明确实体丢失分别结算，原期限含休眠/避险、累计导航账不重开。
+原WorkFailureMemory/Lua/dispatcher/长期目标入口共用，终态behavior_ended不替代外层验收。
+完整参考取舍、有限支持和原生待验见D3-CONTINUOUS-FOLLOW。
+
 ## B5 双格门续卡（2026-10-17）
 
 BuildObjects把普通原版门的两格配对和原生影响范围供原目标/料单、放置及拆改共用；

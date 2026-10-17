@@ -51,6 +51,12 @@ public final class ClientToolDefs {
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
+            case "follow" -> "ACCEPTED只受理，到位休眠仍未终态，等原期限结束或失败；goal_satisfied=false。"
+                    + "data.behavior_ended及follow.phase/target_uuid/owner_target为行为事实；in_band仅in_band_known=true时可用，"
+                    + "target_present为原目标当前在场，position为实际身体位置。"
+                    + "elapsed_ticks含休眠与避险，duration_ticks固定，wake_count/owner_absent_ticks是实际计数。"
+                    + "follow.navigation含原累计search_nodes/search_records/search_nanos/replans，walk_only=true；"
+                    + "到位、期限结束、当前in_band均不验收外层目标；automatic_resume=false，失败/取消不自动重投。";
             case "build_blueprint" -> "list返回names/next_offset。inspect返回source_revision、size/cells/palette_entries及"
                     + "invalid_cells/invalid_palette_entries/unsupported_cells/payload_cells/entity_count，importable=false不能导入。"
                     + "materials仅设计全量需求，完整现场材料走实例build_diff。import须同source_revision，返回design_id/design_revision；"
@@ -89,7 +95,7 @@ public final class ClientToolDefs {
                     + "stand_positions是整数脚格{x,y,z}，用exact=true走到候选后核对新鲜背包。"
                     + "一般扫描另有entity_targets、summary_lines、groups、special_blocks；"
                     + "entities/summary_lines/groups/special_blocks是文字列表，不是带坐标的对象。"
-                    + "entity_targets条目的entity_id/target_uuid供attack，不可猜编号。"
+                    + "entity_targets条目的entity_id/target_uuid供attack，target_uuid也供follow，不可猜编号或身份。"
                     + "items_only=true不含方块/活物字段；frontiers=true才有exploration_points。"
                     + "没有blocks字段；查指定方块应search_resource，不逐格inspect代替区域搜索。";
             case "find_resource", "search_resource" -> "data.targets是[{block,x,y,z,distance,...}]；"
@@ -416,7 +422,7 @@ public final class ClientToolDefs {
                     + "槽0-8直接选中；槽9-35与当前主手槽交换，原主手留在来源槽。"
                     + "只切换主手，不穿戴盔甲或切换副手；忙时先等任务结束或取消",
                     "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35}},\"required\":[\"slot\"]}"),
-            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块分层摘要，绝对坐标；entity_id/target_uuid供attack，不可猜编号。"
+            new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块分层摘要，绝对坐标；entity_id/target_uuid供attack，target_uuid也供follow，不可猜编号或身份。"
                     + "另含地上item_targets数量/延迟/站位；item可过滤掉落物品，items_only=true只查掉落，不扫方块，实际拾取仍需走近",
                     "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"},"
                             + "\"items_only\":{\"type\":\"boolean\"},\"item\":{\"type\":\"string\",\"maxLength\":128},"
@@ -461,6 +467,17 @@ public final class ClientToolDefs {
                             + "\"clear_limit\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":3},"
                             + "\"site_revision\":{\"type\":\"string\",\"minLength\":64,\"maxLength\":64},\"temporary_cleanup\":{\"type\":\"boolean\"},"
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
+            new ToolSpec("follow", "有界持续步行跟随，省略target_uuid跟主人；指定时用scan_area的标准小写UUID，不跟自身或自动换目标。"
+                    + "distance=2-6默认3，seconds=1-60默认30；到位休眠不结束、不惊动模型，距离超过distance+2才唤醒。"
+                    + "只用原PathTask走路，不挖放/传送/攻击/自动换工具；起始脚格32格固定球，工地内收为原范围的保守内接球。"
+                    + "换路/醒来/避险共原8000节点/32768记录/400ms协作搜索及2次重规划账；已有工地沿用其导航账。"
+                    + "主人暂离休眠等至原期限，指定实体死亡/卸载/离维度立即TARGET_LOST；无路/未知/范围/许可失败立即交回。"
+                    + "原期限包含休眠/避险，期限结束仅持续行为结束，goal_satisfied=false，当前距离另查in_band。"
+                    + "同参数局部失败计原任务失败账，第六次不派发；程序中mc.try_call读取局部失败后仍须新鲜完整status才可再动作。"
+                    + "ACCEPTED等真终态，取消不恢复，不以重发补范围/探索/模型或许可预算。",
+                    "{\"type\":\"object\",\"properties\":{\"target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
+                            + "\"distance\":{\"type\":\"integer\",\"minimum\":2,\"maximum\":6},"
+                            + "\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60}},\"additionalProperties\":false}"),
             new ToolSpec("attack", "普通近战锁定一个目标；默认原地不追击。approach=true允许在初始脚格锚点6.5格范围内只行走接近，"
                     + "不挖放、不换目标、不自动换工具；不主动拾取掉落，身体原版触碰拾取仍运行。"
                     + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby一次选择原范围内未命名敌对生物。"

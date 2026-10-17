@@ -17,7 +17,7 @@ public final class WorkFailureMemory {
     private String bodyFacts;
 
     public static boolean localFailure(String tool, String feedback) {
-        if (!Set.of("move_to", "break_block", "gather", "explore").contains(tool)
+        if (!Set.of("move_to", "break_block", "follow", "gather", "explore").contains(tool)
                 || feedback == null) return false;
         int colon = feedback.indexOf(':');
         return colon > 0 && Set.of("NO_PATH", "NO_PROGRESS", "PARTIAL", "TARGET_BLOCKED",
@@ -25,7 +25,7 @@ public final class WorkFailureMemory {
     }
 
     private static boolean tracked(String tool) {
-        return tool.equals("move_to") || tool.equals("break_block");
+        return tool.equals("move_to") || tool.equals("break_block") || tool.equals("follow");
     }
 
     /** Null permits normal permission checks and dispatch; a refusal never dispatches or retries. */

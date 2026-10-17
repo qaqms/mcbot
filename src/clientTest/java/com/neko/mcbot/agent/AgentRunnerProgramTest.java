@@ -57,7 +57,8 @@ class AgentRunnerProgramTest {
     private Msg.Tool outcome() {
         until(() -> client.engine().responses.size() >= 2);
         return client.engine().histories.getLast().stream().filter(Msg.Tool.class::isInstance)
-                .map(Msg.Tool.class::cast).filter(t -> t.callId().equals("program")).findFirst().orElseThrow();
+                .map(Msg.Tool.class::cast).filter(t -> t.callId().equals("program"))
+                .reduce((earlier, later) -> later).orElseThrow();
     }
     private void ack(String job) {
         var body = new JsonObject();
@@ -76,6 +77,104 @@ class AgentRunnerProgramTest {
         body.add("data", JsonParser.parseString(data));
         runner.handleS2c(new Envelope("job_event", body));
         client.drain();
+    }
+    @Test void followArrivalAndAcceptedProgressDoNotAdvanceLuaBeforeTheTrueTerminal() {
+        start("follow briefly then observe", "local r=mc.call('follow',{seconds=1}); "
+                + "if r.data.goal_satisfied then error('not an outer goal') end; return mc.call('inventory',{})", 2);
+        tool("follow", 1);
+        long seq = client.lastTool().num("seq", -1);
+        ack("following");
+        assertEquals(1, client.toolCount());
+        var progress = new JsonObject();
+        progress.addProperty("seq", seq); progress.addProperty("job_id", "following");
+        progress.addProperty("phase", "progress"); progress.addProperty("text", "sleeping at target");
+        runner.handleS2c(new Envelope("job_event", progress)); client.drain();
+        assertEquals(1, client.toolCount());
+        terminal(seq, "following", "{\"behavior_ended\":true,\"goal_satisfied\":false,\"follow\":{\"in_band\":true}}");
+        tool("inventory", 2);
+        receipt(true, "fresh inventory", "{}");
+        assertTrue(outcome().ok(), outcome().content());
+    }
+
+    @Test void followFailureDoesNotDispatchADependentActionOrRefillProgramBudget() {
+        start("follow then equip", "mc.call('follow',{}); return mc.call('equip',{slot=1})", 2);
+        tool("follow", 1);
+        receipt(false, "NO_PATH:dry gap", "{\"goal_satisfied\":false}");
+        assertFalse(outcome().ok());
+        assertEquals(1, client.toolCount());
+    }
+
+    @Test void cancellingFollowIgnoresLateTerminalAndDoesNotWakeTheOldProgram() {
+        start("follow then equip", "mc.call('follow',{}); return mc.call('equip',{slot=1})", 2);
+        tool("follow", 1);
+        long seq = client.lastTool().num("seq", -1);
+        ack("follow-cancel");
+        runner.cancelTask(0); client.drain();
+        terminal(seq, "follow-cancel", "{\"behavior_ended\":true,\"goal_satisfied\":false}");
+        assertEquals(1, client.toolCount());
+        assertEquals(0, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
+    }
+
+    @Test void readOnlyProgramCannotIssueFollowEvenWhenAlreadyNearItsTarget() {
+        start("[只读] follow", "return mc.call('follow',{seconds=1})", 1);
+        assertFalse(outcome().ok());
+        assertEquals(0, client.toolCount());
+    }
+
+    @Test void followLocalRecoverySharesTaskFailureLedgerAcrossFreshQueriesWithoutBuyingMoreAttempts() {
+        start("bounded follow", """
+                for i=1,4 do
+                    mc.try_call("follow",{seconds=1})
+                    mc.call("status",{details=true})
+                end
+                """, 12);
+        for (int i = 0; i < 4; i++) {
+            tool("follow", 2 * i + 1);
+            receipt(false, "NO_PATH:unchanged dry gap", "{\"goal_satisfied\":false}");
+            tool("status", 2 * i + 2);
+            receipt(true, "same full body facts", BoundedGatherTest.state(0).toString());
+        }
+        assertTrue(outcome().ok());
+        program(1, "return mc.call('follow',{seconds=1})", 1);
+        tool("follow", 9);
+        receipt(false, "NO_PATH:fifth real terminal", "{\"goal_satisfied\":false}");
+        until(() -> client.engine().responses.size() >= 3);
+        assertFalse(outcome().ok());
+        program(2, "return mc.call('follow',{seconds=1})", 1);
+        until(() -> client.engine().responses.size() >= 4);
+        assertFalse(outcome().ok());
+        assertTrue(outcome().content().contains("REPEATED_FAILURE:"));
+        assertEquals(9, client.toolCount());
+    }
+
+    @Test void followDurationDoesNotCompleteOrReplaceAnOriginalLongTermItemGoal() {
+        client.liveObservation = true;
+        runner.start();
+        runner.submitTask("取得一块圆石，先跟随主人观察");
+        client.drain();
+        receipt(true, "baseline", BoundedGatherTest.state(0).toString());
+        long taskId = JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong();
+        client.engine().tools(0, new ToolCall("goal", "set_goal",
+                "{\"item\":\"cobblestone\",\"count\":1,\"lifecycle\":\"long_term\"}"));
+        client.drain();
+        receipt(true, "fresh before follow", BoundedGatherTest.state(0).toString());
+        program(1, "return mc.call('follow',{seconds=1})", 1);
+        tool("follow", 3);
+        ack("long-follow");
+        assertEquals(taskId, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
+        terminal(client.lastTool().num("seq", -1), "long-follow",
+                "{\"behavior_ended\":true,\"goal_satisfied\":false,\"follow\":{\"in_band\":true}}");
+        tool("status", 4);
+        receipt(true, "still no cobblestone", BoundedGatherTest.state(0).toString());
+        assertEquals(3, client.engine().responses.size());
+        client.engine().reply(2, "阶段结束");
+        client.drain();
+        receipt(true, "final item still missing", BoundedGatherTest.state(0).toString());
+        receipt(true, "fresh next stage", BoundedGatherTest.state(0).toString());
+        assertEquals(taskId, JsonParser.parseString(runner.statusJson()).getAsJsonObject().get("current_task").getAsLong());
+        assertEquals(1, client.sent.stream().filter(e -> e.kind().equals("task_begin")).count());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m ->
+                m instanceof Msg.Nudge n && n.text().contains("minecraft:cobblestone")));
     }
     @Test void blueprintInspectionCanStopAnUnsupportedImportWithinOneBoundedProgram() {
         start("inspect the selected blueprint","local r=mc.call('build_blueprint',{operation='inspect',name='sample'});"

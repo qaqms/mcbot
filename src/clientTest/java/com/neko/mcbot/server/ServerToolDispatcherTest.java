@@ -49,6 +49,7 @@ class ServerToolDispatcherTest {
             });
         }
         registry.register(new WaitTool());
+        registry.register(new com.neko.mcbot.server.tools.FollowTool());
         dispatcher = new ServerToolDispatcher(registry, scheduler, new RateGuard(20, 60, clock::get),
                 new ServerToolDispatcher.ToolAccess() {
                     @Override public ServerToolDispatcher.Body companion(UUID caller) { return bodies.get(caller); }
@@ -77,6 +78,26 @@ class ServerToolDispatcherTest {
 
     private static JsonObject json(String text) {
         return JsonParser.parseString(text).getAsJsonObject();
+    }
+    @Test void followUsesOriginalPermissionControlAcceptedDeadlineAndTerminalChannel() {
+        begin(sender, 1, true);
+        assertTrue(call(1, "follow", "{\"seconds\":60}").str("feedback").startsWith("DENIED:"));
+        begin(sender, 2, false);
+        control.reflex(true);
+        assertTrue(call(2, "follow", "{}").str("feedback").startsWith("BUSY:"));
+        control.reflex(false);
+        nextResult = new CompletableFuture<>();
+        var ack = call(2, "follow", "{\"seconds\":60}");
+        assertEquals("job_ack", ack.kind());
+        assertEquals(1200, ack.num("cap_ticks", -1));
+        assertEquals(List.of("follow"), effects);
+        assertTrue(call(2, "equip", "{}").str("feedback").startsWith("BUSY:"));
+        nextResult.complete(new ServerTool.Result(true, "bounded duration ended",
+                json("{\"behavior_ended\":true,\"goal_satisfied\":false}")));
+        assertEquals("job_event", receipts.getLast().kind());
+        assertEquals("done", receipts.getLast().str("phase"));
+        assertFalse(receipts.getLast().obj("data").get("goal_satisfied").getAsBoolean());
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
     }
     @Test void blueprintInspectionSharesReadOnlyPolicyAndImportUsesOriginalBodyControl() {
         begin(sender,1,true);

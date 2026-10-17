@@ -6,6 +6,30 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BodyControlTest {
+    @Test void dormancyParksOriginalTokenWithoutYieldingItsReservation() {
+        var releases = new ArrayList<BodyControl.Owner>();
+        var control = new BodyControl(releases::add);
+        Object token = new Object(), other = new Object();
+        assertTrue(control.claim(token));
+        control.dormant(token, true);
+        assertEquals(BodyControl.Owner.IDLE, control.owner());
+        assertFalse(control.owns(token));
+        assertFalse(control.claim(other));
+        control.dormant(other, false);
+        assertEquals(BodyControl.Owner.IDLE, control.owner());
+        control.reflex(true);
+        control.dormant(token, false);
+        assertEquals(BodyControl.Owner.REFLEX, control.owner());
+        control.reflex(false);
+        assertTrue(control.owns(token));
+        control.dormant(token, true);
+        control.release(token);
+        control.dormant(token, false);
+        assertEquals(BodyControl.Owner.IDLE, control.owner());
+        assertTrue(control.claim(other));
+        assertEquals(2, releases.stream().filter(o -> o == BodyControl.Owner.WORK).count());
+    }
+
     @Test void reflexWinsAndReturningNeverRevivesReleasedWork() {
         var releases = new ArrayList<BodyControl.Owner>();
         var control = new BodyControl(releases::add);

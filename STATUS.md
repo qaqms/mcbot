@@ -3,6 +3,54 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## D3 持续跟随与共用休眠验收（2026-10-17 13:01，Asia/Shanghai）
+
+- 本轮B5普通门续卡已独立提交推送`866d665`，随后D3已完成离线验收。
+  当前十四张完整离线卡、B5部分完成、另7卡未开；下一S1，适合时再接S2，
+  B5床/装饰/组件保留独立续卡，本轮不启第三卡。D3提交/推送以Git为准。
+  完整参考链、内容指纹与取舍见docs/D3-CONTINUOUS-FOLLOW-2026-10-17.md。
+- TickTask的只读poll/wantsBody沿原scheduler每刻检查生命周期；BodyControl休眠保留
+  原令牌/任务槽/租约，身体退到IDLE而非任务完成，REFLEX仍优先。
+  睡眠/避险均计原elapsed，真正执行另计；唤醒走原重验，切换清理取消后不推进旧槽。
+  默认任务保持原行为，不增加跟随专属调度器、动作核、成品链或依赖规划器。
+- 新增follow，当前30工具（21服务端+9本地）。省略目标绑定主人UUID，指定target_uuid
+  用扫描原身份；distance整数2-6默认3、seconds整数1-60默认30。
+  固定初始脚格32格节点球，已有工地保守收为原范围内接球，并沿用原工地导航账。
+  共用EntityApproach/PathTask/StandingGeometry与原实体碰撞，只行走/原版跳跃，
+  不挖放、攻击、传送、自动换装或选择替代实体；飞行目标不猜地面。
+  到位休眠，distance+2迟滞唤醒；主人暂不在且原上下文仍有效才等待，
+  明确实体丢失立即TARGET_LOST，无路/未知/范围/许可/租约失败不循环重搜。
+- 换路线/唤醒/暂停恢复累计原8000节点/32768记录/400ms及2次重规划；原期限含休眠/
+  避险不延长，不采用参考部分等待冻结期限或跨退出重播机制。原模型/探索/动作账及许可不补。
+  原WorkFailureMemory纳入follow局部失败，五次后第六次拒发；mc.try_call继续要求
+  新鲜完整status，原Lua第五次局部失败即停止的护栏保持。
+  data.behavior_ended仅结束持续行为，goal_satisfied=false，不验收外层目标；
+  取消终态重查当前位置/目标距离，in_band_known=false不可当精确距离，取消不恢复。
+  status.task共用阶段/休眠/所有权和累计账，气泡只按原在途调用显示跟随。
+- before在旧码复现缺follow契约1失败，11秒；生产编译13秒通过。
+  focused1误把根测试筛选传给agent-core，12秒“无匹配测试”失败，未记产品失败；
+  明确根任务后focused2通过22秒。补失败账/长期阶段后focused3为新夹具错误期待第五次
+  局部失败后的status，29秒/164项1失败；按原护栏拆跨程序后focused4的旧测试辅助
+  方法读到同call_id首条历史，25秒/166项1失败。改为读最后匹配结果，focused5专项12秒通过。
+  两处夹具修正均不放宽产品门或旧断言；随后最终强制全量：
+  build/d3-final1-20261017.log第61–62行，**41秒/20任务全部执行**。
+- XML **1486项/166 suites**（核心348/40、根138/20、客户端1000/106），
+  failures/errors/skipped全0，较B5门续卡新增30项/3类。
+  原生产调度/控制/跟随生命周期、真实碰撞几何/DigAStar及NavigationBudget、
+  实际runner/Lua/长期目标/失败账/目录/dispatcher参与；
+  睡醒/迟滞/无路/目标身份与丢失/取消/身体与维度变化/异常清理/原预算已离线覆盖。
+  世界、身体移动及目标存在条件、模型与网络边界受控，不冒充原生跟随或避险交接已验。
+- build/libs/mcbot-0.1.0.jar **1,572,986 bytes**，末写12:59:41，SHA256
+  `fa0c7154b351361e4d673a573f8b9f49e722377f0d962afb9ac3303217d437a1`。
+  已核FollowWork/FollowTool/原BodyControl/调度/气泡类、内嵌agent-core/LuaJ与许可。
+  list-java无输出，原测试日志目录仍不存在，无新实机证据；
+  原生travel/实体碰撞/目标卸载、主人暂离、多人及避险/取消视觉已补REAL-GAME-RETESTING。
+  只改本体，不安装/启动游戏/服务器/真实模型，不改无敌/玩家配置；
+  宿主/连接器/参考/实例保持。提交前核差异、暂存清单、机器路径/产物/密钥，推送另核Git。
+- 1.21.11本地javap确认Level.getEntity(UUID)为public且返回当前层实体，
+  CollisionGetter.noCollision(Entity,AABB)为默认方法，Entity.isAlive()/position()/
+  getBoundingBox()可直接读；服务端代码已编译。签名核对不代替真实世界行为验收。
+
 ## B5 普通双格门续卡验收（2026-10-17 12:39，Asia/Shanghai）
 
 - 当前十三张完整离线卡，B5首格式及一类复杂对象完成、床/装饰/组件仍未关账，另8卡未开。

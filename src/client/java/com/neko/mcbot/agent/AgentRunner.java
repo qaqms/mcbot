@@ -1266,7 +1266,7 @@ public final class AgentRunner implements ToolExecutor {
             return executeGather(json, true);
         }
         if (!java.util.Set.of("status", "inventory", "equip", "scan_area", "find_resource", "inspect_block",
-                "break_block", "place_block", "build_diff", "build_nearby", "build_site", "build_record", "build_blueprint", "craft", "smelt", "wait", "move_to", "attack", "collect", "transfer")
+                "break_block", "place_block", "build_diff", "build_nearby", "build_site", "build_record", "build_blueprint", "craft", "smelt", "wait", "move_to", "attack", "follow", "collect", "transfer")
                 .contains(name)) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "DENIED:组合只可调用现有游戏工具/gather/workflow；不能嵌套程序、反问或改最终目标。"));
         try {

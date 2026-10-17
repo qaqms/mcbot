@@ -9,6 +9,7 @@ public final class BodyControl {
 
     private final Consumer<Owner> release;
     private Object work;
+    private boolean dormant;
     private boolean reflex;
     private Owner owner = Owner.IDLE;
 
@@ -22,10 +23,12 @@ public final class BodyControl {
         Objects.requireNonNull(token);
         if (reflex || work != null) return false;
         work = token;
+        dormant = false;
         try {
             select();
         } catch (RuntimeException | Error failure) {
             work = null;
+            dormant = false;
             owner = reflex ? Owner.REFLEX : Owner.IDLE;
             throw failure;
         }
@@ -35,6 +38,14 @@ public final class BodyControl {
     public void release(Object token) {
         if (work != token) return;
         work = null;
+        dormant = false;
+        select();
+    }
+
+    /** Keep the original reservation while a continuous task needs no input. */
+    public void dormant(Object token, boolean sleeping) {
+        if (work != token) return;
+        dormant = sleeping;
         select();
     }
 
@@ -46,7 +57,7 @@ public final class BodyControl {
     public boolean owns(Object token) { return work == token && owner == Owner.WORK; }
 
     private void select() {
-        Owner next = reflex ? Owner.REFLEX : work != null ? Owner.WORK : Owner.IDLE;
+        Owner next = reflex ? Owner.REFLEX : work != null && !dormant ? Owner.WORK : Owner.IDLE;
         if (next == owner) return;
         Owner previous = owner;
         // Commit ownership before cleanup: callbacks may cancel or complete the old work.

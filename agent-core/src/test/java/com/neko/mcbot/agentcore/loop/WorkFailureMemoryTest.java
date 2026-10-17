@@ -8,6 +8,27 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorkFailureMemoryTest {
+    @Test void followSharesOriginalFailureLedgerAndDormancyFactsNeverReplenishIt() {
+        var memory = new WorkFailureMemory();
+        var args = json("{\"target_uuid\":\"00000000-0000-0000-0000-000000000001\",\"seconds\":30}");
+        var state = state();
+        observe(memory, state);
+        for (int i = 0; i < 5; i++) {
+            assertNull(memory.refusal("follow", args));
+            memory.terminal("follow", args, ToolOutcome.accepted("follow", "ACCEPTED:waiting"));
+            memory.terminal("follow", args, new ToolOutcome(false, "NO_PATH:unchanged-" + i));
+            memory.terminal("follow", args, new ToolOutcome(true, "duration ended",
+                    json("{\"behavior_ended\":true,\"goal_satisfied\":false,\"follow\":{\"wake_count\":99,\"in_band\":true}}")));
+            state.addProperty("game_tick", i);
+            observe(memory, state);
+        }
+        assertTrue(memory.refusal("follow", args).feedback().startsWith("REPEATED_FAILURE:"));
+        state.addProperty("x", 2);
+        observe(memory, state);
+        assertNull(memory.refusal("follow", args));
+        assertTrue(WorkFailureMemory.localFailure("follow", "NO_PATH:dry gap"));
+        assertFalse(WorkFailureMemory.localFailure("follow", "SCOPE_LIMIT:original"));
+    }
     private static final JsonObject POINT = json("{\"x\":4,\"y\":70,\"z\":0}");
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     private static JsonObject state() {

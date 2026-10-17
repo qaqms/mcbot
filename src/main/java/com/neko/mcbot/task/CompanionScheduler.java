@@ -50,6 +50,7 @@ public final class CompanionScheduler {
         final ControlScope control;
         int elapsed;
         boolean suspended;
+        boolean dormant;
         Slot(UUID id, CompanionPlayer companion, TickTask task,
              CompletableFuture<ServerTool.Result> future, int capTicks, ControlScope control) {
             this.id = id; this.companion = companion; this.task = task; this.future = future;
@@ -220,6 +221,7 @@ public final class CompanionScheduler {
             data.addProperty("elapsed_ticks", slot.elapsed);
             data.addProperty("execution_ticks", slot.task().age);
             data.addProperty("suspended", slot.suspended);
+            data.addProperty("dormant", slot.dormant);
             data.addProperty("body_owner", slot.control == null ? "WORK" : slot.control.control.owner().name());
             data.addProperty("cap_ticks", slot.capTicks());
             data.add("progress", slot.task().observation());
@@ -318,6 +320,23 @@ public final class CompanionScheduler {
                 slot.elapsed++;
                 if (slot.control != null && !slot.control.valid.getAsBoolean()) {
                     finish(slot, new ServerTool.Result(false, "DENIED:原任务身份或许可已失效，未续接工作。", null), true);
+                    continue;
+                }
+                p = slot.task().poll(cp, slot.elapsed);
+                if (active.get(slot.id()) != slot) continue;
+                if (p instanceof TickTask.Progress.Done done) {
+                    finish(slot, done.result() == null
+                            ? new ServerTool.Result(false, "INTERNAL:任务没有返回结果。", null) : done.result(), false);
+                    continue;
+                }
+                slot.dormant = !slot.task().wantsBody();
+                if (slot.control != null) slot.control.control.dormant(slot.control, slot.dormant);
+                // Changing ownership invokes cleanup callbacks, which can finish or cancel this slot.
+                if (active.get(slot.id()) != slot) continue;
+                if (slot.dormant) {
+                    preempt(slot.id());
+                    if (active.get(slot.id()) == slot && slot.elapsed >= slot.capTicks())
+                        finish(slot, timeout(slot), true);
                     continue;
                 }
                 if (slot.control != null && !slot.control.control.owns(slot.control)) {

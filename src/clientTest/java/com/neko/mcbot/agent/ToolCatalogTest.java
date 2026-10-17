@@ -10,6 +10,15 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void followHasABoundedContinuousContractInsteadOfArrivalAsCompletion() {
+        var help = ToolCatalog.read("{\"names\":[\"follow\"]}");
+        assertTrue(help.ok(), help.feedback());
+        assertTrue(help.feedback().contains("休眠"));
+        assertTrue(help.feedback().contains("goal_satisfied=false"));
+        assertTrue(help.feedback().contains("target_uuid"));
+        assertFalse(com.neko.mcbot.agentcore.loop.TaskPolicy.observation("follow",
+                new com.google.gson.JsonObject()));
+    }
     @Test void blueprintInspectionAndExplicitImportExposeTheSharedDesignEntry() {
         var help=ToolCatalog.read("{\"names\":[\"build_blueprint\"]}");
         assertTrue(help.ok(),help.feedback());
