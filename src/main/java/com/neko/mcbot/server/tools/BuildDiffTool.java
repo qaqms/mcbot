@@ -20,7 +20,10 @@ public final class BuildDiffTool implements ServerTool {
     @Override public String name() { return "build_diff"; }
 
     @Override public Result run(CompanionPlayer body, JsonObject args) {
-        return report(args, target -> {
+        return report(args, target -> access(body, target), System::nanoTime);
+    }
+
+    public static BuildSurvey.Access access(CompanionPlayer body, BuildTarget target) {
             var placement = BlockPlacement.forPlayer(body);
             return new BuildSurvey.Access() {
                 @Override public BlockState state(BlockPos pos) {
@@ -57,7 +60,6 @@ public final class BuildDiffTool implements ServerTool {
                     return data;
                 }
             };
-        }, System::nanoTime);
     }
 
     static Result report(JsonObject args, Function<BuildTarget, BuildSurvey.Access> access, LongSupplier clock) {

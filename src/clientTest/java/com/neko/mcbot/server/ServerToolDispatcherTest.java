@@ -40,11 +40,11 @@ class ServerToolDispatcherTest {
     ServerToolDispatcherTest() {
         bodies.put(owner, body("world", new Object()));
         for (String name : List.of("status", "inventory", "scan_area", "find_resource", "inspect_block", "build_diff",
-                "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack")) {
+                "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack", "build_nearby")) {
             registry.register(new ServerTool() {
                 @Override public String name() { return name; }
                 @Override public Acceptance acceptanceMode() {
-                    return List.of("move_to", "break_block", "attack").contains(name) ? Acceptance.ACCEPT : Acceptance.SYNC;
+                    return List.of("move_to", "break_block", "attack", "build_nearby").contains(name) ? Acceptance.ACCEPT : Acceptance.SYNC;
                 }
             });
         }
@@ -100,6 +100,26 @@ class ServerToolDispatcherTest {
         assertEquals(List.of("build_diff"), effects);
         assertTrue(receivedContext.readOnly());
         assertEquals(com.neko.mcbot.body.BodyControl.Owner.REFLEX, control.owner());
+    }
+
+    @Test void buildingBatchRequiresNormalPermissionAndControlAndUsesTheAcceptedTerminalChannel() {
+        begin(sender, 1, true);
+        assertFalse(call(1, "build_nearby", "{}").bool("ok"));
+        assertTrue(effects.isEmpty());
+        begin(sender, 2, false);
+        control.reflex(true);
+        assertTrue(call(2, "build_nearby", "{}").str("feedback").startsWith("BUSY:"));
+        assertTrue(effects.isEmpty());
+        control.reflex(false);
+        nextResult = new CompletableFuture<>();
+        var ack = call(2, "build_nearby", "{}");
+        assertEquals("job_ack", ack.kind());
+        int count = receipts.size();
+        nextResult.complete(new ServerTool.Result(true, "batch only",
+                json("{\"placed_blocks\":2,\"consumed_count\":2,\"goal_satisfied\":false}")));
+        assertEquals(count + 1, receipts.size());
+        assertEquals("job_event", receipts.getLast().kind());
+        assertFalse(receipts.getLast().obj("data").get("goal_satisfied").getAsBoolean());
     }
     @Test void acceptedPartialFailureCarriesBodyFactsExactlyOnceWithoutChangingEffectCounters() {
         begin(sender, 1, false);

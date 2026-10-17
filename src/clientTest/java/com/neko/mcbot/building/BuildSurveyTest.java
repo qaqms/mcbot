@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class BuildSurveyTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
-    static final class World implements BuildSurvey.Access, BlockPlacement.Access {
+    static class World implements BuildSurvey.Access, BlockPlacement.Access {
         final net.minecraft.world.entity.player.Inventory inventory = com.neko.mcbot.server.BlockActionFixtures.inventory();
         final HashMap<BlockPos, BlockState> blocks = new HashMap<>();
         final Set<BlockPos> unknown = new HashSet<>(), protectedCells = new HashSet<>(), far = new HashSet<>(), outside = new HashSet<>();

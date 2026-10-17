@@ -115,31 +115,74 @@ public final class BlockPlacement {
     }
 
     public static ServerTool.Result place(Access access, BlockPos pos, int slot, Direction face) {
-        ServerTool.Result failure = preflight(access, pos, slot, face);
+        return placeDesired(access, pos, slot, face, null);
+    }
+
+    public static ServerTool.Result placeDesired(Access access, BlockPos pos, int slot, Direction face,
+                                                  java.util.function.Predicate<BlockState> matches) {
+        ServerTool.Result failure = matches == null ? preflight(access, pos, slot, face)
+                : assessDesired(access, pos, slot, face, matches);
         if (failure != null) return failure;
         Container inventory = access.inventory();
         ItemStack stack = inventory.getItem(slot);
+        if (matches != null && !ItemStack.isSameItemSameComponents(stack, new ItemStack(stack.getItem())))
+            return failed("NO_ITEM:建筑材料组件已变化，未使用非默认组件物品。", false, 0);
         BlockState before = access.state(pos);
+        var neighborhood = new java.util.LinkedHashMap<BlockPos, BlockState>();
+        for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1)))
+            neighborhood.put(near.immutable(), access.state(near));
         int count = stack.getCount();
         JsonObject contact = access.contact();
-        InteractionResult result = access.place(pos, stack, face);
+        InteractionResult result;
+        boolean threw = false;
+        try {
+            result = access.place(pos, stack, face);
+        } catch (RuntimeException error) {
+            result = InteractionResult.FAIL;
+            threw = true;
+        }
         BlockState after = access.state(pos);
         int consumed = Math.max(0, count - stack.getCount());
         boolean changed = before != after;
         inventory.setChanged();
-        if (!result.consumesAction() || !changed || after.isAir() || consumed != 1) {
-            return failed("PLACE_FAILED:未确认目标格成功放置；已消耗 " + consumed
-                    + " 个，目标状态" + (changed ? "已变化" : "未变化")
-                    + "。先核对现场与背包，勿自动重试。", changed, consumed);
-        }
         JsonObject data = new JsonObject();
-        data.addProperty("placed", BuiltInRegistries.BLOCK.getKey(after.getBlock()).toString());
+        var affected = new JsonArray();
+        int affectedCount = 0;
+        boolean known = true;
+        for (var entry : neighborhood.entrySet()) {
+            var actual = access.state(entry.getKey());
+            if (actual == null || entry.getValue() == null) { known = false; continue; }
+            if (entry.getValue() == actual) continue;
+            affectedCount++;
+            if (affected.size() == 8) continue;
+            var cell = new JsonObject();
+            cell.addProperty("x", entry.getKey().getX()); cell.addProperty("y", entry.getKey().getY());
+            cell.addProperty("z", entry.getKey().getZ());
+            String previous = entry.getValue().toString(), current = actual.toString();
+            cell.addProperty("before", com.neko.mcbot.common.WireSize.truncateToBytes(previous, 256));
+            cell.addProperty("after", com.neko.mcbot.common.WireSize.truncateToBytes(current, 256));
+            cell.addProperty("states_truncated", com.neko.mcbot.common.WireSize.utf8Bytes(previous) > 256
+                    || com.neko.mcbot.common.WireSize.utf8Bytes(current) > 256);
+            affected.add(cell);
+        }
+        if (after != null) data.addProperty("placed", BuiltInRegistries.BLOCK.getKey(after.getBlock()).toString());
         data.addProperty("consumed_count", consumed);
-        data.addProperty("changed", true);
+        data.addProperty("changed", changed || affectedCount > 0);
+        data.add("affected_cells", affected);
+        data.addProperty("affected_count", affectedCount);
+        data.addProperty("affected_cells_complete", known && affectedCount <= 8);
+        data.addProperty("effect_scope", "target_neighborhood_radius_1_not_global");
+        data.addProperty("effect_unknown", threw || !known);
         data.addProperty("x", pos.getX());
         data.addProperty("y", pos.getY());
         data.addProperty("z", pos.getZ());
         if (contact != null) data.add("placement_contact", contact.deepCopy());
+        boolean matched = after != null && (matches == null || matches.test(after));
+        data.addProperty("desired_satisfied", matched);
+        if (threw || !result.consumesAction() || !changed || after == null || after.isAir() || consumed != 1 || !matched)
+            return new ServerTool.Result(false, (threw ? "INTERNAL:" : "PLACE_FAILED:")
+                    + "未确认目标格按要求成功放置；已消耗 " + consumed + " 个，目标状态"
+                    + (changed ? "已变化" : "未变化") + "。保留实际效果，先核对现场与背包，勿自动重试。", data);
         return new ServerTool.Result(true, "在 (" + pos.toShortString() + ") 放置 "
                 + data.get("placed").getAsString() + "，消耗 1 个；朝向/组件由原版放置流程处理。"
                 + (contact == null ? "" : "实际点击=" + contact), data);

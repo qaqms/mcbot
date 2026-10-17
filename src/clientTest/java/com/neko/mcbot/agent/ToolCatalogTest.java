@@ -10,6 +10,21 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void nearbyConstructionIsABoundedActionUsingTheSameTargetSchema() {
+        var help = ToolCatalog.read("{\"names\":[\"build_nearby\"]}");
+        assertTrue(help.ok(), help.feedback());
+        var action = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("build_nearby"))
+                .findFirst().orElseThrow();
+        var query = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("build_diff"))
+                .findFirst().orElseThrow();
+        var actionProperties = JsonParser.parseString(action.paramsJsonSchema()).getAsJsonObject()
+                .getAsJsonObject("properties");
+        assertEquals(JsonParser.parseString(query.paramsJsonSchema()).getAsJsonObject()
+                .getAsJsonObject("properties").get("target"), actionProperties.get("target"));
+        assertEquals(12, actionProperties.getAsJsonObject("max_actions").get("maximum").getAsInt());
+        assertFalse(com.neko.mcbot.agentcore.loop.TaskPolicy.observation("build_nearby", new com.google.gson.JsonObject()));
+    }
+
     @Test void buildingQueryHasOneReadOnlyContractWithTargetAndMaterialPagination() {
         var help = ToolCatalog.read("{\"names\":[\"build_diff\"]}");
         assertTrue(help.ok(), help.feedback());

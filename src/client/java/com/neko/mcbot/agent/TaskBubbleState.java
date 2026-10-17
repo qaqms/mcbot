@@ -26,6 +26,7 @@ public final class TaskBubbleState {
                 case "move_to" -> MOVING;
                 case "break_block" -> MINING;
                 case "place_block" -> query ? OBSERVING : PLACING;
+                case "build_nearby" -> PLACING;
                 case "craft" -> query ? RECIPES : CRAFTING;
                 case "smelt" -> query ? RECIPES : SMELTING;
                 case "equip" -> EQUIPPING;

@@ -102,7 +102,7 @@ public final class WorkFailureMemory {
         return switch (tool) {
             case "move_to" -> positive(data, "removed_blocks", "placed_blocks");
             case "break_block" -> flag(data, "removed") || positive(data, "cleared_blocks");
-            case "place_block" -> flag(data, "changed");
+            case "place_block", "build_nearby" -> flag(data, "changed");
             case "craft" -> positive(data, "crafted_count");
             case "collect" -> positive(data, "collected_count");
             case "smelt" -> positive(data, "loaded_input_count", "loaded_fuel_count", "taken_count");

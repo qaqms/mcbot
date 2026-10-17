@@ -99,6 +99,10 @@ public final class ClientToolDefs {
                     + "material_bill_complete=false有未知或不支持缺口，不能把缺行当零需求。"
                     + "not_assessed表示当前页外或工作预算未查，unknown表示现场不完整；"
                     + "ready仅近身状态预检，不证明实际放置。observation_complete/spatial_stable和预算字段必须核对。";
+            case "build_nearby" -> "ACCEPTED只表示受理，等真终态。action_attempts为本批尝试，placed_blocks/"
+                    + "consumed_count为实际结果，placement_results含逐格效果；失败可能已改变世界或扣料。"
+                    + "survey是收尾重查全目标，仍有cells/materials分页；final_verified=false不可验收。"
+                    + "batch_finished只表示局部批次结束，goal_satisfied才是同修订全目标现场满足，仍不完成外层set_goal。";
             case "break_block" -> "data.removed表示真实移除；collected_count=0表示挖掘不直接塞包。"
                     + "drop_accounting_known表示原生来源观察可用；可用时drop_accounting含ledger_id/origin_id/role/source、"
                     + "spawned_count/live_count/picked_up_self_count/picked_up_other_count/destroyed_count/unresolved_count。"
@@ -270,6 +274,20 @@ public final class ClientToolDefs {
                     "material_offset":{"type":"integer","minimum":0,"maximum":112},
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
                     "required":["target"],"additionalProperties":false}
+                    """.formatted(BUILD_TARGET)),
+            new ToolSpec("build_nearby", "在原地对build_diff同一target/expected_revision的指定16格页施工。"
+                    + "每刻最多一次原版放置，max_actions默认12/最多12；每格重新核材料、接触、目标状态、区域锁及任务控制权。"
+                    + "不移动、不挖、不自动找料或补全依赖；支撑随实际放置重新评估，缺口单独报告。"
+                    + "400ms累计协作工作帽/每次查询50ms/最多1152次查询预检/200游戏刻，不中断单个原版回调。"
+                    + "失败不重放，取消后不再动作；实际扣料与半成品保留，两个游戏刻后重新核全目标。"
+                    + "已有满足格不消费；沿用36槽默认组件与B1单格支持范围。ACCEPTED等真终态；本批结束不是整栋完成。"
+                    + "Lua按max_actions预扣原子预算，换页/换阶段不补原预算。",
+                    """
+                    {"type":"object","properties":{"target":%s,
+                    "offset":{"type":"integer","minimum":0,"maximum":112},
+                    "expected_revision":{"type":"string","minLength":64,"maxLength":64},
+                    "max_actions":{"type":"integer","minimum":1,"maximum":12}},
+                    "required":["target","expected_revision"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
             new ToolSpec("search_resource", "优先用此只读入口查找资源：一次调用在本地完成同中心全部分页，最多5页、30秒；"
                     + "r默认16，targets为1-8个方块ID/#标签。返回真实覆盖、未知范围及最多16个候选；"

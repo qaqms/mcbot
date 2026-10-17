@@ -1266,7 +1266,7 @@ public final class AgentRunner implements ToolExecutor {
             return executeGather(json, true);
         }
         if (!java.util.Set.of("status", "inventory", "equip", "scan_area", "find_resource", "inspect_block",
-                "break_block", "place_block", "build_diff", "craft", "smelt", "wait", "move_to", "attack", "collect", "transfer")
+                "break_block", "place_block", "build_diff", "build_nearby", "craft", "smelt", "wait", "move_to", "attack", "collect", "transfer")
                 .contains(name)) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "DENIED:组合只可调用现有游戏工具/gather/workflow；不能嵌套程序、反问或改最终目标。"));
         try {
@@ -1287,9 +1287,15 @@ public final class AgentRunner implements ToolExecutor {
 
     private CompletableFuture<ToolOutcome> executeCompositionRemote(String name, String args, long taskId, AgentLoop owner) {
         if (program != null && !program.done() && programTask == taskId) {
-            if (programPrimitives >= programPrimitiveLimit)
+            int cost = 1;
+            if ("build_nearby".equals(name)) {
+                var input = com.google.gson.JsonParser.parseString(args).getAsJsonObject();
+                cost = input.has("max_actions") ? input.get("max_actions").getAsInt() : 12;
+            }
+            if (cost > programPrimitiveLimit - programPrimitives)
                 return CompletableFuture.completedFuture(new ToolOutcome(false, "ACTION_LIMIT:组合的原子调用预算已到，嵌套采集/清单共享此预算。"));
-            programPrimitives++;
+            // Reserve the complete batch before dispatch; cancellation and partial work do not refund it.
+            programPrimitives += cost;
         }
         return executeRemote(name, args, taskId, owner, true);
     }

@@ -42,6 +42,15 @@ public final class BuildSurvey {
 
     public static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
                                            LongSupplier clock) {
+        return query(target, access, offset, materialOffset, clock, true);
+    }
+
+    public static ServerTool.Result verify(BuildTarget target, Access access, int offset, LongSupplier clock) {
+        return query(target, access, offset, 0, clock, false);
+    }
+
+    private static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
+                                            LongSupplier clock, boolean assessWork) {
         if (offset < 0 || offset >= target.cells().size() || offset % PAGE != 0
                 || materialOffset < 0 || materialOffset > BuildTarget.LIMIT || materialOffset % PAGE != 0)
             throw new IllegalArgumentException("page");
@@ -74,16 +83,7 @@ public final class BuildSurvey {
                 if (bill != null) bill.unresolved++;
             }
             if (bill != null && actual != null && !matches) bill.required += material.units();
-            String state;
-            if (!inBounds) state = "out_of_scope";
-            else if (actual == null) state = "unknown";
-            else if (!material.supported()) state = "unsupported";
-            else if (matches) state = "satisfied";
-            else if (access.protectedCell(cell.pos())) state = "protected";
-            else if (actual.getBlock() == cell.authored().getBlock()) state = "state_conflict";
-            else if (cell.authored().isAir() || !actual.canBeReplaced()) state = "needs_clear";
-            else if (!access.near(cell.pos())) state = "out_of_reach";
-            else state = "not_assessed";
+            String state = cellState(cell, access, actual);
             if (!material.supported()) {
                 billComplete = false;
                 data.addProperty("unsupported_reason", material.reason());
@@ -94,6 +94,7 @@ public final class BuildSurvey {
         for (var bill : bills.values()) bill.available = BuildInventory.available(access.placement().inventory(), bill.item);
         int checks = 0;
         for (int index = offset; index < Math.min(rows.size(), offset + PAGE); index++) {
+            if (!assessWork) break;
             Row row = rows.get(index);
             if (!row.data().get("state").getAsString().equals("not_assessed")) continue;
             var bill = bills.get(BuiltInRegistries.ITEM.getKey(row.material().item()).toString());
@@ -198,6 +199,19 @@ public final class BuildSurvey {
         return new ServerTool.Result(true, "建筑只读核对：已满足" + satisfied + "/" + rows.size()
                 + "；分类=" + counts + "。查询未施工，材料分配只针对当前页且未预留；"
                 + "未知、不支持、状态冲突及不稳定观察不能认定整项目标满足。明细和料单分别按next_offset/material_next_offset续页。", data);
+    }
+
+    /** The same fresh cell rules precede advisory work and every actual building action. */
+    public static String cellState(BuildTarget.Cell cell, Access access, BlockState actual) {
+        if (!access.inBounds(cell.pos())) return "out_of_scope";
+        if (actual == null) return "unknown";
+        if (!cell.material().supported()) return "unsupported";
+        if (cell.matches(actual)) return "satisfied";
+        if (access.protectedCell(cell.pos())) return "protected";
+        if (actual.getBlock() == cell.authored().getBlock()) return "state_conflict";
+        if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";
+        if (!access.near(cell.pos())) return "out_of_reach";
+        return "not_assessed";
     }
 
     private static String classify(ServerTool.Result failure) {

@@ -3,6 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## B2 近身施工（2026-10-17）
+
+新增build_nearby，当前26项（17服务端+9本地）。输入同build_diff的target，
+必带expected_revision；offset为当前16格页，max_actions默认/最多12，可显式1-12。
+不移动/挖掘/找料，逐格复用原版放置和新鲜目标/材料/权限/控制/区域锁。
+ACCEPTED只受理，真终态给action_attempts/placed_blocks/consumed_count/placement_results，
+失败也保留实际效果；两刻后survey独立重查全目标，final_verified及goal_satisfied须分别读，
+batch_finished不表示整栋完成或外层set_goal已完成。
+12查询轮/1152面预检，执行另≤12次预检；工作协作400ms/查询50ms/终查另50ms、总200刻。
+Lua按max_actions从原原子预算预扣，不够不派发，取消/缺料/无动作不退预算。
+有界邻域效果/输出省略、支持范围和实机边界见B2-NEARBY-CONSTRUCTION。
+
 ## B1 建筑差异与材料（2026-10-17）
 
 新增build_diff只读入口，当前25项工具（16服务端、9本地）。

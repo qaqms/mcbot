@@ -124,6 +124,53 @@ class AgentRunnerProgramTest {
         assertEquals(1, client.toolCount());
     }
 
+    private static final String BUILD = """
+            local t={anchor={x=0,y=90,z=0},cells={{x=0,y=0,z=0,block="stone"}}}
+            local q=mc.call("build_diff",{target=t})
+            mc.call("build_nearby",{target=t,expected_revision=q.data.target_revision,max_actions=2})
+            return mc.call("wait",{seconds=1})
+            """;
+
+    @Test void constructionReservesEveryDeclaredActionAndWaitsForTerminalBeforeContinuing() {
+        start("build selected cells", BUILD, 3);
+        tool("build_diff", 1);
+        receipt(true, "fresh diff", "{\"target_revision\":\"" + "a".repeat(64) + "\"}");
+        tool("build_nearby", 2);
+        long seq = client.lastTool().num("seq", -1);
+        ack("construction");
+        assertEquals(2, client.toolCount());
+        terminal(seq, "construction", """
+                {"placed_blocks":1,"changed":true,"consumed_count":1,"goal_satisfied":false,"final_verified":true}
+                """);
+        assertFalse(outcome().ok());
+        assertTrue(outcome().content().contains("ACTION_LIMIT:"));
+        assertEquals(2, client.toolCount(), "1 query + 2 construction actions exhausted original budget");
+    }
+
+    @Test void insufficientConstructionBudgetDispatchesNoBatchAndCancellationNeverRunsTheNextChild() {
+        start("build selected cells", BUILD, 2);
+        tool("build_diff", 1);
+        receipt(true, "fresh diff", "{\"target_revision\":\"" + "a".repeat(64) + "\"}");
+        assertFalse(outcome().ok());
+        assertEquals(1, client.toolCount());
+    }
+
+    @Test void cancelledAcceptedConstructionCannotResumeAfterItsLateTerminal() {
+        start("build selected cells", BUILD, 12);
+        tool("build_diff", 1);
+        receipt(true, "fresh diff", "{\"target_revision\":\"" + "a".repeat(64) + "\"}");
+        tool("build_nearby", 2);
+        long seq = client.lastTool().num("seq", -1);
+        ack("construction");
+        runner.cancelTask(0);
+        client.drain();
+        terminal(seq, "construction", "{\"goal_satisfied\":true}");
+        runner.submitTask("inspect current facts");
+        client.drain();
+        assertFalse(outcome().ok());
+        assertEquals(2, client.toolCount());
+    }
+
     @Test void cancelledBuildingQueryCannotTriggerPlacementAfterItsLateResult() {
         start("inspect then place if ready", """
                 local q=mc.call("build_diff",{target={anchor={x=0,y=90,z=0},

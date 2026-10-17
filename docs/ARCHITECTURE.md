@@ -3,6 +3,16 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## B2 共用近身施工（2026-10-17）
+
+build_nearby将同一B1目标/修订/指定页交给BuildWork身体任务，复用Survey/Inventory、
+BlockPlacement.placeDesired及原权限/控制/区域锁，最多12动作，每刻至多一次。
+cellState供差异与执行前现场重验共用，原版上下文再核点击、状态、材料和实际效果；
+单放/路径/施工同源观察扣料及有界邻域变化，失败不重放。
+两刻后verify独立核全目标，局部结束与整栋条件分开，外层set_goal建筑生命周期仍待L1。
+Lua按声明动作数预扣原子预算；抢占/取消/换页不补预算，后续持续入口复用同一身体任务。
+完整帽、部分效果与原生待验边界见B2-NEARBY-CONSTRUCTION及STATUS。
+
 ## B1 建筑共用目标与只读核对（2026-10-17）
 
 building/BuildTarget统一有界cells/fill目标、稳定锚点/旋转及内容修订；

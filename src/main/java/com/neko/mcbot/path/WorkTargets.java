@@ -16,9 +16,13 @@ public final class WorkTargets {
 
     public boolean add(BlockPos target) {
         if (task == null) return true;
-        if (cells.size() >= LIMIT && !cells.contains(target)) return false;
+        if (!canAdd(target)) return false;
         cells.add(target.immutable());
         return true;
+    }
+
+    public boolean canAdd(BlockPos target) {
+        return task == null || cells.size() < LIMIT || cells.contains(target);
     }
 
     public boolean protects(BlockPos cell) {
