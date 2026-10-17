@@ -3,6 +3,16 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## D2 身体自保事实（2026-10-17）
+
+工具仍26项。身体可信威胁按刻触发，共用原attack与move_to执行核，不另增工具/模型往返。
+只读不触发，保护/命名/中立来源不自动还击。status.body_defense报告固定来源/范围、
+状态、实际出手/观察伤害、暂停及累计账；defense_active/defense_state/threat_scan_complete
+概要同步Lua。local_clear只表示连续20刻局部安全，不保证甩掉追兵或整项目标完成。
+400刻含暂停/10次出手/6格局部节点球交原工作范围，每身体最多64来源各一次自动处理。
+cancel停止自动自保至新task_begin，新任务不清旧来源账。原显式工具仍走原许可。
+完整机制、边界与实机待验见D2-BODY-DEFENSE-2026-10-17.md。
+
 ## D1 动态近战（2026-10-17）
 
 attack新增严格布尔approach，默认false保持原地；true在固定初始脚格锚点6.5格内

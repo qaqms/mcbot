@@ -244,6 +244,17 @@ public final class AttackTool implements ServerTool {
         @Override public Result onResume(CompanionPlayer c) { return attack.preflight(); }
         @Override public void onSuspend() { attack.suspend(); }
         @Override public void onAbort() { attack.interrupt("CANCELLED:攻击已中止，等待新指令。"); }
+        @Override public com.neko.mcbot.path.PathSpec movementScope() { return attack.movementScope(); }
+    }
+
+    /** Same native action as an explicit call, with frozen passive authority and a scoped lease. */
+    public static TickTask defensive(CompanionPlayer player, LivingEntity entity,
+            CompanionScheduler scheduler, ActionPermissions.BodyPermit permit,
+            CompanionScheduler.ReflexLease lease, BlockPos anchor, com.neko.mcbot.path.PathSpec outerScope,
+            int maxHits, boolean approach, com.neko.mcbot.path.NavigationBudget budget) {
+        return new Task(new EntityAttack(new PlayerAccess(player, player.level(), entity, scheduler,
+                permit.source(), permit.context(), new ActionPermissions.Execution(null), approach, anchor,
+                permit, lease, outerScope, budget), maxHits));
     }
 
     public static boolean protectedTarget(CompanionPlayer player, LivingEntity target) {
@@ -329,32 +340,52 @@ public final class AttackTool implements ServerTool {
         private final boolean approach;
         private final BlockPos anchor;
         private final com.neko.mcbot.server.EntityApproach movement;
+        private final ActionPermissions.BodyPermit bodyPermit;
+        private final CompanionScheduler.ReflexLease reflexLease;
+        private final com.neko.mcbot.path.PathSpec outerScope;
 
         PlayerAccess(CompanionPlayer player, ServerLevel level, LivingEntity entity,
                      CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context,
                      ActionPermissions.Execution execution, boolean approach, BlockPos anchor) {
+            this(player, level, entity, scheduler, permissions, context, execution, approach, anchor,
+                    null, null, com.neko.mcbot.path.PathSpec.DEFAULT, new com.neko.mcbot.path.NavigationBudget());
+        }
+
+        PlayerAccess(CompanionPlayer player, ServerLevel level, LivingEntity entity,
+                     CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context,
+                     ActionPermissions.Execution execution, boolean approach, BlockPos anchor,
+                     ActionPermissions.BodyPermit bodyPermit, CompanionScheduler.ReflexLease reflexLease,
+                     com.neko.mcbot.path.PathSpec outerScope, com.neko.mcbot.path.NavigationBudget budget) {
             this.player = player; this.level = level; this.entity = entity; this.scheduler = scheduler;
             this.permissions = permissions; this.context = context; this.execution = execution;
             this.approach = approach; this.anchor = anchor.immutable();
+            this.bodyPermit = bodyPermit; this.reflexLease = reflexLease; this.outerScope = outerScope;
             this.movement = approach ? new com.neko.mcbot.server.EntityApproach(new com.neko.mcbot.server.EntityApproach.Access() {
                 @Override public net.minecraft.world.phys.Vec3 targetPosition() { return entity.position(); }
                 @Override public boolean canStrike() { return AttackTool.guard(player, level, entity) == null; }
                 @Override public TickTask route(com.neko.mcbot.path.NavigationBudget budget) {
                     return com.neko.mcbot.path.PathTask.approach(level, entity.blockPosition(), permissions, context,
-                            scheduler, new com.neko.mcbot.path.PathSpec(false, false, false, 0, anchor, 6),
-                            com.neko.mcbot.server.MeleeWork.goal(player, entity), budget);
+                            scheduler, new com.neko.mcbot.path.PathSpec(false, false, outerScope.underground(), 0, anchor, 6),
+                            com.neko.mcbot.server.MeleeWork.goal(player, entity), budget).limitTo(outerScope);
                 }
                 @Override public TickTask.Progress advance(TickTask route) { return route.tickSafe(player); }
                 @Override public void stopInput() { player.releaseMovement(); }
-            }) : null;
+            }, budget) : null;
         }
         @Override public EntityAttack.Target target() { return describe(player, entity); }
         @Override public Result guard() {
-            if (context == null || permissions == null || !context.equals(permissions.current(context.owner(),
+            if (bodyPermit != null ? !bodyPermit.valid() : context == null || permissions == null || !context.equals(permissions.current(context.owner(),
                     player.getUUID(), context.dimension(), context.taskId(), player))
                     || !ActionPermissions.allowed(context, "attack", new JsonObject())
                     || approach && !ActionPermissions.allowed(context, "move_to", new JsonObject()))
                 return failed("DENIED:原任务/身体许可已失效，未移动或攻击。");
+            if (bodyPermit != null && (!AttackTool.describe(player, entity).hostile() || entity.hasCustomName()
+                    || protectedTarget(player, entity)))
+                return failed("DENIED:身体自保不取得中立、命名或保护目标的额外攻击许可。");
+            if (bodyPermit != null && (!reflexLease.valid() || !withinApproachScope(anchor, player.position(), entity.position())))
+                return failed("SCOPE_LIMIT:身体自保原范围或资源租约已失效。");
+            if (!outerScope.contains(player.blockPosition().getX(), player.blockPosition().getY(), player.blockPosition().getZ()))
+                return failed("SCOPE_LIMIT:自保不能离开原工作范围。");
             var current = AttackTool.guard(player, level, entity);
             if (current != null && !EntityAttack.geometricFailure(current)) return current;
             if (!entity.isAlive()) return current;
@@ -368,6 +399,10 @@ public final class AttackTool implements ServerTool {
         }
         @Override public Result permission(EntityAttack.Target target, int maxHits) {
             return AttackTool.permission(permissions, context, execution, target, maxHits, approach, anchor.asLong());
+        }
+        @Override public com.neko.mcbot.path.PathSpec movementScope() {
+            return approach ? new com.neko.mcbot.path.PathSpec(false, false, outerScope.underground(), 0, anchor, 6)
+                    : outerScope;
         }
         @Override public boolean canApproach() { return approach; }
         @Override public Result approach() { return movement == null ? null : movement.tick(); }
@@ -390,10 +425,12 @@ public final class AttackTool implements ServerTool {
             return AttackTool.ready(charge, entity.invulnerableTime, player.cannotAttackWithItem(held(), 0));
         }
         @Override public boolean reserve() {
-            String dimension = context.dimension();
+            String dimension = bodyPermit == null ? context.dimension() : bodyPermit.dimension();
             AABB box = entity.getBoundingBox().inflate(1);
             var region = new ResourceLocks.Region(dimension, (int) Math.floor(box.minX), (int) Math.floor(box.minY),
                     (int) Math.floor(box.minZ), (int) Math.floor(box.maxX), (int) Math.floor(box.maxY), (int) Math.floor(box.maxZ));
+            if (reflexLease != null)
+                return reflexLease.reserve(new ResourceLocks.Target(dimension, entity.getUUID()), region);
             return scheduler.reserveTarget(player.getUUID(), new ResourceLocks.Target(dimension, entity.getUUID()))
                     && scheduler.reserve(player.getUUID(), List.of(region));
         }

@@ -63,7 +63,7 @@ public final class ToolCatalog {
             case "collect" -> "兼容触碰拾取，身体会自动拾取；r只是查询范围，远处先走近。"
                     + "ok=false可能已部分拾取，按新鲜背包核对成果。";
             case "status" -> "读取新鲜身体；data.x/y/z是脚格，没有position对象。details=true有"
-                    + "data.inventory.slots[{slot,item,count}]；有完整观测则复用，不重复查询。";
+                    + "data.inventory.slots[{slot,item,count}]；body_defense为有界自保及实际效果，有完整观测则复用。";
             case "inventory" -> "读取data.slots[{slot,item,count}]和selected_slot；列表从1起，"
                     + "entry.slot是equip使用的0-35槽号。";
             case "scan_area" -> "只读附近摘要：data.item_targets为掉落/触碰站位，entity_targets为活物，"

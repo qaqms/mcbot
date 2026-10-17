@@ -27,6 +27,7 @@ public final class EntityAttack {
         default ServerTool.Result approach() { return null; }
         default void stopMoving() { }
         default com.google.gson.JsonObject movement() { return null; }
+        default com.neko.mcbot.path.PathSpec movementScope() { return com.neko.mcbot.path.PathSpec.DEFAULT; }
     }
 
     private final Access access;
@@ -134,6 +135,8 @@ public final class EntityAttack {
     }
 
     public void suspend() { access.stopMoving(); }
+
+    public com.neko.mcbot.path.PathSpec movementScope() { return access.movementScope(); }
 
     public com.google.gson.JsonObject observation() {
         var data = new com.google.gson.JsonObject();

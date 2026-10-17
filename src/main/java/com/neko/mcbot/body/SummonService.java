@@ -118,6 +118,7 @@ public final class SummonService {
         McbotMod.scheduler().cancel(entry.uuid(), "同伴已被遣散。");
         ServerPlayer player = server.getPlayerList().getPlayer(entry.uuid());
         if (player != null) {
+            if (player instanceof CompanionPlayer companion) companion.defense().cancel();
             server.getPlayerList().remove(player);
         }
         FakeConnection connection = connections.remove(entry.uuid());
@@ -203,6 +204,7 @@ public final class SummonService {
         for (UUID uuid : new HashMap<>(connections).keySet()) {
             ServerPlayer player = server.getPlayerList().getPlayer(uuid);
             if (player != null) {
+                if (player instanceof CompanionPlayer companion) companion.defense().cancel();
                 server.getPlayerList().remove(player);
             }
             FakeConnection connection = connections.remove(uuid);

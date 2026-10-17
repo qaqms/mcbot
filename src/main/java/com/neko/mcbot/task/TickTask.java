@@ -44,6 +44,10 @@ public abstract class TickTask {
     /** Release transient state without settling the call or resetting its counters. */
     public void onSuspend() { }
 
+    public com.neko.mcbot.path.PathSpec movementScope() {
+        return com.neko.mcbot.path.PathSpec.DEFAULT;
+    }
+
     /** A task must opt into resumption with fresh action-specific validation. */
     public ServerTool.Result onResume(CompanionPlayer companion) {
         return new ServerTool.Result(false,

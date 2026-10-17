@@ -53,6 +53,23 @@ class BoundedProgramTest {
         return new ToolOutcome(true, "actual", JsonParser.parseString(data).getAsJsonObject());
     }
 
+    @Test void automaticBodyRiskSurvivesSuccessfulQueryCompactionWithoutExtraAction() throws Exception {
+        try (var f = new Fixture("""
+                local r=mc.call("status",{details=true})
+                return r.data.body_defense.strikes
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(actual(
+                    "{\"defense_active\":true,\"defense_state\":\"retreat\",\"threat_scan_complete\":false,"
+                            + "\"body_defense\":{\"strikes\":2}}"));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertTrue(result.feedback().contains("\"defense_active\":true"));
+            assertTrue(result.feedback().contains("\"threat_scan_complete\":false"));
+            assertEquals(2, result.data().get("returned").getAsInt());
+            assertEquals(1, f.calls.size());
+        }
+    }
+
     @Test void variablesBranchesFunctionsAndLoopsUseActualReceiptData() throws Exception {
         try (var f = new Fixture("""
                 local function query(n) return mc.call("inventory", {page=n}).data.amount end

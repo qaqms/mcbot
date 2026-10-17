@@ -3,6 +3,17 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## D2 身体威胁与有限自保（2026-10-17）
+
+ThreatFacts统一可信来源、原生攻击盒/实际爬行者爆炸半径和身体AABB；
+BodyDefense只负责固定来源的触发/生命周期，DefenseDriver委托原EntityAttack/
+EntityApproach/PathTask执行。水中避险优先，BodyControl抢占/恢复仍走原契约。
+冻结BodyPermit和资源租约、固定6格节点球交原工作范围，400刻含暂停/10次出手/
+原累计导航账不重开。RetreatWork固定已知安全落点，每步复核全部威胁。
+status及Lua风险概要共享实际结果；cancel锁自动入口至新任务且不清旧来源账。
+每身体最多64来源各一次自动处理，是有限局部自保，不保证逃脱或完整生存。
+完整参考链、支持边界与原生待验见D2-BODY-DEFENSE及STATUS。
+
 ## D1 共用动态接近与近战（2026-10-17）
 
 attack显式approach=true经EntityApproach协调原PathTask与EntityAttack，不新增动作核。
@@ -10,7 +21,7 @@ attack显式approach=true经EntityApproach协调原PathTask与EntityAttack，不
 可工作站位，真实出手仍走原版距离/视线/满冷却和效果核对。移动不阻断同刻合法出手。
 NavigationBudget在换路线、地形重算与暂停恢复间累计原节点/记录/协作CPU及2次重规划，
 原400刻总帽含暂停；默认原地模式保留，批准绑定模式和原锚点。
-短任务/长期阶段及Lua走同入口，后续自卫复用同一执行器，D2触发与撤退尚未实现。
+短任务/长期阶段及Lua走同入口，D2自保已按上节复用同一执行器。
 完整机制、支持范围和原生待验见D1-DYNAMIC-MELEE及STATUS。
 
 ## B2 共用近身施工（2026-10-17）

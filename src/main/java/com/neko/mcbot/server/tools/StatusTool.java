@@ -45,6 +45,7 @@ public final class StatusTool implements ServerTool {
         if (result.ok()) {
             var recent = companion.recentBodyChanges();
             result.data().add("body_changes", recent);
+            result = defenseReport(result, companion.defense().observation());
             result.data().add("drop_changes", com.neko.mcbot.server.DropTracker.recent(companion));
             result.data().add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
                     companion.level(), companion.blockPosition(), 64));
@@ -72,6 +73,16 @@ public final class StatusTool implements ServerTool {
                 : context.readOnly() ? "只读"
                 : context.autonomous() ? "自主执行，动作无需主人逐次批准" : "逐次确认，需批准的动作按服务端清单询问";
         return new Result(true, result.feedback() + "\n服务端任务权限：" + mode + "。", data);
+    }
+
+    static Result defenseReport(Result result, JsonObject defense) {
+        var data = result.data();
+        data.add("body_defense", defense);
+        data.addProperty("defense_active", defense.get("active").getAsBoolean());
+        data.addProperty("defense_state", defense.get("state").getAsString());
+        data.addProperty("threat_scan_complete", defense.getAsJsonObject("threats").get("scan_complete").getAsBoolean());
+        return new Result(result.ok(), result.feedback() + "\n身体自保：" + defense.get("state").getAsString()
+                + "，活动=" + defense.get("active").getAsBoolean() + "；详情见body_defense，局部拉开不代表甩掉追兵。", data);
     }
 
     static Result report(JsonObject args, Body body, Inventory inventory, JsonObject task) {

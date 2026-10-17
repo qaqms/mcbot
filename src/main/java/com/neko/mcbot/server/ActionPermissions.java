@@ -75,6 +75,20 @@ public final class ActionPermissions {
 
     public Object body(UUID owner) { return bodies.get(owner); }
 
+    /** A frozen body authority does not create a task, approval or fresh work budget. */
+    public record BodyPermit(ActionPermissions source, UUID owner, UUID companion, String dimension,
+                             Object body, Context context) {
+        public boolean valid() {
+            return source.tasks.get(owner) == context
+                    && source.passiveBodyActionAllowed(owner, companion, dimension, body);
+        }
+    }
+
+    public BodyPermit bodyPermit(UUID owner, UUID companion, String dimension, Object body) {
+        return passiveBodyActionAllowed(owner, companion, dimension, body)
+                ? new BodyPermit(this, owner, companion, dimension, body, tasks.get(owner)) : null;
+    }
+
     public boolean passivePickupAllowed(UUID owner, UUID companion, String dimension, Object body) {
         return passiveBodyActionAllowed(owner, companion, dimension, body);
     }

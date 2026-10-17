@@ -53,6 +53,8 @@ public final class ClientToolDefs {
                     + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
                     + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。"
                     + "drop_changes为本身体近期有界来源摘要，拾取事件不替代当前inventory。"
+                    + "body_defense为共用自保状态/实际出手/固定局部范围及威胁来源；defense_active/state与"
+                    + "threat_scan_complete为概要，局部拉开不保证甩掉追兵，取消后不自动接旧活。"
                     + "spatial_facts为区块版本；navigation_trail给当前任务实际路标和有限改动，非可返保证。";
             case "inventory" -> "data.selected_slot、storage_size、slots_used；"
                     + "data.slots是[{slot,item,count,damage?,max_damage?}]，data.equipment是装备列表。"
@@ -260,7 +262,7 @@ public final class ClientToolDefs {
                             + "\"args\":{\"type\":\"object\"}},\"required\":[\"tool\",\"args\"],\"additionalProperties\":false}},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":300}},"
                             + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
-            new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆与水中避险状态；details=true含背包与装备逐槽明细。耗时不等于完成率",
+            new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆、水中避险与body_defense自保事实；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
             new ToolSpec("build_diff", "只读核对有限建筑目标及材料；不施工、不挖掘、不移动或自动找料。"
                     + "target.anchor为世界锚点，cells的x/y/z为相对坐标；或用fill.from/to闭区间生成线/面/体，二者仅选其一。"

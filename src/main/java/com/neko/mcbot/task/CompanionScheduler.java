@@ -28,6 +28,7 @@ public final class CompanionScheduler {
     private final Map<UUID, ResourceLocks.Lease> leases = new HashMap<>();
     private final Map<UUID, CompletableFuture<ServerTool.Result>> calls = new HashMap<>();
     private final Map<UUID, ControlScope> controls = new HashMap<>();
+    private final Map<UUID, ReflexLease> reflexes = new HashMap<>();
 
     private static final class ControlScope {
         final BodyControl control;
@@ -147,6 +148,62 @@ public final class CompanionScheduler {
         return lease != null && lease.claim(target);
     }
 
+    /** A reflex borrows the suspended work's lease; it never releases that work's reservations. */
+    public final class ReflexLease implements AutoCloseable {
+        private final ResourceLocks.Lease lease;
+        private final boolean borrowed;
+        private final UUID companionId;
+        private final CompanionPlayer body;
+        private final net.minecraft.server.level.ServerLevel level;
+        private boolean closed;
+        private ReflexLease(UUID companionId, CompanionPlayer body, ResourceLocks.Lease lease, boolean borrowed) {
+            this.companionId = companionId;
+            this.body = body;
+            this.level = body == null ? null : body.level();
+            this.lease = lease;
+            this.borrowed = borrowed;
+        }
+        public boolean reserve(ResourceLocks.Target target, ResourceLocks.Region region) {
+            return !closed && lease.claim(target) && lease.extend(List.of(region));
+        }
+        public boolean valid() { return !closed && lease.active(); }
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
+            reflexes.remove(companionId, this);
+            if (!borrowed) lease.close();
+        }
+    }
+
+    public ReflexLease reflexLease(UUID companion) {
+        return reflexLease(companion, null);
+    }
+
+    public ReflexLease reflexLease(CompanionPlayer companion) {
+        return reflexLease(companion.getUUID(), companion);
+    }
+
+    private ReflexLease reflexLease(UUID companion, CompanionPlayer body) {
+        if (reflexes.containsKey(companion)) return null;
+        var original = leases.get(companion);
+        boolean borrowed = original != null;
+        var lease = borrowed ? original : locks.acquire(companion, List.of());
+        if (lease == null) return null;
+        var reflex = new ReflexLease(companion, body, lease, borrowed);
+        reflexes.put(companion, reflex);
+        return reflex;
+    }
+
+    public com.neko.mcbot.path.PathSpec movementScope(UUID companion) {
+        var slot = active.get(companion);
+        return slot == null ? com.neko.mcbot.path.PathSpec.DEFAULT : slot.task().movementScope();
+    }
+
+    public boolean meleeActive(UUID companion) {
+        var slot = active.get(companion);
+        return slot != null && slot.task() instanceof com.neko.mcbot.server.tools.AttackTool.Task;
+    }
+
     private static CompletableFuture<ServerTool.Result> completed(String feedback) {
         return CompletableFuture.completedFuture(new ServerTool.Result(false, feedback, null));
     }
@@ -173,6 +230,7 @@ public final class CompanionScheduler {
     public void cancelAll(String reason) {
         var ids = new java.util.HashSet<>(active.keySet());
         ids.addAll(calls.keySet());
+        ids.addAll(reflexes.keySet());
         for (UUID uuid : ids) cancel(uuid, reason);
     }
 
@@ -182,6 +240,8 @@ public final class CompanionScheduler {
      * 返回 false 表示它本来就没在干活。仅服务器线程调用。
      */
     public boolean cancel(UUID companionId, String reason) {
+        var reflex = reflexes.get(companionId);
+        if (reflex != null) reflex.close();
         Slot slot = active.get(companionId);
         String why = reason == null || reason.isBlank()
                 ? "主人主动叫停了这件事。" : reason;
@@ -190,7 +250,7 @@ public final class CompanionScheduler {
         if (slot != null) finish(slot, result, true);
         else {
             var future = calls.remove(companionId);
-            if (future == null) return false;
+            if (future == null) return reflex != null;
             ResourceLocks.Lease lease = leases.remove(companionId);
             if (lease != null) lease.close();
             future.complete(result);
@@ -235,6 +295,13 @@ public final class CompanionScheduler {
     }
 
     void tick(Bodies bodies) {
+        for (var reflex : new java.util.ArrayList<>(reflexes.values())) {
+            if (reflex.body != null && (!bodies.same(reflex.body, bodies.get(reflex.companionId))
+                    || !bodies.sameDimension(reflex.body, reflex.level))) {
+                reflex.close();
+                reflex.body.defense().cancel();
+            }
+        }
         if (active.isEmpty()) {
             return;
         }

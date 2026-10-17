@@ -109,6 +109,8 @@ public final class McbotMod implements ModInitializer {
         });
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            for (var player : server.getPlayerList().getPlayers())
+                if (player instanceof com.neko.mcbot.body.CompanionPlayer companion) companion.defense().cancel();
             scheduler.cancelAll("服务器已关闭。");
             com.neko.mcbot.server.DropTracker.clear();
             com.neko.mcbot.path.PathTask.clearPlanCache();
@@ -126,6 +128,8 @@ public final class McbotMod implements ModInitializer {
             // 票在 scheduler 之前：传送后的下一拍，PathTask 先见到加载好的世界再搜索
             // （自锁死陷阱见 CompanionChunkPads 注释③，不可改到别处）。
             com.neko.mcbot.body.CompanionChunkPads.tick(server);
+            for (var player : server.getPlayerList().getPlayers())
+                if (player instanceof com.neko.mcbot.body.CompanionPlayer companion) companion.tickDefense();
             scheduler.tick(server);
             for (var level : server.getAllLevels()) com.neko.mcbot.server.DropTracker.tick(level);
             if (++tickCount[0] >= 60) {

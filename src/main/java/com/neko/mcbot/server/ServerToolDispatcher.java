@@ -95,6 +95,11 @@ public final class ServerToolDispatcher {
                 companion.level().dimension().identifier().toString(), companion);
     }
 
+    public ActionPermissions.BodyPermit defensePermit(CompanionPlayer companion) {
+        return permissions.bodyPermit(companion.ownerUuid(), companion.getUUID(),
+                companion.level().dimension().identifier().toString(), companion);
+    }
+
     public record ReadOnlyVerification(String status, long taskId, String tool, String feedback) {
     }
 
@@ -205,9 +210,11 @@ public final class ServerToolDispatcher {
                 if (autonomous != null && (!autonomous.isJsonPrimitive()
                         || !autonomous.getAsJsonPrimitive().isBoolean())) return;
                 scheduler.cancel(cp.id(), "新任务替换原任务。");
+                if (cp.identity() instanceof CompanionPlayer player) player.defense().stopCurrent();
                 permissions.begin(new ActionPermissions.Context(sender.owner(), cp.id(),
                         cp.dimension(), taskId, mode.getAsBoolean(),
                         autonomous != null && autonomous.getAsBoolean()), cp.identity());
+                if (cp.identity() instanceof CompanionPlayer player) player.defense().newTask();
             }
             case "task_end" -> {
                 Long taskId = taskId(env);
@@ -215,7 +222,10 @@ public final class ServerToolDispatcher {
                 Body cp = companionOfSender(sender);
                 Object original = permissions.body(sender.owner());
                 if (permissions.end(sender.owner(), taskId)) {
-                    if (cp != null && cp.identity() == original) scheduler.cancel(cp.id(), "所属任务已结束。");
+                    if (cp != null && cp.identity() == original) {
+                        scheduler.cancel(cp.id(), "所属任务已结束。");
+                        if (original instanceof CompanionPlayer player) player.defense().stopCurrent();
+                    }
                 }
             }
             case "authorize" -> {
@@ -238,6 +248,10 @@ public final class ServerToolDispatcher {
                     broadcast(sender, "cancel_ack", "你名下没有同伴，无从叫停。");
                 } else {
                     boolean stopped = scheduler.cancel(cp.id(), null);
+                    if (cp.identity() instanceof CompanionPlayer player) {
+                        stopped |= player.defense().active();
+                        player.defense().cancel();
+                    }
                     broadcast(sender, "cancel_ack", stopped
                             ? "已叫停 " + cp.name() + " 手头的活。"
                             : "它现在手头没有进行中的任务。");
@@ -398,8 +412,10 @@ public final class ServerToolDispatcher {
         permissions.end(owner.owner(), 0);
         if (original instanceof CompanionPlayer player) {
             scheduler.cancel(player.getUUID(), "同伴生命周期操作撤销旧任务。");
+            player.defense().cancel();
         } else {
             Body cp = companionOfSender(owner);
+            if (cp != null && cp.identity() instanceof CompanionPlayer player) player.defense().cancel();
             if (cp != null && cp.identity() == original)
                 scheduler.cancel(cp.id(), "同伴生命周期操作撤销旧任务。");
         }

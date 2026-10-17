@@ -45,6 +45,8 @@ public final class CompanionPlayer extends ServerPlayer {
         }
     });
     private final WaterRecovery waterRecovery = new WaterRecovery();
+    private final com.neko.mcbot.server.DefenseDriver defense = new com.neko.mcbot.server.DefenseDriver(this);
+    private boolean waterControlling, defenseDriving;
     private final WaterRecovery.Access waterAccess = new WaterRecovery.Access() {
         @Override public boolean allowed() {
             var dispatcher = McbotMod.dispatcher();
@@ -108,7 +110,8 @@ public final class CompanionPlayer extends ServerPlayer {
         }
         @Override public MovementInput.Frame recoveryInput() {
             MovementInput.Frame frame = waterRecovery.tick(waterAccess);
-            bodyControl.reflex(frame != null);
+            waterControlling = frame != null;
+            bodyControl.reflex(waterControlling || defense.active());
             return frame;
         }
         @Override public boolean inWater() { return isInWater(); }
@@ -167,7 +170,17 @@ public final class CompanionPlayer extends ServerPlayer {
     public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }
 
     public void walkForTick(double x, double z, boolean jump) {
-        if (bodyControl.owner() == BodyControl.Owner.WORK) movementInput.renew(x, z, jump);
+        if (bodyControl.owner() == BodyControl.Owner.WORK
+                || defenseDriving && bodyControl.owner() == BodyControl.Owner.REFLEX)
+            movementInput.renew(x, z, jump);
+    }
+
+    public com.neko.mcbot.server.DefenseDriver defense() { return defense; }
+
+    public void tickDefense() {
+        defenseDriving = true;
+        try { defense.tick(waterControlling); }
+        finally { defenseDriving = false; }
     }
 
     public void releaseMovement() { movementInput.clear(); }

@@ -25,6 +25,7 @@ public final class ResourceLocks {
         private final UUID id;
         private boolean closed;
         private Lease(UUID id) { this.id = id; }
+        public boolean active() { return !closed; }
 
         public boolean extend(List<Region> regions) {
             if (closed || conflicts(id, null, regions)) return false;

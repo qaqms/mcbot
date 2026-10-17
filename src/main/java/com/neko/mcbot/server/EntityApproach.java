@@ -15,14 +15,18 @@ public final class EntityApproach {
         void stopInput();
     }
     private final Access access;
-    private final NavigationBudget budget = new NavigationBudget();
+    private final NavigationBudget budget;
     private TickTask route;
     private Vec3 heading;
     private boolean started;
     private int ticks, lastPlan = -10, outside;
     private ServerTool.Result failure;
 
-    public EntityApproach(Access access) { this.access = access; }
+    public EntityApproach(Access access) { this(access, new NavigationBudget()); }
+    public EntityApproach(Access access, NavigationBudget budget) {
+        this.access = access;
+        this.budget = java.util.Objects.requireNonNull(budget);
+    }
 
     public ServerTool.Result tick() {
         ticks++;

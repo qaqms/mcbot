@@ -10,6 +10,26 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ActionPermissionsTest {
+    @Test void frozenBodyPermitCannotCrossReadonlyReplacementOrTaskEndAndNeverCreatesApprovals() {
+        Object body = new Object();
+        var idle = permissions.bodyPermit(task.owner(), task.companion(), task.dimension(), body);
+        assertNotNull(idle);
+        assertTrue(idle.valid());
+        assertNull(idle.context());
+        permissions.begin(task, body);
+        assertFalse(idle.valid());
+        var active = permissions.bodyPermit(task.owner(), task.companion(), task.dimension(), body);
+        assertTrue(active.valid());
+        assertSame(task, active.context());
+        assertFalse(permissions.allowsChange(task, null, dig));
+        assertNull(permissions.bodyPermit(task.owner(), task.companion(), "elsewhere", body));
+        permissions.begin(new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 7, false), body);
+        assertFalse(active.valid(), "even equal task fields cannot revive an old frozen authority");
+        permissions.begin(new ActionPermissions.Context(task.owner(), task.companion(), task.dimension(), 8, true), body);
+        assertNull(permissions.bodyPermit(task.owner(), task.companion(), task.dimension(), body));
+        permissions.end(task.owner(), 8);
+        assertFalse(active.valid());
+    }
     @Test void bodyReflexUsesTheSameReadOnlyIdentityAndDimensionBoundaries() {
         var body = new Object();
         assertTrue(permissions.passiveBodyActionAllowed(task.owner(), task.companion(), task.dimension(), body));

@@ -3,6 +3,47 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## D2 威胁触发、自保与有限撤退（2026-10-17 10:46，Asia/Shanghai）
+
+- 本轮按两卡模式D2→B3，D2已独立完成离线验收；十一卡完成、11卡待实施，
+  下一B3。本卡提交/推送以Git为准，前置通过前未编写B3。完整参考链与边界见
+  docs/D2-BODY-DEFENSE-2026-10-17.md；旧交接快照不覆盖此STATUS。
+- ThreatFacts共用可信来源、原生Mob攻击盒/实际范围组件、实际爬行者爆炸半径与身体AABB。
+  只认当前针对、近期实际攻击者或点燃来源；路过不挑衅，保护/命名/中立不自动还击。
+  BodyDefense/DefenseDriver只负责触发/生命周期，原EntityAttack/EntityApproach/PathTask执行；
+  水中避险优先，原工作抢占清输入、归还新鲜重验，原总帽/客户端等待不延长。
+- 固定6格节点球交原工作bounds/地下步型，只行走不挖放；具体撤退落点保持稳定，
+  全部威胁同源步前提贯通搜索/memo/计划/活体复核，落点未知/无支撑不能编造可达。
+  400刻含暂停、最多10出手、原8000/32768/400ms/2次重算累计不重开；
+  仅几何无路可原地有限还击，硬门/爆炸/保护不借失败扩大许可。
+  连续20刻局部安全与真正甩掉追兵/整项目标完成分开。原模型/探索/许可账保持。
+- 冻结BodyPermit不创建任务或批准；借原ResourceLocks租约，不释放被抢占工作占用，
+  原工作终止即借用失效；空闲租约也纳入cancelAll/身体身份及维度检查。
+  主人取消锁自动入口至显式新任务，但不清每身体最多64个来源各一次的处理账；
+  同来源仍存活到帽后需模型显式决定，不宣称无限自卫或完整生存。
+  status.body_defense及Lua风险概要共享真实出手/观察伤害、暂停/累计账与未知，
+  不把自保效果当原工作独占因果或战利品成果。
+- compile1生产编译16秒通过；focused1新增测试夹具漏接口/误用Step字段，编译失败；
+  focused2两项夹具误要求不同来源自保也共一预算对象，修测试边界不放宽产品门。
+  focused3专项31秒通过，首次强制全量1345项48秒通过。收尾补空闲租约取消/身份清理后：
+  build/d2-final2-20261017.log第61–62行，**46秒、20任务全部执行**。
+  XML **1346项/157 suites**（核心337/39、根137/20、客户端872/98），
+  failures/errors/skipped全0，较D1新增32项/3类。本卡未另跑旧版缺功能before回放。
+  生产自保/原近战/调度/A*、真实注册表/碰撞及Lua执行；世界/身体/原版回调/模型网络受控。
+- build/libs/mcbot-0.1.0.jar：**1,465,897 bytes**，末写10:43:10；SHA256
+  `c91eb4ef0328a9b7870b03aa0003b63faf3c9f4f9c2de648aabc5a395996b7e6`。
+  已核四个自保类/两个访问器、原近战/建筑、内嵌agent-core/LuaJ/许可和0.1.0元数据；
+  list-java无输出。只改本体，未安装或启动游戏/服务器/模型，未改无敌或玩家配置；
+  宿主/连接器/只读参考/实例保持，原日志目录本环境不可用，无新增实机证据。
+  原生新Mixin注入、真实受击/移动/爆炸仍按REAL-GAME-RETESTING补证；D3及S类生存另卡。
+- 本卡1.21.11 javap核验：Mob.getTarget/isWithinMeleeAttackRange及protected
+  getAttackBoundingBox(double)；原生近战先读活动ItemStack.ATTACK_RANGE最大/最小值，
+  缺组件用private static final DEFAULT_ATTACK_REACH，随后与目标getHitbox相交。
+  Creeper.private int explosionRadius与isPowered/getSwellDir/isIgnited可读；
+  LivingEntity.getLastHurtByMob/getLastHurtByMobTimestamp/entityAttackRange为public。
+  Level.getEntities(EntityTypeTest,AABB,Predicate,List,int)可限制结果数；
+  这些签名/字节码及编译不等于Mixin注入或真实事件已验。
+
 ## D1 共用动态接近与近战（2026-10-17 10:15，Asia/Shanghai）
 
 - 本轮B2→D1逐卡完成离线验收，B2已提交推送303f9ee；D1独立提交/推送以Git为准。

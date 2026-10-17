@@ -113,6 +113,8 @@ public final class PathTask extends TickTask {
     private final com.neko.mcbot.server.PlacementWork placement;
     private NavigationGoal suppliedGoal;
     private NavigationBudget sharedBudget;
+    private PathSpec outerScope = PathSpec.DEFAULT;
+    private java.util.function.BiPredicate<BlockPos, BlockPos> stepConstraint = (from, to) -> true;
     private Result navigationFailure;
 
     /** A dynamic caller supplies only an arrival predicate and a shared account, never movement actions. */
@@ -124,6 +126,18 @@ public final class PathTask extends TickTask {
         task.sharedBudget = java.util.Objects.requireNonNull(budget);
         return task;
     }
+
+    public PathTask limitTo(PathSpec original) {
+        outerScope = java.util.Objects.requireNonNull(original);
+        return this;
+    }
+
+    public PathTask constrainSteps(java.util.function.BiPredicate<BlockPos, BlockPos> constraint) {
+        stepConstraint = java.util.Objects.requireNonNull(constraint);
+        return this;
+    }
+
+    @Override public PathSpec movementScope() { return spec.anchor() == null ? outerScope : spec; }
 
     // 挖掘子状态
     private BlockPos digPos;
@@ -210,7 +224,8 @@ public final class PathTask extends TickTask {
         if (environment != null) return terminal(environment);
         BlockPos current = StandingGeometry.feetCell(c);
         c.bindSpatialTask(context);
-        if (!spec.contains(current.getX(), current.getY(), current.getZ()))
+        if (!spec.contains(current.getX(), current.getY(), current.getZ())
+                || !outerScope.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
         c.navigationTrail().observe(current.getX(), current.getY(), current.getZ(), c.getY(), c.onGround(), spec);
         // While steering, the next landing belongs to the route, including its airborne ticks.
@@ -779,7 +794,8 @@ public final class PathTask extends TickTask {
 
     private LevelDigSampler samplerFor(CompanionPlayer c, BlockPos from) {
         return new LevelDigSampler(level, c, from,
-                walkOnly || spec.underground() ? 0 : LevelDigSampler.countPlaceables(c.getInventory()), workTarget, spec);
+                walkOnly || spec.underground() ? 0 : LevelDigSampler.countPlaceables(c.getInventory()),
+                workTarget, spec, outerScope).constrainSteps(stepConstraint);
     }
 
     private String memoStats() {

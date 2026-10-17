@@ -22,6 +22,16 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AwarenessToolTest {
+    @Test void statusExposesSharedDefenseFactsAndExplicitIncompleteThreatScan() {
+        var defense = json("{\"active\":true,\"state\":\"retreat\",\"strikes\":2,"
+                + "\"threats\":{\"scan_complete\":false}}");
+        var result = StatusTool.defenseReport(new ServerTool.Result(true, "body", new JsonObject()), defense);
+        assertSame(defense, result.data().get("body_defense"));
+        assertTrue(result.data().get("defense_active").getAsBoolean());
+        assertFalse(result.data().get("threat_scan_complete").getAsBoolean());
+        assertTrue(result.feedback().contains("retreat"));
+        assertTrue(result.feedback().contains("不代表甩掉追兵"));
+    }
     @BeforeAll static void boot() { SharedConstants.tryDetectVersion(); Bootstrap.bootStrap(); }
     private static JsonObject json(String value) { return JsonParser.parseString(value).getAsJsonObject(); }
     private static class Scan implements FindResourceTool.Access {

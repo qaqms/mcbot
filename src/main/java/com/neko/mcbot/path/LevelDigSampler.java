@@ -42,6 +42,13 @@ public final class LevelDigSampler implements DigSampler {
     private final int placeStock;
     private final BlockPos workTarget;
     private final PathSpec spec;
+    private final PathSpec outerScope;
+    private java.util.function.BiPredicate<BlockPos, BlockPos> stepConstraint = (from, to) -> true;
+
+    public LevelDigSampler constrainSteps(java.util.function.BiPredicate<BlockPos, BlockPos> constraint) {
+        stepConstraint = java.util.Objects.requireNonNull(constraint);
+        return this;
+    }
     private final NavigationGeometry geometry;
 
     public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
@@ -56,12 +63,18 @@ public final class LevelDigSampler implements DigSampler {
 
     public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
                            int placeStock, BlockPos workTarget, PathSpec spec) {
+        this(level, companion, start, placeStock, workTarget, spec, PathSpec.DEFAULT);
+    }
+
+    public LevelDigSampler(ServerLevel level, ServerPlayer companion, BlockPos start,
+                           int placeStock, BlockPos workTarget, PathSpec spec, PathSpec outerScope) {
         this.level = level;
         this.companion = companion;
         this.start = start;
         this.placeStock = placeStock;
         this.workTarget = workTarget == null ? null : workTarget.immutable();
         this.spec = spec;
+        this.outerScope = outerScope;
         var dt = level.dimensionType();
         this.minY = dt.minY();
         this.maxY = dt.minY() + dt.height();
@@ -196,12 +209,14 @@ public final class LevelDigSampler implements DigSampler {
         }
         return Math.abs(x - start.getX()) <= RADIUS_XZ
                 && Math.abs(z - start.getZ()) <= RADIUS_XZ
-                && Math.abs(y - start.getY()) <= RADIUS_Y && spec.contains(x, y, z);
+                && Math.abs(y - start.getY()) <= RADIUS_Y && spec.contains(x, y, z)
+                && outerScope.contains(x, y, z);
     }
 
     @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
         // Underground routes keep a full floor and an adjacent horizontal stair for the way back.
-        return spec.allowsStep(fx, fy, fz, x, y, z);
+        return spec.allowsStep(fx, fy, fz, x, y, z) && outerScope.allowsStep(fx, fy, fz, x, y, z)
+                && stepConstraint.test(new BlockPos(fx, fy, fz), new BlockPos(x, y, z));
     }
 
     @Override public boolean known(int x, int y, int z) {
