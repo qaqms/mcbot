@@ -3,6 +3,49 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## B1 建筑目标、只读差异与材料（2026-10-17 09:29，Asia/Shanghai）
+
+- 本轮N3→B1依次完成离线验收，N3已提交推送b424100；B1独立提交/推送以Git记录为准。
+  N1/C1/F1/N2a/N2b/F2/N3/B1共八卡完成、14卡待实施；下一B2近身有界施工，本轮不启第三卡。
+  docs/CONTINUE-DEVELOPMENT-2026-10-16.md及仓外复制交接是历史快照，以本STATUS为准。
+- 完整参考链、取舍、字段及边界见docs/B1-BUILD-TARGETS-2026-10-17.md。
+  已只读核对BuildApi/Ops、目标/旋转/差异、Survey/CellRules/Inventory、
+  计费/Ledger/Bill、有限执行/最终重查/停止及Lua/关联测试；未运行参考或复制其代码/文字。
+  不采用直接写状态、跳过计完成、宽松忽略作者属性或按描述名替换。
+- 新增同源只读build_diff，现25项工具（16服务端+9本地）。
+  building/BuildTarget统一cells/fill线面体、稳定锚点/旋转和内容修订，128格/相对±32/
+  每格8属性；额外载荷、重复格及非法注册状态拒绝。非零双分页须同expected_revision。
+  BuildSurvey重读全目标差异及剩余已知材料，当前16格最多96次原放置预检，
+  50ms协作工作帽，不宣称能中断一次原版回调或包含所有解析/输出的严格主线程时限。
+  料单独立每16种分页，需求/36槽组件一致可用/本页未预留分配/消费0分别报告。
+- BlockPlacement.assessDesired在同一原版预检后核明确作者要求，不改原生选态；
+  工位/实体/工作目标及直接地板复用N3保护，未知不加载。
+  空气明确要求不自动挖，未指定格不动；已有满足不再索料。
+  床/门/流体/复杂组件等不支持；双层半砖计2份但多次动作未实现，料单声明不完整。
+  未知/未评估/缺料/待清/待支撑/远处/保护/冲突分别报告，不能把可做0当建筑完成。
+  goal_satisfied需全目标支持且真实匹配、版本已知稳定；不登记或完成外层set_goal，
+  B2施工、L1建筑目标生命周期、持久实例及导入仍待后续卡。
+- 旧码build/b1-before-20261017.log复现缺build_diff契约1失败（18秒）。
+  focused1通过34秒，focused2核心/客户端均实际执行通过46秒；
+  首次强制全量1274项通过64秒。提交检查发现build包目录被现有忽略规则排除，
+  改为building包并核源码/测试已可跟踪，再强制全量：
+  build/b1-final2-20261017.log第61–62行，41秒、20任务全部执行。
+  XML **1274项/149 suites**（核心336/39、根132/19、客户端806/91），
+  failures/errors/skipped全0，较N3新增23项/3类。
+  覆盖真实注册表/旋转、库存组件、共用预检、全目标/分页、96检查/时间帽、
+  外部变化/版本未知、只读/reflex门及实际runner/Lua原预算和取消迟到隔离。
+- 最新build/libs/mcbot-0.1.0.jar：**1,401,958 bytes**，末写09:28:15，SHA256
+  `c9f1cbb9fd8a7b89a1b2e274bffe8c7b9d00c42d86dc353a227ad9b491b4b7ce`。
+  已核building/BuildTarget/BuildSurvey/BuildInventory、BuildDiffTool、N3版本类、
+  内嵌agent-core/LuaJ及许可；无旧build包类。0.1.0版本及原Mixin配置保持。
+  diff检查通过，暂存源码/测试/文档及密钥/机器绝对路径/产物扫描后提交；
+  list-java仍仅见环境已有MC进程，未启动/停止/干预。
+- 只改本体，宿主/连接器/参考/玩家实例不改；未安装包或启动游戏/服务器/真实模型。
+  世界、原版上下文结果、传输及模型是受控边界；没有真实BlockItem.place或建筑实机验收。
+  原模型/探索/动作/材料/范围/许可与取消保持，短任务/长期阶段走同一入口；
+  后续身体施工复用同一目标/材料/预检，不额外增加依赖规划器或成品模板。
+  实机补证见REAL-GAME-RETESTING的B1/N3节。
+
 ## N3 空间事实与返程候选（2026-10-17 09:09，Asia/Shanghai）
 
 - 维护者本轮恢复两卡模式，顺序N3→B1。N3已独立完成离线验收，
@@ -5031,6 +5074,13 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-17 N3/B1本地官方映射javap、编译及注册对象离线调用确认（未运行真实世界/注入）：
+LevelChunk.setBlockState(BlockPos,BlockState,int):BlockState；
+ServerChunkCache.getChunkNow(int,int):LevelChunk；前者有效返回旧状态后记录版本，后者不加载。
+BlockState.rotate(Rotation):BlockState、canBeReplaced():boolean、hasBlockEntity():boolean；
+Property.getValue(String):Optional、getName(T):String；ItemStack.isSameItemSameComponents
+(ItemStack,ItemStack):boolean。作者约束只限定原生预检选态，不调用setBlockState施工。
 
 2026-10-16 F2本地官方映射javap、编译及实际映射反射确认（未运行世界/Mixin）：
 ServerLevel.addFreshEntity(Entity):boolean，ServerPlayerGameMode.destroyBlock(BlockPos):boolean；

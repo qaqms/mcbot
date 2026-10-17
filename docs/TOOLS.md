@@ -3,6 +3,32 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## B1 建筑差异与材料（2026-10-17）
+
+新增build_diff只读入口，当前25项工具（16服务端、9本地）。
+target含anchor世界坐标、rotation默认0，以及cells或fill恰一个；
+cells相对x/y/z及block，properties可选[{name,value}]；
+fill.from/to为闭区间，退化表达线/面，或有界实体块。128格、相对各轴±32、
+每格最多8属性，真实注册表校验，不接NBT/组件/实体载荷或重复格。
+未指定格不动，air明确要求清空；查询不挖放或自动找料。
+
+旋转0/90/180/270绕锚点，坐标与作者属性一起转；未写属性不要求，已写属性不忽略。
+target_revision按完整规范目标生成；非零offset/material_offset须expected_revision一致。
+cells每16格按next_offset续页，materials每16种按material_next_offset独立续页，
+二者-1表示末页。counts/remaining每次对全目标重新读，不累加不同查询页的观察数。
+当前页外的工作候选为not_assessed；每页至多96次预检，50ms协作工作帽，不保证原生回调可中断。
+
+counts区分satisfied/ready/missing_material/needs_clear/needs_support/out_of_reach/protected/
+unknown/unsupported/state_conflict/blocked/not_assessed/out_of_scope；
+materials[].required是已知未满足格需求下界，available仅36槽默认组件材料，
+allocated只对本页通过预检格有限分配且未预留，consumed=0。
+material_bill_complete=false不能据缺项判零需求；unknown不是空格，
+unsupported即使已存在也不默认为本体支持验收。
+goal_satisfied只在全目标已知、支持、真实状态匹配且版本稳定时true；
+并不登记或完成外层set_goal。ready尚待执行，B2才接有限施工，
+查询不延长或重开原模型/探索/范围/许可/动作账。
+详情、示例与原版/受控边界见B1-BUILD-TARGETS-2026-10-17.md。
+
 ## N3 地形与返程事实（2026-10-17）
 
 status.spatial_facts含dimension及chunks映射；值为不透明版本串或null（未知/未加载）。

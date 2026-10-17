@@ -39,7 +39,7 @@ class ServerToolDispatcherTest {
 
     ServerToolDispatcherTest() {
         bodies.put(owner, body("world", new Object()));
-        for (String name : List.of("status", "inventory", "scan_area", "find_resource", "inspect_block",
+        for (String name : List.of("status", "inventory", "scan_area", "find_resource", "inspect_block", "build_diff",
                 "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack")) {
             registry.register(new ServerTool() {
                 @Override public String name() { return name; }
@@ -93,6 +93,14 @@ class ServerToolDispatcherTest {
         assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
     }
 
+    @Test void buildingObservationRemainsAvailableUnderReadOnlyPolicyAndReflexControl() {
+        begin(sender, 1, true);
+        control.reflex(true);
+        assertTrue(call(1, "build_diff", "{}").bool("ok"));
+        assertEquals(List.of("build_diff"), effects);
+        assertTrue(receivedContext.readOnly());
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.REFLEX, control.owner());
+    }
     @Test void acceptedPartialFailureCarriesBodyFactsExactlyOnceWithoutChangingEffectCounters() {
         begin(sender, 1, false);
         nextResult = new CompletableFuture<>();

@@ -38,6 +38,7 @@ public final class BlockPlacement {
         ServerTool.Result sight(BlockPos pos, Direction face);
         /** Read-only preflight; the same context is consumed only by place. */
         default ServerTool.Result prepare(BlockPos pos, ItemStack stack, Direction face) { return null; }
+        default BlockState proposedState() { return null; }
         default JsonObject contact() { return null; }
         default JsonArray standingPositions(BlockPos pos, int slot, Direction face) { return new JsonArray(); }
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
@@ -71,6 +72,18 @@ public final class BlockPlacement {
     /** Null is a passed read-only preflight, never an executed placement. */
     public static ServerTool.Result assess(Access access, BlockPos pos, int slot, Direction face) {
         return preflight(access, pos, slot, face);
+    }
+
+    /** Author requirements constrain the native context; they never replace its selected state. */
+    public static ServerTool.Result assessDesired(Access access, BlockPos pos, int slot, Direction face,
+                                                  java.util.function.Predicate<BlockState> matches) {
+        var failure = preflight(access, pos, slot, face);
+        if (failure != null) return failure;
+        BlockState proposed = access.proposedState();
+        if (proposed != null && matches.test(proposed)) return null;
+        var data = new JsonObject();
+        data.addProperty("placement_failure", proposed == null ? "state_prediction_unknown" : "desired_state_mismatch");
+        return new ServerTool.Result(false, "TARGET_BLOCKED:原版预检选出的状态不能确认满足目标要求，未放置或改写状态。", data);
     }
 
     public static ServerTool.Result assessAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
@@ -286,6 +299,7 @@ public final class BlockPlacement {
         private BlockHitResult hit;
         private JsonObject contact;
         private BlockPlaceContext context;
+        private BlockState proposedState;
 
         private PlayerAccess(CompanionPlayer player, Vec3 eye, AABB bounds, TerrainEdits edits) {
             this.player = player;
@@ -316,6 +330,7 @@ public final class BlockPlacement {
         @Override public ServerTool.Result sight(BlockPos pos, Direction face) {
             contacts.clear();
             context = null;
+            proposedState = null;
             hit = null;
             contact = null;
             BlockAim.Contact failure = null;
@@ -370,6 +385,7 @@ public final class BlockPlacement {
             BlockState desired = item instanceof StandingAndWallBlockItem
                     ? ((com.neko.mcbot.mixin.BlockItemPlacementAccess) item).mcbot$placementState(context)
                     : item.getBlock().getStateForPlacement(context);
+            proposedState = desired;
             return checkSite(pos, new Site() {
                 @Override public BlockState current() { return state(pos); }
                 @Override public boolean replaceable() { return context.canPlace(); }
@@ -408,6 +424,7 @@ public final class BlockPlacement {
             };
         }
         @Override public JsonObject contact() { return contact; }
+        @Override public BlockState proposedState() { return proposedState; }
         @Override public JsonArray standingPositions(BlockPos pos, int slot, Direction face) {
             var result = new JsonArray();
             var points = WorkPositions.miningCandidates(pos, new WorkPositions.Access() {

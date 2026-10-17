@@ -364,7 +364,9 @@ public final class BoundedProgram {
             var signals = new JsonObject();
             for (String key : List.of("no_targets", "can_craft", "preflight_passed", "truncated",
                     "unknown", "unloaded", "scan_complete", "coverage_complete", "results_truncated",
-                    "work_truncated", "next_offset", "in_water", "eyes_in_water", "in_lava", "water_recovery")) {
+                    "work_truncated", "next_offset", "in_water", "eyes_in_water", "in_lava", "water_recovery",
+                    "goal_satisfied", "observation_complete", "spatial_stable", "material_bill_complete",
+                    "work_assessment_complete", "budget_exhausted", "material_next_offset")) {
                 var value = receipt.data().get(key);
                 if (value != null && value.isJsonPrimitive() && bytes(value.toString()) <= 128)
                     signals.add(key, value);

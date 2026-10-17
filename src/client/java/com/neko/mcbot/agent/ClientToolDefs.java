@@ -11,6 +11,40 @@ public final class ClientToolDefs {
     private ClientToolDefs() {
     }
 
+    private static final String BUILD_COORDINATE = """
+            {"type":"object","properties":{"x":{"type":"integer","minimum":-32,"maximum":32},
+            "y":{"type":"integer","minimum":-32,"maximum":32},"z":{"type":"integer","minimum":-32,"maximum":32}},
+            "required":["x","y","z"],"additionalProperties":false}
+            """;
+    private static final String BUILD_PROPERTIES = """
+            {"type":"array","minItems":0,"maxItems":8,"items":{"type":"object",
+            "properties":{"name":{"type":"string","minLength":1,"maxLength":32},
+            "value":{"type":"string","minLength":1,"maxLength":32}},
+            "required":["name","value"],"additionalProperties":false}}
+            """;
+    private static final String BUILD_CELL = """
+            {"type":"object","properties":{"x":{"type":"integer","minimum":-32,"maximum":32},
+            "y":{"type":"integer","minimum":-32,"maximum":32},"z":{"type":"integer","minimum":-32,"maximum":32},
+            "block":{"type":"string","minLength":1,"maxLength":128},"properties":%s},
+            "required":["x","y","z","block"],"additionalProperties":false}
+            """.formatted(BUILD_PROPERTIES);
+    private static final String BUILD_FILL = """
+            {"type":"object","properties":{"from":%s,"to":%s,"block":{"type":"string","minLength":1,"maxLength":128},
+            "properties":%s},"required":["from","to","block"],"additionalProperties":false}
+            """.formatted(BUILD_COORDINATE, BUILD_COORDINATE, BUILD_PROPERTIES);
+    private static final String BUILD_ANCHOR = """
+            {"type":"object","properties":{"x":{"type":"integer","minimum":-29999984,"maximum":29999984},
+            "y":{"type":"integer","minimum":-2048,"maximum":2047},"z":{"type":"integer","minimum":-29999984,"maximum":29999984}},
+            "required":["x","y","z"],"additionalProperties":false}
+            """;
+    private static final String BUILD_TARGET = """
+            {"oneOf":[{"type":"object","properties":{"anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},
+            "cells":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
+            "required":["anchor","cells"],"additionalProperties":false},
+            {"type":"object","properties":{"anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},"fill":%s},
+            "required":["anchor","fill"],"additionalProperties":false}]}
+            """.formatted(BUILD_ANCHOR, BUILD_CELL, BUILD_ANCHOR, BUILD_FILL);
+
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
@@ -57,6 +91,14 @@ public final class ClientToolDefs {
                     + "建议已做有界预检，不必再次遍历邻域，执行前仍重验。"
                     + "native_validation_pending表示原版尚待执行，changed=false/consumed_count=0不是已放置。"
                     + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
+            case "build_diff" -> "data.target_revision由完整目标内容生成；counts对全部目标分类，remaining不含已满足格。"
+                    + "goal_satisfied仅完整稳定现场且全部支持/满足才true，不直接登记或完成外层任务。"
+                    + "cells是当前16格明细，next_offset=-1为末页；materials独立material_next_offset续页。"
+                    + "料单required为全目标已知未满足格需求下界，available仅36储物槽的无额外组件材料，"
+                    + "shortfall是差额；allocated仅当前明细页通过原版预检的份数，未预留，consumed始终0。"
+                    + "material_bill_complete=false有未知或不支持缺口，不能把缺行当零需求。"
+                    + "not_assessed表示当前页外或工作预算未查，unknown表示现场不完整；"
+                    + "ready仅近身状态预检，不证明实际放置。observation_complete/spatial_stable和预算字段必须核对。";
             case "break_block" -> "data.removed表示真实移除；collected_count=0表示挖掘不直接塞包。"
                     + "drop_accounting_known表示原生来源观察可用；可用时drop_accounting含ledger_id/origin_id/role/source、"
                     + "spawned_count/live_count/picked_up_self_count/picked_up_other_count/destroyed_count/unresolved_count。"
@@ -211,6 +253,24 @@ public final class ClientToolDefs {
                             + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
             new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆与水中避险状态；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
+            new ToolSpec("build_diff", "只读核对有限建筑目标及材料；不施工、不挖掘、不移动或自动找料。"
+                    + "target.anchor为世界锚点，cells的x/y/z为相对坐标；或用fill.from/to闭区间生成线/面/体，二者仅选其一。"
+                    + "最多128格、相对各轴±32，无重复格；未指定格不动，air为明确清空要求，清空仍需后续原挖掘许可。"
+                    + "rotation默认0，允许0/90/180/270顺时针，坐标和作者状态一起旋转。"
+                    + "properties可选[{name,value}]，只匹配明确要求的属性；不忽略已写的朝向/含水等，也不自动替代方块。"
+                    + "target_revision按完整规范目标生成，任一非零偏移续页必须带expected_revision。改变目标不补任何任务预算。"
+                    + "offset和material_offset独立16格/16种分页；counts及全目标剩余需求每次重新核对，不累加各页观察数。"
+                    + "当前页最多96次原版放置预检，共用50ms协作时间帽；未查明/不支持/未知保留缺口，不能误报完成。"
+                    + "支持已有普通单格投影类别；多格、流体、双层半砖多次动作及复杂组件留后续卡，绝不直接写状态。"
+                    + "需求/可用/本页分配/实际消费分开，已满足格不再要料，只有36槽无额外组件材料可分配。"
+                    + "ready仍待真实放置，goal_satisfied仅本次同修订现场条件，不是外层目标已验收。",
+                    """
+                    {"type":"object","properties":{"target":%s,
+                    "offset":{"type":"integer","minimum":0,"maximum":112},
+                    "material_offset":{"type":"integer","minimum":0,"maximum":112},
+                    "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
+                    "required":["target"],"additionalProperties":false}
+                    """.formatted(BUILD_TARGET)),
             new ToolSpec("search_resource", "优先用此只读入口查找资源：一次调用在本地完成同中心全部分页，最多5页、30秒；"
                     + "r默认16，targets为1-8个方块ID/#标签。返回真实覆盖、未知范围及最多16个候选；"
                     + "work=true评估可工作站位。空结果仍不证明未加载处没有资源。不要重复首张页代替完整搜索。"

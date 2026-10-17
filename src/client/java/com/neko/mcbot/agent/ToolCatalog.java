@@ -48,6 +48,8 @@ public final class ToolCatalog {
                     + "expected_block保护观测目标，clear_obstructions最多3格且须原权限；ACCEPTED等真终态，不重发。";
             case "place_block" -> "放置到准确目标格，须真实命中可替换轮廓或邻接面；face默认up。"
                     + "query只读，须看preflight_passed；执行重验，失败核对实际消耗/变化，不自动重试。";
+            case "build_diff" -> "只读建筑格集或fill线/面/体差异与材料；最多128格，锚点/旋转/作者属性固定，未指定格不动。"
+                    + "明细及料单独立分页；未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
             case "move_to" -> "规划有界行走/挖穿/搭路；walk_only=true不挖放，exact=true指定脚格，"
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
                     + "拾取须用新鲜stand_positions和exact=true；默认相邻到达不保证触碰。"

@@ -19,7 +19,8 @@ public final class TaskPolicy {
 
     public static boolean observation(String name, JsonObject args) {
         return switch (name) {
-            case "status", "inventory", "scan_area", "find_resource", "search_resource", "inspect_block", "tool_help" -> true;
+            case "status", "inventory", "scan_area", "find_resource", "search_resource", "inspect_block", "tool_help",
+                    "build_diff" -> true;
             case "craft", "place_block" -> args.has("query") && args.get("query").isJsonPrimitive()
                     && args.get("query").getAsJsonPrimitive().isBoolean() && args.get("query").getAsBoolean();
             case "smelt" -> !args.has("action") || (args.get("action").isJsonPrimitive()

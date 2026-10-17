@@ -10,6 +10,19 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void buildingQueryHasOneReadOnlyContractWithTargetAndMaterialPagination() {
+        var help = ToolCatalog.read("{\"names\":[\"build_diff\"]}");
+        assertTrue(help.ok(), help.feedback());
+        var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("build_diff"))
+                .findFirst().orElseThrow();
+        var properties = JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject()
+                .getAsJsonObject("properties");
+        assertTrue(properties.has("target"));
+        assertTrue(properties.has("offset"));
+        assertTrue(properties.has("material_offset"));
+        assertTrue(com.neko.mcbot.agentcore.loop.TaskPolicy.observation("build_diff", new com.google.gson.JsonObject()));
+    }
+
     @Test void compactCatalogKeepsEverySchemaAndStableOrderWhileReducingActualWireBytes() {
         assertEquals(ClientToolDefs.SPECS.stream().map(s -> s.name()).toList(),
                 ToolCatalog.MODEL_SPECS.stream().map(s -> s.name()).toList());

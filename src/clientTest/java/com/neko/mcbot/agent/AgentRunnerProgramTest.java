@@ -104,6 +104,42 @@ class AgentRunnerProgramTest {
         assertTrue(client.sent.stream().noneMatch(e -> e.kind().contains("program")));
     }
 
+    @Test void readOnlyBuildingSurveyUsesTheSameProgramEntryAndReportsIncompleteGoalEvidence() {
+        start("[只读] inspect the selected building cells", """
+                local q=mc.call("build_diff",{target={anchor={x=0,y=90,z=0},
+                    cells={{x=0,y=0,z=0,block="stone"}}}})
+                assert(q.data.goal_satisfied==false)
+                return {revision=q.data.target_revision,missing=q.data.remaining}
+                """, 1);
+        tool("build_diff", 1);
+        receipt(true, "read-only actual difference", """
+                {"target_revision":"fixture","remaining":1,"goal_satisfied":false,
+                "observation_complete":false,"material_bill_complete":false,"material_next_offset":-1}
+                """);
+        var result = outcome();
+        assertTrue(result.ok(), result.content());
+        assertTrue(result.content().contains("\"missing\":1"));
+        assertTrue(result.content().contains("\"goal_satisfied\":false"), "unprinted negative evidence remains model-facing");
+        assertTrue(result.content().contains("\"material_bill_complete\":false"));
+        assertEquals(1, client.toolCount());
+    }
+
+    @Test void cancelledBuildingQueryCannotTriggerPlacementAfterItsLateResult() {
+        start("inspect then place if ready", """
+                local q=mc.call("build_diff",{target={anchor={x=0,y=90,z=0},
+                    cells={{x=0,y=0,z=0,block="stone"}}}})
+                if q.data.counts.ready>0 then mc.call("place_block",{x=0,y=90,z=0,item="stone"}) end
+                """);
+        tool("build_diff", 1);
+        assertTrue(runner.cancelTask(0));
+        client.drain();
+        receipt(true, "late survey", "{\"counts\":{\"ready\":1}}");
+        runner.submitTask("inspect current facts");
+        client.drain();
+        assertEquals(1, client.toolCount());
+        assertTrue(outcome().content().contains("CANCELLED:"));
+    }
+
     @Test void helpUsesTheActualRunnerWithoutGameDispatchOrChangingTheNextCatalog() {
         runner.start();
         runner.submitTask("[只读] read the available crafting contract");
