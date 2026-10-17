@@ -3,6 +3,40 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## B5 首格式导入验收，复杂对象扩展未关账（2026-10-17 12:08，Asia/Shanghai）
+
+- 本轮B4→B5按序推进，B4已独立提交推送0cde9be；B5本轮收原版gzip结构.nbt首阶段，
+  不是全部复杂对象完成。当前十三张完整离线卡；B5已完成首阶段、扩展未关账，另8张未开。
+  下一轮优先B5续卡：先一类多格对象完整目标/材料/占位/原动作/来源/验收，再按兼容性接D3，
+  仍逐卡验收提交，不在本轮启第三卡。完整参考及扩展门见docs/B5-STRUCTURE-BLUEPRINTS-2026-10-17.md。
+- 新增build_blueprint，当前29工具（20服务端+9本地）。list/inspect只读世界内固定目录，
+  import须明确source_revision/design_id与原数据修改许可；全部支持后才存B4设计。
+  后续实例、旋转/作者状态、差异/材料、Lua/工地/原挖放与全目标重查沿B1-B4同源入口。
+  导入不执行世界动作、不自动采料、不登记/完成外层目标或恢复取消工作，不补原预算/范围/许可。
+- 压缩64KiB、解压128KiB、NBT计费堆256KiB/深16、解析协作200ms；目录128项、
+  调色板64、轴1-33/体积4096、显式格1-128。精确Tag类型、重复格/越界/坏下标/属性检查，
+  固定名称、无链接/跳目录、读前后文件身份/时间及源字节哈希；尾随/截断/过大声明拒绝。
+  不支持格、非法状态、方块实体载荷及实体分别计数并阻止整份导入，不创建删减图假完成；
+  载荷正文不出站。多调色板/其他格式、多格/流体/装饰及组件仍不支持，不忽略明确作者状态。
+- before缺build_blueprint契约1失败，11秒；生产编译19秒通过。focused1共113项，
+  唯一失败为新增取消夹具等待本不应出现的下一轮模型请求；按原工装开新任务读取消历史，
+  不放宽产品门。focused2共113项24秒通过；最终强制全量
+  build/b5-final-20261017.log第61–62行：**42秒、20任务全部执行**。
+  XML **1433项/162 suites**（核心347/40、根137/20、客户端949/102），
+  failures/errors/skipped全0，较B4新增21项/1类。
+  真实gzip/NBT/临时文件、生产解析/存储/旋转/原放置核与独立BuildSurvey、Lua/runner/
+  dispatcher参与；世界/身体/原版动作及网络/模型受控，不当作原生导出/施工/重进通过。
+- build/libs/mcbot-0.1.0.jar：**1,540,909 bytes**，末写12:05:58，SHA256
+  `2c767dcbb8507231f2805a53200faf089304a5f85142447a2b5a4379cb2185d7`。
+  已核StructureBlueprint/BuildBlueprintTool、B4记录/地形钩子、内嵌agent-core/LuaJ及许可；
+  list-java无输出，原日志目录仍不存在，无新实机证据。只改本体，不安装/启动游戏/
+  服务器/真实模型，不改玩家配置/无敌，宿主/连接器/只读参考/实例保持。
+- 1.21.11 javap核验NbtIo.read(DataInput,NbtAccounter)、NbtAccounter(long,int)；
+  CompoundTag.keySet/entrySet、getList/getInt/getString等返回Optional，ListTag.get直接Tag；
+  IntTag/StringTag.value为精确读值。ByteArrayTag读取字节码先accountBytes再newarray，
+  超大声明受原生计费门；双字节/时间流帽仍独立检查。这些不代替原生世界验收。
+  提交前核diff/暂存清单/机器路径/密钥/产物扫描，推送以Git实际记录为准。
+
 ## B4 可复用设计与实例修订（2026-10-17 11:52，Asia/Shanghai）
 
 - 本轮B4→B5，B4独立离线验收完成，当前十三卡完成、9待实施；下一B5，前置通过前未写B5代码。
@@ -5256,6 +5290,14 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-17 B5本地官方映射javap/字节码及生产NBT解析离线调用确认，未运行游戏：
+NbtIo.read(DataInput,NbtAccounter):CompoundTag，NbtAccounter(long quota,int maxDepth)公开。
+CompoundTag.keySet/entrySet提供实际键/值；getInt/getString/getCompound/getList为Optional，
+ListTag.get(int):Tag，IntTag.value():int、StringTag.value():String可执行精确类型读取。
+ByteArrayTag$1.readAccounted在newarray前按声明长度accountBytes，异常声明不会先分配数组。
+本体另包压缩/解压字节流与阶段时间门；不使用unlimitedHeap或旧版NBT的默认值读取猜类型。
+这些签名/字节码和临时文件测试不表示原生结构导出/世界施工已验。
 
 2026-10-17 D1本地官方映射javap/编译及原生形状离线调用确认，未运行真实战斗：
 Player.isWithinAttackRange(AABB,double):boolean委托LivingEntity.entityAttackRange():AttackRange；

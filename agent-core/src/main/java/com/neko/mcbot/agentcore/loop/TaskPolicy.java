@@ -32,6 +32,10 @@ public final class TaskPolicy {
                     .contains(args.get("operation").getAsString())
                     && java.util.Set.of("operation","design_id","design_revision","instance_id","instance_revision","offset","layer")
                     .containsAll(args.keySet());
+            case "build_blueprint" -> args.has("operation") && args.get("operation").isJsonPrimitive()
+                    && args.getAsJsonPrimitive("operation").isString()
+                    && java.util.Set.of("list","inspect").contains(args.get("operation").getAsString())
+                    && java.util.Set.of("operation","name","offset").containsAll(args.keySet());
             case "smelt" -> !args.has("action") || (args.get("action").isJsonPrimitive()
                     && args.get("action").getAsJsonPrimitive().isString()
                     && "query".equals(args.get("action").getAsString()));

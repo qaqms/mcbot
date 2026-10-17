@@ -77,6 +77,27 @@ class AgentRunnerProgramTest {
         runner.handleS2c(new Envelope("job_event", body));
         client.drain();
     }
+    @Test void blueprintInspectionCanStopAnUnsupportedImportWithinOneBoundedProgram() {
+        start("inspect the selected blueprint","local r=mc.call('build_blueprint',{operation='inspect',name='sample'});"
+                +"if not r.data.importable then return r.data end; "
+                +"return mc.call('build_blueprint',{operation='import',name='sample',source_revision=r.data.source_revision,design_id='wall'})",4);
+        tool("build_blueprint",1); receipt(true,"unsupported","{\"importable\":false,\"unsupported_cells\":2}");
+        assertTrue(outcome().ok()); assertEquals(1,client.toolCount());
+        assertTrue(outcome().content().contains("\"unsupported_cells\":2"));
+    }
+    @Test void readOnlyLuaRejectsBlueprintImportWithoutDispatch() {
+        start("[只读] inspect","return mc.call('build_blueprint',{operation='import',name='sample',source_revision='"
+                +"a".repeat(64)+"',design_id='wall'})",4);
+        assertFalse(outcome().ok()); assertEquals(0,client.toolCount());
+    }
+    @Test void cancelledInspectionNeverImportsFromALateResult() {
+        start("inspect then import","local r=mc.call('build_blueprint',{operation='inspect',name='sample'});"
+                +"return mc.call('build_blueprint',{operation='import',name='sample',source_revision=r.data.source_revision,design_id='wall'})",4);
+        tool("build_blueprint",1); runner.cancelTask(0); client.drain();
+        receipt(true,"late file data","{\"importable\":true,\"source_revision\":\""+"a".repeat(64)+"\"}");
+        runner.submitTask("inspect current world"); client.drain();
+        assertFalse(outcome().ok()); assertEquals(1,client.toolCount());
+    }
     @Test void durableRecordQueriesAndReferenceConstructionUseTheExistingLuaRunner() {
         start("[只读] inspect designs","return mc.call('build_record',{operation='design_list'}).data",4);
         tool("build_record",1);

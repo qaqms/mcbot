@@ -10,6 +10,12 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void blueprintInspectionAndExplicitImportExposeTheSharedDesignEntry() {
+        var help=ToolCatalog.read("{\"names\":[\"build_blueprint\"]}");
+        assertTrue(help.ok(),help.feedback());
+        assertTrue(help.feedback().contains("source_revision"));
+        assertTrue(help.feedback().contains(".nbt"));
+    }
     @Test void durableBuildingRecordsAreDiscoverableAndUseTheSharedTargetReference() {
         var help = ToolCatalog.read("{\"names\":[\"build_record\"]}");
         assertTrue(help.ok(), help.feedback());

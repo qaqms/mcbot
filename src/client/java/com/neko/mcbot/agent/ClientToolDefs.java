@@ -51,6 +51,10 @@ public final class ClientToolDefs {
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
+            case "build_blueprint" -> "list返回names/next_offset。inspect返回source_revision、size/cells/palette_entries及"
+                    + "invalid_cells/invalid_palette_entries/unsupported_cells/payload_cells/entity_count，importable=false不能导入。"
+                    + "materials仅设计全量需求，完整现场材料走实例build_diff。import须同source_revision，返回design_id/design_revision；"
+                    + "不产生实例或世界动作，goal_satisfied=false；不支持部分不得忽略。";
             case "build_record" -> "data.design_id/design_revision及content_revision是设计修订；设计修改不更新实例。"
                     + "instance_id/instance_revision及target为原build_diff/build_site/build_nearby通用引用；"
                     + "records按16条分页，status为intact/absent/conflict/unknown，action_count为真实动作数。"
@@ -276,6 +280,24 @@ public final class ClientToolDefs {
                             + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
             new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆、水中避险与body_defense自保事实；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
+            new ToolSpec("build_blueprint", "读取当前世界mcbot/blueprints/<name>.nbt的原版gzip结构格式，只转换数据，绝不直接写世界。"
+                    + "operation=list只读目录，每16项分页offset；inspect(name)只读尺寸、状态/材料和拒绝计数，不创建目录。"
+                    + "import(name,source_revision,design_id)明确将全部支持的同一文件快照存为B4设计，需数据修改许可；"
+                    + "再用build_record实例化、同build_diff/build_site/mc.build原动作施工，不自动执行或找料。"
+                    + "名称1-48小写字母/数字/下划线/连字符，首位字母/数字，不带扩展名；禁止路径/符号链接。"
+                    + "只支持size、palette、blocks与空entities的结构；调色板Name/Properties逐项进B1注册表/作者状态，不忽略属性。"
+                    + "显式air是清空要求，缺省格不碰；非法/不支持格、方块实体载荷或任何实体使整份不可导入，不导入部分图假完成。"
+                    + "不接容器内容、战利品、命令、点击文本、可执行载荷或物品组件；多格/装饰扩展另卡。"
+                    + "压缩64KiB/解压128KiB/NBT计费256KiB/深16/解析200ms协作帽，目录至多128项、调色板64项，"
+                    + "各轴1-33/体积4096/显式格1-128；保留原施工/模型/探索/范围/许可与取消预算。",
+                    """
+                    {"type":"object","properties":{"operation":{"type":"string","enum":["list","inspect","import"]},
+                    "name":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-z0-9][a-z0-9_-]{0,47}$"},
+                    "source_revision":{"type":"string","minLength":64,"maxLength":64},
+                    "design_id":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-z0-9][a-z0-9_-]{0,47}$"},
+                    "offset":{"type":"integer","minimum":0,"maximum":112}},
+                    "required":["operation"],"additionalProperties":false}
+                    """),
             new ToolSpec("build_record", "保存可复用设计与世界内建筑实例，只有数据、不含脚本；不执行世界动作或自动恢复目标。"
                     + "design_create(design_id,definition)创建；definition为cells或fill之一，相对±32、最多128格。"
                     + "design_patch(design_id,design_revision,edits)逐步修改最多16格，remove=true删除，其他项为完整cell；同坐标不能重复。"

@@ -27,6 +27,8 @@ public final class ToolCatalog {
                     + "不按脚本行数缩小嵌套采集预算。错误按program_error.kind/line核对，已完成动作勿重放。";
         if (spec.name().equals("tool_help")) return spec.description();
         String text = switch (spec.name()) {
+            case "build_blueprint" -> "只读查看世界内有界原版结构.nbt，按source_revision显式完整导入B4设计；"
+                    + "不支持格/载荷阻止导入，实例与施工仍走原建筑入口，无直接世界写入或预算重开。";
             case "build_record" -> "保存/分页修改可复用设计，显式创建或修订隔离实例；target引用复用原差异/工地/施工/Lua。"
                     + "逐真实动作落盘，未知来源/外部修改保守冲突；不自动续已取消目标，不补预算，参数先tool_help。";
             case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"

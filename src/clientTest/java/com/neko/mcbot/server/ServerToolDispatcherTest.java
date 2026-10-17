@@ -40,7 +40,7 @@ class ServerToolDispatcherTest {
     ServerToolDispatcherTest() {
         bodies.put(owner, body("world", new Object()));
         for (String name : List.of("status", "inventory", "scan_area", "find_resource", "inspect_block", "build_diff",
-                "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack", "build_nearby", "build_site", "build_record")) {
+                "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack", "build_nearby", "build_site", "build_record", "build_blueprint")) {
             registry.register(new ServerTool() {
                 @Override public String name() { return name; }
                 @Override public Acceptance acceptanceMode() {
@@ -77,6 +77,17 @@ class ServerToolDispatcherTest {
 
     private static JsonObject json(String text) {
         return JsonParser.parseString(text).getAsJsonObject();
+    }
+    @Test void blueprintInspectionSharesReadOnlyPolicyAndImportUsesOriginalBodyControl() {
+        begin(sender,1,true);
+        assertTrue(call(1,"build_blueprint","{\"operation\":\"inspect\",\"name\":\"sample\"}").bool("ok"));
+        assertFalse(call(1,"build_blueprint","{\"operation\":\"import\"}").bool("ok"));
+        begin(sender,2,false); control.reflex(true);
+        assertTrue(call(2,"build_blueprint","{\"operation\":\"list\"}").bool("ok"));
+        assertTrue(call(2,"build_blueprint","{\"operation\":\"import\"}").str("feedback").startsWith("BUSY:"));
+        control.reflex(false);
+        assertTrue(call(2,"build_blueprint","{\"operation\":\"import\"}").bool("ok"));
+        assertEquals(3,effects.size());
     }
     @Test void durableDataEditsShareTaskPermissionAndControlWhileRecordQueriesStayReadOnly() {
         begin(sender,1,true);

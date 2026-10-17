@@ -3,6 +3,16 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## B5 首格式（2026-10-17）
+
+新增build_blueprint，当前29项（20服务端+9本地）。list/inspect只读当前世界
+mcbot/blueprints合法名称.nbt，inspect给source_revision、尺寸/格数及非法/不支持/载荷/实体计数。
+import明确name/source_revision/design_id且需原数据修改许可；全部支持才存B4设计，
+再经原build_record实例化、build_diff/工地/Lua及原动作，不立即施工或完成目标。
+预算与Tag类型严格有界；未知状态、多格/特殊/组件/载荷/实体不能静默忽略或创建部分设计。
+只支持原版gzip结构.nbt和B1已有单格/状态，多格/装饰及其他格式为B5后续续卡。
+完整边界、字段、参考链和待验见B5-STRUCTURE-BLUEPRINTS，原模型/探索/动作账及许可不补。
+
 ## B4 设计与实例（2026-10-17）
 
 新增build_record，当前28项（19服务端+9本地），详见B4-BUILDING-RECORDS。
