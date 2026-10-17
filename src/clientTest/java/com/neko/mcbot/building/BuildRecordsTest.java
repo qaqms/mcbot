@@ -18,6 +18,12 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildRecordsTest {
+    @Test void worldIdentityIsDurableEvenBeforeAnyDesignOrBuildingExists() {
+        var first = new BuildRecords(root); first.load(); first.initializeIdentity();
+        var next = new BuildRecords(root); next.load();
+        assertTrue(next.healthy()); assertEquals(first.worldId(), next.worldId());
+        assertEquals(0, next.list(owner, builder, "world", true, 0).getAsJsonArray("entries").size());
+    }
     @TempDir Path root;
     @BeforeAll static void boot() { BlockActionFixtures.bootstrap(); }
     final UUID owner=UUID.randomUUID(), builder=UUID.randomUUID();

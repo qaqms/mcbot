@@ -34,7 +34,7 @@ public final class ClientSession {
         AgentRunner old = runner;
         if (old == null) return;
         // Keep ownership until close has initiated cancellation and emitted terminal events.
-        old.close();
+        old.disconnect();
         stopBridge.run();
         runner = null;
     }

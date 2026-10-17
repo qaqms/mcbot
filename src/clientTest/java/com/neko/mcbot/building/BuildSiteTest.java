@@ -12,6 +12,34 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void recoveredSiteKeepsProtectionNavigationAndEditAccountsWithoutGrantingOldCleanupRights() {
+        var world = new World(); var original = site(world); temporary(original, world);
+        assertNull(original.charge()); assertTrue(original.navigation().takeReplan());
+        assertNull(original.checkpoint(target().revision(), FEET, world));
+        var restored = new BuildSite(); restored.bind("new-session", world);
+        restored.restore(original.snapshot(), FEET.east(2), world);
+        assertEquals(original.scope(), restored.scope());
+        assertEquals(1, restored.navigation().replans());
+        assertEquals(1, restored.report(world).get("edit_attempts").getAsInt());
+        assertTrue(restored.protects(TARGET)); assertTrue(restored.protects(FEET.below()));
+        assertTrue(restored.protects(TEMP));
+        assertNotNull(restored.miningGuard(TEMP, target().revision(), true, world));
+        // This particular round is not retried; changing provenance cannot reopen its budget.
+        assertEquals(1, restored.report(world).get("checkpoints").getAsInt());
+    }
+    @Test void restoredSiteStillDetectsRepeatedRoundsAndRejectsChangedCorridorsAndSpentEdits() {
+        var world = new World(); var original = site(world);
+        assertNull(original.checkpoint(target().revision(), FEET, world));
+        var restored = new BuildSite(); restored.bind("new-session", world);
+        restored.restore(original.snapshot(), FEET, world);
+        assertTrue(restored.checkpoint(target().revision(), FEET, world).feedback().startsWith("NO_PROGRESS:"));
+        var saved = original.snapshot(); saved.addProperty("edits", BuildSite.EDIT_LIMIT);
+        var spent = new BuildSite(); spent.bind("spent", world);
+        assertThrows(IllegalArgumentException.class, () -> spent.restore(saved, FEET, world));
+        world.unknown.add(FEET.below());
+        var unknown = new BuildSite(); unknown.bind("unknown", world);
+        assertThrows(IllegalArgumentException.class, () -> unknown.restore(original.snapshot(), FEET, world));
+    }
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
     static final BlockPos FEET = new BlockPos(0,90,0), TARGET = new BlockPos(4,90,0), TEMP = new BlockPos(8,90,0);
     static final List<BlockPos> ROUTE = List.of(FEET, FEET.east());

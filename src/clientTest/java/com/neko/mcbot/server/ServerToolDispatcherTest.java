@@ -88,6 +88,25 @@ class ServerToolDispatcherTest {
         return JsonParser.parseString(text).getAsJsonObject();
     }
 
+    @Test void invalidRecoveryRevokesNewPermissionsAndCannotDispatchActions() {
+        begin(sender, 71, false);
+        nextResult = new CompletableFuture<>();
+        call(71, "move_to", "{}");
+        var recovery = json("{\"task_id\":72,\"read_only\":false,\"autonomous\":true,"
+                + "\"recovery_identity\":{},\"recovery_spatial\":{}}");
+        recovery.addProperty("body_id", incarnation);
+        send(sender, "task_begin", recovery);
+        assertTrue(nextResult.isDone(), "the previous action must be cancelled");
+        denied(call(72, "wait", "{\"seconds\":1}"), "TASK_REQUIRED");
+        denied(call(71, "wait", "{\"seconds\":1}"), "TASK_REQUIRED");
+        assertEquals(List.of("move_to"), effects);
+        nextResult = null;
+        assertTrue(call(0, "status", "{}").bool("ok"));
+        assertNull(receivedContext, "no permission may survive failed restoration");
+        begin(sender, 73, false);
+        assertTrue(call(73, "wait", "{\"seconds\":1}").bool("ok"));
+    }
+
     @Test void sameEnvironmentGateStopsShortAndStageActionsWhileQueriesRemainAvailableAfterRescueEnds() {
         begin(sender, 1, false);
         environmentFailure = new ServerTool.Result(false, "ENVIRONMENT_UNSAFE:oxygen limit", null);

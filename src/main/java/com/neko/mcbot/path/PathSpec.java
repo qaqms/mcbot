@@ -40,6 +40,27 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
         return dx * dx + dy * dy + dz * dz <= radius * (double) radius;
     }
 
+    public JsonObject snapshot() {
+        var data = new JsonObject();
+        data.addProperty("work", workArrival);
+        data.addProperty("clear_obstructions", clear);
+        data.addProperty("underground", underground);
+        data.addProperty("max_digs", maxDigs);
+        if (anchor != null) {
+            var bounds = new JsonObject();
+            bounds.addProperty("x", anchor.getX()); bounds.addProperty("y", anchor.getY());
+            bounds.addProperty("z", anchor.getZ()); bounds.addProperty("radius", radius);
+            data.add("bounds", bounds);
+        }
+        return data;
+    }
+
+    public static PathSpec restore(JsonObject data) {
+        var parsed = parse(data);
+        return new PathSpec(bool(data, "work"), parsed.clear, parsed.underground,
+                parsed.maxDigs, parsed.anchor, parsed.radius);
+    }
+
     public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
         return !underground || Math.abs(x - fx) + Math.abs(z - fz) == 1 && Math.abs(y - fy) <= 1;
     }

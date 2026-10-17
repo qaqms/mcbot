@@ -62,6 +62,57 @@ public final class NavigationTrail {
         return points.stream().filter(p -> p.id == id).findFirst().orElse(null);
     }
 
+    public JsonObject snapshot() {
+        var data = new JsonObject();
+        var rows = new JsonArray();
+        var scopes = new java.util.ArrayList<PathSpec>();
+        for (var p : points) {
+            if (!scopes.contains(p.scope)) scopes.add(p.scope);
+            var row = new JsonArray();
+            row.add(p.id); row.add(p.x); row.add(p.y); row.add(p.z); row.add(p.feetY); row.add(scopes.indexOf(p.scope));
+            rows.add(row);
+        }
+        var specs = new JsonArray(); scopes.forEach(s -> specs.add(s.snapshot()));
+        data.add("points", rows); data.add("scopes", specs);
+        var changes = new JsonArray(); edits.forEach(e -> changes.add(e.deepCopy()));
+        data.add("edits", changes);
+        data.addProperty("sequence", sequence); data.addProperty("truncated", truncated); data.addProperty("gap", gap);
+        return data;
+    }
+
+    public void restore(JsonObject data) {
+        if (task == null || !points.isEmpty() || !edits.isEmpty()) throw new IllegalArgumentException();
+        var rows = data.getAsJsonArray("points");
+        var specs = data.getAsJsonArray("scopes");
+        var changes = data.getAsJsonArray("edits");
+        if (rows.size() > LIMIT || specs.size() > LIMIT || changes.size() > LIMIT) throw new IllegalArgumentException();
+        long previous = 0;
+        for (var value : rows) {
+            var row = value.getAsJsonArray();
+            if (row.size() != 6) throw new IllegalArgumentException();
+            long id = row.get(0).getAsBigDecimal().longValueExact();
+            int x = row.get(1).getAsBigDecimal().intValueExact(), y = row.get(2).getAsBigDecimal().intValueExact(),
+                    z = row.get(3).getAsBigDecimal().intValueExact();
+            double feet = row.get(4).getAsDouble();
+            if (id <= previous || !Double.isFinite(feet) || feet < y || feet > y + 1.01) throw new IllegalArgumentException();
+            var spec = PathSpec.restore(specs.get(row.get(5).getAsBigDecimal().intValueExact()).getAsJsonObject());
+            observe(x, y, z, feet, true, spec);
+            points.set(points.size() - 1, new Point(id, x, y, z, feet, spec));
+            previous = id;
+        }
+        sequence = data.get("sequence").getAsBigDecimal().longValueExact();
+        if (sequence < previous || sequence < 0) throw new IllegalArgumentException();
+        for (var value : changes) {
+            var row = value.getAsJsonObject();
+            edited(row.get("operation").getAsString(), row.get("x").getAsBigDecimal().intValueExact(),
+                    row.get("y").getAsBigDecimal().intValueExact(), row.get("z").getAsBigDecimal().intValueExact());
+        }
+        for (String key : List.of("truncated", "gap"))
+            if (!data.getAsJsonPrimitive(key).isBoolean()) throw new IllegalArgumentException();
+        truncated |= data.get("truncated").getAsBoolean();
+        gap |= data.get("gap").getAsBoolean();
+    }
+
     public JsonObject report() {
         var data = new JsonObject();
         var samples = new JsonArray();

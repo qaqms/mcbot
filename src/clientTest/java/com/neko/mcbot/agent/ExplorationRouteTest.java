@@ -7,6 +7,21 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ExplorationRouteTest {
+    @Test void checkpointKeepsOriginalScopeSpentAttemptsAndUndergroundReturnTrail() {
+        var route = new ExplorationRoute(3, 32);
+        route.beginUnderground(point(0, 70, 0));
+        route.attempt(point(1, 69, 0)); route.observe(point(1, 69, 0));
+        route.reachedUnderground(point(1, 69, 0), false);
+        var movement = new JsonObject(); movement.addProperty("removed_blocks", 3); route.recordDigs(movement);
+        var restored = ExplorationRoute.restore(route.snapshot());
+        assertEquals(1, restored.attempts()); assertEquals(2, restored.remainingSteps());
+        assertEquals(125, restored.remainingDigs()); assertEquals(route.bounds(), restored.bounds());
+        assertEquals(route.trail(), restored.trail()); assertEquals(route.returnPoint(), restored.returnPoint());
+        assertTrue(restored.tried(point(1, 69, 0)));
+        assertThrows(IllegalArgumentException.class, () -> restored.observe(point(33, 70, 0)));
+        restored.attemptReturn(restored.returnPoint());
+        assertThrows(IllegalStateException.class, restored::snapshot);
+    }
     @Test void changingTerrainDuringPaginationCannotCertifyOneCompleteCoverageRegion() {
         var route = new ExplorationRoute(8, 64);
         route.observe(point(0, 70, 0));

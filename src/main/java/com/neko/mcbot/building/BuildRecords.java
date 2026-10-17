@@ -53,6 +53,10 @@ public final class BuildRecords {
     public BuildRecords(Path worldRoot) { file = worldRoot.resolve("mcbot").resolve("buildings.json"); }
     public boolean healthy() { return healthy; }
     public UUID worldId() { return worldId; }
+    public void initializeIdentity() {
+        requireHealthy();
+        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) save();
+    }
 
     public void load() {
         designs.clear(); instances.clear();

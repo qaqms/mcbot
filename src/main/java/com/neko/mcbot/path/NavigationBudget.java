@@ -56,4 +56,36 @@ public final class NavigationBudget {
     public int records() { return records; }
     public long nanos() { return nanos; }
     public int replans() { return replans; }
+
+    public com.google.gson.JsonObject snapshot() {
+        observe(current);
+        var data = new com.google.gson.JsonObject();
+        data.addProperty("nodes", Math.min(nodes, nodeCap)); data.addProperty("node_cap", nodeCap);
+        data.addProperty("records", Math.min(records, recordCap)); data.addProperty("record_cap", recordCap);
+        data.addProperty("nanos", Math.min(nanos, timeCap)); data.addProperty("time_cap", timeCap);
+        data.addProperty("replans", replans); data.addProperty("replan_cap", replanCap);
+        return data;
+    }
+
+    public static NavigationBudget restore(com.google.gson.JsonObject data) {
+        var value = new NavigationBudget(count(data, "node_cap", NODES), count(data, "record_cap", RECORDS),
+                number(data, "time_cap", NANOS), count(data, "replan_cap", REPLANS));
+        value.nodes = count(data, "nodes", value.nodeCap);
+        value.records = count(data, "records", value.recordCap);
+        value.nanos = number(data, "nanos", value.timeCap);
+        value.replans = count(data, "replans", value.replanCap);
+        return value;
+    }
+
+    private static int count(com.google.gson.JsonObject data, String key, int max) {
+        return Math.toIntExact(number(data, key, max));
+    }
+    private static long number(com.google.gson.JsonObject data, String key, long max) {
+        var item = data.get(key);
+        if (item == null || !item.isJsonPrimitive() || !item.getAsJsonPrimitive().isNumber())
+            throw new IllegalArgumentException();
+        long value = item.getAsBigDecimal().longValueExact();
+        if (value < 0 || value > max) throw new IllegalArgumentException();
+        return value;
+    }
 }

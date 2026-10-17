@@ -200,6 +200,7 @@ public final class AgentLoop {
     private ItemGoal itemGoal;
     private WorldGoal worldGoal;
     private GoalContinuation goalContinuation;
+    private String durableGoalId;
     private int rejectedFinishes;
     private int lastFinishProgress = -1;
     /** 本步工具调用的落账账本；非 null = "这一步的工具还没全部写进对话"。 */
@@ -243,6 +244,139 @@ public final class AgentLoop {
     public synchronized boolean compacting() { return compacting; }
     public synchronized ItemGoal.Progress goalProgress() {
         return activeDirective == null || itemGoal == null ? null : itemGoal.snapshot();
+    }
+
+    public synchronized com.google.gson.JsonObject goalCheckpoint() {
+        if (activeDirective == null || goalContinuation == null || !hasGoal()) return null;
+        if (activeDirective.text().length() > 4000) throw new IllegalArgumentException("Directive too large");
+        var saved = new com.google.gson.JsonObject();
+        saved.addProperty("version", 1);
+        if (durableGoalId == null) durableGoalId = java.util.UUID.randomUUID().toString();
+        saved.addProperty("goal_id", durableGoalId);
+        saved.addProperty("task_id", activeDirective.id());
+        saved.addProperty("directive", activeDirective.text());
+        saved.add("initial", GoalCheckpoint.initial(initialInventory));
+        saved.addProperty("steps", steps);
+        saved.addProperty("step_limit", cfg.maxStepsPerDirective());
+        saved.addProperty("empty_searches", emptySearches);
+        saved.addProperty("repeat_count", repeatCount);
+        if (lastCallKey != null) saved.addProperty("last_call_key", lastCallKey);
+        saved.addProperty("rejected_finishes", rejectedFinishes);
+        saved.addProperty("last_finish_progress", lastFinishProgress);
+        saved.addProperty("stopped", stuckAbort);
+        saved.add("continuation", goalContinuation.snapshot());
+        if (itemGoal != null) {
+            var target = new com.google.gson.JsonObject();
+            target.addProperty("item", itemGoal.target().item());
+            target.addProperty("count", itemGoal.target().count());
+            target.addProperty("mode", itemGoal.target().additional() ? "additional" : "total");
+            saved.add("item_goal", target);
+        } else saved.add("world_goal", worldGoal.snapshot());
+        return saved;
+    }
+
+    /** Explicit owner recovery only: no old model stream, tool call, approval, or conversation is replayed. */
+    public synchronized void resume(long taskId, com.google.gson.JsonObject saved) {
+        if (closed || busy() || taskId <= 0) throw new IllegalStateException("Recovery requires an idle loop");
+        if (GoalCheckpoint.bounded(saved, "version", 1, 1) != 1
+                || GoalCheckpoint.bounded(saved, "step_limit", 1, 40) != cfg.maxStepsPerDirective()
+                || WorldGoal.flag(saved, "stopped")
+                || !WorldGoal.flag(saved, "settled")
+                || saved.has("item_goal") == saved.has("world_goal")) throw new IllegalArgumentException();
+        String directive = saved.get("directive").getAsString();
+        if (directive.isBlank() || directive.length() > 4000) throw new IllegalArgumentException();
+        var initial = saved.getAsJsonObject("initial").deepCopy();
+        BodyFacts.fingerprint(initial);
+        GoalCheckpoint.scope(initial);
+        var continuation = GoalContinuation.restore(saved.getAsJsonObject("continuation"), initial);
+        int used = GoalCheckpoint.bounded(saved, "steps", 0, cfg.maxStepsPerDirective());
+        int searches = GoalCheckpoint.bounded(saved, "empty_searches", 0, 3);
+        int repeats = GoalCheckpoint.bounded(saved, "repeat_count", 0, cfg.repeatAbortAt());
+        int finishes = GoalCheckpoint.bounded(saved, "rejected_finishes", 0, 3);
+        int finishProgress = GoalCheckpoint.bounded(saved, "last_finish_progress", -1, Integer.MAX_VALUE);
+        String callKey = saved.has("last_call_key") ? saved.get("last_call_key").getAsString() : null;
+        if (callKey != null && callKey.length() > 65536) throw new IllegalArgumentException();
+        String goalId = WorldGoal.text(saved, "goal_id");
+        if (!java.util.UUID.fromString(goalId).toString().equals(goalId)) throw new IllegalArgumentException();
+        var item = saved.has("item_goal")
+                ? new ItemGoal(ItemGoal.Target.parse(saved.get("item_goal").toString()), initial) : null;
+        var worldSaved = saved.has("world_goal") ? saved.getAsJsonObject("world_goal").deepCopy() : null;
+        var request = worldSaved == null ? null : WorldGoal.request(worldSaved.getAsJsonObject("request"));
+        generation++;
+        long expected = generation;
+        activeDirective = new Directive(taskId, directive);
+        running = true;
+        steps = used;
+        emptySearches = searches;
+        repeatCount = repeats;
+        rejectedFinishes = finishes;
+        lastFinishProgress = finishProgress;
+        lastCallKey = callKey;
+        stuckAbort = false;
+        noTargetsAbort = false;
+        blockReason = null;
+        initialInventory = initial;
+        latestObservation = null;
+        itemGoal = item;
+        worldGoal = null;
+        goalContinuation = continuation;
+        durableGoalId = goalId;
+        searchPages.reset();
+        convo.clear();
+        convo.add(new Msg.User(directive));
+        if (promptCache != null) promptCache.onDirectiveBoundary();
+        listener.onTaskStarted(taskId);
+        CompletableFuture<ToolOutcome> observation;
+        try {
+            observation = java.util.Objects.requireNonNull(request == null
+                    ? executor.observe(taskId) : executor.observe(taskId, request));
+        } catch (RuntimeException failure) { observation = CompletableFuture.failedFuture(failure); }
+        observation.whenComplete((state, failure) -> {
+            synchronized (AgentLoop.this) {
+                if (!isCurrent(expected)) return;
+                try {
+                    if (failure != null || state == null || !state.ok() || state.accepted()) throw new IllegalArgumentException();
+                    var fresh = state.data();
+                    GoalCheckpoint.verifyIdentity(initial, fresh);
+                    if (itemGoal != null) itemGoal.observe(fresh);
+                    else {
+                        if (fresh.has("goal_evidence_unavailable")) throw new IllegalArgumentException();
+                        worldGoal = WorldGoal.restore(worldSaved, fresh);
+                    }
+                    latestObservation = fresh;
+                } catch (RuntimeException unavailable) {
+                    finishCurrent(TaskStatus.FAILED, "RECOVERY_UNVERIFIABLE:世界、身体、修订、容器或完整现场无法核对，未恢复旧动作。");
+                    return;
+                }
+                if (itemGoal != null ? itemGoal.satisfied() : worldGoal.satisfied()) {
+                    finishCurrent(TaskStatus.COMPLETED, "恢复核验：当前现场已满足原目标条件。");
+                    return;
+                }
+                if (continuation.exhausted() || used >= cfg.maxStepsPerDirective()
+                        || searches >= 3 || repeats >= cfg.repeatAbortAt() || finishes >= 3) {
+                    finishCurrent(TaskStatus.FAILED, "RECOVERY_LIMIT:原目标累计预算或失败限制已到，未追加预算。");
+                    return;
+                }
+                convo.add(new Msg.Nudge("[主人明确恢复原长期目标]\n" + goalFacts() + "\n" + continuation.facts()
+                        + "\n现场与新任务权限已重新核对；旧程序、动作和批准均未回放。依据新鲜事实选择剩余有限阶段。"));
+                step();
+            }
+        });
+    }
+
+    private boolean persistGoal(boolean settled) {
+        try {
+            var saved = goalCheckpoint();
+            if (saved != null) {
+                saved.addProperty("settled", settled);
+                executor.checkpoint(activeDirective.id(), saved);
+            }
+            return true;
+        } catch (RuntimeException unavailable) {
+            stuckAbort = true;
+            blockReason = "CHECKPOINT_UNAVAILABLE:无法完整保存目标及原累计账，已停止；不以旧记录重开预算。";
+            return false;
+        }
     }
     public synchronized boolean awaitingModel() {
         return !compacting && activeResponse != null && !activeResponse.isDone();
@@ -510,6 +644,7 @@ public final class AgentLoop {
         itemGoal = null;
         worldGoal = null;
         goalContinuation = null;
+        durableGoalId = null;
         rejectedFinishes = 0;
         lastFinishProgress = -1;
         blockReason = null;
@@ -580,6 +715,10 @@ public final class AgentLoop {
                         finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:无法核对目标的实际背包数量，未判完成。");
                         return;
                     }
+                }
+                if (!persistGoal(true)) {
+                    finishCurrent(TaskStatus.FAILED, blockReason);
+                    return;
                 }
                 var history = turnHistory(state);
                 String system = systemPrompt.get();
@@ -689,6 +828,11 @@ public final class AgentLoop {
     }
 
     private void verifyFinish(long expectedGeneration, StepReactor reactor, String text) {
+        try { executor.checkpointIntent(activeDirective.id()); }
+        catch (RuntimeException unavailable) {
+            finishCurrent(TaskStatus.FAILED, "CHECKPOINT_UNAVAILABLE:无法保存阶段验收意图，未继续。");
+            return;
+        }
         CompletableFuture<ToolOutcome> observation;
         try { observation = java.util.Objects.requireNonNull(worldGoal == null
                 ? executor.observe(activeDirective.id()) : executor.observe(activeDirective.id(), worldGoal.request())); }
@@ -846,6 +990,16 @@ public final class AgentLoop {
 
     private CompletableFuture<ToolOutcome> executeTool(ToolCall call) {
         try {
+            if (blockReason != null && blockReason.startsWith("CHECKPOINT_UNAVAILABLE:"))
+                return CompletableFuture.completedFuture(new ToolOutcome(false, blockReason));
+            if (goalContinuation != null) {
+                try { executor.checkpointIntent(activeDirective.id()); }
+                catch (RuntimeException unavailable) {
+                    stuckAbort = true;
+                    blockReason = "CHECKPOINT_UNAVAILABLE:无法保存调用意图，未执行。";
+                    return CompletableFuture.completedFuture(new ToolOutcome(false, blockReason));
+                }
+            }
             if ("set_goal".equals(call.name())) return setGoal(call.argsJson());
             if ("report_blocked".equals(call.name())) {
                 var args = com.google.gson.JsonParser.parseString(call.argsJson()).getAsJsonObject();
@@ -926,6 +1080,7 @@ public final class AgentLoop {
                         worldGoal = candidate;
                         goalContinuation = continuation;
                         latestObservation = data;
+                        if (!persistGoal(false)) return new ToolOutcome(false, blockReason);
                         return new ToolOutcome(true, goalFacts()
                                 + (continuation == null ? "" : "\n" + continuation.facts()));
                     } catch (RuntimeException unavailable) {
@@ -971,6 +1126,7 @@ public final class AgentLoop {
                     ? new GoalContinuation(maxRuns, initialInventory) : goalContinuation;
             itemGoal = candidate;
             goalContinuation = continuation;
+            if (!persistGoal(false)) return new ToolOutcome(false, blockReason);
             return new ToolOutcome(true, itemGoal.facts()
                     + (goalContinuation == null ? "" : "\n" + goalContinuation.facts()));
         } catch (RuntimeException invalid) {

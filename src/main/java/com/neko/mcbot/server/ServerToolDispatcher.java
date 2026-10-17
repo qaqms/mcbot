@@ -244,10 +244,22 @@ public final class ServerToolDispatcher {
                         || !autonomous.getAsJsonPrimitive().isBoolean())) return;
                 scheduler.cancel(cp.id(), "新任务替换原任务。");
                 if (cp.identity() instanceof CompanionPlayer player) player.stopBodyBehaviors();
-                permissions.begin(new ActionPermissions.Context(sender.owner(), cp.id(),
+                var nextContext = new ActionPermissions.Context(sender.owner(), cp.id(),
                         cp.dimension(), taskId, mode.getAsBoolean(),
-                        autonomous != null && autonomous.getAsBoolean()), cp.identity());
+                        autonomous != null && autonomous.getAsBoolean());
+                permissions.begin(nextContext, cp.identity());
                 if (cp.identity() instanceof CompanionPlayer player) player.newBodyTask();
+                if (env.body().has("recovery_spatial")) {
+                    try {
+                        if (!(cp.identity() instanceof CompanionPlayer player)) throw new IllegalArgumentException();
+                        com.neko.mcbot.agentcore.loop.GoalCheckpoint.verifyIdentity(
+                                env.body().getAsJsonObject("recovery_identity"), recoveryIdentity(player));
+                        SpatialCheckpoint.restore(player, nextContext, env.body().getAsJsonObject("recovery_spatial"));
+                    } catch (RuntimeException unavailable) {
+                        permissions.end(sender.owner(), taskId);
+                        if (cp.identity() instanceof CompanionPlayer player) player.stopBodyBehaviors();
+                    }
+                }
             }
             case "task_end" -> {
                 Long taskId = taskId(env);
@@ -441,6 +453,20 @@ public final class ServerToolDispatcher {
 
     private final java.util.concurrent.atomic.AtomicLong jobSeq = new java.util.concurrent.atomic.AtomicLong();
 
+    private JsonObject recoveryIdentity(CompanionPlayer player) {
+        var data = new JsonObject();
+        var records = McbotMod.buildRecords(player.level().getServer());
+        if (records == null || !records.healthy()) throw new IllegalArgumentException();
+        data.addProperty("world_id", records.worldId().toString());
+        data.addProperty("owner_uuid", player.ownerUuid().toString());
+        data.addProperty("companion_uuid", player.getUUID().toString());
+        data.addProperty("body_continuity_id", player.bodyContinuityId().toString());
+        data.addProperty("body_id", player.observationBodyId().toString());
+        data.addProperty("dimension", player.level().dimension().identifier().toString());
+        data.addProperty("alive", player.isAlive() && !player.lifecycle().retired());
+        return data;
+    }
+
     private static Long taskId(Envelope env) {
         var value = env.body().get("task_id");
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return null;
@@ -595,8 +621,14 @@ public final class ServerToolDispatcher {
             if (companion != null && !access.bodyId(companion).isEmpty()) {
                 body.addProperty("body_id", access.bodyId(companion));
                 body.addProperty("body_state", access.alive(companion) ? "alive" : "dead");
-                if (companion.identity() instanceof CompanionPlayer cp)
+                if (companion.identity() instanceof CompanionPlayer cp) {
                     body.add("body_lifecycle", cp.lifecycle().observation());
+                    try {
+                        var identity = recoveryIdentity(cp);
+                        for (String key : java.util.List.of("world_id", "owner_uuid", "body_continuity_id", "dimension"))
+                            body.add(key, identity.get(key));
+                    } catch (RuntimeException unavailable) { }
+                }
             }
         }
         send(owner, kind, body);

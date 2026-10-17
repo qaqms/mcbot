@@ -9,6 +9,18 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldGoalTest {
+    @Test void restoredWorldGoalUsesFreshBodyAndExactRevisionButKeepsDeliveryBaselines() {
+        var original = new WorldGoal(building(), buildState(10));
+        var fresh = buildState(20); fresh.addProperty("body_id", "body-after-rejoin");
+        assertTrue(WorldGoal.restore(original.snapshot(), fresh).satisfied());
+        fresh.getAsJsonObject("goal_evidence").addProperty("target_revision", "b".repeat(64));
+        assertThrows(RuntimeException.class, () -> WorldGoal.restore(original.snapshot(), fresh));
+        var delivery = new WorldGoal(delivery("additional"), deliveryState(5, 8));
+        var sameContainer = deliveryState(8, 11);
+        assertTrue(WorldGoal.restore(delivery.snapshot(), sameContainer).satisfied());
+        sameContainer.getAsJsonObject("goal_evidence").addProperty("container_id", "new-container");
+        assertThrows(RuntimeException.class, () -> WorldGoal.restore(delivery.snapshot(), sameContainer));
+    }
     static final String REVISION = "a".repeat(64);
     static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     static JsonObject building() {

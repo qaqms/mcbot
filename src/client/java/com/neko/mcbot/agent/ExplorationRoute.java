@@ -99,6 +99,60 @@ final class ExplorationRoute {
     }
 
     ExplorationRoute(int maxSteps, int radius) { this.maxSteps = maxSteps; this.radius = radius; }
+    JsonObject snapshot() {
+        if (pending) throw new IllegalStateException("Exploration in flight");
+        var data = new JsonObject();
+        data.addProperty("max_steps", maxSteps); data.addProperty("radius", radius);
+        data.addProperty("attempts", attempts); data.addProperty("regions", regions);
+        data.addProperty("digs", undergroundDigs); data.addProperty("spatial", spatial);
+        data.addProperty("dimension", dimension);
+        data.add("anchor", anchor.deepCopy()); data.add("current", current.deepCopy());
+        var positions = new JsonArray(); visited.forEach(p -> positions.add(p.deepCopy()));
+        data.add("visited", positions);
+        var triedPoints = new JsonArray(); tried.stream().sorted().forEach(triedPoints::add);
+        data.add("tried", triedPoints); data.add("trail", trail());
+        data.addProperty("heading_x", headingX); data.addProperty("heading_z", headingZ);
+        return data;
+    }
+
+    static ExplorationRoute restore(JsonObject data) {
+        int steps = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "max_steps", 0, 64);
+        int radius = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "radius", 1, 256);
+        var route = new ExplorationRoute(steps, radius);
+        route.attempts = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "attempts", 0, steps);
+        route.regions = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "regions", 0, route.attempts);
+        route.undergroundDigs = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "digs", 0, 128);
+        if (!data.get("spatial").isJsonPrimitive() || !data.getAsJsonPrimitive("spatial").isBoolean())
+            throw new IllegalArgumentException();
+        route.spatial = data.get("spatial").getAsBoolean();
+        route.dimension = data.get("dimension").getAsString();
+        route.anchor = point(data.getAsJsonObject("anchor"));
+        route.current = point(data.getAsJsonObject("current"));
+        var visited = data.getAsJsonArray("visited");
+        var tried = data.getAsJsonArray("tried");
+        var trail = data.getAsJsonArray("trail");
+        if (visited.size() > steps + 2 || tried.size() > steps || trail.size() > steps + 1) throw new IllegalArgumentException();
+        for (var value : visited) route.visited.add(point(value.getAsJsonObject()));
+        for (var value : tried) {
+            String key = value.getAsString();
+            if (!key.matches("-?[0-9]{1,10}:-?[0-9]{1,10}:-?[0-9]{1,10}") || !route.tried.add(key))
+                throw new IllegalArgumentException();
+        }
+        for (var value : trail) route.undergroundTrail.add(feet(point(value.getAsJsonObject())));
+        if (route.spatial && trail.isEmpty() || !route.within(route.current)) throw new IllegalArgumentException();
+        route.headingX = number(data, "heading_x"); route.headingZ = number(data, "heading_z");
+        return route;
+    }
+
+    private static JsonObject point(JsonObject data) {
+        var result = new JsonObject();
+        for (String axis : List.of("x", "y", "z")) {
+            double value = number(data, axis);
+            if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) throw new IllegalArgumentException();
+            result.addProperty(axis, value);
+        }
+        return result;
+    }
     int attempts() { return attempts; }
     int regions() { return regions; }
     boolean exhausted() { return attempts >= maxSteps; }

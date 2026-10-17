@@ -87,6 +87,10 @@ public final class McbotMod implements ModInitializer {
             roster.load();
             var records=new com.neko.mcbot.building.BuildRecords(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT));
             records.load(); buildingRecords=records; recordsServer=server;
+            if (records.healthy()) {
+                try { records.initializeIdentity(); }
+                catch (RuntimeException unavailable) { LOG.error("无法持久化世界身份；目标恢复不可用。"); }
+            }
             if (!records.healthy()) LOG.error("建筑记录不可用，修改入口将保守停止；请核对存档中的mcbot/buildings.json。");
 
             ToolRegistry tools = new ToolRegistry();

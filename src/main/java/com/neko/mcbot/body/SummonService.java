@@ -72,6 +72,7 @@ public final class SummonService {
         try {
             companion = loadCompanion(profile,
                     owner != null ? owner.getUUID() : CompanionRoster.NO_OWNER, where, false);
+            companion.resetBodyContinuity();
             companion.setRespawnPosition(
                     new ServerPlayer.RespawnConfig(
                             LevelData.RespawnData.of(overworld.dimension(), where, 0.0F, 0.0F), true),

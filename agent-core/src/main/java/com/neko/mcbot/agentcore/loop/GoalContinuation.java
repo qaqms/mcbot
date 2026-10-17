@@ -34,6 +34,35 @@ final class GoalContinuation {
         return !args.has("max_runs") || limit(args) == maxRuns;
     }
 
+    JsonObject snapshot() {
+        var data = new JsonObject();
+        data.addProperty("max_runs", maxRuns);
+        data.addProperty("completed_runs", completedRuns);
+        data.addProperty("stalled", stalled);
+        var values = new com.google.gson.JsonArray();
+        observed.stream().sorted().forEach(values::add);
+        data.add("observed", values);
+        return data;
+    }
+
+    static GoalContinuation restore(JsonObject data, JsonObject initial) {
+        int limit = GoalCheckpoint.bounded(data, "max_runs", 1, 16);
+        var value = new GoalContinuation(limit, initial);
+        value.completedRuns = GoalCheckpoint.bounded(data, "completed_runs", 0, limit);
+        value.stalled = GoalCheckpoint.bounded(data, "stalled", 0, 2);
+        var facts = data.getAsJsonArray("observed");
+        if (facts == null || facts.isEmpty() || facts.size() > limit + 1) throw new IllegalArgumentException();
+        value.observed.clear();
+        for (var fact : facts) {
+            if (!fact.isJsonPrimitive() || !fact.getAsJsonPrimitive().isString()
+                    || fact.getAsString().length() > 16384 || !value.observed.add(fact.getAsString()))
+                throw new IllegalArgumentException();
+        }
+        return value;
+    }
+
+    boolean exhausted() { return completedRuns >= maxRuns || stalled >= 2; }
+
     Verdict checkpoint(JsonObject state) {
         return checkpoint(state, "");
     }

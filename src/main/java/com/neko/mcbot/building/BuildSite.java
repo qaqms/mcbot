@@ -307,11 +307,87 @@ public final class BuildSite {
         for (var record : temporary.values()) signature.append('|').append(record.pos).append(':')
                 .append(access.state(record.pos)).append(':').append(record.witness != null && record.witness.intact());
         checkpoints++;
-        if (!rounds.add(signature.toString())) {
+        if (!rounds.add(fingerprint(signature.toString()))) {
             stopped = true;
             return failed("NO_PROGRESS:相同真实目标缺口与站位已出现，停止往返施工；计时、查询和扣料不算进展。");
         }
         return null;
+    }
+
+    private static String fingerprint(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    public JsonObject snapshot() {
+        var data = new JsonObject();
+        data.addProperty("active", active());
+        if (!active()) return data;
+        data.add("target", target.input()); data.add("scope", scope.snapshot());
+        var accessRoute = new JsonArray(); route.forEach(p -> accessRoute.add(BuildTarget.coordinates(p)));
+        data.add("route", accessRoute);
+        data.addProperty("checkpoints", checkpoints); data.addProperty("edits", edits); data.addProperty("stopped", stopped);
+        data.add("navigation", navigation.snapshot());
+        var seen = new JsonArray(); rounds.stream().sorted().forEach(seen::add); data.add("rounds", seen);
+        var items = new JsonArray();
+        for (var entry : temporary.values()) {
+            var item = BuildTarget.coordinates(entry.pos);
+            item.add("state", BuildTarget.exactState(entry.state)); item.addProperty("purpose", entry.purpose);
+            items.add(item);
+        }
+        data.add("temporary", items);
+        if (instance != null) {
+            data.addProperty("instance_id", instance.id()); data.addProperty("instance_revision", instance.revision());
+        }
+        return data;
+    }
+
+    public void restore(JsonObject data, BlockPos feet, Access access) {
+        if (!data.getAsJsonPrimitive("active").isBoolean() || active()) throw new IllegalArgumentException();
+        if (!data.get("active").getAsBoolean()) return;
+        var target = BuildTarget.parse(data.getAsJsonObject("target"));
+        var scope = com.neko.mcbot.path.PathSpec.restore(data.getAsJsonObject("scope"));
+        var values = data.getAsJsonArray("route");
+        if (values.size() < 2 || values.size() > ROUTE_LIMIT || !scope.contains(feet.getX(), feet.getY(), feet.getZ()))
+            throw new IllegalArgumentException();
+        var restoredRoute = new ArrayList<BlockPos>();
+        for (var value : values) {
+            var p = value.getAsJsonObject();
+            restoredRoute.add(new BlockPos(BuildTarget.integer(p.get("x"), -29999984, 29999984),
+                    BuildTarget.integer(p.get("y"), -2048, 2047), BuildTarget.integer(p.get("z"), -29999984, 29999984)));
+        }
+        var failure = begin(target, restoredRoute, restoredRoute.getFirst(), scope, access);
+        if (failure != null) throw new IllegalArgumentException("Worksite changed");
+        checkpoints = BuildTarget.integer(data.get("checkpoints"), 0, ROUND_LIMIT);
+        edits = BuildTarget.integer(data.get("edits"), 0, EDIT_LIMIT);
+        if (!data.getAsJsonPrimitive("stopped").isBoolean()) throw new IllegalArgumentException();
+        stopped = data.get("stopped").getAsBoolean();
+        navigation = com.neko.mcbot.path.NavigationBudget.restore(data.getAsJsonObject("navigation"));
+        var seen = data.getAsJsonArray("rounds");
+        var items = data.getAsJsonArray("temporary");
+        if (seen.size() > ROUND_LIMIT || items.size() > TEMP_LIMIT) throw new IllegalArgumentException();
+        for (var value : seen) {
+            String hash = value.getAsString();
+            if (!hash.matches("[0-9a-f]{64}") || !rounds.add(hash)) throw new IllegalArgumentException();
+        }
+        for (var value : items) {
+            var item = value.getAsJsonObject();
+            var pos = new BlockPos(BuildTarget.integer(item.get("x"), -29999984, 29999984),
+                    BuildTarget.integer(item.get("y"), -2048, 2047), BuildTarget.integer(item.get("z"), -29999984, 29999984));
+            var state = item.getAsJsonObject("state").deepCopy();
+            state.addProperty("x", 0); state.addProperty("y", 0); state.addProperty("z", 0);
+            var cells = new JsonArray(); cells.add(state);
+            var input = new JsonObject(); input.add("anchor", BuildTarget.coordinates(BlockPos.ZERO)); input.add("cells", cells);
+            String purpose = item.get("purpose").getAsString();
+            if (!Set.of("support", "workstation").contains(purpose) || !inScope(pos)
+                    || temporary.put(pos, new Temporary(pos, BuildTarget.parse(input).cells().getFirst().authored(),
+                    purpose, null, null)) != null) throw new IllegalArgumentException();
+        }
+        // Old witnesses are never reconstructed from a saved block state.
+        if (stopped || checkpoints >= ROUND_LIMIT || edits >= EDIT_LIMIT || navigation.exhausted()
+                || live(access) != null) throw new IllegalArgumentException("Worksite exhausted or unavailable");
     }
     public JsonObject report(Access access) {
         var data = new JsonObject();

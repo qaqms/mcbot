@@ -3,7 +3,21 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
-## L1 多类目标的独立验收（2026-10-17）
+## L2 目标数据恢复（2026-10-17）
+
+GoalJournal在客户端按世界/主人/同伴范围保存原AgentLoop长期目标和host累计账；
+先写在途标记，完整结算且新鲜空间可用才开放检查点。ClientSession退出停执行，
+进世界不自动唤醒；主人用原submitTask明确恢复，原goal_id保持而session/传输task_id更新。
+BuildRecords持久世界UUID，playerdata持久body_continuity_id，瞬态body_id保持S3语义；
+死亡/显式召唤换continuity。服务端新task_begin复核身份及空间/工地修订，失败撤新权限。
+原loop先核现场、原基线/40步/阶段/失败账；已满足零模型，否则在原剩余额度内选择阶段。
+WorkFailureMemory、DeliveryLedger、ExplorationRoute及原WorkTargets/NavigationTrail/BuildSite/
+NavigationBudget只恢复数据；临时/B4来源见证不伪造，不回放工具/Lua/批准或输入。
+单记录512 KiB、128范围、空间16000 bytes，未知/在途/换箱/修订或身份变化保守停止；
+只支持当前客户端数据，跨文件崩溃事务及原生重进仍待验。详见L2-GOAL-RECOVERY。
+下方“无L2恢复”为历史检查点，外部桥v1.0保持。
+
+## L1 多类目标的独立验收（2026-10-17，历史检查点）
 
 原AgentLoop保留ItemGoal，并以WorldGoal冻结building/delivery条件；原GoalContinuation
 在同task_id内处理阶段，不新增模型裁判、动作核或规划系统。

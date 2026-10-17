@@ -276,6 +276,16 @@ public final class CompanionPlayer extends ServerPlayer {
     }
 
     public UUID observationBodyId() { return observationBodyId; }
+    private UUID bodyContinuityId = UUID.randomUUID();
+    public UUID bodyContinuityId() { return bodyContinuityId; }
+    public void resetBodyContinuity() { bodyContinuityId = UUID.randomUUID(); }
+    static UUID readContinuity(net.minecraft.world.level.storage.ValueInput input) {
+        try {
+            String value = input.getStringOr("mcbot_body_continuity", "");
+            UUID parsed = UUID.fromString(value);
+            return parsed.toString().equals(value) ? parsed : UUID.randomUUID();
+        } catch (IllegalArgumentException invalid) { return UUID.randomUUID(); }
+    }
     public BodyLifecycle lifecycle() { return lifecycle; }
 
     public com.google.gson.JsonObject deathObservation() {
@@ -313,6 +323,7 @@ public final class CompanionPlayer extends ServerPlayer {
     @Override
     protected void addAdditionalSaveData(net.minecraft.world.level.storage.ValueOutput output) {
         super.addAdditionalSaveData(output);
+        if (bodyContinuityId != null) output.putString("mcbot_body_continuity", bodyContinuityId.toString());
         if (lifecycle != null) lifecycle.save(output.child("mcbot_body_lifecycle"));
         if (previousDeath != null) output.putString("mcbot_last_death", previousDeath.toString());
     }
@@ -320,6 +331,7 @@ public final class CompanionPlayer extends ServerPlayer {
     @Override
     protected void readAdditionalSaveData(net.minecraft.world.level.storage.ValueInput input) {
         super.readAdditionalSaveData(input);
+        bodyContinuityId = readContinuity(input);
         if (lifecycle != null) input.child("mcbot_body_lifecycle").ifPresent(lifecycle::load);
         previousDeath = null;
         String saved = input.getStringOr("mcbot_last_death", "");

@@ -11,6 +11,8 @@ import com.neko.mcbot.agentcore.loop.TaskReplies;
 import com.neko.mcbot.agentcore.loop.ToolExecutor;
 import com.neko.mcbot.agentcore.loop.TaskPolicy;
 import com.neko.mcbot.agentcore.loop.WorkFailureMemory;
+import com.neko.mcbot.agentcore.loop.GoalCheckpoint;
+import com.neko.mcbot.agentcore.loop.GoalJournal;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
 import com.neko.mcbot.agentcore.prompt.SkillLoader;
 import com.neko.mcbot.agentcore.script.BoundedProgram;
@@ -112,6 +114,12 @@ public final class AgentRunner implements ToolExecutor {
     private JsonObject taskInitialObservation;
     private WorkFailureMemory workFailures;
     private com.neko.mcbot.agentcore.loop.DeliveryLedger deliveries;
+    private GoalJournal goalJournal;
+    private String recoveryScope;
+    private JsonObject recoveryRecord, recoveryObservation;
+    private Boolean restoredAutonomous;
+    private boolean preserveCheckpoint, recoveryWriteFailed, recoveryControlPending, durableActive;
+    private long recoveryEpoch;
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
      * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
@@ -160,6 +168,7 @@ public final class AgentRunner implements ToolExecutor {
         void send(Envelope envelope);
         boolean isCurrentRunner(AgentRunner owner);
         CompletableFuture<ToolOutcome> observe(AgentRunner owner, long taskId);
+        default GoalJournal goalJournal() { return null; }
     }
 
     private static final class MinecraftServices implements ClientServices {
@@ -205,6 +214,9 @@ public final class AgentRunner implements ToolExecutor {
         @Override public CompletableFuture<ToolOutcome> observe(AgentRunner owner, long taskId) {
             return owner.requestObservation(taskId);
         }
+        @Override public GoalJournal goalJournal() {
+            return new GoalJournal(FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("goals"));
+        }
     }
 
     public AgentRunner(ClientConfig cfg) {
@@ -221,6 +233,7 @@ public final class AgentRunner implements ToolExecutor {
         if (closed || !cfg.brainEnabled || loop != null) {
             return;
         }
+        goalJournal = client.goalJournal();
         ChatEngine engine;
         try {
             engine = client.engine(cfg);
@@ -242,12 +255,31 @@ public final class AgentRunner implements ToolExecutor {
                         taskInitialObservation = null;
                         workFailures = new WorkFailureMemory();
                         deliveries = new com.neko.mcbot.agentcore.loop.DeliveryLedger();
+                        restoredAutonomous = null;
+                        durableActive = recoveryRecord != null;
+                        recoveryWriteFailed = false;
+                        recoveryObservation = null;
+                        var restored = recoveryRecord;
+                        if (restored != null) {
+                            var host = restored.getAsJsonObject("host");
+                            taskInitialObservation = restored.getAsJsonObject("core").getAsJsonObject("initial").deepCopy();
+                            workFailures = WorkFailureMemory.restore(host.getAsJsonObject("failures"));
+                            deliveries = com.neko.mcbot.agentcore.loop.DeliveryLedger.restore(host.getAsJsonObject("deliveries"));
+                            if (host.has("exploration")) explorationRoute = ExplorationRoute.restore(host.getAsJsonObject("exploration"));
+                            explorationTask = taskId;
+                            restoredAutonomous = host.get("autonomous").getAsBoolean() && cfg.preferences.autonomousActions();
+                        }
                         panelHistory.status(taskId, "running");
                         JsonObject scope = new JsonObject();
                         scope.addProperty("task_id", taskId);
                         scope.addProperty("read_only", taskPolicies.getOrDefault(taskId, true));
-                        scope.addProperty("autonomous", cfg.preferences.autonomousActions()
+                        scope.addProperty("autonomous", taskAutonomous()
                                 && !taskPolicies.getOrDefault(taskId, true));
+                        if (restored != null) {
+                            scope.add("recovery_spatial", restored.getAsJsonObject("host").get("spatial").deepCopy());
+                            scope.add("recovery_identity", restored.getAsJsonObject("core").get("initial").deepCopy());
+                        }
+                        recoveryRecord = null;
                         sendTaskControl("task_begin", scope);
                         JsonObject d = new JsonObject();
                         d.addProperty("status", "running");
@@ -257,6 +289,7 @@ public final class AgentRunner implements ToolExecutor {
                     @Override
                     public void onTaskFinished(long taskId, AgentLoop.TaskStatus status, String text) {
                         boolean wasActive = currentTask == taskId;
+                        if (wasActive && !preserveCheckpoint) clearSavedGoal();
                         if (wasActive) taskBubble.finish(taskId, status, text,
                                 loop == null ? null : loop.goalProgress(), client.nowMs());
                         if (wasActive && status != AgentLoop.TaskStatus.COMPLETED) sendCancel();
@@ -272,6 +305,7 @@ public final class AgentRunner implements ToolExecutor {
                             currentTask = 0;
                             workFailures = null;
                             deliveries = null;
+                            durableActive = false;
                         }
                         panelHistory.status(taskId, status.name().toLowerCase(java.util.Locale.ROOT));
                         if (status != AgentLoop.TaskStatus.COMPLETED) panelHistory.add(taskId, "[mcbot] " + text);
@@ -406,8 +440,16 @@ public final class AgentRunner implements ToolExecutor {
 
     public void close() {
         if (closed) return;
+        recoveryEpoch++;
+        if (!preserveCheckpoint) clearSavedGoal();
         closed = true;
         shutdownBrain();
+    }
+
+    /** Leaving a world stops all execution but retains only already durable, settled checkpoints. */
+    public void disconnect() {
+        preserveCheckpoint = true;
+        close();
     }
 
     private void shutdownBrain() {
@@ -547,6 +589,8 @@ public final class AgentRunner implements ToolExecutor {
         if (!result.ok() || !data.has("hp") || !data.has("dimension")) return;
         companionBody = data.deepCopy();
         bodyObservedAt = client.nowMs();
+        try { recoveryScope = GoalCheckpoint.scope(data); }
+        catch (RuntimeException missingIdentity) { }
     }
 
     public void handleS2c(Envelope env) {
@@ -728,6 +772,8 @@ public final class AgentRunner implements ToolExecutor {
         if (died) bodyUnavailable = true;
         else if (!token.isEmpty() && bodyChanged && env.str("body_state").equals("alive")) bodyUnavailable = false;
         else if (companionChanged && token.isEmpty()) bodyUnavailable = false;
+        try { recoveryScope = GoalCheckpoint.scope(env.body()); }
+        catch (RuntimeException unavailable) { }
     }
 
     public String lifecycleResult() {
@@ -830,6 +876,14 @@ public final class AgentRunner implements ToolExecutor {
     public long submitTask(String text) {
         if (text == null || text.isBlank()) throw new IllegalArgumentException("text must not be blank");
         long id = taskSeq.incrementAndGet();
+        String command = text.trim();
+        if (List.of("恢复目标", "目标状态", "放弃目标").contains(command)) {
+            recoveryControl(id, command);
+            return id;
+        }
+        recoveryEpoch++;
+        recoveryControlPending = false;
+        if (loop == null || !loop.busy()) clearSavedGoal();
         submitTask(id, text);
         return id;
     }
@@ -932,6 +986,9 @@ public final class AgentRunner implements ToolExecutor {
     public boolean cancelTask(long taskId) {
         AgentLoop brain = loop;
         if (closed) return false;
+        recoveryEpoch++;
+        recoveryControlPending = false;
+        if (taskId == 0 || taskId == currentTask) clearSavedGoal();
         boolean cancelled = brain != null && brain.cancelTask(taskId);
         if (taskId == 0 && !cancelled) sendCancel();
         return cancelled;
@@ -1029,8 +1086,142 @@ public final class AgentRunner implements ToolExecutor {
             if (!closed && taskId == currentTask && state != null && state.ok()
                     && taskInitialObservation == null && state.data().has("inventory"))
                 taskInitialObservation = state.data();
+            if (!closed && taskId == currentTask && state != null && state.ok() && !state.accepted())
+                recoveryObservation = state.data();
             return state;
         });
+    }
+
+    private boolean taskAutonomous() {
+        return restoredAutonomous == null ? cfg.preferences.autonomousActions() : restoredAutonomous;
+    }
+
+    private void clearSavedGoal() {
+        if (goalJournal == null || recoveryScope == null) return;
+        try { goalJournal.clear(recoveryScope); }
+        catch (RuntimeException failure) {
+            recoveryWriteFailed = true;
+            LOG.warn("[brain] goal cancellation could not be persisted");
+        }
+    }
+
+    private boolean blockSavedGoal() {
+        if (goalJournal == null || recoveryScope == null || !durableActive) return true;
+        try {
+            if (recoveryWriteFailed) return false;
+            goalJournal.block(recoveryScope);
+            return true;
+        } catch (RuntimeException failure) {
+            recoveryWriteFailed = true;
+            return false;
+        }
+    }
+
+    @Override public void checkpoint(long taskId, JsonObject core) {
+        if (goalJournal == null) return;
+        if (closed || taskId != currentTask || recoveryWriteFailed) throw new IllegalStateException();
+        var initial = core.getAsJsonObject("initial");
+        recoveryScope = GoalCheckpoint.scope(initial);
+        durableActive = true;
+        if (recoveryObservation == null || !recoveryScope.equals(GoalCheckpoint.scope(recoveryObservation))
+                || !initial.get("body_continuity_id").equals(recoveryObservation.get("body_continuity_id"))
+                || !initial.get("dimension").equals(recoveryObservation.get("dimension")))
+            throw new IllegalArgumentException("Recovery identity changed");
+        var host = new JsonObject();
+        host.addProperty("read_only", taskPolicies.getOrDefault(taskId, true));
+        host.addProperty("autonomous", taskAutonomous());
+        host.add("failures", workFailures.snapshot());
+        try {
+            host.add("deliveries", deliveries.snapshot());
+            if (explorationRoute != null) host.add("exploration", explorationRoute.snapshot());
+        } catch (RuntimeException unsettled) {
+            goalJournal.block(recoveryScope);
+            return;
+        }
+        boolean ready = core.has("settled") && core.get("settled").getAsBoolean()
+                && recoveryObservation.has("recovery_spatial_known")
+                && recoveryObservation.get("recovery_spatial_known").isJsonPrimitive()
+                && recoveryObservation.getAsJsonPrimitive("recovery_spatial_known").isBoolean()
+                && recoveryObservation.get("recovery_spatial_known").getAsBoolean()
+                && recoveryObservation.has("recovery_spatial")
+                && !com.neko.mcbot.agentcore.loop.BodyFacts.environmentUnsafe(recoveryObservation);
+        if (ready) host.add("spatial", recoveryObservation.get("recovery_spatial").deepCopy());
+        goalJournal.save(recoveryScope, core, host, ready);
+    }
+
+    @Override public void checkpointIntent(long taskId) {
+        if (taskId != currentTask || !blockSavedGoal()) throw new IllegalStateException("Checkpoint unavailable");
+    }
+
+    private void recoveryControl(long commandId, String command) {
+        panelHistory.begin(commandId, command);
+        AgentLoop brain = loop;
+        if (goalJournal == null || closed || brain == null || brain.busy() || recoveryControlPending) {
+            emitDone(commandId, AgentLoop.TaskStatus.FAILED, "RECOVERY_UNAVAILABLE:当前无可用存储、大脑离线或已有任务；未新开模型请求。");
+            return;
+        }
+        recoveryControlPending = true;
+        long epoch = ++recoveryEpoch, generation = brainGeneration, bodyGeneration = companionGeneration;
+        executeRemote("status", "{\"details\":true,\"recovery\":true}", 0, null).whenComplete((state, failure) ->
+                client.executeOnClient(() -> {
+                    if (closed || epoch != recoveryEpoch || generation != brainGeneration || brain != loop
+                            || bodyGeneration != companionGeneration || !client.isCurrentRunner(this)) return;
+                    recoveryControlPending = false;
+                    try {
+                        if (failure != null || state == null || !state.ok() || state.accepted() || brain.busy())
+                            throw new IllegalArgumentException();
+                        var fresh = state.data();
+                        recoveryScope = GoalCheckpoint.scope(fresh);
+                        if (command.equals("放弃目标")) {
+                            goalJournal.clear(recoveryScope);
+                            emitDone(commandId, AgentLoop.TaskStatus.COMPLETED, "原目标记录已放弃，不会恢复。");
+                            return;
+                        }
+                        var record = goalJournal.load(recoveryScope);
+                        if (record == null) {
+                            emitDone(commandId, AgentLoop.TaskStatus.FAILED, "RECOVERY_EMPTY:当前世界与主人没有可恢复目标。");
+                            return;
+                        }
+                        var core = record.getAsJsonObject("core");
+                        var host = record.getAsJsonObject("host");
+                        GoalCheckpoint.verifyIdentity(core.getAsJsonObject("initial"), fresh);
+                        validateRecoveryHost(host);
+                        if (command.equals("目标状态")) {
+                            emitDone(commandId, AgentLoop.TaskStatus.COMPLETED, "有待恢复的长期目标："
+                                    + core.get("directive").getAsString() + "；累计模型步数="
+                                    + core.get("steps").getAsInt() + "/" + core.get("step_limit").getAsInt()
+                                    + "。当前未恢复执行。");
+                            return;
+                        }
+                        goalJournal.block(recoveryScope);
+                        long oldId = core.get("task_id").getAsBigDecimal().longValueExact();
+                        if (oldId < 0 || oldId >= Long.MAX_VALUE - 1) throw new IllegalArgumentException();
+                        taskSeq.accumulateAndGet(oldId, Math::max);
+                        long taskId = taskSeq.incrementAndGet();
+                        panelHistory.begin(taskId, core.get("directive").getAsString());
+                        taskPolicies.put(taskId, host.get("read_only").getAsBoolean());
+                        recoveryRecord = record;
+                        // The preflight status supplies this incarnation's transport identity.
+                        companionBodyId = fresh.get("body_id").getAsString();
+                        recoveryWriteFailed = false;
+                        brain.resume(taskId, core);
+                        emitDone(commandId, AgentLoop.TaskStatus.COMPLETED, "恢复请求已受理；原目标将先核现场及新权限，未重放旧动作。");
+                    } catch (RuntimeException unavailable) {
+                        recoveryRecord = null;
+                        if (brain.currentTaskId() != 0) brain.failTasks("RECOVERY_UNVERIFIABLE:恢复数据无效，未继续。");
+                        emitDone(commandId, AgentLoop.TaskStatus.FAILED,
+                                "RECOVERY_UNVERIFIABLE:记录在途、不完整、身份变化或现场不可核实；未调用模型或重放旧动作。");
+                    }
+                }));
+    }
+
+    private static void validateRecoveryHost(JsonObject host) {
+        for (String key : List.of("read_only", "autonomous"))
+            if (!host.getAsJsonPrimitive(key).isBoolean()) throw new IllegalArgumentException();
+        WorkFailureMemory.restore(host.getAsJsonObject("failures"));
+        com.neko.mcbot.agentcore.loop.DeliveryLedger.restore(host.getAsJsonObject("deliveries"));
+        if (host.has("exploration")) ExplorationRoute.restore(host.getAsJsonObject("exploration"));
+        if (!host.has("spatial") || !host.get("spatial").isJsonObject()) throw new IllegalArgumentException();
     }
 
     @Override
@@ -1093,9 +1284,10 @@ public final class AgentRunner implements ToolExecutor {
     CompletableFuture<ToolOutcome> requestObservation(long taskId) {
         long generation = brainGeneration;
         long bodyGeneration = companionGeneration;
-        return executeRemote("status", "{\"details\":true}", taskId, loop).thenApply(result -> {
+        return executeRemote("status", goalJournal == null ? "{\"details\":true}"
+                : "{\"details\":true,\"recovery\":true}", taskId, loop).thenApply(result -> {
             var mode = result.data().get("permission_mode");
-            if (!closed && taskId == currentTask && result.ok() && cfg.preferences.autonomousActions()
+            if (!closed && taskId == currentTask && result.ok() && taskAutonomous()
                     && !taskPolicies.getOrDefault(taskId, true)
                     && (mode == null || !mode.isJsonPrimitive() || !mode.getAsJsonPrimitive().isString()
                     || !"autonomous".equals(mode.getAsString()))) {
@@ -1104,6 +1296,10 @@ public final class AgentRunner implements ToolExecutor {
                 return new ToolOutcome(false, "MODE_UNAVAILABLE:服务端未确认自主执行模式，任务未继续。"
                         + "请同步更新客户端与服务端，或关闭自主执行后重新提交。", data);
             }
+            if (restoredAutonomous != null && (mode == null || !mode.isJsonPrimitive()
+                    || !mode.getAsJsonPrimitive().isString() || !(taskPolicies.getOrDefault(taskId, true)
+                    ? "read_only" : taskAutonomous() ? "autonomous" : "confirm").equals(mode.getAsString())))
+                return new ToolOutcome(false, "RECOVERY_UNVERIFIABLE:服务端未确认恢复任务的新权限。");
             if (!closed && generation == brainGeneration && bodyGeneration == companionGeneration && taskId == currentTask)
                 captureBody(result);
             return result;
@@ -1114,6 +1310,8 @@ public final class AgentRunner implements ToolExecutor {
     public CompletableFuture<ToolOutcome> execute(String name, String argsJson) {
         if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
         if (bodyUnavailable) return CompletableFuture.completedFuture(ToolOutcome.synthetic("BODY_DIED:原身体已终止。"));
+        if (!blockSavedGoal()) return CompletableFuture.completedFuture(new ToolOutcome(false,
+                "CHECKPOINT_UNAVAILABLE:无法保存派发前的在途标记，未执行。"));
         if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(argsJson));
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
@@ -1432,6 +1630,8 @@ public final class AgentRunner implements ToolExecutor {
         if (!body.get("args").isJsonObject()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "DENIED:工具参数须为 JSON 对象。"));
         JsonObject args = body.getAsJsonObject("args");
+        if (taskId != 0 && !TaskPolicy.observation(name, args) && !blockSavedGoal())
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "CHECKPOINT_UNAVAILABLE:未保存派发意图，动作未发送。"));
         if (taskPolicies.getOrDefault(taskId, false) && !TaskPolicy.observation(name, args)) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
                     "DENIED:主人要求只读，此任务不能移动或改动世界/物品。"));
@@ -1545,7 +1745,8 @@ public final class AgentRunner implements ToolExecutor {
         long generation = companionGeneration;
         body.addProperty("body_id", companionBodyId);
         client.executeOnClient(() -> {
-            if (generation == companionGeneration && client.isCurrentRunner(this) && client.canSend())
+            if (generation == companionGeneration && client.isCurrentRunner(this) && client.canSend()
+                    && WireSize.fits(new Envelope(kind, body).encode()))
                 client.send(new Envelope(kind, body));
         });
     }

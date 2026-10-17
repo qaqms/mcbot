@@ -34,4 +34,21 @@ public final class WorkTargets {
     public boolean protects(BlockPos cell) {
         return cells.contains(cell) || cells.contains(cell.above());
     }
+
+    public com.google.gson.JsonArray snapshot() {
+        var data = new com.google.gson.JsonArray();
+        cells.stream().sorted(java.util.Comparator.comparingLong(BlockPos::asLong)).forEach(p ->
+                data.add(com.neko.mcbot.building.BuildTarget.coordinates(p)));
+        return data;
+    }
+
+    public void restore(com.google.gson.JsonArray data) {
+        if (task == null || !cells.isEmpty() || data == null || data.size() > LIMIT) throw new IllegalArgumentException();
+        for (var value : data) {
+            var p = value.getAsJsonObject();
+            if (!cells.add(new BlockPos(p.get("x").getAsBigDecimal().intValueExact(),
+                    p.get("y").getAsBigDecimal().intValueExact(), p.get("z").getAsBigDecimal().intValueExact())))
+                throw new IllegalArgumentException();
+        }
+    }
 }

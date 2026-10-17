@@ -3,7 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## L1 多类目标与完整现场（2026-10-17）
+## L2 主人明确恢复（2026-10-17）
+
+仍31项模型工具，无新增模型恢复工具。原任务输入完整发送`目标状态`、`恢复目标`或`放弃目标`，
+仅空闲时处理；前两者先新鲜查身份，放弃先确定当前范围，均不把命令作为新模型指令。
+恢复用原goal_id和新task_id，先查原目标/新权限；原基线、40步/阶段/失败/探索/工地账不重开。
+status增加world_id/owner_uuid/companion_uuid/body_continuity_id；body_id仍每身体实例改变。
+内部status recovery=true及task_begin的恢复载荷仅供本体接线，不加入模型Schema或外部桥必填字段。
+退出/重进不自动恢复；在途/未知/身份或修订变化、旧容器身份失效拒绝，不回放Lua/动作/批准。
+仅完整long_term检查点可恢复，单条512 KiB/128范围、空间16000 bytes，
+原生保存/断线/多人仍待实机；详见L2-GOAL-RECOVERY。下方无L2为历史检查点。
+
+## L1 多类目标与完整现场（2026-10-17，历史检查点）
 
 仍31工具（22服务端+9本地）。set_goal的type省略/item沿原item/count/mode背包规则；
 building须同build_diff的target与expected_revision；delivery须container={x,y,z}及item/count/mode。

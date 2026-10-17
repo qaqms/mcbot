@@ -66,6 +66,8 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     boolean connected = true;
     boolean liveObservation;
     boolean failSave;
+    com.neko.mcbot.agentcore.loop.GoalJournal journal;
+    @Override public com.neko.mcbot.agentcore.loop.GoalJournal goalJournal() { return journal; }
 
     AgentRunner create() {
         var runner = new AgentRunner(CONFIG, this);

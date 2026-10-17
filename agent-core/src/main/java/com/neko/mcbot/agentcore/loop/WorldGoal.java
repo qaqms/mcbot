@@ -8,7 +8,9 @@ import java.util.Set;
 /** Fixed world conditions; only fresh, complete server evidence may satisfy them. */
 public final class WorldGoal {
     private final JsonObject request;
-    private final String type, dimension, bodyId, containerId;
+    private final String type, dimension, containerId;
+    private String bodyId;
+    private final JsonObject registration;
     private final ItemGoal.Target delivery;
     private final int baseline;
     private final long balanceBaseline;
@@ -42,6 +44,9 @@ public final class WorldGoal {
     }
 
     public WorldGoal(JsonObject spec, JsonObject state) {
+        registration = new JsonObject();
+        for (String key : List.of("dimension", "body_id", "alive", "goal_evidence"))
+            registration.add(key, state.get(key).deepCopy());
         request = request(spec);
         type = text(request, "type");
         dimension = text(state, "dimension");
@@ -62,6 +67,19 @@ public final class WorldGoal {
     }
 
     public JsonObject request() { return request.deepCopy(); }
+    JsonObject snapshot() {
+        var saved = new JsonObject();
+        saved.add("request", request());
+        saved.add("registration", registration.deepCopy());
+        return saved;
+    }
+
+    static WorldGoal restore(JsonObject saved, JsonObject fresh) {
+        var value = new WorldGoal(saved.getAsJsonObject("request"), saved.getAsJsonObject("registration"));
+        value.bodyId = text(fresh, "body_id");
+        value.observe(fresh);
+        return value;
+    }
     public boolean matches(JsonObject spec) { return request.equals(request(spec)); }
     public int progress() { return progress; }
     public boolean satisfied() { return satisfied; }

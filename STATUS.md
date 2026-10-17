@@ -3,6 +3,59 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## L2 长期目标跨退出恢复（2026-10-17 16:53，Asia/Shanghai）
+
+- 从已推送L1 `5381e076e13242bac566afe4cf3ef788c07644f4`独立收L2，不启动K1/P1。
+  当前十九张完整离线卡、B5部分、K1/P1未开，下一K1；床/装饰/组件保留B5续卡。
+  完整参考核对、指纹、机制与保守支持边界见
+  `docs/L2-GOAL-RECOVERY-2026-10-17.md`，源码提交/推送另核Git。
+- 原submitTask识别完整主人命令`目标状态`、`恢复目标`、`放弃目标`，面板/聊天/桥共入口，
+  不新增工具（仍31项）或桥字段。进世界/重连不自动醒，空闲明确恢复才建新task_id，
+  原goal_id/原始指令/初始库存、building/delivery条件与登记证据保持；旧传输任务不续跑。
+  命令受理与实际恢复任务各有task_id及终态，命令completed不代表原目标完成。
+- GoalJournal按世界/主人/同伴存客户端本地数据，512 KiB/128范围含标记与临时范围，
+  解析前32层/100000 token帽；原子替换前强制写blocked，完整结算及新鲜空间可用才开放。
+  工具/组合/阶段验收前先标在途，登记时不提前开放检查点；写失败阻止同轮后续动作。
+  在途/未知/超帽拒绝恢复，明确取消/放弃/终态及普通close清当前已知记录，
+  disconnect只留原已结算数据；不保存模型配置/凭据/对话历史或重放Lua/工具/批准。
+- 原BuildRecords即使无设计也落world_id；playerdata保存body_continuity_id，
+  普通加载保持而死亡新建/明确召唤重置，瞬态body_id仍每实例变化。
+  恢复核同世界/主人/同伴/continuity/维度与当前存活安全，服务端再核身份、
+  原空间/工地/B4实例修订并新建权限；恢复失败撤权，未确认准确模式前不发模型请求。
+  read_only保留，autonomous是原记录与当前主人开关交集，不继承旧批准/控制/租约/输入。
+- 原AgentLoop先验新鲜最终事实，已满足零模型完成；否则原40步含已开始等待轮、
+  max_runs/已结束阶段/停滞/重复事实、空搜/重复调用/拒绝结束及失败账均不补。
+  DeliveryLedger保留已核实净账，在途/未知不转信用；ExplorationRoute保留原范围、
+  尝试/访问/地下挖掘与返程账，短时覆盖/区块版本不复活。
+  WorkTargets/NavigationTrail/BuildSite和原NavigationBudget恢复保护/通道/缺口、
+  目标/原范围/临时位置及原节点/存储/CPU/重规划累计账，空间最多16000 UTF-8 bytes。
+  临时/B4来源见证不凭相同状态重建，位置仍保护/占容量，不能恢复清理权。
+- before旧码1项1失败，14秒，复现恢复命令被当作新模型指令。focused1通过30秒；
+  focused2漏ToolOutcome导入编译13秒失败；focused3客户端91项1失败，
+  暴露BuildSite临时状态重建漏anchor，补原目标锚点并保留断言。
+  final1强制全量客户端1122项2失败，原CompanionStateTest暴露构造期过早读Fabric游戏目录；
+  将journal初始化移到start，未改旧断言。补marker容量/清理及dispatcher恢复失败撤权测试，
+  final2强制全量50秒通过；再补实际runner建筑恢复/修订变化零模型回归。
+  最终`build/l2-final3-20261017.log`第61–62行：**47秒/20任务全部执行**。
+- 三处XML **1661项/183 suites**：核心397/45、根140/20、客户端1124/118，
+  failures/errors/skipped全0；较L1新增40项/4类。
+  原生产loop/runner/dispatcher及真实journal文件/NBT读写、原建筑/路线/探索/预算组件参与；
+  世界/身体/网络/模型受控，没有实际Fabric重进、CompanionPlayer或MinecraftServer实例，
+  不把组件/接线或编译/JAR核对当原生生命周期已验。
+- `build/libs/mcbot-0.1.0.jar` **1,674,712 bytes**，末写16:49:23，SHA256
+  `9807170593d7b6af1a5ee1e2a369411e6592aa2ab62b4c7ccf79b960725e6fd6`。
+  已核AgentRunner/CompanionPlayer/SpatialCheckpoint及内嵌GoalCheckpoint/GoalJournal/
+  WorldGoal/DeliveryLedger/原loop，内嵌core与本轮构建SHA256
+  `490ad312a8cba1e91863e2f9d2c82f0110f87ed4b52a91242fdd9b1fc65286be`一致，LuaJ及许可在包。
+  list-java无输出；差异空白检查通过，暂存47文件，产物/实例/凭据路径、
+  新增机器路径及密钥模式扫描均0匹配；提交推送另核本地完整HEAD与远端main。
+- 同一客户端journal才可恢复；世界/playerdata/journal不是崩溃原子事务，
+  存档克隆会复制身份，无克隆认证或多客户端并发journal协调。
+  原容器身份不能跨原生对象/区块重载伪造，delivery可能因此明确拒绝；换箱/修订/
+  死亡/未知现场不续。原生保存/断线停手、多人/并发及连接器两任务体验待集中实机。
+  本轮只改本体，不安装或启动游戏/服务器/真实模型，不改宿主、连接器、参考、玩家实例或无敌。
+  无新增Minecraft映射入口，沿已核ValueInput/ValueOutput等既有API；下方无L2为历史检查点。
+
 ## L1 多类目标独立现场验收（2026-10-17 16:11，Asia/Shanghai）
 
 - 从已推送S3 `0f289b2`接L1，本轮独立收一张，不提前写L2。

@@ -66,6 +66,10 @@ public interface ToolExecutor {
     /** Stop local composition before the loop synthesizes unresolved tool receipts. */
     default void stop(long taskId, String reason) { }
 
+    /** Synchronous durable boundary. A host failure stops the goal before the next model turn. */
+    default void checkpoint(long taskId, com.google.gson.JsonObject checkpoint) { }
+    default void checkpointIntent(long taskId) { }
+
     /** Optional host observation, taken anew before each model turn, never stored as a tool call. */
     default CompletableFuture<ToolOutcome> observe(long taskId) {
         return CompletableFuture.completedFuture(new ToolOutcome(true, ""));

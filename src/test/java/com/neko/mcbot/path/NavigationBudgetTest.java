@@ -5,6 +5,16 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationBudgetTest {
+    @Test void snapshotPreservesCustomCapsAndAlreadySpentSearchAndReplanBudget() {
+        var original = new NavigationBudget(5, 1000, NavigationBudget.NANOS, 1);
+        var search = search(original); search.advance(2); original.observe(search);
+        assertTrue(original.takeReplan());
+        var restored = NavigationBudget.restore(original.snapshot());
+        assertEquals(original.nodes(), restored.nodes()); assertEquals(original.records(), restored.records());
+        assertEquals(original.nanos(), restored.nanos()); assertFalse(restored.takeReplan());
+        var next = search(restored); while (!next.advance(20)) { }
+        restored.observe(next); assertTrue(restored.exhausted()); assertEquals(5, restored.nodes());
+    }
     private static final DigSampler FLOOR = new DigSampler() {
         @Override public boolean passable(int x, int y, int z) { return y >= 0; }
         @Override public boolean support(int x, int y, int z) { return y == -1; }

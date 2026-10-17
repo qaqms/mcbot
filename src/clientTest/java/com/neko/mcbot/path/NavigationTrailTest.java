@@ -5,6 +5,28 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationTrailTest {
+    @Test void restoredActualTrailKeepsIdsFractionalPassagesScopeAndEditsWithoutClaimingReachability() {
+        var trail = new NavigationTrail(); trail.bind("old-task", new Object());
+        var spec = new PathSpec(false, true, true, 12, new BlockPos(0,70,0),32);
+        trail.observe(0,70,0,70.5,true,spec); trail.observe(1,70,0,70.5,true,spec);
+        trail.edited("dig",1,71,0);
+        var saved = trail.snapshot();
+        var restored = new NavigationTrail(); restored.bind("new-task",new Object()); restored.restore(saved);
+        assertEquals(trail.report(),restored.report());
+        assertTrue(restored.protectsPassage(new BlockPos(1,72,0)));
+        assertEquals(spec,restored.point(2).scope());
+        restored.observe(2,70,0,70.5,true,spec);
+        assertEquals(3,restored.point(3).id());
+        assertFalse(restored.report().get("return_guaranteed").getAsBoolean());
+    }
+    @Test void restoredSelectedTargetsKeepTheirOriginalCapacityAndSupportProtection() {
+        var original = new WorkTargets(); original.bind("old");
+        for (int i=0;i<WorkTargets.LIMIT;i++) assertTrue(original.add(new BlockPos(i,70,0)));
+        var restored = new WorkTargets(); restored.bind("new"); restored.restore(original.snapshot());
+        assertFalse(restored.add(new BlockPos(100,70,0)));
+        assertTrue(restored.protects(new BlockPos(20,69,0)));
+        assertEquals(original.snapshot(),restored.snapshot());
+    }
     @org.junit.jupiter.api.Test void actualPassageKeepsFractionalHeadroomAndFloorUntilTaskChanges() {
         var trail=new NavigationTrail(); var world=new Object();
         trail.bind("task",world); trail.observe(1,90,2,90.5,true);

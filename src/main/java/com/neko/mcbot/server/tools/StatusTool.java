@@ -44,6 +44,11 @@ public final class StatusTool implements ServerTool {
                 companion.getInventory(), task);
         if (result.ok()) {
             result.data().addProperty("body_id", companion.observationBodyId().toString());
+            result.data().addProperty("body_continuity_id", companion.bodyContinuityId().toString());
+            result.data().addProperty("owner_uuid", companion.ownerUuid().toString());
+            result.data().addProperty("companion_uuid", companion.getUUID().toString());
+            var records = McbotMod.buildRecords(companion.level().getServer());
+            if (records != null && records.healthy()) result.data().addProperty("world_id", records.worldId().toString());
             result.data().addProperty("alive", companion.isAlive() && !companion.lifecycle().retired());
             result.data().add("body_lifecycle", companion.lifecycle().observation());
             result.data().addProperty("body_state", companion.lifecycle().state());
@@ -58,6 +63,14 @@ public final class StatusTool implements ServerTool {
             result.data().add("drop_changes", com.neko.mcbot.server.DropTracker.recent(companion));
             result.data().add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
                     companion.level(), companion.blockPosition(), 64));
+            if (args.has("recovery") && args.get("recovery").getAsBoolean()) {
+                try {
+                    result.data().add("recovery_spatial", com.neko.mcbot.server.SpatialCheckpoint.snapshot(companion));
+                    result.data().addProperty("recovery_spatial_known", true);
+                } catch (RuntimeException unavailable) {
+                    result.data().addProperty("recovery_spatial_known", false);
+                }
+            }
             result = new Result(true, result.feedback()
                     + com.neko.mcbot.body.BodyChangeLog.sentence(recent), result.data());
         }
@@ -116,9 +129,11 @@ public final class StatusTool implements ServerTool {
                 + "；只用已有库存，实际消费见body_maintenance，原目标另行核验。", data);
     }
     static Result report(JsonObject args, Body body, Inventory inventory, JsonObject task) {
-        for (String key : args.keySet()) if (!key.equals("details")) return denied();
+        for (String key : args.keySet()) if (!key.equals("details") && !key.equals("recovery")) return denied();
         if (args.has("details") && (!args.get("details").isJsonPrimitive()
                 || !args.get("details").getAsJsonPrimitive().isBoolean())) return denied();
+        if (args.has("recovery") && (!args.get("recovery").isJsonPrimitive()
+                || !args.get("recovery").getAsJsonPrimitive().isBoolean())) return denied();
         boolean details = args.has("details") && args.get("details").getAsBoolean();
         Result contents = InventoryTool.report(inventory);
         var data = new JsonObject();
@@ -157,6 +172,6 @@ public final class StatusTool implements ServerTool {
     }
 
     private static Result denied() {
-        return new Result(false, "DENIED:status 只接受可选布尔 details。", null);
+        return new Result(false, "DENIED:status 只接受可选布尔 details 和内部 recovery。", null);
     }
 }

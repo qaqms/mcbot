@@ -98,6 +98,46 @@ public final class WorkFailureMemory {
 
     private void clear() { failures.clear(); terrain.clear(); }
 
+    public synchronized JsonObject snapshot() {
+        var data = new JsonObject();
+        var entries = new com.google.gson.JsonArray();
+        failures.forEach((key, count) -> {
+            var value = new JsonObject();
+            value.addProperty("tool", key.tool());
+            value.add("args", key.args().deepCopy());
+            value.addProperty("reason", key.reason());
+            value.addProperty("count", count);
+            entries.add(value);
+        });
+        data.add("entries", entries);
+        if (bodyFacts != null) data.addProperty("body_facts", bodyFacts);
+        return data;
+    }
+
+    public static WorkFailureMemory restore(JsonObject data) {
+        var memory = new WorkFailureMemory();
+        var entries = data.getAsJsonArray("entries");
+        if (entries == null || entries.size() > ENTRY_LIMIT) throw new IllegalArgumentException();
+        for (var entry : entries) {
+            var value = entry.getAsJsonObject();
+            String tool = WorldGoal.text(value, "tool"), reason = WorldGoal.text(value, "reason");
+            var args = value.getAsJsonObject("args");
+            if (!tracked(tool) || !localFailure(tool, reason + ":") || args == null
+                    || args.toString().length() > 20000) throw new IllegalArgumentException();
+            var key = new Key(tool, args.deepCopy(), reason);
+            if (memory.failures.put(key, GoalCheckpoint.bounded(value, "count", 1, FAILURE_LIMIT)) != null)
+                throw new IllegalArgumentException();
+        }
+        if (data.has("body_facts")) {
+            var value = data.get("body_facts");
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                    || value.getAsString().length() > 16384) throw new IllegalArgumentException();
+            memory.bodyFacts = value.getAsString();
+        }
+        // Live chunk versions cannot survive a server restart; retaining failure counts is conservative.
+        return memory;
+    }
+
     private static boolean effect(String tool, JsonObject data) {
         return switch (tool) {
             case "move_to" -> positive(data, "removed_blocks", "placed_blocks");
