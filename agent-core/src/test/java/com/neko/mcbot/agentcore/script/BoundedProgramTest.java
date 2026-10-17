@@ -16,6 +16,26 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class BoundedProgramTest {
+    @Test void tryCallCannotSwallowDeathAndContinueWithAnotherAction() throws Exception {
+        try (var f = new Fixture("mc.try_call('move_to',{x=1,y=60,z=2}); return mc.call('inventory',{})")) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(false, "BODY_DIED:retired"));
+            var outcome = f.outcome();
+            assertFalse(outcome.ok());
+            assertTrue(outcome.feedback().contains("BODY_DIED:"));
+            assertEquals(1, f.calls.size());
+        }
+    }
+    @Test void bodyIdentityAndDeathRemainVisibleInCompactedQueryReceipts() throws Exception {
+        try (var f = new Fixture("local r=mc.call('status',{}); return r.data.alive")) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(actual(
+                    "{\"body_id\":\"new-body\",\"body_state\":\"dead\",\"alive\":false}"));
+            var outcome = f.outcome();
+            assertTrue(outcome.ok(), outcome.feedback());
+            assertTrue(outcome.feedback().contains("\"alive\":false"));
+            assertTrue(outcome.feedback().contains("\"body_id\":\"new-body\""));
+            assertTrue(outcome.feedback().contains("\"body_state\":\"dead\""));
+        }
+    }
     private static final class Fixture implements AutoCloseable {
         final ConcurrentLinkedQueue<Runnable> queue = new ConcurrentLinkedQueue<>();
         final AtomicLong time = new AtomicLong();

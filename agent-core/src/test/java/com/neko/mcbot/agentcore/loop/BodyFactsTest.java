@@ -6,6 +6,13 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BodyFactsTest {
+    @Test void deathIsAnUnsafeSharedFactEvenIfTheEnvironmentHasCleared() {
+        assertTrue(BodyFacts.environmentUnsafe(JsonParser.parseString(
+                "{\"alive\":false,\"environment_work_safe\":true}").getAsJsonObject()));
+        assertFalse(BodyFacts.environmentUnsafe(JsonParser.parseString("{\"alive\":true}").getAsJsonObject()));
+        assertThrows(IllegalArgumentException.class, () -> BodyFacts.environmentUnsafe(
+                JsonParser.parseString("{\"alive\":\"false\"}").getAsJsonObject()));
+    }
     @Test void sharedUnsafeFactIsAuthoritativeEvenWhenTheBodyIsAlreadyDry() {
         assertTrue(BodyFacts.environmentUnsafe(JsonParser.parseString(
                 "{\"environment_work_safe\":false,\"eyes_in_water\":false}").getAsJsonObject()));

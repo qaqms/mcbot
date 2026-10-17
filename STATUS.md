@@ -3,6 +3,51 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## S3 死亡与身体重建隔离验收（2026-10-17 15:38，Asia/Shanghai）
+
+- 本轮从S2 `096af1f`接S3，未启L1/L2；当前十七张完整离线卡、B5部分完成、
+  另4卡未开，下一L1。完整只读参考链、指纹、实现取舍及边界见
+  `docs/S3-DEATH-RECONSTRUCTION-2026-10-17.md`；提交/推送以Git为准。
+- 原die入口一次性退役：先发布身体死亡，后撤精确身体权限/批准、原scheduler工作/
+  反射租约、环境/自保/维护和手部占用，再走原生死亡及F2同源实际接受生成账。
+  通知/撤权/清理/原生结算不完整不自动重建；物理的travel/方块/落地作用后再核生命和世界。
+  保留真实部分效果与装备/库存，不给尸体补血、不推测掉落、不改原无敌。
+- 原AgentLoop统一failed活动及排队任务，停止模型/整理、工具、挂起长活、反问/授权、
+  Lua/采集/探索及长期阶段。新身体沿用同伴UUID但body_id不同，排队控制/动作/批准/取消
+  冻结原body_id，服务端再核当前实例；旧task_end/cancel也不能影响重建后的新任务。
+  身体恢复不发模型请求或续旧目标，明确新任务仍先新鲜status；外部桥v1.0保持。
+- 原生死亡完整且主人在线存活才等待40刻后、每20刻至多一次/共8次安全搜索。
+  复用StandingGeometry，在主人当前层只查75个已加载干燥候选及实体碰撞，不强制加载/改地形。
+  新CompanionPlayer先在死亡世界走restoreFrom(false)的keepInventory，再注册到目标世界，
+  不重载死亡前存档，不继承旧攻击者/控制/输入/许可。部分注册或通知失败先退役新身体再清理，
+  搜索耗尽/异常均停止自动重试；当前没有重置重建次数或自动修档入口。
+- status新增body_id/alive/body_state/body_lifecycle和last_death；当前装备取真实inventory，
+  旧死亡掉落为有界实际快照，snapshot=true不代表当前地面状态或入包。
+  all_death_drops_proven=false；Lua摘要保留生命/实例，try_call不可吞BODY_DIED继续动作。
+  playerdata版本化保存完整死亡/原身份/剩余搜索账及有界快照，重启不重播die或补次数；
+  未验证0血、坏元数据或中断rebuilding停用，不等于L2目标恢复或跨存档崩溃事务。
+- before旧码1项1失败，18秒，复现死亡后旧活动任务仍运行；compile1原回归25秒通过。
+  focused1客户端124项有4个新NBT夹具NPE，原因漏传注册表上下文；改用实际RegistryAccess.EMPTY，
+  保留断言后focused2通过28秒。final1强制全量客户端1090项1失败：
+  新runner网络门改变原取消通知契约，恢复“客户端边界检查实际网络”后final2全量54秒通过。
+  收尾保留有界实际掉落样本并补Lua死亡不可吞测试，最终强制全量：
+  `build/s3-final3-20261017.log`第61–62行，**52秒/20任务全部执行**。
+- XML **1585项/174 suites**（核心356/41、根139/20、客户端1090/113），
+  failures/errors/skipped全0，比S2实核1548项新增37项/2类。
+  生产loop/runner/dispatcher/scheduler/权限、Lua、实际NBT读写和F2掉落账参与；
+  世界/身体/模型/网络及原生死亡/重建/掉落实体回调受控，不冒充原生事件或实机已验。
+- `build/libs/mcbot-0.1.0.jar` **1,626,326 bytes**，末写15:38:02，SHA256
+  `efa6483c23d32473af8a5a82159a4108e3ceffd311b896800ac3efe842262d84`。
+  已核BodyLifecycle/CompanionPlayer/SummonService/runner、内嵌core与本轮构建哈希一致、
+  LuaJ及许可；list-java无输出，暂存文件无产物/实例/凭据文件，新增内容机器路径/密钥扫描0匹配。
+  首次提交因本机未配置Git作者而拒绝；核最近三次一致的仓库身份，仅本次git -c复用，
+  不改全局/仓库配置。提交推送结果另核本地HEAD与远端main。
+  未安装或启动游戏/服务器/真实模型，不改宿主、协作者连接器、只读参考、玩家实例或无敌；
+  原生掉落/keepInventory/附魔/用物交接、跨维度注册/动画/保存重进与多人待REAL-GAME-RETESTING。
+- 统计更正：本轮开工复核S2三处XML，旧1196项/131 suites只含根138/20及客户端1058/111，
+  漏计agent-core的352/41；正确为**1548项/172 suites**，失败/错误/跳过全0。
+  下节和相关S2文档同步更正，不改变原S2构建日志、候选哈希或真实验收边界。
+
 ## S2 有限补给与装备维护验收（2026-10-17，Asia/Shanghai）
 
 - S1 后继续单卡收S2；未提前写S3。新增 `consume` 原生持续用物、空盔甲槽装备、
@@ -17,7 +62,8 @@
   新任务；失败不补原模型/工作/探索/许可/导航账，`goal_satisfied=false`。
 - `status`/Lua增加 `saturation`、`using_item`、`body_maintenance`；`consume` 可直接调用
   并进入有界 `workflow`。工具白名单、权限门、取消/迟到和原子预算保持。
-- 最终强制全量 `build/s2-final2-20261017.log`：**1196项/131 suites**，失败/错误/跳过全0，
+- 最终强制全量 `build/s2-final2-20261017.log`：**1548项/172 suites**，失败/错误/跳过全0，
+  （S3开工复核更正：旧1196/131漏计agent-core的352/41），
   20任务全部执行，构建56秒。JAR SHA256：
   `e841b57042e38e703f7df10502ef3b0c30aa0ea34dea27151b411bcb2e9eb680`。
 - 未启动游戏、服务器或真实模型；FoodData递减、原生用物动画/属性同步、多人抢占和死亡交接
@@ -5451,6 +5497,19 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-17 S3本地官方映射javap/字节码及生产编译确认，未运行游戏：
+ServerPlayer.die(DamageSource)为public，负责原生死亡/掉落；restoreFrom(ServerPlayer,boolean)
+为public，false分支回到原生最大生命，读取this.level().getGameRules().KEEP_INVENTORY或旧身体
+spectator决定是否transferInventoryXpAndScore；本体只在死亡世界执行此步后切换目标层。
+setServerLevel(ServerLevel)同时更新Entity.level与gameMode的层；copyRespawnPosition公开。
+onUpdateAbilities在connection为null时直接返回，因此新身体无需借用尸体的网络连接。
+PlayerList.respawn会创建普通ServerPlayer，不能直接当CompanionPlayer重建；remove会保存实际playerdata。
+ServerPlayer.readAdditionalSaveData(ValueInput)/addAdditionalSaveData(ValueOutput)为protected；
+ValueInput.child/getStringOr/getBooleanOr/getIntOr及ValueOutput.child/putString/putBoolean/putInt可用。
+TagValueOutput.createWithoutContext(ProblemReporter)/buildResult与TagValueInput.create(reporter,provider,tag)
+可实际离线往返；provider必须非null，纯生命周期测试用RegistryAccess.EMPTY。
+签名/字节码/受控NBT验证不表示实际死亡、原生登录/掉落/附魔或跨维度已验。
 
 2026-10-17 B5本地官方映射javap/字节码及生产NBT解析离线调用确认，未运行游戏：
 NbtIo.read(DataInput,NbtAccounter):CompoundTag，NbtAccounter(long quota,int maxDepth)公开。

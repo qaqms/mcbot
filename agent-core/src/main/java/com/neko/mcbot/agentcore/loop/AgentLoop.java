@@ -353,6 +353,15 @@ public final class AgentLoop {
         return false;
     }
 
+    /** A lost body ends this task generation; recovery must not pump its queued directives. */
+    public synchronized void failTasks(String reason) {
+        discardQueued(TaskStatus.FAILED, reason);
+        stopActive(TaskStatus.FAILED, reason, false);
+        itemGoal = null;
+        goalContinuation = null;
+        running = false;
+    }
+
     public synchronized long currentTaskId() {
         return activeDirective == null ? 0 : activeDirective.id();
     }

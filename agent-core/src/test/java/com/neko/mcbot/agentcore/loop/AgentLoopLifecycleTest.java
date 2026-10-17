@@ -16,6 +16,27 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentLoopLifecycleTest {
+    @Test void bodyDeathCancelsAnInFlightSummaryAndFailsQueuedTasksWithoutPumping() {
+        var engine = new Engine();
+        var rec = new Recorder();
+        var loop = new AgentLoop(engine, List.of(), (n, a) -> fail("no tools"),
+                AgentLoop.Config.defaults(), rec, () -> "SYS", 10);
+        for (int i = 0; i < 10; i++) loop.conversation().add(new Msg.User("x".repeat(4000)));
+        loop.submit(11, "A");
+        loop.submit(22, "B");
+        engine.responses.getFirst().complete(text("A done"));
+        assertEquals(2, engine.responses.size());
+        loop.failTasks("BODY_DIED:body retired");
+        assertTrue(engine.responses.get(1).isCancelled());
+        engine.responses.get(1).complete(text("old summary"));
+        assertEquals(2, engine.responses.size());
+        assertEquals(List.of(11L), rec.started);
+        assertTrue(rec.finished.contains(new Finished(22, AgentLoop.TaskStatus.FAILED)));
+        assertEquals(0, loop.queuedTasks());
+        loop.submit(33, "fresh");
+        assertEquals(List.of(11L, 33L), rec.started);
+        loop.close();
+    }
     @Test
     void laterIndexCannotStartBeforeTheFirstToolEvenIfItsStreamSignalArrivesFirst() {
         var engine = new Engine();

@@ -43,6 +43,11 @@ public final class StatusTool implements ServerTool {
                         companion.getAirSupply(), companion.getMaxAirSupply(), companion.waterRecoveryState()),
                 companion.getInventory(), task);
         if (result.ok()) {
+            result.data().addProperty("body_id", companion.observationBodyId().toString());
+            result.data().addProperty("alive", companion.isAlive() && !companion.lifecycle().retired());
+            result.data().add("body_lifecycle", companion.lifecycle().observation());
+            result.data().addProperty("body_state", companion.lifecycle().state());
+            result.data().add("last_death", companion.deathObservation());
             var recent = companion.recentBodyChanges();
             result.data().add("body_changes", recent);
             result = defenseReport(result, companion.defense().observation());

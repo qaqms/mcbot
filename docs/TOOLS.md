@@ -3,6 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## S3 身体实例与死亡终态（2026-10-17）
+
+S3不新增游戏工具。status的body_id为当前身体实例，alive/body_state/body_lifecycle报告
+生命/清理/原生死亡/有界重建账，完整inventory/equipment仍是当前真实库存。
+last_death中的observed_drops来自F2实际接受生成账；重建后snapshot=true为旧事实，
+不代表当前掉落位置/可拾取状态，更不代表已入包；all_death_drops_proven恒false。
+死亡使活动/排队任务failed（BODY_DIED），包括长期阶段、Lua/采集和持续行为；
+try_call不可吞死亡继续。重建不发新模型请求，须明确新任务并重新status才工作。
+内部task_begin/end、authorize、cancel及动作带冻结body_id；外部桥v1.0入口不增加必填字段。
+当前有限重建最多8次，未知0血/坏元数据/耗尽/部分失败停用，无自动重试或修档。
+完整支持与边界见S3-DEATH-RECONSTRUCTION。下方旧工具数量按对应历史阶段阅读。
+
 ## S1 共用环境事实与停工（2026-10-17）
 
 工具仍30项。status的air_supply/max_air_supply为原生推进后的身体空气读数，

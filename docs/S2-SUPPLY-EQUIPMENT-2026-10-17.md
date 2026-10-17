@@ -38,7 +38,8 @@
 同一概要，完整库存仍通过 `inventory` 或 `status details=true` 取得。`consume` 可直接调用，
 也可作为有限 `workflow` 步骤；两者均经原权限、控制、取消和原子预算入口。
 
-专项及最终强制全量 `build/s2-final2-20261017.log`：1196项，失败/错误/跳过0；
+专项及最终强制全量 `build/s2-final2-20261017.log`：1548项/172 suites，失败/错误/跳过0；
+S3开工三根XML复核更正：旧1196/131漏计agent-core的352/41，根138/20、客户端1058/111。
 JAR SHA256 为 `e841b57042e38e703f7df10502ef3b0c30aa0ea34dea27151b411bcb2e9eb680`。
 真实游戏中的FoodData递减、客户端用物动画、装备属性显示、多人抢占和死亡交接仍待
 `REAL-GAME-RETESTING.md`。

@@ -129,6 +129,8 @@ public final class AgentRunner implements ToolExecutor {
     private volatile long currentTask;
     private volatile String companionName = "";
     private volatile java.util.UUID companionUuid;
+    private volatile String companionBodyId = "";
+    private volatile boolean bodyUnavailable;
     private volatile String lifecycleResult = "";
     /** 已超时或取消的调用仍收到回执；只计数，不重新消费。 */
     private final AtomicLong lateResults = new AtomicLong();
@@ -148,7 +150,7 @@ public final class AgentRunner implements ToolExecutor {
         ChatEngine engine(ClientConfig cfg);
         PromptBuilder prompt(ClientConfig cfg);
         void showChat(String text);
-        void sendCancel(AgentRunner owner);
+        void sendCancel(AgentRunner owner, JsonObject body);
         void saveConfig(ClientConfig cfg);
         long nowMs();
         boolean inGame();
@@ -186,14 +188,8 @@ public final class AgentRunner implements ToolExecutor {
         }
 
         @Override
-        public void sendCancel(AgentRunner owner) {
-            Minecraft.getInstance().execute(() -> {
-                if (McbotClient.runner() != owner) return;
-                if (ClientPlayNetworking.canSend(McbotPayloads.C2s.TYPE)) {
-                    ClientPlayNetworking.send(new McbotPayloads.C2s(
-                            new Envelope("cancel", new JsonObject()).encode()));
-                }
-            });
+        public void sendCancel(AgentRunner owner, JsonObject body) {
+            if (canSend()) send(new Envelope("cancel", body));
         }
 
         @Override public void saveConfig(ClientConfig cfg) { ClientConfig.save(cfg); }
@@ -471,6 +467,7 @@ public final class AgentRunner implements ToolExecutor {
     }
     public String taskState() {
         if (closed) return "会话已关闭";
+        if (bodyUnavailable) return "原身体已死亡，等待身体重建";
         var question = questionSnapshot();
         if (question != null) return question.authorization() ? "等待你的确认" : "等待你的回答";
         if (loop != null && loop.compacting()) return "正在整理上下文";
@@ -505,7 +502,7 @@ public final class AgentRunner implements ToolExecutor {
     }
     public CompletableFuture<Boolean> compactContext() {
         AgentLoop brain = loop;
-        if (closed || brain == null || brain.busy()) return CompletableFuture.completedFuture(false);
+        if (closed || bodyUnavailable || brain == null || brain.busy()) return CompletableFuture.completedFuture(false);
         long generation = brainGeneration;
         return brain.compactNow().thenApply(changed -> {
             if (closed || generation != brainGeneration || brain != loop) return false;
@@ -691,7 +688,12 @@ public final class AgentRunner implements ToolExecutor {
         }
         String name = env.str("companion");
         if (name.isEmpty()) id = null;
-        if (!companionName.equals(name) || !java.util.Objects.equals(companionUuid, id)) {
+        boolean companionChanged = !companionName.equals(name) || !java.util.Objects.equals(companionUuid, id);
+        String token = env.str("body_id");
+        boolean bodyChanged = !token.isEmpty() && !token.equals(companionBodyId);
+        boolean lostBody = !companionBodyId.isEmpty() && (companionChanged || bodyChanged);
+        boolean died = !env.str("body_state").isEmpty() && !env.str("body_state").equals("alive");
+        if (companionChanged || bodyChanged || died && !bodyUnavailable) {
             companionGeneration++;
             workFailures = currentTask == 0 ? null : new WorkFailureMemory();
             companionBody = new JsonObject();
@@ -699,8 +701,30 @@ public final class AgentRunner implements ToolExecutor {
             companionObservation = "尚未读取同伴信息";
             taskBubble.clear();
         }
+        // Close the old generation before draining futures: completion callbacks can dispatch work.
+        if (lostBody || died && !bodyUnavailable) {
+            bodyUnavailable = true;
+            if (loop != null) loop.failTasks("BODY_DIED:原身体已终止或被替换，旧目标和排队任务不自动续跑。");
+            stop(0, "BODY_DIED:原身体已终止。");
+            pending.drain(t -> true).forEach(t -> t.complete(ToolOutcome.synthetic("BODY_DIED:原身体已终止。")));
+            clearTaskWaits(0, "BODY_DIED:原身体已终止。");
+            authorizationPlans.clear();
+            taskPolicies.clear();
+            explorationRoute = null;
+            taskInitialObservation = null;
+            workFailures = null;
+            parked = false;
+            parkedJobs = 0;
+            brainGeneration++;
+        }
         companionName = name;
         companionUuid = id;
+        if (companionChanged) companionBodyId = "";
+        if (!token.isEmpty()) companionBodyId = token;
+        // A duplicate alive notice for a retired incarnation cannot resurrect it.
+        if (died) bodyUnavailable = true;
+        else if (!token.isEmpty() && bodyChanged && env.str("body_state").equals("alive")) bodyUnavailable = false;
+        else if (companionChanged && token.isEmpty()) bodyUnavailable = false;
     }
 
     public String lifecycleResult() {
@@ -714,10 +738,12 @@ public final class AgentRunner implements ToolExecutor {
         }
         record("§9我> §r" + ("status".equals(name) ? "查看状态" : "扫描附近"));
         long generation = brainGeneration;
+        long bodyGeneration = companionGeneration;
         executeRemote(name, "{}", 0, null).whenComplete((result, failure) ->
                 client.executeOnClient(() -> {
                     // Reload keeps this runner, but queued inspection displays belong to the old brain.
-                    if (closed || generation != brainGeneration || !client.isCurrentRunner(this)) return;
+                    if (closed || generation != brainGeneration || bodyGeneration != companionGeneration
+                            || !client.isCurrentRunner(this)) return;
                     say("§7[mcbot] " + (failure == null ? result.feedback() : "检查失败，请重试。") + "§r");
                 }));
     }
@@ -809,6 +835,12 @@ public final class AgentRunner implements ToolExecutor {
         panelHistory.begin(id, text);
         record("§9我> §r" + text, id);   // Display only the owner's original directive.
         AgentLoop brain = loop;
+        if (bodyUnavailable) {
+            String reason = "BODY_DIED:原身体已死亡；身体重建并重新观测后，请明确提交新任务。";
+            emitDone(id, AgentLoop.TaskStatus.FAILED, reason);
+            askWaiters.finish(id, AgentLoop.TaskStatus.FAILED, reason);
+            return;
+        }
         if (closed || brain == null) {
             say("§c[mcbot] 大脑未配置：打开面板（默认 G）填 base_url/model/api_key 后保存。§r");
             String reason = "大脑不在线，指令未执行";
@@ -903,7 +935,13 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void sendCancel() {
-        client.sendCancel(this);
+        long generation = companionGeneration;
+        var scope = new JsonObject();
+        scope.addProperty("body_id", companionBodyId);
+        client.executeOnClient(() -> {
+            if (generation == companionGeneration && client.isCurrentRunner(this))
+                client.sendCancel(this, scope);
+        });
     }
 
     /** 先登记编号再投令，同步完成也不会抢答其他任务。 */
@@ -961,6 +999,8 @@ public final class AgentRunner implements ToolExecutor {
         o.addProperty("brain_enabled", !closed && loop != null);
         o.addProperty("model", cfg == null ? "" : cfg.model);
         o.addProperty("companion", companionName);
+        o.addProperty("body_id", companionBodyId);
+        o.addProperty("body_available", !bodyUnavailable);
         o.addProperty("current_task", currentTask);
         AgentLoop brain = loop;
         o.addProperty("queued_tasks", brain == null ? 0 : brain.queuedTasks());
@@ -980,7 +1020,7 @@ public final class AgentRunner implements ToolExecutor {
 
     @Override
     public CompletableFuture<ToolOutcome> observe(long taskId) {
-        if (closed || taskId != currentTask) return CompletableFuture.completedFuture(
+        if (closed || bodyUnavailable || taskId != currentTask) return CompletableFuture.completedFuture(
                 ToolOutcome.synthetic("CANCELLED:观测所属任务已结束。"));
         return client.observe(this, taskId).thenApply(state -> {
             if (!closed && taskId == currentTask && state != null && state.ok()
@@ -1013,6 +1053,7 @@ public final class AgentRunner implements ToolExecutor {
     @Override
     public CompletableFuture<ToolOutcome> execute(String name, String argsJson) {
         if (closed) return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:会话已关闭。"));
+        if (bodyUnavailable) return CompletableFuture.completedFuture(ToolOutcome.synthetic("BODY_DIED:原身体已终止。"));
         if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(argsJson));
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
@@ -1336,6 +1377,7 @@ public final class AgentRunner implements ToolExecutor {
                     "DENIED:主人要求只读，此任务不能移动或改动世界/物品。"));
         }
         body.addProperty("task_id", taskId);
+        body.addProperty("body_id", companionBodyId);
         CompletableFuture<ToolOutcome> f = new CompletableFuture<>();
         String json = new Envelope("tool_call", body).encode();
         // 发送前自检：服务端闸①对超尺寸包是“丢弃 + 日志”，不会回话。若不在这里拦下，
@@ -1367,7 +1409,7 @@ public final class AgentRunner implements ToolExecutor {
         client.executeOnClient(() -> {
             if (closed || f.isDone()) return;
             if (ticket.owner() != null && (ticket.owner() != loop || ticket.taskId() != currentTask)) return;
-            if (memory != null && bodyGeneration != companionGeneration) {
+            if (bodyGeneration != companionGeneration || bodyUnavailable && taskId != 0) {
                 pending.takeTool(seq);
                 f.complete(ToolOutcome.synthetic("CANCELLED:同伴身体已替换，旧调用未发送。"));
                 return;
@@ -1435,8 +1477,11 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void sendTaskControl(String kind, JsonObject body) {
+        long generation = companionGeneration;
+        body.addProperty("body_id", companionBodyId);
         client.executeOnClient(() -> {
-            if (client.isCurrentRunner(this) && client.canSend()) client.send(new Envelope(kind, body));
+            if (generation == companionGeneration && client.isCurrentRunner(this) && client.canSend())
+                client.send(new Envelope(kind, body));
         });
     }
 
@@ -1456,16 +1501,23 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private CompletableFuture<ToolOutcome> authorize(QuestionRecord question) {
+        long generation = companionGeneration;
         long seq = seqGen.incrementAndGet();
         JsonObject body = new JsonObject();
         body.addProperty("seq", seq);
         body.addProperty("task_id", question.taskId);
         body.addProperty("authorization_id", question.authorizationId);
+        body.addProperty("body_id", companionBodyId);
         var future = new CompletableFuture<ToolOutcome>();
         var ticket = new ToolTicket(question.taskId, loop, future, question.composition);
         pending.registerTool(seq, "authorize", client.nowMs(), TOOL_TIMEOUT_MS, ticket);
         client.executeOnClient(() -> {
             if (closed || future.isDone()) return;
+            if (bodyUnavailable || generation != companionGeneration) {
+                pending.takeTool(seq);
+                future.complete(ToolOutcome.synthetic("BODY_DIED:原身体授权已失效。"));
+                return;
+            }
             if (question.taskId != currentTask || ticket.owner() != loop || !client.canSend()) {
                 pending.takeTool(seq);
                 future.complete(new ToolOutcome(false, "CANCELLED:任务已结束，授权没有发送。"));

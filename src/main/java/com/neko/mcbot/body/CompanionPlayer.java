@@ -24,6 +24,47 @@ public final class CompanionPlayer extends ServerPlayer {
     private final MeleeClock meleeClock = new MeleeClock();
     private final HealthObservation healthObservation = new HealthObservation();
     private final UUID observationBodyId = UUID.randomUUID();
+    private final BodyLifecycle lifecycle = new BodyLifecycle(observationBodyId);
+    private com.neko.mcbot.server.DropTracker.Request deathDrops;
+    private com.google.gson.JsonObject previousDeath;
+    private final BodyLifecycle.Access deathAccess = new BodyLifecycle.Access() {
+        @Override public boolean current() {
+            return McbotMod.summonService() != null
+                    && level().getServer().getPlayerList().getPlayer(getUUID()) == CompanionPlayer.this;
+        }
+        @Override public void announce() {
+            var dispatcher = McbotMod.dispatcher();
+            if (dispatcher != null && dispatcher.belongsTo(level().getServer()))
+                dispatcher.publishBody(CompanionPlayer.this);
+        }
+        @Override public void revoke() {
+            var dispatcher = McbotMod.dispatcher();
+            if (dispatcher != null && dispatcher.belongsTo(level().getServer()))
+                dispatcher.retireBody(CompanionPlayer.this);
+        }
+        @Override public void stop() {
+            try {
+                McbotMod.scheduler().interrupt(getUUID(), new com.neko.mcbot.server.ServerTool.Result(
+                        false, "BODY_DIED:原身体已死亡，旧工作终止；保留实际部分效果，不自动续跑。", null));
+            } finally {
+                try { cancelBodyBehaviors(); }
+                finally {
+                    releaseMovement();
+                    stopUsingItem();
+                    setDeltaMovement(Vec3.ZERO);
+                    swinging = false;
+                    attackAnim = oAttackAnim = 0;
+                }
+            }
+        }
+        @Override public boolean ownerReady() {
+            ServerPlayer owner = level().getServer().getPlayerList().getPlayer(ownerUuid);
+            return owner != null && owner.isAlive() && !owner.isRemoved();
+        }
+        @Override public boolean rebuild() {
+            return McbotMod.summonService().rebuild(CompanionPlayer.this);
+        }
+    };
     private final com.neko.mcbot.path.WorkTargets workTargets = new com.neko.mcbot.path.WorkTargets();
     private final com.neko.mcbot.building.BuildSite buildSite = new com.neko.mcbot.building.BuildSite();
     private final com.neko.mcbot.path.NavigationTrail navigationTrail = new com.neko.mcbot.path.NavigationTrail();
@@ -226,6 +267,62 @@ public final class CompanionPlayer extends ServerPlayer {
     }
 
     public UUID observationBodyId() { return observationBodyId; }
+    public BodyLifecycle lifecycle() { return lifecycle; }
+
+    public com.google.gson.JsonObject deathObservation() {
+        var data = lifecycle.retired() || previousDeath == null ? lifecycle.observation() : previousDeath.deepCopy();
+        if (!data.has("drop_capture_available")) data.addProperty("drop_capture_available", false);
+        if (!data.has("all_death_drops_proven")) data.addProperty("all_death_drops_proven", false);
+        if (deathDrops != null) {
+            var drops = deathDrops.report();
+            data.addProperty("drop_capture_available", drops != null);
+            if (drops != null) data.add("observed_drops", drops);
+            // Missing admissions, asynchronous loot and grave mods cannot be inferred from an empty capture.
+            data.addProperty("all_death_drops_proven", false);
+        }
+        return data;
+    }
+
+    public void rebuiltFrom(CompanionPlayer original) {
+        previousDeath = original.deathObservation();
+        previousDeath.addProperty("state", "dead");
+        previousDeath.addProperty("reconstruction_complete", true);
+        previousDeath.addProperty("replacement_body_id", observationBodyId.toString());
+        previousDeath.addProperty("snapshot", true);
+    }
+
+    public void tickLifecycle() {
+        if (!isAlive() && !lifecycle.retired()) lifecycle.unavailable(deathAccess);
+        try { lifecycle.tick(deathAccess); }
+        catch (RuntimeException failure) {
+            McbotMod.LOG.error("[body-lifecycle] reconstruction failed body_id={}", observationBodyId, failure);
+        }
+    }
+
+    public void reconstructionFailed() { lifecycle.unavailable(deathAccess, "reconstruction_failed"); }
+
+    @Override
+    protected void addAdditionalSaveData(net.minecraft.world.level.storage.ValueOutput output) {
+        super.addAdditionalSaveData(output);
+        if (lifecycle != null) lifecycle.save(output.child("mcbot_body_lifecycle"));
+        if (previousDeath != null) output.putString("mcbot_last_death", previousDeath.toString());
+    }
+
+    @Override
+    protected void readAdditionalSaveData(net.minecraft.world.level.storage.ValueInput input) {
+        super.readAdditionalSaveData(input);
+        if (lifecycle != null) input.child("mcbot_body_lifecycle").ifPresent(lifecycle::load);
+        previousDeath = null;
+        String saved = input.getStringOr("mcbot_last_death", "");
+        if (!saved.isEmpty() && com.neko.mcbot.common.WireSize.utf8Bytes(saved) <= 12288) {
+            try {
+                var value = com.google.gson.JsonParser.parseString(saved);
+                if (value.isJsonObject()) previousDeath = value.getAsJsonObject();
+            } catch (com.google.gson.JsonParseException invalid) {
+                McbotMod.LOG.warn("[body-lifecycle] invalid prior death snapshot");
+            }
+        }
+    }
 
     public com.neko.mcbot.path.WorkTargets workTargets() { return workTargets; }
     public com.neko.mcbot.building.BuildSite buildSite() { return buildSite; }
@@ -249,6 +346,7 @@ public final class CompanionPlayer extends ServerPlayer {
     public com.neko.mcbot.server.MaintenanceDriver maintenance() { return maintenance; }
 
     public void tickDefense() {
+        if (lifecycle.retired() || !isAlive() || isRemoved()) return;
         defenseDriving = true;
         try { defense.tick(waterControlling || environmentFailure() != null); }
         finally { defenseDriving = false; }
@@ -333,8 +431,13 @@ public final class CompanionPlayer extends ServerPlayer {
 
     @Override
     public void tick() {
+        if (lifecycle.retired() || !isAlive()) {
+            if (!lifecycle.retired()) lifecycle.unavailable(deathAccess);
+            return;
+        }
         observeHealth(HealthObservation.Phase.BEFORE_TICK);
         super.tick();
+        if (!isAlive() || isRemoved() || lifecycle.retired()) return;
         // FakeConnection has no listener tick, so Player.tick cannot supply these updates.
         ((com.neko.mcbot.mixin.LivingEquipmentAccess) (net.minecraft.world.entity.LivingEntity) this)
                 .mcbot$detectEquipmentUpdates();
@@ -356,6 +459,19 @@ public final class CompanionPlayer extends ServerPlayer {
         BodyPickup.tick(pickup);
         observeHealth(HealthObservation.Phase.AFTER_TICK);
         observeBodyChanges();
+    }
+
+    @Override
+    public void die(DamageSource source) {
+        if (lifecycle == null || lifecycle.retired()) return;
+        String cause = source.typeHolder().unwrapKey().map(key -> key.identifier().toString()).orElse("unknown");
+        deathDrops = com.neko.mcbot.server.DropTracker.request(this, blockPosition(), "death");
+        try {
+            lifecycle.die(deathAccess, cause, () ->
+                    com.neko.mcbot.server.DropTracker.death(deathDrops, () -> super.die(source)));
+        } finally {
+            observeBodyChanges();
+        }
     }
 
     @Override

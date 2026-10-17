@@ -16,6 +16,24 @@ import static com.neko.mcbot.server.DropLedger.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DropLedgerTest {
+    @Test void nativeDeathRoleUsesTheSameLedgerButARebuiltBodyCannotInheritOldPickupCredit() {
+        var death = begin("death");
+        var mining = begin("target");
+        UUID drop = UUID.randomUUID(), other = UUID.randomUUID();
+        spawn(death, drop, 4); spawn(mining, other, 2);
+        assertEquals("death", ledger.report(death).get("role").getAsString());
+        assertEquals(body.toString(), ledger.report(death).get("body_id").getAsString());
+        UUID freshBody = UUID.randomUUID();
+        assertEquals(0, ledger.provenance(drop, actor, freshBody).get("recorded_own_count").getAsInt());
+        ledger.reduced(item(drop, 4), item(drop, 0), Outcome.PICKUP,
+                new Picker(actor, freshBody), "rebuilt_touch");
+        assertEquals(0, count(death, "picked_up_self_count"));
+        assertEquals(4, count(death, "picked_up_other_count"));
+        assertEquals(2, count(mining, "live_count"));
+        conserved(death); conserved(mining);
+        var keep = begin("death");
+        assertEquals(0, count(keep, "spawned_count"), "only actual admissions enter the death ledger");
+    }
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
     final DropLedger ledger = new DropLedger();
     final UUID actor = UUID.randomUUID(), body = UUID.randomUUID();

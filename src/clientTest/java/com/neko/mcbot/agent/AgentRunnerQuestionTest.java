@@ -66,7 +66,7 @@ class AgentRunnerQuestionTest {
         }
         @Override public PromptBuilder prompt(ClientConfig cfg) { return new PromptBuilder(() -> "SYS"); }
         @Override public void showChat(String text) { chat.add(text); }
-        @Override public void sendCancel(AgentRunner owner) { cancels++; }
+        @Override public void sendCancel(AgentRunner owner, JsonObject body) { cancels++; }
         @Override public void saveConfig(ClientConfig cfg) { saved.add(cfg); }
         @Override public long nowMs() { return now; }
         @Override public boolean inGame() { return false; }

@@ -54,6 +54,26 @@ public final class DropTracker {
         finally { restore(REQUEST, previous); }
     }
 
+    /** Capture only entities actually admitted during native death, without predicting loot. */
+    public static void death(Request request, Runnable action) {
+        Capture previous = CAPTURE.get();
+        BlockPos oldSource = SOURCE.get();
+        Request oldRequest = REQUEST.get();
+        var ledger = ledger(request.body.level());
+        CAPTURE.remove(); SOURCE.remove(); REQUEST.remove();
+        try {
+            guarded(ledger, () -> {
+                var origin = ledger.begin(request.body.getUUID(), request.body.observationBodyId(),
+                        request.pos, "death", request.body.level().getGameTime());
+                request.captured = new Capture(request.body.level(), ledger, origin, request.pos);
+                CAPTURE.set(request.captured);
+            });
+            action.run();
+        } finally {
+            restore(CAPTURE, previous); restore(SOURCE, oldSource); restore(REQUEST, oldRequest);
+        }
+    }
+
     /** Mask nested foreign/native destruction instead of attributing its items to the caller. */
     public static boolean nativeBreak(ServerPlayer player, BlockPos pos, BooleanSupplier action) {
         if (REQUEST.get() == null && CAPTURE.get() == null) return action.getAsBoolean();

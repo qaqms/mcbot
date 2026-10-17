@@ -32,6 +32,8 @@ class ServerToolDispatcherTest {
     private CompletableFuture<ServerTool.Result> nextResult;
     private Runnable onRun = () -> {};
     private ServerTool.Result environmentFailure;
+    private String incarnation = "";
+    private boolean alive = true;
     private ActionPermissions.Context receivedContext;
     private ActionPermissions receivedPermissions;
     private final ServerToolDispatcher dispatcher;
@@ -54,6 +56,8 @@ class ServerToolDispatcherTest {
         dispatcher = new ServerToolDispatcher(registry, scheduler, new RateGuard(20, 60, clock::get),
                 new ServerToolDispatcher.ToolAccess() {
                     @Override public ServerToolDispatcher.Body companion(UUID caller) { return bodies.get(caller); }
+                    @Override public String bodyId(ServerToolDispatcher.Body body) { return incarnation; }
+                    @Override public boolean alive(ServerToolDispatcher.Body body) { return alive; }
                     @Override public com.neko.mcbot.body.BodyControl control(ServerToolDispatcher.Body body) {
                         return control;
                     }
@@ -360,6 +364,7 @@ class ServerToolDispatcherTest {
         var scope = new JsonObject();
         scope.addProperty("task_id", id);
         scope.addProperty("read_only", readOnly);
+        scope.addProperty("body_id", incarnation);
         send(caller, "task_begin", scope);
     }
 
@@ -369,6 +374,7 @@ class ServerToolDispatcherTest {
         request.addProperty("task_id", task);
         request.addProperty("tool", tool);
         request.addProperty("accept", true);
+        request.addProperty("body_id", incarnation);
         request.add("args", args);
         send(caller, "tool_call", request);
         return receipts.getLast();
@@ -643,5 +649,60 @@ class ServerToolDispatcherTest {
         assertEquals("cancelled", receipts.getLast().str("phase"));
         denied(call(59, "wait", "{\"seconds\":1}"), "READ_ONLY");
         assertEquals(List.of("break_block"), effects);
+    }
+
+    @Test void deadBodyRejectsNewTasksAndEveryMutationButItsActualStatusRemainsReadable() {
+        incarnation = UUID.randomUUID().toString();
+        begin(sender, 1, false);
+        call(1, "status", "{}");
+        assertNotNull(receivedContext);
+        alive = false;
+        begin(sender, 2, false);
+        assertTrue(call(2, "craft", "{}").str("feedback").startsWith("BODY_DIED:"));
+        assertTrue(call(1, "attack", "{}").str("feedback").startsWith("BODY_DIED:"));
+        assertTrue(call(2, "status", "{}").bool("ok"));
+        assertNull(receivedContext, "task_begin on a dead body must not establish a task");
+        send(sender, "companion_status", new JsonObject());
+        assertEquals(incarnation, receipts.getLast().str("body_id"));
+        assertEquals("dead", receipts.getLast().str("body_state"));
+        assertEquals(companion.toString(), receipts.getLast().str("companion_uuid"));
+        assertEquals(List.of("status", "status"), effects);
+    }
+
+    @Test void oldIncarnationControlsCannotEndCancelAuthorizeOrReplaceTheNewBodyTask() {
+        String old = UUID.randomUUID().toString();
+        incarnation = old;
+        begin(sender, 1, false);
+        call(1, "status", "{}");
+        var oldPermit = receivedPermissions.bodyPermit(owner, companion, "world", bodies.get(owner).identity());
+        incarnation = UUID.randomUUID().toString();
+        bodies.put(owner, body("world", new Object()));
+        begin(sender, 2, false);
+        nextResult = new CompletableFuture<>();
+        call(2, "move_to", "{}");
+        for (String kind : List.of("cancel", "task_end", "task_begin", "authorize")) {
+            var stale = json("{\"task_id\":2,\"read_only\":true,\"authorization_id\":\"old\"}");
+            stale.addProperty("body_id", old);
+            send(sender, kind, stale);
+            assertFalse(nextResult.isDone(), kind);
+        }
+        assertFalse(oldPermit.valid());
+        nextResult.complete(new ServerTool.Result(true, "fresh action", null));
+        nextResult = null;
+        assertTrue(call(2, "craft", "{}").bool("ok"), "old task_begin must not replace the new task policy");
+    }
+
+    @Test void missingOrStaleBodyTokenCannotMutateEvenWithAValidTaskNumber() {
+        incarnation = UUID.randomUUID().toString();
+        begin(sender, 1, false);
+        for (String token : List.of("", UUID.randomUUID().toString())) {
+            var stale = json("{\"seq\":5,\"task_id\":1,\"tool\":\"craft\",\"args\":{}}");
+            stale.addProperty("body_id", token);
+            send(sender, "tool_call", stale);
+            assertTrue(receipts.getLast().str("feedback").startsWith("BODY_DIED:"));
+        }
+        assertTrue(effects.isEmpty());
+        assertEquals("BLOCKED", dispatcher.verifyReadOnly(sender).status());
+        assertTrue(call(1, "craft", "{}").bool("ok"));
     }
 }

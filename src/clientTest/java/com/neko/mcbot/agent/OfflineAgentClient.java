@@ -93,10 +93,8 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     }
     @Override public PromptBuilder prompt(ClientConfig cfg) { return new PromptBuilder(() -> cfg.persona); }
     @Override public void showChat(String text) { chat.add(text); }
-    @Override public void sendCancel(AgentRunner owner) {
-        executeOnClient(() -> {
-            if (isCurrentRunner(owner) && canSend()) send(new Envelope("cancel", new com.google.gson.JsonObject()));
-        });
+    @Override public void sendCancel(AgentRunner owner, com.google.gson.JsonObject body) {
+        if (canSend()) send(new Envelope("cancel", body));
     }
     @Override public void saveConfig(ClientConfig cfg) {
         if (failSave) throw new java.io.UncheckedIOException(new java.io.IOException("synthetic save failure"));

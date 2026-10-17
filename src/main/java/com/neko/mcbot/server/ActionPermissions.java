@@ -75,6 +75,10 @@ public final class ActionPermissions {
 
     public Object body(UUID owner) { return bodies.get(owner); }
 
+    public void retire(UUID owner, Object body) {
+        if (bodies.get(owner) == body) end(owner, 0);
+    }
+
     /** A frozen body authority does not create a task, approval or fresh work budget. */
     public record BodyPermit(ActionPermissions source, UUID owner, UUID companion, String dimension,
                              Object body, Context context) {

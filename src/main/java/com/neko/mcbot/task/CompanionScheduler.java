@@ -246,13 +246,17 @@ public final class CompanionScheduler {
      * 返回 false 表示它本来就没在干活。仅服务器线程调用。
      */
     public boolean cancel(UUID companionId, String reason) {
-        var reflex = reflexes.get(companionId);
-        if (reflex != null) reflex.close();
-        Slot slot = active.get(companionId);
         String why = reason == null || reason.isBlank()
                 ? "主人主动叫停了这件事。" : reason;
         ServerTool.Result result = new ServerTool.Result(false,
                 "CANCELLED:" + why + "别自作主张续上，等主人的下一步指示。", null);
+        return interrupt(companionId, result);
+    }
+
+    public boolean interrupt(UUID companionId, ServerTool.Result result) {
+        var reflex = reflexes.get(companionId);
+        if (reflex != null) reflex.close();
+        Slot slot = active.get(companionId);
         if (slot != null) finish(slot, result, true);
         else {
             var future = calls.remove(companionId);
@@ -295,6 +299,9 @@ public final class CompanionScheduler {
     interface Bodies {
         CompanionPlayer get(UUID id);
         boolean same(CompanionPlayer expected, CompanionPlayer fresh);
+        default boolean alive(CompanionPlayer body) {
+            return body == null || body.isAlive() && !body.isRemoved() && !body.lifecycle().retired();
+        }
         default boolean sameDimension(CompanionPlayer fresh, net.minecraft.server.level.ServerLevel expected) {
             return fresh == null ? expected == null : fresh.level() == expected;
         }
@@ -306,7 +313,7 @@ public final class CompanionScheduler {
     void tick(Bodies bodies) {
         for (var reflex : new java.util.ArrayList<>(reflexes.values())) {
             if (reflex.body != null && (!bodies.same(reflex.body, bodies.get(reflex.companionId))
-                    || !bodies.sameDimension(reflex.body, reflex.level))) {
+                    || !bodies.sameDimension(reflex.body, reflex.level) || !bodies.alive(reflex.body))) {
                 reflex.close();
                 reflex.body.cancelBodyBehaviors();
             }
@@ -322,6 +329,10 @@ public final class CompanionScheduler {
                 if (!bodies.same(slot.companion(), cp) || !bodies.sameDimension(cp, slot.level())) {
                     finish(slot, new ServerTool.Result(false,
                             "TARGET_LOST:原身体已不在场、已被替换或已换维度，这个任务作废。", null), true);
+                    continue;
+                }
+                if (!bodies.alive(cp)) {
+                    finish(slot, new ServerTool.Result(false, "BODY_DIED:原身体已终止，未继续旧工作。", null), true);
                     continue;
                 }
                 slot.elapsed++;

@@ -13,6 +13,28 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CompanionPhysicsTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"travel", "blocks", "fall"})
+    void nativeDeathDuringMotionCannotRunLaterEffectsOrWorkRecovery(String phase) {
+        var body = new Body() {
+            @Override public void travel(Vec3 input) {
+                super.travel(input);
+                if (phase.equals("travel")) active = false;
+            }
+            @Override public void applyBlockEffects() {
+                super.applyBlockEffects();
+                if (phase.equals("blocks")) active = false;
+            }
+            @Override public void checkFall(Vec3 movement) {
+                super.checkFall(movement);
+                active = false;
+            }
+            @Override public void afterMovement() { fail("dead body cannot start a reflex"); }
+        };
+        CompanionPhysics.tick(body);
+        assertNull(body.recorded);
+        assertEquals(phase, body.calls.getLast());
+    }
     /** Movement speed is supplied; native voxel collision runs without a world or player. */
     static class Body implements CompanionPhysics.Access {
         boolean active = true;

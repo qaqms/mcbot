@@ -55,11 +55,14 @@ final class CompanionPhysics {
             else if (body.grounded()) body.jump();
         }
         body.travel(input.relativeTo(body.yaw()));
+        if (!body.active() || body.worldIdentity() != world) { body.unavailable(); return; }
         body.applyBlockEffects();
+        if (!body.active() || body.worldIdentity() != world) { body.unavailable(); return; }
         body.refreshEyes();
         Vec3 movement = body.position().subtract(before);
         // Server players normally receive this settlement from movement packets.
         body.checkFall(movement);
+        if (!body.active() || body.worldIdentity() != world) { body.unavailable(); return; }
         body.recordMovement(movement);
         body.afterMovement();
     }

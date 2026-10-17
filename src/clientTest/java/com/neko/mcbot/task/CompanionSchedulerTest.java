@@ -114,6 +114,41 @@ class CompanionSchedulerTest {
         assertEquals(0, task.ticks);
     }
 
+    @Test void deathStopsBeforePollOrAnyDormantWorkCanWake() {
+        var polls = new AtomicInteger();
+        var task = new TickTask() {
+            @Override public Progress poll(CompanionPlayer companion, int elapsed) {
+                polls.incrementAndGet(); return running();
+            }
+            @Override public boolean wantsBody() { return false; }
+            @Override public Progress tick(CompanionPlayer companion) { fail("dead body"); return running(); }
+        };
+        var future = new CompletableFuture<ServerTool.Result>();
+        scheduler.submit(body, null, task, future, 20);
+        scheduler.tick(new CompanionScheduler.Bodies() {
+            @Override public CompanionPlayer get(UUID id) { return null; }
+            @Override public boolean same(CompanionPlayer expected, CompanionPlayer fresh) { return true; }
+            @Override public boolean alive(CompanionPlayer companion) { return false; }
+        });
+        assertTrue(future.join().feedback().startsWith("BODY_DIED:"));
+        assertEquals(0, polls.get());
+        assertFalse(scheduler.busy(body));
+    }
+
+    @Test void deathInterruptionKeepsPartialEffectsAndReleasesWorkAndBorrowedReflexExactlyOnce() {
+        var task = new Task();
+        var receipt = start(task, 20);
+        var reflex = scheduler.reflexLease(body);
+        assertNotNull(reflex);
+        assertTrue(scheduler.interrupt(body, new ServerTool.Result(false, "BODY_DIED:actual partial work", null)));
+        assertFalse(reflex.valid());
+        freeAfter(receipt, task, "BODY_DIED:");
+        assertFalse(scheduler.interrupt(body, new ServerTool.Result(false, "BODY_DIED:duplicate", null)));
+        scheduler.tick(present);
+        assertEquals(0, task.ticks);
+        assertEquals(1, task.cleanups);
+    }
+
     @Test void dimensionChangeStopsBeforeTheNextActionTick() {
         var task = new Task();
         var receipt = start(task, 20);

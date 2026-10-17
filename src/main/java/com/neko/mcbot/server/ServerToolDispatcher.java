@@ -39,6 +39,13 @@ public final class ServerToolDispatcher {
     // Only Minecraft lookup, tool effects and packet delivery are replaced in offline tests.
     interface ToolAccess {
         Body companion(UUID owner);
+        default String bodyId(Body body) {
+            return body.identity() instanceof CompanionPlayer cp ? cp.observationBodyId().toString() : "";
+        }
+        default boolean alive(Body body) {
+            return !(body.identity() instanceof CompanionPlayer cp)
+                    || cp.isAlive() && !cp.isRemoved() && !cp.lifecycle().retired();
+        }
         default com.neko.mcbot.body.BodyControl control(Body body) {
             return body.identity() instanceof CompanionPlayer cp ? cp.bodyControl() : null;
         }
@@ -89,18 +96,33 @@ public final class ServerToolDispatcher {
     }
 
     public boolean passivePickupAllowed(CompanionPlayer companion) {
-        return permissions.passivePickupAllowed(companion.ownerUuid(), companion.getUUID(),
+        return !companion.lifecycle().retired() && permissions.passivePickupAllowed(companion.ownerUuid(), companion.getUUID(),
                 companion.level().dimension().identifier().toString(), companion);
     }
 
     public boolean passiveBodyActionAllowed(CompanionPlayer companion) {
-        return permissions.passiveBodyActionAllowed(companion.ownerUuid(), companion.getUUID(),
+        return !companion.lifecycle().retired() && permissions.passiveBodyActionAllowed(companion.ownerUuid(), companion.getUUID(),
                 companion.level().dimension().identifier().toString(), companion);
     }
 
     public ActionPermissions.BodyPermit defensePermit(CompanionPlayer companion) {
+        if (companion.lifecycle().retired()) return null;
         return permissions.bodyPermit(companion.ownerUuid(), companion.getUUID(),
                 companion.level().dimension().identifier().toString(), companion);
+    }
+
+    public void retireBody(CompanionPlayer body) {
+        permissions.retire(body.ownerUuid(), body);
+    }
+
+    public void publishBody(CompanionPlayer body) {
+        var owner = server.getPlayerList().getPlayer(body.ownerUuid());
+        if (owner == null || summon.companionOf(body.ownerUuid()) != body) return;
+        broadcast(new Sender(owner.getUUID(), owner, json ->
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(owner,
+                        new McbotPayloads.S2c(json))), "companion_state",
+                body.lifecycle().retired() ? "BODY_DIED:同伴原身体已终止；旧目标不会自动续跑。"
+                        : "同伴身体已就绪；重新观测后才能开始新任务。");
     }
 
     public record ReadOnlyVerification(String status, long taskId, String tool, String feedback) {
@@ -128,6 +150,7 @@ public final class ServerToolDispatcher {
         scope.addProperty("task_id", id);
         scope.addProperty("read_only", true);
         scope.addProperty("seq", -2);
+        scope.addProperty("body_id", access.bodyId(body));
         try {
             handle(probe, new Envelope("task_begin", scope));
             ActionPermissions.Context context = permissions.current(owner.owner(), body.id(),
@@ -135,6 +158,7 @@ public final class ServerToolDispatcher {
             if (context == null || !context.readOnly())
                 return new ReadOnlyVerification("BLOCKED", id, "wait", "只读任务未建立，稍后再试；不能记作权限门通过。");
             var request = new JsonObject();
+            request.addProperty("body_id", access.bodyId(body));
             request.addProperty("task_id", id);
             request.addProperty("seq", seq);
             request.addProperty("tool", "wait");
@@ -144,6 +168,7 @@ public final class ServerToolDispatcher {
             handle(probe, new Envelope("tool_call", request));
         } finally {
             var end = new JsonObject();
+            end.addProperty("body_id", access.bodyId(body));
             end.addProperty("task_id", id);
             end.addProperty("seq", -4);
             try {
@@ -186,6 +211,11 @@ public final class ServerToolDispatcher {
             return;
         }
 
+        if (java.util.Set.of("task_begin", "task_end", "authorize", "cancel").contains(env.kind())) {
+            Body current = companionOfSender(sender);
+            if (current != null && !matchesBody(current, env)) return;
+            if ("task_begin".equals(env.kind()) && current != null && !access.alive(current)) return;
+        }
         switch (env.kind()) {
             case "summon" -> {
                 revokeTask(sender);
@@ -289,6 +319,11 @@ public final class ServerToolDispatcher {
         if (companion == null) {
             replyTool(sender, seq, false,
                     "DENIED:你没有在册的同伴，先召唤一个（/mcbot summon <名字>）。", null);
+            return;
+        }
+        if (!com.neko.mcbot.agentcore.loop.TaskPolicy.observation(toolName, args)
+                && (!matchesBody(companion, env) || !access.alive(companion))) {
+            replyTool(sender, seq, false, "BODY_DIED:原身体不可用或已替换，旧动作未派发；先核对新身体。", null);
             return;
         }
         Long taskId = taskId(env);
@@ -482,6 +517,14 @@ public final class ServerToolDispatcher {
         return access.companion(sender.owner());
     }
 
+    private boolean matchesBody(Body body, Envelope env) {
+        String expected = access.bodyId(body);
+        if (expected.isEmpty()) return true;
+        var value = env.body().get("body_id");
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+                && expected.equals(value.getAsString());
+    }
+
     private void replyTool(Sender owner, int seq, boolean ok, String feedback, JsonObject data) {
         JsonObject body = new JsonObject();
         body.addProperty("seq", seq);
@@ -549,6 +592,12 @@ public final class ServerToolDispatcher {
             Body companion = companionOfSender(owner);
             body.addProperty("companion", companion == null ? "" : companion.name());
             body.addProperty("companion_uuid", companion == null ? "" : companion.id().toString());
+            if (companion != null && !access.bodyId(companion).isEmpty()) {
+                body.addProperty("body_id", access.bodyId(companion));
+                body.addProperty("body_state", access.alive(companion) ? "alive" : "dead");
+                if (companion.identity() instanceof CompanionPlayer cp)
+                    body.add("body_lifecycle", cp.lifecycle().observation());
+            }
         }
         send(owner, kind, body);
     }

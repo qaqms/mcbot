@@ -10,6 +10,21 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ActionPermissionsTest {
+    @Test void retiringOnlyTheOriginalBodyRevokesItsApprovalAndCannotTouchAReplacement() {
+        var old = new Object();
+        permissions.begin(task, old);
+        var permit = permissions.bodyPermit(task.owner(), task.companion(), task.dimension(), old);
+        String token = permissions.propose(new ActionPermissions.Scope(task, 999,
+                Map.of(ActionPermissions.key(dig), dig)));
+        permissions.retire(task.owner(), old);
+        assertFalse(permit.valid());
+        assertFalse(permissions.approve(task, token));
+        var fresh = new Object();
+        permissions.begin(task, fresh);
+        permissions.retire(task.owner(), old);
+        assertNotNull(permissions.current(task.owner(), task.companion(), task.dimension(), task.taskId(), fresh));
+        assertFalse(permissions.approve(task, token));
+    }
     @Test void frozenBodyPermitCannotCrossReadonlyReplacementOrTaskEndAndNeverCreatesApprovals() {
         Object body = new Object();
         var idle = permissions.bodyPermit(task.owner(), task.companion(), task.dimension(), body);

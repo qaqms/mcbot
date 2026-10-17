@@ -151,7 +151,7 @@ public final class SummonService {
                 // .dat 可能停在死角（上次硬杀/被埋/被水淹）：进场后检查落点，不可站就挪
                 ServerLevel lvl = companion.level();
                 BlockPos here = companion.blockPosition();
-                if (!SafeSpawn.isStandable(lvl, here)) {
+                if (companion.isAlive() && !companion.lifecycle().retired() && !SafeSpawn.isStandable(lvl, here)) {
                     BlockPos safe = SafeSpawn.findNear(lvl, here);
                     if (!SafeSpawn.isStandable(lvl, safe)) {
                         safe = SafeSpawn.findNear(lvl, lvl.getRespawnData().pos());
@@ -197,6 +197,71 @@ public final class SummonService {
             companion.observeHealth(HealthObservation.Phase.POSITIONED);
             return companion;
         }
+    }
+
+    /** Native death has already settled inventory. Never reload the pre-death playerdata here. */
+    public boolean rebuild(CompanionPlayer original) {
+        var players = server.getPlayerList();
+        if (players.getPlayer(original.getUUID()) != original || !original.lifecycle().rebuilding()
+                || roster.byUuid(original.getUUID()) == null) return false;
+        ServerPlayer owner = players.getPlayer(original.ownerUuid());
+        if (owner == null || !owner.isAlive() || owner.isRemoved()) return false;
+        ServerLevel target = owner.level();
+        var fresh = new CompanionPlayer(server, target, original.getGameProfile(),
+                original.clientInformation(), original.ownerUuid());
+        var geometry = com.neko.mcbot.server.StandingGeometry.forPlayer(fresh);
+        BlockPos center = owner.blockPosition();
+        Vec3 where = null;
+        // A fixed local search uses the same loaded, dry standing geometry as normal work.
+        search:
+        for (int y : new int[]{0, 1, -1}) for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
+            BlockPos cell = center.offset(x, y, z);
+            var foot = geometry.standing(cell.getX(), cell.getY(), cell.getZ(),
+                    com.neko.mcbot.path.TerrainEdits.EMPTY);
+            if (foot == null) continue;
+            var bounds = geometry.body(cell.getX(), foot.height(), cell.getZ());
+            if (!target.noCollision(fresh, bounds)) continue;
+            where = new Vec3(cell.getX() + .5, foot.height(), cell.getZ() + .5);
+            break search;
+        }
+        if (where == null) return false;
+        // restoreFrom(false) checks this body's level for keepInventory. Settle that rule in
+        // the death world before registration at the owner's current level.
+        fresh.setServerLevel(original.level());
+        try { fresh.restoreFrom(original, false); }
+        finally { fresh.setServerLevel(target); }
+        fresh.copyRespawnPosition(original);
+        fresh.setInvulnerable(original.isInvulnerable());
+        fresh.rebuiltFrom(original);
+        fresh.snapTo(where, owner.getYRot(), 0);
+        // Remove/save the actual corpse before joining the replacement under the same profile UUID.
+        players.remove(original);
+        FakeConnection old = connections.remove(original.getUUID());
+        if (old != null) old.closeQuietly();
+        var connection = new FakeConnection();
+        connections.put(fresh.getUUID(), connection);
+        try {
+            players.placeNewPlayer(connection, fresh,
+                    CommonListenerCookie.createInitial(fresh.getGameProfile(), false));
+            fresh.teleportTo(where.x, where.y, where.z);
+            var dispatcher = McbotMod.dispatcher();
+            if (dispatcher != null && dispatcher.belongsTo(server)) dispatcher.publishBody(fresh);
+        } catch (RuntimeException | Error failure) {
+            // Do not replay a partially joined replacement or reload an older inventory snapshot.
+            try { fresh.reconstructionFailed(); }
+            finally {
+                try {
+                    if (players.getPlayer(fresh.getUUID()) == fresh) players.remove(fresh);
+                } finally {
+                    connections.remove(fresh.getUUID(), connection);
+                    connection.closeQuietly();
+                }
+            }
+            throw failure;
+        }
+        McbotMod.LOG.info("[body-lifecycle] rebuilt companion={} old_body={} new_body={}",
+                fresh.getUUID(), original.observationBodyId(), fresh.observationBodyId());
+        return true;
     }
 
     /** 停服：把同伴从玩家列表摘除（名册保留）。存档交给原版流程。 */
