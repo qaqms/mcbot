@@ -40,8 +40,9 @@ public final class ToolCatalog {
             case "gather" -> "连续扫描、工作导航、挖掘、触碰拾取并核对实际背包。item是入包物品，targets是来源方块；先核对工具。"
                     + "材料阶段scope=subtask，已有材料用mode=total；默认task登记最终目标。"
                     + "material_for查询真实替代材料，不自动转换；explore_steps=0只在当前工区采集，原探索账不重置。";
-            case "set_goal" -> "登记不可降低的最终物品数量：additional相对任务开始净新增，total为背包总量。"
-                    + "多阶段首次设lifecycle=long_term；阶段不重开原预算，最终按新鲜背包核验。";
+            case "set_goal" -> "固定最终条件：type省略/item验背包数量，building验target/expected_revision全目标，"
+                    + "delivery验container/item/count，additional须登记后本任务净存入及同容器净增量，transfer须item过滤。"
+                    + "多阶段首次lifecycle=long_term；不重开原预算，结束前新鲜核验，持续跟随结束不替代目标完成。";
             case "workflow" -> "串行执行已知参数的1-12步，整份先验证；失败或放置负预检即停，保留已完成效果。"
                     + "不支持移动/反问/嵌套，制作及装取数量须明确；依赖结果用run_program。";
             case "search_resource" -> "只读完整资源搜索，本地最多5页/30秒；work=true评估工作站位与采收/干燥安全。"
@@ -85,6 +86,7 @@ public final class ToolCatalog {
                     + "entity_id/target_uuid供attack，target_uuid也供follow，不可猜身份；special_blocks为近圈坐标文字列表。"
                     + "没有blocks字段。指定方块用search_resource。";
             case "inspect_block" -> "只读6.5格内精确方块，data.block是ID字符串；容器看slots及next_offset，"
+                    + "指定item给全槽item_total及container_id，供交付验收；"
                     + "区域搜索用search_resource，不逐格inspect。";
             case "transfer" -> "近身普通容器存取，机器用smelt；ok=false可能部分搬运，未搬部分留在来源，先核对背包。";
             default -> {

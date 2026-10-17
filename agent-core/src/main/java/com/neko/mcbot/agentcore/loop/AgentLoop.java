@@ -198,6 +198,7 @@ public final class AgentLoop {
     private com.google.gson.JsonObject initialInventory;
     private com.google.gson.JsonObject latestObservation;
     private ItemGoal itemGoal;
+    private WorldGoal worldGoal;
     private GoalContinuation goalContinuation;
     private int rejectedFinishes;
     private int lastFinishProgress = -1;
@@ -358,6 +359,7 @@ public final class AgentLoop {
         discardQueued(TaskStatus.FAILED, reason);
         stopActive(TaskStatus.FAILED, reason, false);
         itemGoal = null;
+        worldGoal = null;
         goalContinuation = null;
         running = false;
     }
@@ -506,6 +508,7 @@ public final class AgentLoop {
         initialInventory = null;
         latestObservation = null;
         itemGoal = null;
+        worldGoal = null;
         goalContinuation = null;
         rejectedFinishes = 0;
         lastFinishProgress = -1;
@@ -568,8 +571,11 @@ public final class AgentLoop {
                 latestObservation = state.data();
                 if (initialInventory == null && latestObservation.has("inventory"))
                     initialInventory = latestObservation.deepCopy();
-                if (itemGoal != null) {
-                    try { itemGoal.observe(latestObservation); }
+                if (hasGoal()) {
+                    try {
+                        if (itemGoal != null) itemGoal.observe(latestObservation);
+                        else worldGoal.observeBody(latestObservation);
+                    }
                     catch (RuntimeException invalid) {
                         finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:无法核对目标的实际背包数量，未判完成。");
                         return;
@@ -606,10 +612,10 @@ public final class AgentLoop {
 
     private List<Msg> turnHistory(ToolOutcome state) {
         var history = new ArrayList<>(convo.outboundHistory());
-        if (itemGoal != null || history.stream().noneMatch(m -> m instanceof Msg.User u
+        if (hasGoal() || history.stream().noneMatch(m -> m instanceof Msg.User u
                 && u.text().equals(activeDirective.text())))
             history.add(new Msg.Nudge("[当前任务的独立事实账]\n原始指令："
-                    + activeDirective.text() + (itemGoal == null ? "" : "\n" + itemGoal.facts())
+                    + activeDirective.text() + (hasGoal() ? "\n" + goalFacts() : "")
                     + (goalContinuation == null ? "" : "\n" + goalContinuation.facts())));
         if (!state.feedback().isBlank()) history.add(new Msg.Nudge(
                 "[本轮服务端身体观测 task_id=" + activeDirective.id() + " step=" + steps
@@ -671,7 +677,8 @@ public final class AgentLoop {
         reactor.seal();
         convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
         if (!turn.hasToolCalls()) {
-            if (itemGoal == null) finishCurrent(TaskStatus.COMPLETED, turn.text());
+            if (stuckAbort) { step(); return; }
+            if (!hasGoal()) finishCurrent(TaskStatus.COMPLETED, turn.text());
             else verifyFinish(stepGeneration, reactor, turn.text());
             return;
         }
@@ -683,7 +690,8 @@ public final class AgentLoop {
 
     private void verifyFinish(long expectedGeneration, StepReactor reactor, String text) {
         CompletableFuture<ToolOutcome> observation;
-        try { observation = java.util.Objects.requireNonNull(executor.observe(activeDirective.id())); }
+        try { observation = java.util.Objects.requireNonNull(worldGoal == null
+                ? executor.observe(activeDirective.id()) : executor.observe(activeDirective.id(), worldGoal.request())); }
         catch (RuntimeException failure) { observation = CompletableFuture.failedFuture(failure); }
         observation.whenComplete((state, failure) -> {
             synchronized (AgentLoop.this) {
@@ -691,24 +699,25 @@ public final class AgentLoop {
                 try {
                     if (failure != null || state == null || !state.ok() || state.accepted())
                         throw new IllegalArgumentException();
-                    itemGoal.observe(state.data());
+                    if (itemGoal != null) itemGoal.observe(state.data());
+                    else worldGoal.observe(state.data());
                     latestObservation = state.data();
                 } catch (RuntimeException unavailable) {
-                    finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:结束前没有有效背包事实，未判目标完成。");
+                    finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:结束前没有有效的完整目标事实，未判目标完成。");
                     return;
                 }
-                if (itemGoal.satisfied()) {
+                if (itemGoal != null ? itemGoal.satisfied() : worldGoal.satisfied()) {
                     finishCurrent(TaskStatus.COMPLETED, text);
                     return;
                 }
                 if (goalContinuation != null) {
                     GoalContinuation.Verdict verdict;
-                    try { verdict = goalContinuation.checkpoint(latestObservation); }
+                    try { verdict = goalContinuation.checkpoint(latestObservation, goalFingerprint()); }
                     catch (RuntimeException invalid) {
                         finishCurrent(TaskStatus.FAILED, "STATE_UNAVAILABLE:阶段结束时缺少完整身体事实，未续跑。");
                         return;
                     }
-                    String facts = itemGoal.facts() + "\n" + goalContinuation.facts();
+                    String facts = goalFacts() + "\n" + goalContinuation.facts();
                     if (verdict != GoalContinuation.Verdict.CONTINUE) {
                         finishCurrent(TaskStatus.FAILED, (verdict == GoalContinuation.Verdict.LIMIT
                                 ? "GOAL_RUN_LIMIT:长期目标阶段预算已到，需主人决定后续。"
@@ -721,21 +730,25 @@ public final class AgentLoop {
                     step();
                     return;
                 }
-                int progress = itemGoal.progress();
+                int progress = itemGoal != null ? itemGoal.progress() : worldGoal.progress();
                 rejectedFinishes = progress > lastFinishProgress ? 1 : rejectedFinishes + 1;
                 lastFinishProgress = progress;
                 if (rejectedFinishes >= 3) {
                     finishCurrent(TaskStatus.FAILED, "GOAL_NOT_MET:连续结束但实际目标未满足，已停止。"
-                            + itemGoal.facts());
+                            + goalFacts());
                     return;
                 }
-                convo.add(new Msg.Nudge("[目标校验未通过] " + itemGoal.facts()
+                convo.add(new Msg.Nudge("[目标校验未通过] " + goalFacts()
                         + "\n继续按当前事实推进；若确实无法继续，用report_blocked说明实际障碍。不要再次声称完成。"));
-                listener.onNotice("目标实际数量未满足，继续当前任务；尚未发送done。");
+                listener.onNotice("目标现场条件未满足，继续当前任务；尚未发送done。");
                 step();
             }
         });
     }
+
+    private boolean hasGoal() { return itemGoal != null || worldGoal != null; }
+    private String goalFacts() { return itemGoal != null ? itemGoal.facts() : worldGoal.facts(); }
+    private String goalFingerprint() { return worldGoal == null ? "" : worldGoal.fingerprint(); }
 
     private void finishCurrent(TaskStatus status, String text) {
         Directive finished = activeDirective;
@@ -833,7 +846,7 @@ public final class AgentLoop {
 
     private CompletableFuture<ToolOutcome> executeTool(ToolCall call) {
         try {
-            if ("set_goal".equals(call.name())) return CompletableFuture.completedFuture(setGoal(call.argsJson()));
+            if ("set_goal".equals(call.name())) return setGoal(call.argsJson());
             if ("report_blocked".equals(call.name())) {
                 var args = com.google.gson.JsonParser.parseString(call.argsJson()).getAsJsonObject();
                 if (!args.keySet().equals(Set.of("reason")) || !args.get("reason").isJsonPrimitive()
@@ -842,7 +855,7 @@ public final class AgentLoop {
                     return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:受阻原因须为1-512字符。"));
                 stuckAbort = true;
                 blockReason = "BLOCKED:" + args.get("reason").getAsString()
-                        + (itemGoal == null ? "" : "\n" + itemGoal.facts());
+                        + (hasGoal() ? "\n" + goalFacts() : "");
                 return CompletableFuture.completedFuture(new ToolOutcome(false, blockReason));
             }
             if ("gather".equals(call.name())) {
@@ -856,7 +869,7 @@ public final class AgentLoop {
                 if (scope == ItemGoal.Scope.TASK) {
                     var goal = new com.google.gson.JsonObject();
                     for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
-                    var receipt = setGoal(goal.toString());
+                    var receipt = setItemGoal(goal.toString());
                     if (!receipt.ok()) return CompletableFuture.completedFuture(receipt);
                 }
             }
@@ -870,8 +883,67 @@ public final class AgentLoop {
 
     private String blockReason;
 
-    private ToolOutcome setGoal(String json) {
+    private CompletableFuture<ToolOutcome> setGoal(String json) {
         try {
+            if (json == null || json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 20000)
+                throw new IllegalArgumentException();
+            var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            String type = args.has("type") ? WorldGoal.text(args, "type") : "item";
+            if (type.equals("item")) {
+                args.remove("type");
+                return CompletableFuture.completedFuture(setItemGoal(args.toString()));
+            }
+            String lifecycle = args.has("lifecycle") ? WorldGoal.text(args, "lifecycle")
+                    : goalContinuation == null ? "task" : "long_term";
+            if (!Set.of("task", "long_term").contains(lifecycle)) throw new IllegalArgumentException();
+            boolean longTerm = lifecycle.equals("long_term");
+            if (!longTerm && args.has("max_runs")) throw new IllegalArgumentException();
+            if (hasGoal() && (longTerm != (goalContinuation != null)
+                    || goalContinuation != null && !goalContinuation.matches(args)))
+                return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:目标生命周期及阶段预算已固定，不能重开。"));
+            int maxRuns = longTerm ? GoalContinuation.limit(args) : 0;
+            args.remove("lifecycle"); args.remove("max_runs");
+            var spec = WorldGoal.request(args);
+            if (hasGoal()) return CompletableFuture.completedFuture(new ToolOutcome(worldGoal != null && worldGoal.matches(spec),
+                    worldGoal != null && worldGoal.matches(spec) ? goalFacts() : "DENIED:最终目标已固定，不能更换类型、修订或条件。"));
+            long expectedGeneration = generation;
+            var initial = initialInventory;
+            CompletableFuture<ToolOutcome> observation;
+            try { observation = java.util.Objects.requireNonNull(executor.observe(activeDirective.id(), spec)); }
+            catch (RuntimeException failure) { observation = CompletableFuture.failedFuture(failure); }
+            return observation.handle((state, failure) -> {
+                synchronized (AgentLoop.this) {
+                    if (!isCurrent(expectedGeneration)) return ToolOutcome.synthetic("CANCELLED:目标登记所属任务已停止。");
+                    try {
+                        if (failure != null || state == null || !state.ok() || state.accepted())
+                            throw new IllegalArgumentException();
+                        var data = state.data();
+                        if (initial == null || !WorldGoal.text(initial, "body_id").equals(WorldGoal.text(data, "body_id"))
+                                || !WorldGoal.text(initial, "dimension").equals(WorldGoal.text(data, "dimension")))
+                            throw new IllegalArgumentException();
+                        var candidate = new WorldGoal(spec, data);
+                        var continuation = longTerm ? new GoalContinuation(maxRuns, initial, candidate.fingerprint()) : null;
+                        worldGoal = candidate;
+                        goalContinuation = continuation;
+                        latestObservation = data;
+                        return new ToolOutcome(true, goalFacts()
+                                + (continuation == null ? "" : "\n" + continuation.facts()));
+                    } catch (RuntimeException unavailable) {
+                        stuckAbort = true;
+                        blockReason = "STATE_UNAVAILABLE:登记前未取得同身体、同修订或同容器的完整现场事实；未判目标完成。";
+                        return new ToolOutcome(false, blockReason);
+                    }
+                }
+            });
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:set_goal须为item、building或delivery的有效条件；先tool_help核对必填参数，未登记目标。"));
+        }
+    }
+
+    private ToolOutcome setItemGoal(String json) {
+        try {
+            if (worldGoal != null) return new ToolOutcome(false, "DENIED:已固定世界目标；材料采集须用scope=subtask。");
             var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
             if (!Set.of("item", "count", "mode", "lifecycle", "max_runs").containsAll(args.keySet()))
                 throw new IllegalArgumentException();

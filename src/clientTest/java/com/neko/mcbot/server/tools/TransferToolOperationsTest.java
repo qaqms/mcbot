@@ -50,6 +50,8 @@ class TransferToolOperationsTest {
             return present ? new TransferTool.Target(container, locked, machine, valid, Direction.EAST) : null;
         }
         @Override public Container inventory() { reads.add("inventory"); return inventory; }
+        @Override public String identity(BlockPos pos, TransferTool.Target target) { return "container-one"; }
+        @Override public String dimension() { return "minecraft:overworld"; }
 
         com.neko.mcbot.server.ServerTool.Result execute(String fields) {
             return TransferTool.execute(JsonParser.parseString("{\"x\":2,\"y\":90,\"z\":-3" + fields + "}").getAsJsonObject(), this);
@@ -78,6 +80,22 @@ class TransferToolOperationsTest {
             assertTrue(result.feedback().startsWith(prefix), result.feedback());
             unchanged(before);
         }
+    }
+
+    @Test
+    void filteredPartialMovementProvidesActualContainerAndInventoryDeltaForTheSameNativeIdentity() {
+        var f=new Fixture();
+        f.inventory.setItem(0,new ItemStack(Items.DIAMOND,10));
+        f.container.setItem(0,new ItemStack(Items.DIAMOND,60));
+        var result=f.execute(",\"dir\":\"in\",\"item\":\"diamond\"");
+        assertFalse(result.ok());
+        assertTrue(result.data().get("transfer_evidence_known").getAsBoolean());
+        assertEquals(60,result.data().get("container_count_before").getAsInt());
+        assertEquals(64,result.data().get("container_count_after").getAsInt());
+        assertEquals("container-one",result.data().get("container_id").getAsString());
+        assertEquals("minecraft:diamond",result.data().get("item").getAsString());
+        assertFalse(f.execute(",\"dir\":\"out\"").data().get("transfer_evidence_known").getAsBoolean(),
+                "unfiltered moves must not claim a per-item delivery balance");
     }
 
     @Test

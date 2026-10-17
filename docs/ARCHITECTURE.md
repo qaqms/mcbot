@@ -3,6 +3,20 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## L1 多类目标的独立验收（2026-10-17）
+
+原AgentLoop保留ItemGoal，并以WorldGoal冻结building/delivery条件；原GoalContinuation
+在同task_id内处理阶段，不新增模型裁判、动作核或规划系统。
+原runner带目标observe先details status，再经原工具/身体/权限门读取build_diff verify_only
+或inspect_block item；登记及段尾查完整现场，每轮仅展示上次核验与新鲜身体事实。
+BuildSurvey仍核全目标/明确属性/稳定版本，goal_observation_key不纳入无关动态状态或区块版本；
+ContainerIdentity复用原CellWitness和实际容器/区块/世界弱身份，不继承换箱或新身体。
+原transfer核实际双向库存变化，executeRemote同源终态供直接/Lua的DeliveryLedger记净账；
+additional同时需要登记后净存入和同容器净增，total只验当前存量。
+原阶段/模型/探索/许可等账不重开，follow终态不替代外层目标；仅明确超距可按原账续材料阶段，
+未知/替换/死亡/取消不续跑。完整支持、数量帽与原生待验见L1-GOAL-VERIFICATION。
+外部桥v1.0不变，本卡不接L2目标持久恢复；下方未实现建筑/交付按历史检查点阅读。
+
 ## S3 死亡与身体实例隔离（2026-10-17）
 
 BodyLifecycle在原die入口先发布死亡，再撤精确身体权限、结束原scheduler/反射/手部占用，
@@ -753,7 +767,8 @@ LT1物品目标校验/任务内请求预算与有界LT2采集已接线，40模�
 最终数量条件需模型set_goal或默认gather登记，原始指令与目标事实独立保留，不能降低既有条件。
 材料gather用scope=subtask，可先后处理不同物品，成功不代表整项完成；
 additional按本次新鲜基线计，total按真实总量计，结束校验仍只认最终物品。
-没有登记条件的普通文字结束仍按COMPLETED；没有任意自然语言/建筑/交付通用验证器。
+没有登记条件的普通文字结束仍按COMPLETED；没有任意自然语言通用验证器。
+L1已接显式建筑及容器交付条件，见本文顶部；不等于通用语义裁判或L2跨退出恢复。
 gather减少逐格模型安排，按真实回执查资源及有界换区；固定workflow保持12步。
 独立explore可供非采集观测复用；补给/地下勘探/目标跨退出恢复、跟随护卫和技能
 按需读取尚未实现，技能正文仍全量注入system。

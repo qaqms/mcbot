@@ -28,6 +28,11 @@
 | 契约测试 | mcbot 的 Bridge/AgentLoop/TaskReplies 与本地 HTTP 回归 | 连接器按 §6 验证接入行为；真实 MC + N.E.K.O 链路另行联合验收 |
 
 各模块可以独立迭代内部实现，但每次改动须保持这些可观察行为并通过相应契约回归。
+L1对本体成功登记的item/building/delivery条件增加新鲜事实守卫，长期阶段仍共原task_id，
+中间核验未满足不发done；未知/受阻沿原failed，取消沿原cancelled。
+连接器仍只投任务、回答、取消和消费原事件，无需提交目标类型、原子工具或新增字段。
+未登记条件的普通作答沿原completed语义；不能把L1推定为任意自然语言成功认证。
+没有L2跨退出恢复，连接器不自动重投；实现/边界见L1-GOAL-VERIFICATION。
 S3中身体死亡使活动及排队任务沿原done事件返回failed，text含BODY_DIED；重建不自动重投。
 status可选增加body_id/body_available，仅用于观察。内部身体实例令牌由本体管理，
 连接器不需提交新字段，也不得据重建通知自动恢复旧目标；明确新任务仍由本体先查新鲜事实。

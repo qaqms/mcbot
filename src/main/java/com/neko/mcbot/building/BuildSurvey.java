@@ -59,6 +59,7 @@ public final class BuildSurvey {
         var before = access.terrain();
         var rows = new ArrayList<Row>();
         var observation = new StringBuilder(target.revision());
+        var goalObservation = new StringBuilder(target.revision());
         var bills = new TreeMap<String, Bill>();
         var actuals = new java.util.HashMap<BlockPos, BlockState>();
         boolean observationComplete = true, billComplete = true, budgetExhausted = false;
@@ -79,6 +80,8 @@ public final class BuildSurvey {
             boolean matches = cell.matches(actual);
             boolean objectMatches = BuildObjects.matches(target, cell, actuals::get);
             observation.append('|').append(actual);
+            goalObservation.append('|').append(actual == null ? "unknown"
+                    : BuiltInRegistries.BLOCK.getKey(actual.getBlock()) + "|" + cell.actualProperties(actual));
             data.addProperty("matches_actual", matches);
             if (actual != null) {
                 data.addProperty("actual_block", BuiltInRegistries.BLOCK.getKey(actual.getBlock()).toString());
@@ -110,6 +113,7 @@ public final class BuildSurvey {
                 data.addProperty("item", BuiltInRegistries.ITEM.getKey(material.item()).toString());
             rows.add(new Row(cell, material, data));
         }
+        String goalKey = hash(goalObservation.toString());
         for (var bill : bills.values()) {
             bill.available = BuildInventory.available(access.placement().inventory(), bill.item);
             observation.append('|').append(BuiltInRegistries.ITEM.getKey(bill.item)).append(':').append(bill.available);
@@ -212,12 +216,10 @@ public final class BuildSurvey {
         data.addProperty("allocation_scope", "current_details_page_only_not_reserved");
         data.addProperty("observation_complete", observationComplete && stable);
         data.addProperty("spatial_stable", stable);
+        data.addProperty("goal_observation_key", goalKey);
         if (after != null) data.add("spatial_facts", after);
         observation.append('|').append(after);
-        try {
-            data.addProperty("observation_key", java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(observation.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))));
-        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+        data.addProperty("observation_key", hash(observation.toString()));
         data.addProperty("work_assessment_complete", !budgetExhausted && counts.get("not_assessed").getAsInt() == 0
                 && counts.get("unknown").getAsInt() == 0 && stable);
         data.addProperty("budget_exhausted", budgetExhausted);
@@ -229,6 +231,13 @@ public final class BuildSurvey {
         return new ServerTool.Result(true, "建筑只读核对：已满足" + satisfied + "/" + rows.size()
                 + "；分类=" + counts + "。查询未施工，材料分配只针对当前页且未预留；"
                 + "未知、不支持、状态冲突及不稳定观察不能认定整项目标满足。明细和料单分别按next_offset/material_next_offset续页。", data);
+    }
+
+    private static String hash(String facts) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(facts.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
 
     /** The same fresh cell rules precede advisory work and every actual building action. */

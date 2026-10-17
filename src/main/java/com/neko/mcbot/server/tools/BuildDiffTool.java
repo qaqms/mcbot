@@ -72,8 +72,12 @@ public final class BuildDiffTool implements ServerTool {
     static Result report(JsonObject args, Function<BuildTarget, BuildSurvey.Access> access, LongSupplier clock) {
         BuildTarget target;
         int offset, materialOffset;
+        boolean verify;
         try {
-            BuildTarget.keys(args, Set.of("target", "offset", "material_offset", "expected_revision"));
+            BuildTarget.keys(args, Set.of("target", "offset", "material_offset", "expected_revision", "verify_only"));
+            if (args.has("verify_only") && (!args.get("verify_only").isJsonPrimitive()
+                    || !args.get("verify_only").getAsJsonPrimitive().isBoolean())) throw new IllegalArgumentException();
+            verify = args.has("verify_only") && args.get("verify_only").getAsBoolean();
             target = BuildTarget.parse(args.getAsJsonObject("target"));
             offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, 112) : 0;
             materialOffset = args.has("material_offset") ? BuildTarget.integer(args.get("material_offset"), 0, 112) : 0;
@@ -94,6 +98,7 @@ public final class BuildDiffTool implements ServerTool {
             return new Result(false, "DENIED:建筑目标须为anchor/rotation及cells或fill之一，最多128格；"
                     + "相对坐标±32，无重复格，状态名/值须在真实注册表中；两种分页偏移须为16的倍数。", null);
         }
-        return BuildSurvey.query(target, access.apply(target), offset, materialOffset, clock);
+        return verify ? BuildSurvey.verify(target, access.apply(target), offset, clock)
+                : BuildSurvey.query(target, access.apply(target), offset, materialOffset, clock);
     }
 }

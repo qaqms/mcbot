@@ -70,4 +70,9 @@ public interface ToolExecutor {
     default CompletableFuture<ToolOutcome> observe(long taskId) {
         return CompletableFuture.completedFuture(new ToolOutcome(true, ""));
     }
+
+    /** Hosts append complete evidence for a frozen world condition through their existing read-only tools. */
+    default CompletableFuture<ToolOutcome> observe(long taskId, com.google.gson.JsonObject goal) {
+        return observe(taskId);
+    }
 }

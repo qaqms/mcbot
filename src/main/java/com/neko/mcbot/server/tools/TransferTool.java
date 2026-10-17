@@ -33,9 +33,16 @@ public final class TransferTool implements ServerTool {
         boolean loaded(BlockPos pos);
         Target target(BlockPos pos);
         Container inventory();
+        default String identity(BlockPos pos, Target target) { return null; }
+        default String dimension() { return ""; }
     }
 
     private record PlayerAccess(CompanionPlayer companion, CompanionScheduler scheduler) implements Access {
+        @Override public String identity(BlockPos pos, Target target) {
+            return companion.level().getBlockEntity(pos) == target.slots()
+                    ? companion.containerIdentity(pos, target.slots()) : null;
+        }
+        @Override public String dimension() { return companion.level().dimension().identifier().toString(); }
         @Override public boolean busy() { return scheduler.busy(companion.getUUID()); }
         @Override public boolean inBounds(BlockPos pos) { return companion.level().isInWorldBounds(pos); }
         @Override public double distanceSquared(BlockPos pos) {
@@ -129,12 +136,16 @@ public final class TransferTool implements ServerTool {
         }
         if (target.locked()) return failure("DENIED:容器已锁定，不能通过工具绕过容器锁。");
         if (!target.valid()) return failure("DENIED:容器当前不可用，先靠近并检查目标。");
-        return transfer(access.inventory(), target, args);
+        return transfer(access.inventory(), target, args, access);
     }
 
-    private static Result transfer(Container inventory, Target target, Arguments args) {
+    private static Result transfer(Container inventory, Target target, Arguments args, Access access) {
         Container source = args.out() ? target.slots() : inventory;
         Container destination = args.out() ? inventory : target.slots();
+        String identity = access.identity(args.pos(), target);
+        boolean bounded = target.slots().getContainerSize() <= 1024;
+        int before = args.filter() == null || !bounded ? -1 : count(target.slots(), args.filter());
+        int inventoryBefore = args.filter() == null ? -1 : count(inventory, args.filter(), Inventory.INVENTORY_SIZE);
         int sourceSlots = args.out() ? source.getContainerSize() : Math.min(Inventory.INVENTORY_SIZE, source.getContainerSize());
         int destinationSlots = args.out() ? Inventory.INVENTORY_SIZE : destination.getContainerSize();
         int movedStacks = 0, movedItems = 0, remainingItems = 0;
@@ -152,6 +163,20 @@ public final class TransferTool implements ServerTool {
         data.addProperty("remaining_items", remainingItems);
         data.addProperty("partial", movedItems > 0 && remainingItems > 0);
         data.addProperty("dir", args.out() ? "out" : "in");
+        data.addProperty("x", args.pos().getX()); data.addProperty("y", args.pos().getY());
+        data.addProperty("z", args.pos().getZ()); data.addProperty("dimension", access.dimension());
+        if (args.filter() != null) data.addProperty("item", BuiltInRegistries.ITEM.getKey(args.filter()).toString());
+        if (identity != null) data.addProperty("container_id", identity);
+        int after = before < 0 ? -1 : count(target.slots(), args.filter());
+        int inventoryAfter = args.filter() == null ? -1 : count(inventory, args.filter(), Inventory.INVENTORY_SIZE);
+        boolean observed = before >= 0 && identity != null && identity.equals(access.identity(args.pos(), target))
+                && (args.out() ? before - after : after - before) == movedItems
+                && (args.out() ? inventoryAfter - inventoryBefore : inventoryBefore - inventoryAfter) == movedItems;
+        data.addProperty("transfer_evidence_known", observed);
+        if (before >= 0) {
+            data.addProperty("container_count_before", before);
+            data.addProperty("container_count_after", after);
+        }
         String what = args.filter() == null ? "物品" : BuiltInRegistries.ITEM.getKey(args.filter()).toString();
         String feedback = (args.out() ? "从容器取出 " : "存入容器 ") + movedItems + " 个" + what
                 + "（" + movedStacks + " 组）。";
@@ -165,6 +190,17 @@ public final class TransferTool implements ServerTool {
         return new Result(remainingItems == 0, feedback, data);
     }
 
+    private static int count(Container container, Item item) {
+        return count(container, item, container.getContainerSize());
+    }
+    private static int count(Container container, Item item, int limit) {
+        int total = 0;
+        for (int i = 0; i < Math.min(limit, container.getContainerSize()); i++) {
+            var stack = container.getItem(i);
+            if (stack.is(item)) total = Math.addExact(total, stack.getCount());
+        }
+        return total;
+    }
     private static Result failure(String text) {
         return new Result(false, text, null);
     }

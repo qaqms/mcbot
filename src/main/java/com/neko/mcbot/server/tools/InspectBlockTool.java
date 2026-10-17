@@ -17,10 +17,17 @@ public final class InspectBlockTool implements ServerTool {
     interface Access {
         Result guard(BlockPos pos);
         Target target(BlockPos pos);
+        default String identity(BlockPos pos, Target target) { return null; }
+        default String dimension() { return ""; }
     }
     @Override public String name() { return "inspect_block"; }
     @Override public Result run(CompanionPlayer companion, JsonObject args) {
         return execute(args, new Access() {
+            @Override public String identity(BlockPos pos, Target target) {
+                return companion.level().getBlockEntity(pos) == target.container()
+                        ? companion.containerIdentity(pos, target.container()) : null;
+            }
+            @Override public String dimension() { return companion.level().dimension().identifier().toString(); }
             @Override public Result guard(BlockPos pos) {
                 if (!companion.level().isInWorldBounds(pos)
                         || !companion.level().getWorldBorder().isWithinBounds(pos)) return failed("DENIED:目标超出世界边界。");
@@ -42,8 +49,18 @@ public final class InspectBlockTool implements ServerTool {
     }
 
     static Result execute(JsonObject args, Access access) {
-        for (String key : args.keySet()) if (!java.util.List.of("x", "y", "z", "offset").contains(key))
+        for (String key : args.keySet()) if (!java.util.List.of("x", "y", "z", "offset", "item").contains(key))
             return failed("DENIED:只接受整数坐标和可选offset。");
+        net.minecraft.world.item.Item item = null;
+        if (args.has("item")) {
+            try {
+                var value = args.get("item");
+                if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                        || value.getAsString().length() > 128) throw new IllegalArgumentException();
+                item = BuiltInRegistries.ITEM.get(com.neko.mcbot.common.ResourceLocationHelper.of(value.getAsString()))
+                        .orElseThrow().value();
+            } catch (RuntimeException invalid) { return failed("DENIED:item须为有效物品ID。"); }
+        }
         BlockPos pos = BreakBlockTool.readPos(args);
         int offset = 0;
         try {
@@ -67,6 +84,11 @@ public final class InspectBlockTool implements ServerTool {
         data.addProperty("container", container != null);
         data.addProperty("slot_count", size);
         data.addProperty("offset", offset);
+        data.addProperty("x", pos.getX()); data.addProperty("y", pos.getY()); data.addProperty("z", pos.getZ());
+        data.addProperty("dimension", access.dimension());
+        String identity = container == null ? null : access.identity(pos, target);
+        data.addProperty("container_identity_known", identity != null);
+        if (identity != null) data.addProperty("container_id", identity);
         var slots = new JsonArray();
         StringBuilder feedback = new StringBuilder("方块 @(" + pos.getX() + "," + pos.getY() + "," + pos.getZ()
                 + ") " + data.get("block").getAsString() + "，本体容器 " + size + " 槽；");
@@ -80,6 +102,19 @@ public final class InspectBlockTool implements ServerTool {
         }
         data.add("slots", slots);
         data.addProperty("next_offset", end < size ? end : -1);
+        if (item != null) {
+            int total = 0;
+            for (int slot = 0; slot < size; slot++) {
+                var stack = container.getItem(slot);
+                if (stack.is(item)) total = Math.addExact(total, stack.getCount());
+            }
+            data.addProperty("item", BuiltInRegistries.ITEM.getKey(item).toString());
+            data.addProperty("item_total", total);
+            // A single server-thread scan covers all native slots; page size affects details only.
+            boolean same = identity != null && identity.equals(access.identity(pos, target));
+            data.addProperty("contents_complete", container != null && same);
+            feedback.append("\n全本体容器 ").append(data.get("item").getAsString()).append(" 总量=").append(total);
+        }
         feedback.append("\n下一页offset=").append(end < size ? end : -1)
                 .append("；只读，不开启GUI、不搬物品、不合并双箱、不代表全存储网络；熔炉进度用smelt query。");
         return new Result(true, feedback.toString(), data);

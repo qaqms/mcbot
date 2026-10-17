@@ -3,6 +3,61 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## L1 多类目标独立现场验收（2026-10-17 16:11，Asia/Shanghai）
+
+- 从已推送S3 `0f289b2`接L1，本轮独立收一张，不提前写L2。
+  当前十八张完整离线卡、B5部分、另3卡未开，下一L2；K1/P1仍按实际证据另卡。
+  完整只读参考链、内容指纹、支持及未验边界见
+  `docs/L1-GOAL-VERIFICATION-2026-10-17.md`；源码提交/推送另核Git。
+- 原set_goal增加type，省略/item保持原背包物品目标；building固定原target/expected_revision，
+  delivery固定container/item/count/mode。仍31工具（22服务端+9本地），无新模型裁判、
+  成品链、依赖规划器或外部桥字段。世界目标登记先查完整事实，登记读取失败终止，
+  成功后类型/修订/口径/基线/阶段帽和原身体/维度固定，不降级成未验证文字完成。
+- 原runner先details status，再经原同任务/身体信封调用build_diff verify_only或inspect_block。
+  建筑用原BuildSurvey完整128格/原协作50ms/版本稳定及全部支持判据，16格明细不裁掉目标；
+  核修订、全分类/剩余数、完整/稳定/预算及goal_satisfied，不凭局部批次或放置数完成。
+  goal_observation_key只纳入全目标真实方块和明确作者属性，库存/无关区块版本/
+  未要求的动态属性不充建筑进展；原查询observation_key仍保留。
+- inspect_block的可选item在单次服务端调用查完最多1024本体槽，分页只影响明细。
+  每身体128个有界弱引用容器身份需同原生对象/世界/区块及原CellWitness，
+  同状态拆换/新实例/无见证不可继承。原距离/锁/有效性/未展开战利品/加载门保持。
+  transfer明确item过滤才核实际容器增减、36槽反向变化、moved_items和同身份；
+  原动作/组件/槽面/部分搬运/许可与机器拒绝保持。
+- 原executeRemote的真实终态统一供直接/Lua记任务DeliveryLedger（128组）。
+  additional按登记后“同容器净新增”与“已核实本任务净存入”较小值验收，取出扣账；
+  原有库存、旁人单独存入、背包减少及循环取放不创造本任务信用。
+  在途/超时、未过滤或未知搬运不靠重查恢复信用；已核实失败部分效果仍记账。
+  total仅验当前容器总量，不证明由谁存入。没有双箱合并、指定组件/接收玩家或逐件来源认证。
+- 短任务与long_term共原结束守卫/GoalContinuation，先验最终条件再验原阶段帽；
+  实际建筑状态进入重复事实判据，原task_id/40步/许可/探索等账不重开。
+  交付远行仅明确OUT_OF_REACH保留原条件并有限续阶段，本次不沿用旧成功，回到原容器再验；
+  未知/替换/错误终止。follow到位/休眠/期限终态不验收建筑/交付。
+  取消、死亡、重载/断连及迟到沿原generation/身体门隔离，无L2跨退出目标恢复。
+- before旧码缺type契约1项1失败，15秒；focused1首契约及旧专项29秒通过。
+  focused2新核心测试漏导入ToolOutcome，编译10秒失败；补导入后focused3客户端50项
+  1失败，原因新Lua夹具未等待既有异步程序线程实际派发（读到上一条status）。
+  按原ProgramTest的有界等待补夹具，保留原断言；focused4专项29秒通过。
+  收尾补有效登记失败不可降级完成、原生容器当前对象核对及仅目标属性阶段指纹后，
+  最终强制全量 `build/l1-final1-20261017.log` 第61–62行：
+  **49秒、20任务全部执行**。
+- XML **1621项/179 suites**：核心375/43、根139/20、客户端1107/116，
+  failures/errors/skipped全0，较S3新增36项/5类。
+  原生产loop/runner/Lua、原BuildSurvey、真实注册表/Inventory/ItemStack/SimpleContainer/
+  ItemTransfers及身份/净账逻辑参与；世界/区块/身体/模型/网络边界受控，
+  不把原生Mixin、游戏动作、容器ticker或模型实际登记行为记已验。
+- `build/libs/mcbot-0.1.0.jar` **1,645,071 bytes**，末写16:09:10，SHA256
+  `a276784a237a02837ddca56916ce49782a27c2b440c8aaf6d22e3e29b276e571`。
+  已核ContainerIdentity/BuildSurvey/原工具/runner、新WorldGoal/DeliveryLedger及原loop，
+  内嵌core与本轮产物SHA256
+  `61407ec7ff0ea22421f007f91db16448495db854c174b36deff2413396a82631`一致，LuaJ及许可在包。
+  list-java无输出；差异空白检查通过，新增内容机器路径/密钥及暂存产物/实例/凭据路径扫描均0匹配。
+  提交推送另核HEAD与远端。
+  只改本体，不安装或启动游戏/服务器/真实模型，不改宿主、连接器、参考、玩家实例或无敌。
+  原生容器替换/卸载/并发库存、施工/多格及保存重进、联合问答和模型选择仍待集中实机。
+- 本卡只组合已有已核API和原TerrainVersion/CellWitness，无新增待猜的Minecraft映射签名；
+  既有服务端权限/控制及桥v1.0的通用completed含义保持。三类成功登记条件有独立守卫，
+  未登记的普通作答仍按原契约；任意自然语言、多目标逻辑/实体交付及持久恢复不在L1范围。
+
 ## S3 死亡与身体重建隔离验收（2026-10-17 15:38，Asia/Shanghai）
 
 - 本轮从S2 `096af1f`接S3，未启L1/L2；当前十七张完整离线卡、B5部分完成、

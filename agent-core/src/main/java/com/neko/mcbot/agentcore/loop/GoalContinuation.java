@@ -13,8 +13,12 @@ final class GoalContinuation {
     private int completedRuns, stalled;
 
     GoalContinuation(int maxRuns, JsonObject initial) {
+        this(maxRuns, initial, "");
+    }
+
+    GoalContinuation(int maxRuns, JsonObject initial, String goalFacts) {
         this.maxRuns = maxRuns;
-        observed.add(BodyFacts.fingerprint(initial));
+        observed.add(BodyFacts.fingerprint(initial) + "|" + goalFacts);
     }
 
     static int limit(JsonObject args) {
@@ -31,7 +35,11 @@ final class GoalContinuation {
     }
 
     Verdict checkpoint(JsonObject state) {
-        String facts = BodyFacts.fingerprint(state);
+        return checkpoint(state, "");
+    }
+
+    Verdict checkpoint(JsonObject state, String goalFacts) {
+        String facts = BodyFacts.fingerprint(state) + "|" + goalFacts;
         completedRuns++;
         stalled = observed.add(facts) ? 0 : stalled + 1;
         if (stalled >= 2) return Verdict.NO_PROGRESS;
@@ -41,7 +49,7 @@ final class GoalContinuation {
     String facts() {
         return "长期目标生命周期：阶段已核对=" + completedRuns + "/" + maxRuns
                 + "，连续重复事实=" + stalled
-                + "；阶段结束须新鲜背包核验，材料与位移仅作阶段进展；总步数、权限、探索预算和原始目标继续沿用。";
+                + "；阶段结束须新鲜身体及目标现场核验，材料与位移仅作阶段进展；总步数、权限、探索预算和原始目标继续沿用。";
     }
 
 }

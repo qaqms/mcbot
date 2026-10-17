@@ -111,6 +111,7 @@ public final class AgentRunner implements ToolExecutor {
     private int programPrimitiveLimit;
     private JsonObject taskInitialObservation;
     private WorkFailureMemory workFailures;
+    private com.neko.mcbot.agentcore.loop.DeliveryLedger deliveries;
     /**
      * 两段式等待记账（R2-S4）：seq → 终局回执；受理后转成 jobId → job 事件。
      * 凭据就是那个 future，转段时跟着一起搬（见 {@link PendingJobs}）。
@@ -240,6 +241,7 @@ public final class AgentRunner implements ToolExecutor {
                         explorationRoute = null;
                         taskInitialObservation = null;
                         workFailures = new WorkFailureMemory();
+                        deliveries = new com.neko.mcbot.agentcore.loop.DeliveryLedger();
                         panelHistory.status(taskId, "running");
                         JsonObject scope = new JsonObject();
                         scope.addProperty("task_id", taskId);
@@ -269,6 +271,7 @@ public final class AgentRunner implements ToolExecutor {
                         if (wasActive) {
                             currentTask = 0;
                             workFailures = null;
+                            deliveries = null;
                         }
                         panelHistory.status(taskId, status.name().toLowerCase(java.util.Locale.ROOT));
                         if (status != AgentLoop.TaskStatus.COMPLETED) panelHistory.add(taskId, "[mcbot] " + text);
@@ -1030,6 +1033,63 @@ public final class AgentRunner implements ToolExecutor {
         });
     }
 
+    @Override
+    public CompletableFuture<ToolOutcome> observe(long taskId, JsonObject goal) {
+        try {
+            var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("set_goal")).findFirst().orElseThrow();
+            BoundedWorkflow.validate(goal, com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
+            var request = com.neko.mcbot.agentcore.loop.WorldGoal.request(goal);
+            AgentLoop owner = loop;
+            long bodyGeneration = companionGeneration;
+            var ledger = deliveries;
+            return observe(taskId).thenCompose(state -> {
+                if (!goalObservationCurrent(taskId, owner, bodyGeneration) || !state.ok() || state.accepted())
+                    return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:目标观测上下文已失效。"));
+                boolean building = request.get("type").getAsString().equals("building");
+                var args = new JsonObject();
+                if (building) {
+                    args.add("target", request.get("target"));
+                    args.add("expected_revision", request.get("expected_revision"));
+                    args.addProperty("verify_only", true);
+                } else {
+                    args = request.getAsJsonObject("container").deepCopy();
+                    args.add("item", request.get("item"));
+                }
+                return executeRemote(building ? "build_diff" : "inspect_block", args.toString(), taskId, owner)
+                        .thenApply(result -> {
+                            if (!goalObservationCurrent(taskId, owner, bodyGeneration))
+                                return ToolOutcome.synthetic("CANCELLED:目标观测上下文已失效。");
+                            var data = state.data();
+                            if (!result.ok() || result.accepted()) {
+                                if (!result.accepted() && result.feedback().startsWith("OUT_OF_REACH:")) {
+                                    data.addProperty("goal_evidence_unavailable", true);
+                                    data.addProperty("goal_evidence_reason", "OUT_OF_REACH");
+                                    return new ToolOutcome(true, "目标现场超距；未判完成，原条件与预算保持。", data);
+                                }
+                                return new ToolOutcome(false, "STATE_UNAVAILABLE:目标现场读取失败；未判完成。");
+                            }
+                            var evidence = result.data();
+                            if (!building) {
+                                if (ledger == null || ledger != deliveries) return ToolOutcome.synthetic("CANCELLED:原交付账已结束。");
+                                try { ledger.describe(evidence); }
+                                catch (RuntimeException unknown) {
+                                    return new ToolOutcome(false, "STATE_UNAVAILABLE:缺少可核实的容器身份及交付账。");
+                                }
+                            }
+                            data.add("goal_evidence", evidence);
+                            return new ToolOutcome(true, "已重新读取身体与完整目标现场。", data);
+                        });
+            });
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:目标参数未通过现有工具契约。"));
+        }
+    }
+
+    private boolean goalObservationCurrent(long taskId, AgentLoop owner, long bodyGeneration) {
+        return !closed && !bodyUnavailable && owner == loop && taskId == currentTask
+                && bodyGeneration == companionGeneration;
+    }
+
     CompletableFuture<ToolOutcome> requestObservation(long taskId) {
         long generation = brainGeneration;
         long bodyGeneration = companionGeneration;
@@ -1390,6 +1450,7 @@ public final class AgentRunner implements ToolExecutor {
                             + "请缩小范围或分批（如扫描半径调小、一次只处理少量方块）。"));
         }
         WorkFailureMemory memory = taskId != 0 && taskId == currentTask && owner == loop ? workFailures : null;
+        var deliveryLedger = memory == null ? null : deliveries;
         long bodyGeneration = companionGeneration;
         var recordedArgs = args.deepCopy();
         ToolTicket ticket = new ToolTicket(taskId, owner, f, terminalOnly, outcome -> {
@@ -1397,6 +1458,8 @@ public final class AgentRunner implements ToolExecutor {
                     && owner == loop && taskId == currentTask)
             {
                 memory.terminal(name, recordedArgs, outcome);
+                if (name.equals("transfer") && deliveryLedger != null && deliveryLedger == deliveries)
+                    deliveryLedger.terminal(recordedArgs, outcome);
                 if (explorationRoute != null && outcome.ok() && name.equals("status"))
                     explorationRoute.terrainObserved(outcome.data());
             }
@@ -1424,6 +1487,8 @@ public final class AgentRunner implements ToolExecutor {
                 taskBubble.sent(taskId, seq, TaskBubbleState.Activity.tool(name,
                         args.has("query") && args.get("query").isJsonPrimitive()
                                 && args.get("query").getAsJsonPrimitive().isBoolean() && args.get("query").getAsBoolean()));
+                if (name.equals("transfer") && deliveryLedger != null && deliveryLedger == deliveries)
+                    deliveryLedger.started();
                 client.send(new Envelope("tool_call", body));
             } else {
                 pending.takeTool(seq);

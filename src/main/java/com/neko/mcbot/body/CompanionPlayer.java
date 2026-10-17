@@ -25,6 +25,15 @@ public final class CompanionPlayer extends ServerPlayer {
     private final HealthObservation healthObservation = new HealthObservation();
     private final UUID observationBodyId = UUID.randomUUID();
     private final BodyLifecycle lifecycle = new BodyLifecycle(observationBodyId);
+    private final com.neko.mcbot.server.ContainerIdentity containerIdentities =
+            new com.neko.mcbot.server.ContainerIdentity();
+
+    public String containerIdentity(BlockPos pos, net.minecraft.world.Container container) {
+        var chunk = level().getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
+        var witness = chunk instanceof com.neko.mcbot.server.TerrainVersion version
+                ? version.mcbot$watchCell(pos) : null;
+        return containerIdentities.identify(level(), chunk, container, pos, witness);
+    }
     private com.neko.mcbot.server.DropTracker.Request deathDrops;
     private com.google.gson.JsonObject previousDeath;
     private final BodyLifecycle.Access deathAccess = new BodyLifecycle.Access() {

@@ -39,6 +39,9 @@ public final class PromptBuilder implements Supplier<String> {
               material_for按真实配方允许替代材料；sources=true只取一层普通合成转换输入，
               不把这种输入当成天然资源，不把来源件数当成转换产量。根据实际观测选择获取途径。
             - 物品任务先用set_goal登记主人最终要求；独立采集可由gather默认登记。
+              建筑用type=building及同build_diff的target/expected_revision；容器交付用type=delivery及container/item/count。
+              交付先靠近登记基线，additional只认登记后本任务已核实净存入及同容器净增量；双向transfer明确item过滤。
+              total只验容器现有总量，不证明由谁交付；建筑局部批次或持续跟随到位/结束都不替代最终条件。
               多阶段物品目标首次登记lifecycle=long_term；阶段回复后系统核对新鲜事实，未完成才在原总预算内继续。
               材料阶段用scope=subtask，已有材料宜用mode=total，不能改写最终目标或减少数量。
               未指定背包总量时采集按additional净新增；中间材料、移动或脚本结束不等于整项完成。

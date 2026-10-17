@@ -3,6 +3,23 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## L1 多类目标与完整现场（2026-10-17）
+
+仍31工具（22服务端+9本地）。set_goal的type省略/item沿原item/count/mode背包规则；
+building须同build_diff的target与expected_revision；delivery须container={x,y,z}及item/count/mode。
+世界目标登记先新鲜身体/完整现场，失败则终止，成功后不可换类型/修订/口径/基线或阶段帽。
+building同BuildSurvey验全部目标，build_diff verify_only=true略过工作预检而保留完整稳定扫描；
+goal_observation_key只含目标真实方块及明确属性，页尾/局部批次/耗材不替代整项目标。
+inspect_block可选item给最多1024槽全本体item_total/contents_complete及有见证的容器身份；
+分页只影响明细，原距离/锁/战利品/加载门保持，不拼双箱或全存储网络。
+delivery additional取登记后同容器净新增与本任务已核实净存入的较小值，双向transfer须item过滤，
+取出扣账，失败的已知部分效果保留；在途/未知/未过滤搬运不靠重登记补信用。
+total只验当前指定容器总量，不证明由谁存入。未知/换箱/换身体/修订不完成；
+仅明确OUT_OF_REACH可按原账继续有限材料阶段，返回原容器再核验。
+三类同原task/long_term、总步帽与阶段账，取消/死亡不续，follow终态不代验外层目标；
+桥v1.0不变，未登记普通作答仍是原语义，无L2跨退出恢复。
+完整输入示例、参考/限制及原生待验见L1-GOAL-VERIFICATION；下方未接建筑/交付按历史阅读。
+
 ## S3 身体实例与死亡终态（2026-10-17）
 
 S3不新增游戏工具。status的body_id为当前身体实例，alive/body_state/body_lifecycle报告
@@ -436,7 +453,7 @@ data.failure_memory含reason/failures/limit/entry_limit/dispatched=false。
   生命周期及阶段上限首次固定，省略沿用，不允许增加或改模式；
   原目标、背包基线、40模型步帽、权限、程序原子预算和探索账均按原各自作用域继续。
   最后一段仍先验目标再验帽；受阻、取消、错误或未知状态均终止且不自动重启。
-  目前只校验物品数量，不支持建筑/交付验收或跨退出恢复。
+  L1已让同生命周期接显式建筑和容器交付条件，见顶部；仍不支持跨退出恢复。
 
 2026-10-15执行与事实更新（覆盖下方逐格查询的旧描述）：
 
@@ -497,7 +514,7 @@ additional默认按任务开始完整36槽背包的净新增计算，total按当
 模型须保留主人原目标和口径；本体没有通用自然语言目标解析器。
 每轮和结束前观测实际背包，不累计矿格/collected_count/地上掉落。
 未满足的结束回复继续同一task_id；三次无实际进展的结束回复后FAILED。
-受阻可report_blocked，取消不会续目标。交付/建筑和跨退出持久化不在当前校验内。
+受阻可report_blocked，取消不会续目标。L1的显式建筑/容器交付见顶部；跨退出持久化仍未实现。
 
 ```json
 {"item":"dirt","targets":["dirt","grass_block"],"count":64,"mode":"additional","r":8}
@@ -754,7 +771,7 @@ status的实际服务端回执包含permission_mode=confirm/autonomous/read_only
 | `gather` | `count,item/targets或material_for,mode?,scope?,r?,timeout_seconds?,max_blocks?,explore_steps?,explore_radius?` | **本地** | 默认r16；精确物品或真实配方材料子目标，分页及换区后按新鲜背包结算，不覆盖最终目标 |
 | `search_resource` | `targets,r?,work?` | **本地只读** | 默认r16，最多5页/30秒；同中心完整查询，累计已读/未知、最多16候选；原程序预算逐页计数 |
 | `explore` | `max_steps?,radius?,timeout_seconds?` | **本地** | 通用一段换区观察；同任务共享步数/范围/访问记录，支持run_program任意已有观测条件；不采集或验证目标 |
-| `set_goal` | `item,count,mode?` | **本地** | 固定本任务物品完成条件，additional净新增或total总量；结束前重新观测背包，未满足不发完成done |
+| `set_goal` | `type?,item/count/mode?`或`target/expected_revision`或`container/item/count/mode?` | **本地** | 固定item/building/delivery条件及task/long_term阶段帽；结束前新鲜完整核验，未满足不发完成done；具体互斥必填规则见L1文档 |
 | `report_blocked` | `reason` | **本地** | 1-512字符实际障碍，以FAILED结束并保留成果/目标事实；不能把受阻说成完成 |
 
 游戏内 `@bot 答 <文本>` / `@bot answer <文本>` 只用于回答当前最新的有效问题。

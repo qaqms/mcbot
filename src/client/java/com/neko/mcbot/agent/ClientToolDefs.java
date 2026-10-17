@@ -119,8 +119,16 @@ public final class ClientToolDefs {
                     + "no_targets为布尔，unknown为数量，results_truncated/work_truncated表示输出/工作评估截断；"
                     + "find_resource续页看next_offset及scan_center；search_resource给scan_complete/coverage_complete/"
                     + "search_pages。局部空结果不等于没有资源；目标发现不等于可采或入包。";
+            case "set_goal" -> "type省略/item保持背包物品目标；building固定target与expected_revision，"
+                    + "delivery固定container/item/count/mode。世界目标登记须先完整现场读取，失败不登记。"
+                    + "additional交付从登记时计，只认本任务显式item过滤的已核实净存入与同容器净增量两者较小值；"
+                    + "total只验容器当前总量，不证明由谁存入。取出会扣账，超时/未知搬运不授予交付信用。"
+                    + "结束前重新读完整目标，building未知/不支持/不稳定不能完成；"
+                    + "超距不能验收，可在原预算内先完成材料阶段再返回。生命周期与目标首次固定，不跨退出恢复。";
             case "inspect_block" -> "data.block是方块ID字符串，container是布尔，slots是[{slot,item,count,...}]，"
                     + "slot_count/offset/next_offset为整数。没有block.name或pos；next_offset=-1为末页。"
+                    + "指定item时item_total是单次扫描全部本体槽位的总数，contents_complete声明完整；"
+                    + "container_id/container_identity_known绑定原生容器、区块及未失效格见证，替换/重载不可继承。"
                     + "普通方块也返回成功且slots为空；区域搜索用search_resource。";
             case "place_block" -> "query时data.preflight_passed布尔；false时failure是原因字符串，"
                     + "alternatives是改选目标格的最多6个{x,y,z,face}，checked_positions为这些目标检查数；"
@@ -130,6 +138,7 @@ public final class ClientToolDefs {
                     + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
             case "build_diff" -> "data.target_revision由完整目标内容生成；counts对全部目标分类，remaining不含已满足格。"
                     + "goal_satisfied仅完整稳定现场且全部支持/满足才true，不直接登记或完成外层任务。"
+                    + "verify_only=true仅重查全目标，略过当前页工作预检；goal_observation_key只含目标真实状态，用于阶段核对。"
                     + "cells是当前16格明细，next_offset=-1为末页；materials独立material_next_offset续页。"
                     + "料单required为全目标已知未满足格需求下界，available仅36储物槽的无额外组件材料，"
                     + "shortfall是差额；allocated仅当前明细页通过原版预检的份数，未预留，consumed始终0。"
@@ -269,19 +278,25 @@ public final class ClientToolDefs {
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
                             + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
                             + "\"required\":[\"count\"],\"additionalProperties\":false}"),
-            new ToolSpec("set_goal", "数量型物品任务开始时登记本任务完成条件，原始主人的数量/口径不可改写。"
+            new ToolSpec("set_goal", "登记本任务不可降低的最终条件，type省略或item保持物品接口。"
                     + "item是物品ID，count是目标件数；mode=additional指相对任务开始背包净新增，total指背包总量。"
+                    + "type=building须target和build_diff读到的expected_revision，完整目标同修订独立验收。"
+                    + "type=delivery须container={x,y,z}及item/count/mode，先靠近登记完整容器基线；"
+                    + "additional仅登记后本任务已核实净存入且容器净新增，双向transfer须明确item过滤；total为容器当前总量。"
                     + "首次登记后不能换目标或降低数量。完成回复会重新查询实际背包核对，挖掘格数/地上掉落不算入包。"
                     + "多阶段物品目标可首次设lifecycle=long_term，max_runs默认8、最多16；本段回复只触发新鲜事实检查，"
                     + "未完成则继续同一任务，重复事实两段/阶段或原总步数耗尽/受阻/取消即终止。阶段不重置背包基线、权限或探索预算。"
                     + "生命周期和阶段上限首次固定，省略沿用；仅当前任务会话内，不跨退出恢复。"
-                    + "交付、建筑等目标不由此验证；无法继续用report_blocked，不能声称已完成",
-                    "{\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"maxLength\":128},"
+                    + "建筑局部批次/持续跟随结束不等于整项完成；无法继续用report_blocked",
+                    "{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"item\",\"building\",\"delivery\"]},"
+                            + "\"item\":{\"type\":\"string\",\"maxLength\":128},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4096},"
                             + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]},"
+                            + "\"target\":" + BUILD_TARGET + ",\"expected_revision\":{\"type\":\"string\",\"minLength\":64,\"maxLength\":64},"
+                            + "\"container\":" + BUILD_ANCHOR + ","
                             + "\"lifecycle\":{\"type\":\"string\",\"enum\":[\"task\",\"long_term\"]},"
                             + "\"max_runs\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16}},"
-                            + "\"required\":[\"item\",\"count\"],\"additionalProperties\":false}"),
+                            + "\"additionalProperties\":false}"),
             new ToolSpec("report_blocked", "确实无法继续时停止当前任务并报告实际障碍，保留已完成动作与物品。"
                     + "不用于临时思考或让主人逐步操作；取消后不会续跑。目标未满足按失败/受阻结束，不能写成完成",
                     "{\"type\":\"object\",\"properties\":{\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512}},"
@@ -367,7 +382,7 @@ public final class ClientToolDefs {
                     {"type":"object","properties":{"target":%s,
                     "offset":{"type":"integer","minimum":0,"maximum":112},
                     "material_offset":{"type":"integer","minimum":0,"maximum":112},
-                    "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
+                    "expected_revision":{"type":"string","minLength":64,"maxLength":64},"verify_only":{"type":"boolean"}},
                     "required":["target"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
             new ToolSpec("build_site", "登记任务内工地、完整目标与明确进出通道，供所有原挖放和路线共用保护。"
@@ -427,9 +442,11 @@ public final class ClientToolDefs {
                             + "\"required\":[\"targets\"],\"additionalProperties\":false}"),
             new ToolSpec("inspect_block", "只读查看6.5格内已加载方块及本体容器逐槽ID/数量/耐久。"
                     + "offset默认0，每页24槽，next_offset=-1表示末页；拒绝锁定/未展开战利品容器。"
+                    + "可选item另给全部本体槽位总数与容器身份，用于交付验收；不从单页猜总量。"
                     + "不打开GUI、不搬物品、不合并双箱；机器计时用smelt query",
                     "{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},\"z\":{\"type\":\"integer\"},"
-                            + "\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1023}},\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false}"),
+                            + "\"offset\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1023},"
+                            + "\"item\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":128}},\"required\":[\"x\",\"y\",\"z\"],\"additionalProperties\":false}"),
             new ToolSpec("inventory", "查看完整背包逐槽物品ID/数量/耐久、主手选中槽及装备栏。"
                     + "槽0-8是快捷栏，9-35是背包；切换工具或准备材料前先查看，未列出的背包槽为空",
                     "{\"type\":\"object\",\"properties\":{}}"),

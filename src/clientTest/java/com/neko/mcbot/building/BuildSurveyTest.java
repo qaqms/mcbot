@@ -92,6 +92,32 @@ class BuildSurveyTest {
         assertEquals(0, material(changed).get("consumed").getAsInt());
     }
 
+    @Test void goalFingerprintTracksAllActualCellsButIgnoresInventoryAndUnrelatedChunkVersions() {
+        var world=new World();
+        var target=cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"stone\"},"
+                + "{\"x\":1,\"y\":0,\"z\":0,\"block\":\"stone\"}]");
+        var before=BuildSurvey.verify(target,world,0,()->0).data();
+        world.inventory.setItem(0,new ItemStack(Items.STONE,12));
+        var inventory=BuildSurvey.verify(target,world,0,()->0).data();
+        assertEquals(before.get("goal_observation_key"),inventory.get("goal_observation_key"));
+        assertNotEquals(before.get("observation_key"),inventory.get("observation_key"));
+        world.blocks.put(new BlockPos(0,90,0),Blocks.STONE.defaultBlockState());
+        var first=BuildSurvey.verify(target,world,0,()->0).data();
+        world.blocks.remove(new BlockPos(0,90,0));
+        world.blocks.put(new BlockPos(1,90,0),Blocks.STONE.defaultBlockState());
+        var second=BuildSurvey.verify(target,world,0,()->0).data();
+        assertNotEquals(first.get("goal_observation_key"),second.get("goal_observation_key"));
+        assertEquals(0,world.prepares,"verification must not run placement preflights");
+        var furnace=cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"furnace\"}]");
+        world.blocks.put(new BlockPos(0,90,0),Blocks.FURNACE.defaultBlockState());
+        var unlit=BuildSurvey.verify(furnace,world,0,()->0).data();
+        world.blocks.put(new BlockPos(0,90,0),Blocks.FURNACE.defaultBlockState()
+                .setValue(BlockStateProperties.LIT,true));
+        assertEquals(unlit.get("goal_observation_key"),
+                BuildSurvey.verify(furnace,world,0,()->0).data().get("goal_observation_key"),
+                "state properties absent from the authored condition cannot buy another stage");
+    }
+
     @Test void finiteAllocationDoesNotPromiseOneRemainingStackToEveryCellOrConsumeIt() {
         var target = cells("""
                 [{"x":0,"y":0,"z":0,"block":"stone"},{"x":1,"y":0,"z":0,"block":"stone"},
