@@ -10,6 +10,15 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void durableBuildingRecordsAreDiscoverableAndUseTheSharedTargetReference() {
+        var help = ToolCatalog.read("{\"names\":[\"build_record\"]}");
+        assertTrue(help.ok(), help.feedback());
+        for (String name : List.of("build_diff", "build_nearby", "build_site")) {
+            var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals(name)).findFirst().orElseThrow();
+            assertTrue(spec.paramsJsonSchema().contains("instance_id"));
+        }
+        assertTrue(help.feedback().contains("instance_revision"));
+    }
     @Test void constructionHelperAndTemporaryEngineeringAreDiscoverableInTheActualCatalog() {
         var help=ToolCatalog.read("{\"names\":[\"build_site\",\"run_program\",\"place_block\"]}");
         assertTrue(help.ok(),help.feedback());

@@ -125,7 +125,7 @@ public final class ActionPermissions {
     public static boolean allowed(Context context, String tool, JsonObject args) {
         return TaskPolicy.observation(tool, args) || context != null && !context.readOnly()
                 && java.util.Set.of("equip", "craft", "smelt", "move_to", "break_block", "place_block",
-                        "collect", "transfer", "wait", "attack", "build_nearby", "build_site").contains(tool);
+                        "collect", "transfer", "wait", "attack", "build_nearby", "build_site", "build_record").contains(tool);
     }
 
     /** Only the current owner task can replace concrete approvals with its chosen execution mode. */

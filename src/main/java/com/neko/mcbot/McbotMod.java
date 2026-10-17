@@ -28,6 +28,11 @@ public final class McbotMod implements ModInitializer {
     private static volatile SummonService summonService;
     private static volatile ToolRegistry toolRegistry;
     private static volatile ServerToolDispatcher dispatcher;
+    private static volatile com.neko.mcbot.building.BuildRecords buildingRecords;
+    private static volatile net.minecraft.server.MinecraftServer recordsServer;
+    public static com.neko.mcbot.building.BuildRecords buildRecords(net.minecraft.server.MinecraftServer server) {
+        return recordsServer==server ? buildingRecords : null;
+    }
     private static final com.neko.mcbot.task.CompanionScheduler scheduler =
             new com.neko.mcbot.task.CompanionScheduler();
 
@@ -80,6 +85,9 @@ public final class McbotMod implements ModInitializer {
             com.neko.mcbot.server.DropTracker.clear();
             CompanionRoster roster = new CompanionRoster(server);
             roster.load();
+            var records=new com.neko.mcbot.building.BuildRecords(server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT));
+            records.load(); buildingRecords=records; recordsServer=server;
+            if (!records.healthy()) LOG.error("建筑记录不可用，修改入口将保守停止；请核对存档中的mcbot/buildings.json。");
 
             ToolRegistry tools = new ToolRegistry();
             tools.register(new StatusTool());
@@ -97,6 +105,7 @@ public final class McbotMod implements ModInitializer {
             tools.register(new com.neko.mcbot.server.tools.BuildDiffTool());
             tools.register(new com.neko.mcbot.server.tools.BuildNearbyTool());
             tools.register(new com.neko.mcbot.server.tools.BuildSiteTool());
+            tools.register(new com.neko.mcbot.server.tools.BuildRecordTool());
             tools.register(new com.neko.mcbot.server.tools.MoveToTool());
             tools.register(new com.neko.mcbot.server.tools.TransferTool());
             tools.register(new com.neko.mcbot.server.tools.WaitTool());
@@ -119,6 +128,7 @@ public final class McbotMod implements ModInitializer {
             summonService = null;
             toolRegistry = null;
             dispatcher = null;
+            buildingRecords=null; recordsServer=null;
             if (service != null) {
                 service.dismissAllForShutdown();
             }

@@ -29,6 +29,7 @@ public final class BlockMining {
         default JsonObject dropReport() { return null; }
         boolean destroy();
         default ServerTool.Result beforeDestroy() { return null; }
+        default boolean recordingKnown() { return true; }
         void crack(int stage);
     }
 
@@ -144,6 +145,7 @@ public final class BlockMining {
         JsonObject data = new JsonObject();
         data.addProperty("removed", removed);
         data.addProperty("reported_success", reported);
+        data.addProperty("recording_known",access.recordingKnown());
         addDropReport(data);
         if (!removed) return finish(new ServerTool.Result(false,
                 "BREAK_FAILED:目标没有移除；原版可能已处理耐久或产生连带效果，先核对状态，勿自动重试。", data));
@@ -233,6 +235,8 @@ public final class BlockMining {
                 return failure("DENIED:目标超出世界范围，换位置。");
             }
             if (!level.isLoaded(pos)) return failure("TARGET_LOST:目标未加载，先靠近。");
+            var recordFailure=BuildRecordAccess.guard(player,pos,true,siteRevision);
+            if (recordFailure!=null) return recordFailure;
             var siteFailure = player.buildSite().miningGuard(pos, siteRevision, cleanup, new BuildSiteAccess(player));
             if (siteFailure != null) return siteFailure;
             for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
@@ -275,11 +279,22 @@ public final class BlockMining {
         @Override public ItemStack held() { return player.getMainHandItem(); }
         @Override public HandSnapshot.Pickups handPickups() { return player.handPickups(); }
         @Override public boolean destroy() {
-            boolean result = DropTracker.destroy(dropRequest, () -> player.gameMode.destroyBlock(pos));
-            if (cleanup && state().isAir()) player.buildSite().removedTemporary(pos);
-            return result;
+            var before=state();
+            try { return DropTracker.destroy(dropRequest, () -> player.gameMode.destroyBlock(pos)); }
+            finally {
+                player.buildSite().recordRemoval(pos,before,state());
+                if (cleanup && state().isAir()) player.buildSite().removedTemporary(pos);
+            }
         }
-        @Override public ServerTool.Result beforeDestroy() { return player.buildSite().charge(); }
+        @Override public ServerTool.Result beforeDestroy() {
+            var failure=BuildRecordAccess.guard(player,pos,true,siteRevision);
+            if (failure==null) failure=player.buildSite().miningGuard(pos,siteRevision,cleanup,new BuildSiteAccess(player));
+            return failure!=null ? failure : player.buildSite().charge();
+        }
+        @Override public boolean recordingKnown() {
+            var records=BuildRecordAccess.store(player);
+            return records==null || records.healthy();
+        }
         @Override public JsonObject dropReport() { return dropRequest.report(); }
         @Override public void crack(int stage) {
             level.getServer().getPlayerList().broadcastAll(

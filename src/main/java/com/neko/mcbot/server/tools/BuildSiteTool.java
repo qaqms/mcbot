@@ -50,7 +50,12 @@ public final class BuildSiteTool implements ServerTool {
     @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer body, JsonObject args,
             CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {
         Arguments input;
-        try { input = arguments(args); }
+        com.neko.mcbot.building.BuildRecords.Instance instance=null;
+        try {
+            if (args.has("target") && args.getAsJsonObject("target").has("instance_id"))
+                instance=BuildRecordAccess.instance(body,args.getAsJsonObject("target"));
+            input = arguments(BuildRecordAccess.expanded(body,args));
+        }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:build_site须query、begin(target/access_route)或checkpoint(expected_revision)，不接受额外字段。", null));
@@ -61,6 +66,9 @@ public final class BuildSiteTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:工地登记须原任务、身体及动作许可。", null));
         body.bindSpatialTask(context);
         var site = body.buildSite();
+        if ("begin".equals(input.operation()) && site.active()
+                && !java.util.Objects.equals(site.instanceId(),instance==null ? null : instance.id()))
+            return CompletableFuture.completedFuture(new Result(false,"TARGET_REVISION_CHANGED:工地实例绑定已冻结，未更换来源或重开预算。",null));
         var access = new BuildSiteAccess(body);
         Result failure = switch (input.operation()) {
             case "begin" -> site.begin(input.target(), input.route(), StandingGeometry.feetCell(body),
@@ -69,6 +77,7 @@ public final class BuildSiteTool implements ServerTool {
             case "checkpoint" -> site.checkpoint(input.revision(), StandingGeometry.feetCell(body), access);
             default -> null;
         };
+        if (failure==null && instance!=null) site.attach(BuildRecordAccess.store(body),instance);
         return CompletableFuture.completedFuture(new Result(failure == null, failure == null
                 ? "工地事实已核对；登记不改世界、不授予挖放许可，通道仅覆盖声明格，不保证全局逃生。"
                 : failure.feedback(), site.report(access)));

@@ -36,7 +36,13 @@ public final class BuildNearbyTool implements ServerTool {
     @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer body, JsonObject args,
             CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {
         Arguments input;
-        try { input = arguments(args); }
+        try {
+            if (args.has("target") && args.getAsJsonObject("target").has("instance_id")
+                    && !java.util.Objects.equals(body.buildSite().instanceId(),
+                    args.getAsJsonObject("target").get("instance_id").getAsString()))
+                throw new IllegalArgumentException("instance_site_required");
+            input = arguments(com.neko.mcbot.server.BuildRecordAccess.expanded(body,args));
+        }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:须提供有效target和匹配的expected_revision；offset为16的倍数，max_actions为1-12。", null));

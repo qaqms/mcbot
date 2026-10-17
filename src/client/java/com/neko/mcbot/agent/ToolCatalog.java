@@ -27,6 +27,8 @@ public final class ToolCatalog {
                     + "不按脚本行数缩小嵌套采集预算。错误按program_error.kind/line核对，已完成动作勿重放。";
         if (spec.name().equals("tool_help")) return spec.description();
         String text = switch (spec.name()) {
+            case "build_record" -> "保存/分页修改可复用设计，显式创建或修订隔离实例；target引用复用原差异/工地/施工/Lua。"
+                    + "逐真实动作落盘，未知来源/外部修改保守冲突；不自动续已取消目标，不补预算，参数先tool_help。";
             case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"
                     + "首次max_steps/radius固定，与gather共享原任务预算；发现不等于入包，取消不返程。";
             case "gather" -> "连续扫描、工作导航、挖掘、触碰拾取并核对实际背包。item是入包物品，targets是来源方块；先核对工具。"

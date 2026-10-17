@@ -3,6 +3,19 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## B4 设计与实例（2026-10-17）
+
+新增build_record，当前28项（19服务端+9本地），详见B4-BUILDING-RECORDS。
+design_create/patch/query/list保存相对目标，patch须明确design_revision、最多16项；
+query可layer及16格分页。instance_create冻结设计快照/落点/朝向，query/list查看真实来源，
+instance_revise在未登记工地的新调用中明确设计修订，目标不重叠。
+target={instance_id,instance_revision}复用原build_diff/build_site/build_nearby和mc.build；
+登记同实例工地后才能通过引用施工，原expected_revision仍是全目标内容哈希。
+records.status区分intact/absent/conflict/unknown，action_count为真实变化次数；
+同块替换/区块重载/保存重进不恢复拆除权，recording_known=false后停修改。
+设计更新不无声改实例，不自动恢复已取消任务，不补原模型/探索/动作预算或许可。
+旧文工具数量按当时检查点阅读。
+
 ## D2 身体自保事实（2026-10-17）
 
 工具仍26项。身体可信威胁按刻触发，共用原attack与move_to执行核，不另增工具/模型往返。

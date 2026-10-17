@@ -39,6 +39,8 @@ public final class BuildSite {
     private com.neko.mcbot.path.NavigationBudget navigation = new com.neko.mcbot.path.NavigationBudget();
     private int checkpoints, edits;
     private boolean stopped;
+    private BuildRecords records;
+    private BuildRecords.Instance instance;
 
     public void bind(Object nextTask, Object nextWorld) {
         if (task != nextTask || world != nextWorld) {
@@ -46,6 +48,7 @@ public final class BuildSite {
             protectedCells.clear(); accessCells.clear(); scope = com.neko.mcbot.path.PathSpec.DEFAULT;
             navigation = new com.neko.mcbot.path.NavigationBudget();
             checkpoints = edits = 0; stopped = false; task = nextTask; world = nextWorld;
+            records=null; instance=null;
         }
     }
     public boolean active() { return task != null && target != null; }
@@ -53,6 +56,19 @@ public final class BuildSite {
     public BuildTarget target() { return target; }
     public com.neko.mcbot.path.PathSpec scope() { return scope; }
     public com.neko.mcbot.path.NavigationBudget navigation() { return navigation; }
+    public String instanceId() { return instance==null ? null : instance.id(); }
+    public BuildRecords.Instance instance() { return instance; }
+    public void attach(BuildRecords store, BuildRecords.Instance selected) {
+        if (!same(selected.target().revision()) || instance!=null && instance!=selected)
+            throw new IllegalArgumentException("instance_binding");
+        records=store; instance=selected;
+    }
+    public void recordPlacement(BlockPos pos, BlockState before, BlockState after, int consumed, Access access) {
+        if (instance!=null && cell(pos)!=null) records.placed(instance,pos,before,after,consumed,access);
+    }
+    public void recordRemoval(BlockPos pos, BlockState before, BlockState after) {
+        if (instance!=null && cell(pos)!=null) records.removed(instance,pos,before,after);
+    }
 
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet, Access access) {
         return begin(next, accessRoute, feet, active() ? scope
@@ -106,6 +122,8 @@ public final class BuildSite {
     public ServerTool.Result live(Access access) {
         if (!active()) return failed("DENIED:须先登记当前任务工地。");
         if (stopped) return failed("ACTION_LIMIT:工地有限工作已停止，不通过重开Lua续账。");
+        if (instance!=null && (!records.healthy() || !same(instance.target().revision())))
+            return failed("RECORD_UNAVAILABLE:实例记录不可用或修订已变，未继续施工。");
         if (!access.passageComplete()) return failed("TARGET_LOST:实际路线记录有缺口或已到256条帽，未继续修改工地。");
         for (var p : route) if (!access.corridor(p))
             return failed("ENVIRONMENT_UNSAFE:声明的进出通道已改变或未知，停止施工并核对现场。");
@@ -162,6 +180,8 @@ public final class BuildSite {
             return failed("DENIED:不覆盖工地通道、地板或已记录临时工程。");
         var selected = cell(pos);
         if (selected != null) {
+            if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
+                return failed("DENIED:实例格来源冲突、未知或累计记录额度耗尽，不覆盖外部改动。");
             if (selected.matches(access.state(pos)) || !selected.matches(proposed))
                 return failed("DENIED:不覆盖已满足格或放入偏离冻结目标的状态。");
         } else if (protects(pos) && !temporaryPlacement) return failed("DENIED:不覆盖完整目标的直接支撑。");
@@ -188,10 +208,12 @@ public final class BuildSite {
             var selected = cell(pos);
             var actual = access.state(pos);
             if (selected == null || actual == null || selected.matches(actual)
-                    || actual.getBlock() == selected.authored().getBlock() || !selected.material().supported()
+                    || instance==null && actual.getBlock() == selected.authored().getBlock() || !selected.material().supported()
                     || !access.material(selected) || access.facility(pos) || dependent(pos, access)
                     || target.cells().stream().anyMatch(c -> !c.authored().isAir() && c.pos().below().equals(pos)))
                 return failed("DENIED:只清有材料可替换、非成品且无依赖的冻结目标障碍；状态冲突交回模型。");
+            if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
+                return failed("DENIED:旧实例格来源不可证、已被外部修改或累计记录额度耗尽，未拆除。");
         }
         return null;
     }
@@ -250,6 +272,10 @@ public final class BuildSite {
         var data = new JsonObject();
         data.addProperty("active", active());
         data.addProperty("task_scoped", true);
+        if (instance!=null) {
+            data.addProperty("instance_id",instance.id()); data.addProperty("instance_revision",instance.revision());
+            data.addProperty("recording_known",records.healthy());
+        }
         data.addProperty("return_guaranteed", false);
         if (!active()) return data;
         data.addProperty("target_revision", target.revision());

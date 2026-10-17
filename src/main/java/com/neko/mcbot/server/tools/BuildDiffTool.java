@@ -20,7 +20,9 @@ public final class BuildDiffTool implements ServerTool {
     @Override public String name() { return "build_diff"; }
 
     @Override public Result run(CompanionPlayer body, JsonObject args) {
-        return report(args, target -> access(body, target), System::nanoTime);
+        try { return report(com.neko.mcbot.server.BuildRecordAccess.expanded(body,args),
+                target -> access(body, target), System::nanoTime); }
+        catch (RuntimeException invalid) { return new Result(false,"DENIED:实例身份或修订不符，未查询另一实例。",null); }
     }
 
     public static BuildSurvey.Access access(CompanionPlayer body, BuildTarget target) {

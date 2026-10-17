@@ -225,7 +225,7 @@ public final class BuildSurvey {
         if (!cell.material().supported()) return "unsupported";
         if (cell.matches(actual)) return "satisfied";
         if (access.protectedCell(cell.pos())) return "protected";
-        if (actual.getBlock() == cell.authored().getBlock()) return "state_conflict";
+        if (actual.getBlock() == cell.authored().getBlock()) return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";
         if (!access.near(cell.pos())) return "out_of_reach";
         return "not_assessed";

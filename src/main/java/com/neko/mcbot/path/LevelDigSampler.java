@@ -280,6 +280,7 @@ public final class LevelDigSampler implements DigSampler {
     private boolean protectedWork(BlockPos cell) {
         return preserved(workTarget, cell) || companion instanceof com.neko.mcbot.body.CompanionPlayer body
                 && (body.workTargets().protects(cell) || body.buildSite().protects(cell)
+                || com.neko.mcbot.server.BuildRecordAccess.protects(body,cell)
                 || body.buildSite().active() && body.navigationTrail().protectsPassage(cell));
     }
 

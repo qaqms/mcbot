@@ -77,6 +77,27 @@ class AgentRunnerProgramTest {
         runner.handleS2c(new Envelope("job_event", body));
         client.drain();
     }
+    @Test void durableRecordQueriesAndReferenceConstructionUseTheExistingLuaRunner() {
+        start("[只读] inspect designs","return mc.call('build_record',{operation='design_list'}).data",4);
+        tool("build_record",1);
+        receipt(true,"stored data","{\"entries\":[],\"next_offset\":-1}");
+        assertTrue(outcome().ok());
+    }
+    @Test void readOnlyLuaCannotCreateDurableDesignData() {
+        start("[只读] inspect","return mc.call('build_record',{operation='design_create',design_id='wall',"
+                +"definition={cells={{x=0,y=0,z=0,block='stone'}}}})",4);
+        assertFalse(outcome().ok()); assertEquals(0,client.toolCount());
+    }
+    @Test void instanceReferencePassesTheOriginalConstructionSchemasWithoutExpandingTheTarget() {
+        start("build selected instance","return mc.build({instance_id='12345678-1234-1234-1234-123456789012',instance_revision=2},"
+                +"{access_route={{x=0,y=90,z=0},{x=1,y=90,z=0}},max_actions=1,max_rounds=1})",8);
+        tool("build_site",1);
+        assertEquals(2,client.lastTool().body().getAsJsonObject("args").getAsJsonObject("target").get("instance_revision").getAsInt());
+        receipt(true,"frozen instance",siteFacts());
+        tool("status",2); receipt(true,"body","{}");
+        tool("build_diff",3); receipt(true,"whole target",siteDiff("satisfied",true));
+        assertTrue(outcome().ok()); assertEquals(3,client.toolCount());
+    }
 
     @Test void recipeThenCraftThenRealSlotSelectionNeedsOnlyOneModelTurn() {
         start("make a fixture item", """

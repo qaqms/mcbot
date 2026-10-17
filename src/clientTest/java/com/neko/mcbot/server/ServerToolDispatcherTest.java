@@ -40,7 +40,7 @@ class ServerToolDispatcherTest {
     ServerToolDispatcherTest() {
         bodies.put(owner, body("world", new Object()));
         for (String name : List.of("status", "inventory", "scan_area", "find_resource", "inspect_block", "build_diff",
-                "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack", "build_nearby", "build_site")) {
+                "equip", "craft", "smelt", "move_to", "break_block", "place_block", "collect", "transfer", "attack", "build_nearby", "build_site", "build_record")) {
             registry.register(new ServerTool() {
                 @Override public String name() { return name; }
                 @Override public Acceptance acceptanceMode() {
@@ -77,6 +77,17 @@ class ServerToolDispatcherTest {
 
     private static JsonObject json(String text) {
         return JsonParser.parseString(text).getAsJsonObject();
+    }
+    @Test void durableDataEditsShareTaskPermissionAndControlWhileRecordQueriesStayReadOnly() {
+        begin(sender,1,true);
+        assertFalse(call(1,"build_record","{\"operation\":\"design_create\"}").bool("ok"));
+        assertTrue(call(1,"build_record","{\"operation\":\"design_list\"}").bool("ok"));
+        begin(sender,2,false); control.reflex(true);
+        assertTrue(call(2,"build_record","{\"operation\":\"instance_create\"}").str("feedback").startsWith("BUSY:"));
+        assertTrue(call(2,"build_record","{\"operation\":\"instance_list\"}").bool("ok"));
+        control.reflex(false);
+        assertTrue(call(2,"build_record","{\"operation\":\"design_patch\"}").bool("ok"));
+        assertEquals(List.of("build_record","build_record","build_record"),effects);
     }
     @Test void worksiteQueryRemainsReadOnlyWhileRegistrationSharesTheOriginalControlAndPermissionGate() {
         begin(sender,1,true);

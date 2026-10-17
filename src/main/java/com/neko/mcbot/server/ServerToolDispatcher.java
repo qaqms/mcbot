@@ -624,7 +624,7 @@ public final class ServerToolDispatcher {
             for (String key : java.util.List.of("removed", "changed", "cleared_blocks", "removed_blocks",
                     "placed_blocks", "collected_count", "crafted_count", "loaded_input_count",
                     "loaded_fuel_count", "taken_count", "moved_items", "strikes",
-                    "observed_health_loss", "observed_absorption_loss", "observation_known")) {
+                    "observed_health_loss", "observed_absorption_loss", "observation_known", "recording_known")) {
                 var value = original.get(key);
                 if (value != null && value.isJsonPrimitive()
                         && (value.getAsJsonPrimitive().isBoolean() || value.getAsJsonPrimitive().isNumber()))

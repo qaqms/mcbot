@@ -44,6 +44,7 @@ public final class BlockPlacement {
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
         default ServerTool.Result beforePlace() { return null; }
         default void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) { }
+        default boolean recordingKnown() { return true; }
     }
 
     interface Site {
@@ -187,6 +188,7 @@ public final class BlockPlacement {
         }
         if (after != null) data.addProperty("placed", BuiltInRegistries.BLOCK.getKey(after.getBlock()).toString());
         data.addProperty("consumed_count", consumed);
+        data.addProperty("recording_known",access.recordingKnown());
         data.addProperty("changed", changed || affectedCount > 0);
         data.add("affected_cells", affected);
         data.addProperty("affected_count", affectedCount);
@@ -374,6 +376,8 @@ public final class BlockPlacement {
         }
         @Override public ServerTool.Result guard(BlockPos pos) {
             var level = player.level();
+            var recordFailure=BuildRecordAccess.guard(player,pos,false,null);
+            if (recordFailure!=null) return recordFailure;
             // Vanilla doors/beds and support/collision queries also read adjacent cells.
             for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
                 if (!level.isInWorldBounds(near) || !level.getWorldBorder().isWithinBounds(near)) {
@@ -498,10 +502,20 @@ public final class BlockPlacement {
             };
         }
         @Override public JsonObject contact() { return contact; }
-        @Override public ServerTool.Result beforePlace() { return player.buildSite().charge(); }
+        @Override public ServerTool.Result beforePlace() {
+            var failure=BuildRecordAccess.guard(player,context.getClickedPos(),false,null);
+            if (failure==null) failure=player.buildSite().placementGuard(context.getClickedPos(),proposedState,
+                    new BuildSiteAccess(player),temporaryPurpose!=null);
+            return failure!=null ? failure : player.buildSite().charge();
+        }
         @Override public void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) {
+            player.buildSite().recordPlacement(pos,before,after,consumed,new BuildSiteAccess(player));
             if (temporaryPurpose != null && consumed == 1)
                 player.buildSite().placedTemporary(pos, before, after, temporaryPurpose, new BuildSiteAccess(player));
+        }
+        @Override public boolean recordingKnown() {
+            var records=BuildRecordAccess.store(player);
+            return records==null || records.healthy();
         }
         @Override public BlockState proposedState() { return proposedState; }
         @Override public JsonArray standingPositions(BlockPos pos, int slot, Direction face) {

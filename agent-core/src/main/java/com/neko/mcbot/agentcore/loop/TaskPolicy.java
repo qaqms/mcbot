@@ -26,6 +26,12 @@ public final class TaskPolicy {
             case "build_site" -> args.size() == 1 && args.has("operation")
                     && args.get("operation").isJsonPrimitive() && args.get("operation").getAsJsonPrimitive().isString()
                     && "query".equals(args.get("operation").getAsString());
+            case "build_record" -> args.has("operation") && args.get("operation").isJsonPrimitive()
+                    && args.getAsJsonPrimitive("operation").isString()
+                    && java.util.Set.of("design_list","design_query","instance_list","instance_query")
+                    .contains(args.get("operation").getAsString())
+                    && java.util.Set.of("operation","design_id","design_revision","instance_id","instance_revision","offset","layer")
+                    .containsAll(args.keySet());
             case "smelt" -> !args.has("action") || (args.get("action").isJsonPrimitive()
                     && args.get("action").getAsJsonPrimitive().isString()
                     && "query".equals(args.get("action").getAsString()));

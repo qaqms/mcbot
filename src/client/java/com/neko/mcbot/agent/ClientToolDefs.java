@@ -42,12 +42,19 @@ public final class ClientToolDefs {
             "cells":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
             "required":["anchor","cells"],"additionalProperties":false},
             {"type":"object","properties":{"anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},"fill":%s},
-            "required":["anchor","fill"],"additionalProperties":false}]}
+            "required":["anchor","fill"],"additionalProperties":false},
+            {"type":"object","properties":{"instance_id":{"type":"string","minLength":36,"maxLength":36},
+            "instance_revision":{"type":"integer","minimum":1,"maximum":1024}},
+            "required":["instance_id","instance_revision"],"additionalProperties":false}]}
             """.formatted(BUILD_ANCHOR, BUILD_CELL, BUILD_ANCHOR, BUILD_FILL);
 
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
+            case "build_record" -> "data.design_id/design_revision及content_revision是设计修订；设计修改不更新实例。"
+                    + "instance_id/instance_revision及target为原build_diff/build_site/build_nearby通用引用；"
+                    + "records按16条分页，status为intact/absent/conflict/unknown，action_count为真实动作数。"
+                    + "同块替换/重载后来源不可证为conflict，不授权拆除；automatic_resume=false。";
             case "build_site" -> "data.active/task_scoped/target_revision/bounds为当前任务工地；"
                     + "checkpoints/edit_attempts及navigation_*累计不重开，temporary含实际来源与cleanup_allowed；"
                     + "登记不改世界或授予许可，return_guaranteed=false；只保护声明通道，不证明全局逃生。";
@@ -269,6 +276,35 @@ public final class ClientToolDefs {
                             + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
             new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆、水中避险与body_defense自保事实；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
+            new ToolSpec("build_record", "保存可复用设计与世界内建筑实例，只有数据、不含脚本；不执行世界动作或自动恢复目标。"
+                    + "design_create(design_id,definition)创建；definition为cells或fill之一，相对±32、最多128格。"
+                    + "design_patch(design_id,design_revision,edits)逐步修改最多16格，remove=true删除，其他项为完整cell；同坐标不能重复。"
+                    + "design_query(design_id,design_revision,offset?,layer?)按16格/切层查询，design_list列设计。"
+                    + "instance_create(design_id,design_revision,anchor,rotation?)冻结副本；同设计可多落点，世界/维度/主人/身体隔离，实例不能重叠。"
+                    + "instance_query(instance_id,instance_revision,offset?)查询来源；instance_list列当前身体/维度实例。"
+                    + "instance_revise(instance_id,instance_revision,design_revision)显式应用同设计新修订，只能在新任务未登记工地时进行。"
+                    + "返回target={instance_id,instance_revision}直接交原build_diff/build_site/build_nearby及mc.build，仍需原通道/范围/许可。"
+                    + "设计修订不清失败账或补模型/探索/动作账。逐真实动作落盘，取消保留半成品；旧格拆除须有效逐格见证和真实依赖检查。"
+                    + "同块替换、缺钩子、卸载和重进后来源不可证均保守冲突；已满足的他人方块不认领。"
+                    + "每世界最多32设计/32实例，每实例128来源格/256真实动作；无淘汰换额，读写失败停修改。",
+                    """
+                    {"type":"object","properties":{"operation":{"type":"string","enum":["design_create","design_patch","design_query","design_list",
+                    "instance_create","instance_query","instance_revise","instance_list"]},
+                    "design_id":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-z0-9][a-z0-9_-]{0,47}$"},
+                    "design_revision":{"type":"integer","minimum":1,"maximum":1024},
+                    "definition":{"oneOf":[{"type":"object","properties":{"cells":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
+                    "required":["cells"],"additionalProperties":false},{"type":"object","properties":{"fill":%s},
+                    "required":["fill"],"additionalProperties":false}]},
+                    "edits":{"type":"array","minItems":1,"maxItems":16,"items":{"oneOf":[%s,
+                    {"type":"object","properties":{"x":{"type":"integer","minimum":-32,"maximum":32},"y":{"type":"integer","minimum":-32,"maximum":32},
+                    "z":{"type":"integer","minimum":-32,"maximum":32},"remove":{"type":"boolean","enum":[true]}},
+                    "required":["x","y","z","remove"],"additionalProperties":false}]}},
+                    "instance_id":{"type":"string","minLength":36,"maxLength":36},
+                    "instance_revision":{"type":"integer","minimum":1,"maximum":1024},
+                    "anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},
+                    "offset":{"type":"integer","minimum":0,"maximum":112},"layer":{"type":"integer","minimum":-32,"maximum":32}},
+                    "required":["operation"],"additionalProperties":false}
+                    """.formatted(BUILD_CELL,BUILD_FILL,BUILD_CELL,BUILD_ANCHOR)),
             new ToolSpec("build_diff", "只读核对有限建筑目标及材料；不施工、不挖掘、不移动或自动找料。"
                     + "target.anchor为世界锚点，cells的x/y/z为相对坐标；或用fill.from/to闭区间生成线/面/体，二者仅选其一。"
                     + "最多128格、相对各轴±32，无重复格；未指定格不动，air为明确清空要求，清空仍需后续原挖掘许可。"

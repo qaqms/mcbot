@@ -105,6 +105,54 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
         cells = List.copyOf(cells);
     }
 
+    public JsonObject input() {
+        var result = new JsonObject();
+        result.add("anchor", coordinates(anchor));
+        result.addProperty("rotation", rotation);
+        var entries = new com.google.gson.JsonArray();
+        Rotation inverse = switch (rotation) {
+            case 90 -> Rotation.COUNTERCLOCKWISE_90;
+            case 180 -> Rotation.CLOCKWISE_180;
+            case 270 -> Rotation.CLOCKWISE_90;
+            default -> Rotation.NONE;
+        };
+        for (var cell : cells) {
+            var entry = coordinates(cell.pos().subtract(anchor).rotate(inverse));
+            entry.addProperty("block", BuiltInRegistries.BLOCK.getKey(cell.authored().getBlock()).toString());
+            var properties = new com.google.gson.JsonArray();
+            for (String name : new java.util.TreeSet<>(cell.properties())) {
+                var pair = new JsonObject();
+                pair.addProperty("name", name);
+                pair.addProperty("value", value(cell.authored(), cell.authored().getBlock().getStateDefinition().getProperty(name)));
+                properties.add(pair);
+            }
+            entry.add("properties", properties);
+            entries.add(entry);
+        }
+        result.add("cells", entries);
+        return result;
+    }
+
+    public static JsonObject coordinates(BlockPos pos) {
+        var out = new JsonObject();
+        out.addProperty("x", pos.getX()); out.addProperty("y", pos.getY()); out.addProperty("z", pos.getZ());
+        return out;
+    }
+
+    public static JsonObject exactState(BlockState state) {
+        var out = new JsonObject();
+        out.addProperty("block", BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+        var properties = new com.google.gson.JsonArray();
+        for (var property : state.getProperties()) {
+            var pair = new JsonObject();
+            pair.addProperty("name", property.getName());
+            pair.addProperty("value", value(state, property));
+            properties.add(pair);
+        }
+        out.add("properties", properties);
+        return out;
+    }
+
     public static BuildTarget parse(JsonObject input) {
         keys(input, Set.of("anchor", "rotation", "cells", "fill"));
         BlockPos anchor = position(input.getAsJsonObject("anchor"), 29_999_984, false);
