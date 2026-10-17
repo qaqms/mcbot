@@ -127,6 +127,7 @@ final class BoundedSurvey {
             }
             // Inventory completeness is required even on a return trip.
             ItemGoal.count(state, "minecraft:air");
+            if (stopUnsafeEnvironment()) return;
             if (returning) returnNext();
             else {
                 String shortage = shortage(state);
@@ -218,6 +219,7 @@ final class BoundedSurvey {
                 if (!receipt.ok()) {
                     finish(false, receipt.feedback() + " 已重新核对实际位置，保留原路标。"); return;
                 }
+                if (stopUnsafeEnvironment()) return;
                 boolean at = true;
                 for (String axis : List.of("x", "y", "z"))
                     at &= (int) Math.floor(ExplorationRoute.number(state, axis)) == ExplorationRoute.integer(point, axis);
@@ -253,6 +255,11 @@ final class BoundedSurvey {
         if (ExplorationRoute.integer(slot, "max_damage") - ExplorationRoute.integer(slot, "damage")
                 <= option("reserve_durability", 16)) return "SUPPLY_LOW:主手耐久已到保留值。";
         return null;
+    }
+    private boolean stopUnsafeEnvironment() {
+        if (!com.neko.mcbot.agentcore.loop.BodyFacts.environmentUnsafe(state)) return false;
+        finish(false, "ENVIRONMENT_UNSAFE:身体环境或避险恢复尚不安全，停止地下工作；保留原返程记录和预算。");
+        return true;
     }
     private void finish(boolean ok, String reason) {
         if (done()) return;

@@ -45,6 +45,9 @@ public final class ServerToolDispatcher {
         default com.neko.mcbot.body.BodyChangeLog changes(Body body) {
             return body.identity() instanceof CompanionPlayer cp ? cp.bodyChanges() : null;
         }
+        default ServerTool.Result environmentFailure(Body body) {
+            return body.identity() instanceof CompanionPlayer cp ? cp.environmentFailure() : null;
+        }
         CompletableFuture<ServerTool.Result> run(ServerTool tool, Body body, JsonObject args,
                 ActionPermissions permissions, ActionPermissions.Context context);
     }
@@ -210,11 +213,11 @@ public final class ServerToolDispatcher {
                 if (autonomous != null && (!autonomous.isJsonPrimitive()
                         || !autonomous.getAsJsonPrimitive().isBoolean())) return;
                 scheduler.cancel(cp.id(), "新任务替换原任务。");
-                if (cp.identity() instanceof CompanionPlayer player) player.defense().stopCurrent();
+                if (cp.identity() instanceof CompanionPlayer player) player.stopBodyBehaviors();
                 permissions.begin(new ActionPermissions.Context(sender.owner(), cp.id(),
                         cp.dimension(), taskId, mode.getAsBoolean(),
                         autonomous != null && autonomous.getAsBoolean()), cp.identity());
-                if (cp.identity() instanceof CompanionPlayer player) player.defense().newTask();
+                if (cp.identity() instanceof CompanionPlayer player) player.newBodyTask();
             }
             case "task_end" -> {
                 Long taskId = taskId(env);
@@ -224,7 +227,7 @@ public final class ServerToolDispatcher {
                 if (permissions.end(sender.owner(), taskId)) {
                     if (cp != null && cp.identity() == original) {
                         scheduler.cancel(cp.id(), "所属任务已结束。");
-                        if (original instanceof CompanionPlayer player) player.defense().stopCurrent();
+                        if (original instanceof CompanionPlayer player) player.stopBodyBehaviors();
                     }
                 }
             }
@@ -249,8 +252,8 @@ public final class ServerToolDispatcher {
                 } else {
                     boolean stopped = scheduler.cancel(cp.id(), null);
                     if (cp.identity() instanceof CompanionPlayer player) {
-                        stopped |= player.defense().active();
-                        player.defense().cancel();
+                        stopped |= player.defense().active() || player.environmentActive();
+                        player.cancelBodyBehaviors();
                     }
                     broadcast(sender, "cancel_ack", stopped
                             ? "已叫停 " + cp.name() + " 手头的活。"
@@ -319,8 +322,11 @@ public final class ServerToolDispatcher {
             fut = ServerActionGate.execute(context, companion.id(), dimension, toolName, resourceArgs,
                     scheduler, () -> {
                         var control = access.control(companion);
-                        if (com.neko.mcbot.agentcore.loop.TaskPolicy.observation(toolName, args) || control == null)
+                        if (com.neko.mcbot.agentcore.loop.TaskPolicy.observation(toolName, args))
                             return run.get();
+                        var unsafe = access.environmentFailure(companion);
+                        if (unsafe != null) return CompletableFuture.completedFuture(unsafe);
+                        if (control == null) return run.get();
                         return scheduler.controlled(companion.id(), control,
                                 () -> context != null && context.equals(permissions.current(
                                 sender.owner(), companion.id(), companion.dimension(), context.taskId(), companion.identity())),
@@ -412,10 +418,10 @@ public final class ServerToolDispatcher {
         permissions.end(owner.owner(), 0);
         if (original instanceof CompanionPlayer player) {
             scheduler.cancel(player.getUUID(), "同伴生命周期操作撤销旧任务。");
-            player.defense().cancel();
+            player.cancelBodyBehaviors();
         } else {
             Body cp = companionOfSender(owner);
-            if (cp != null && cp.identity() instanceof CompanionPlayer player) player.defense().cancel();
+            if (cp != null && cp.identity() instanceof CompanionPlayer player) player.cancelBodyBehaviors();
             if (cp != null && cp.identity() == original)
                 scheduler.cancel(cp.id(), "同伴生命周期操作撤销旧任务。");
         }

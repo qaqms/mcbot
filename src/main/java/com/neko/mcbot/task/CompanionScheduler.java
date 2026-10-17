@@ -294,6 +294,9 @@ public final class CompanionScheduler {
         default boolean sameDimension(CompanionPlayer fresh, net.minecraft.server.level.ServerLevel expected) {
             return fresh == null ? expected == null : fresh.level() == expected;
         }
+        default ServerTool.Result environmentFailure(CompanionPlayer body) {
+            return body == null || body.environmentActive() ? null : body.environmentFailure();
+        }
     }
 
     void tick(Bodies bodies) {
@@ -301,7 +304,7 @@ public final class CompanionScheduler {
             if (reflex.body != null && (!bodies.same(reflex.body, bodies.get(reflex.companionId))
                     || !bodies.sameDimension(reflex.body, reflex.level))) {
                 reflex.close();
-                reflex.body.defense().cancel();
+                reflex.body.cancelBodyBehaviors();
             }
         }
         if (active.isEmpty()) {
@@ -320,6 +323,11 @@ public final class CompanionScheduler {
                 slot.elapsed++;
                 if (slot.control != null && !slot.control.valid.getAsBoolean()) {
                     finish(slot, new ServerTool.Result(false, "DENIED:原任务身份或许可已失效，未续接工作。", null), true);
+                    continue;
+                }
+                var environmentFailure = bodies.environmentFailure(cp);
+                if (environmentFailure != null) {
+                    finish(slot, environmentFailure, true);
                     continue;
                 }
                 p = slot.task().poll(cp, slot.elapsed);

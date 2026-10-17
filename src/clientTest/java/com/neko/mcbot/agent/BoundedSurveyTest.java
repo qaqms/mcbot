@@ -20,13 +20,14 @@ class BoundedSurveyTest {
         final ExplorationRoute route = new ExplorationRoute(8, 64);
         int x, y = 90, z, damage, food = 20, foundAfter = 2;
         long now;
-        boolean failMove, unknownPosition;
+        boolean failMove, unknownPosition, environmentSafe = true;
         String moveFailure = "PARTIAL:short route";
         CompletableFuture<ToolOutcome> pending;
         JsonObject state() {
             var data = BoundedGatherTest.state(0);
             data.addProperty("x", x); data.addProperty("y", y); data.addProperty("z", z);
             data.addProperty("hp", 20); data.addProperty("food", food); data.addProperty("on_fire", false);
+            data.addProperty("environment_work_safe", environmentSafe);
             var inv = data.getAsJsonObject("inventory");
             inv.addProperty("selected_slot", 0); inv.addProperty("slots_used", 1);
             var slot = inv.getAsJsonArray("slots").get(0).getAsJsonObject();
@@ -117,6 +118,27 @@ class BoundedSurveyTest {
         assertEquals(List.of("status"), w.calls);
         var back = w.survey(true).start(); w.drain();
         assertTrue(back.join().ok());
+    }
+    @Test void sharedEnvironmentFactStopsBothDescentAndReturnWithoutRefreshingOriginalLedger() {
+        var fresh = new World();
+        fresh.environmentSafe = false;
+        var stopped = fresh.survey(false).start(); fresh.drain();
+        assertTrue(stopped.join().feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+        assertEquals(List.of("status"), fresh.calls);
+        assertEquals(0, fresh.route.attempts());
+        var progressed = new World();
+        progressed.foundAfter = 1;
+        var first = progressed.survey(false).start(); progressed.drain();
+        assertTrue(first.join().ok(), first.join().feedback());
+        int attempts = progressed.route.attempts(), digs = progressed.route.remainingDigs();
+        progressed.environmentSafe = false;
+        progressed.calls.clear();
+        var back = progressed.survey(true).start(); progressed.drain();
+        assertTrue(back.join().feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+        assertEquals(List.of("status"), progressed.calls);
+        assertEquals(attempts, progressed.route.attempts());
+        assertEquals(digs, progressed.route.remainingDigs());
+        assertTrue(progressed.route.hasUndergroundTrail());
     }
     @Test void partialRouteReadsTheActualLandingBeforeReportingAndKeepsItsReturnPoint() {
         var w = new World(); w.failMove = true;

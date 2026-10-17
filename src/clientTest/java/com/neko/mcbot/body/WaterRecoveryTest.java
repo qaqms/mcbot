@@ -116,7 +116,8 @@ class WaterRecoveryTest {
         var recovery = new WaterRecovery();
         assertTrue(recovery.tick(body).jump());
         body.position = new Vec3(100000, 0, 100000);
-        assertTrue(recovery.tick(body).jump());
+        assertEquals(MovementInput.Frame.IDLE, recovery.tick(body));
+        assertEquals("scope_limit", recovery.state(), "a teleport cannot move the original rescue bounds");
         for (int i = 0; i < 601; i++) recovery.tick(body);
         assertEquals("limit", recovery.state());
         body.dimension = new Object();
@@ -140,5 +141,52 @@ class WaterRecoveryTest {
         var input = recovery.tick(body);
         assertTrue(input.x() > 0, "an earlier failed north-to-air edge must not hide the valid east-to-air edge");
         assertEquals("seeking_air", recovery.state());
+    }
+
+    @Test void permissionSuppressionCannotRestartTheOriginalSubmergedDeadline() {
+        var body = new Water();
+        var recovery = new WaterRecovery();
+        for (int i = 0; i < 590; i++) recovery.tick(body);
+        body.allowed = false;
+        for (int i = 0; i < 20; i++) assertNull(recovery.tick(body));
+        body.allowed = true;
+        assertEquals(MovementInput.Frame.IDLE, recovery.tick(body));
+        assertEquals("limit", recovery.state());
+    }
+
+    @Test void successivePositionsCannotMoveTheOriginalRescueScope() {
+        var body = new Water();
+        var recovery = new WaterRecovery();
+        recovery.tick(body);
+        body.position = new Vec3(7, 0, 0);
+        assertEquals(MovementInput.Frame.IDLE, recovery.tick(body));
+        assertEquals("scope_limit", recovery.state());
+    }
+
+    @Test void originalWorkScopeAlsoConstrainsSearchAndStraightUpFallback() {
+        var body = new Water() {
+            @Override public boolean withinScope(Vec3 feet) { return feet.equals(Vec3.ZERO); }
+            @Override public boolean passage(Vec3 from, Vec3 to) {
+                fail("scope refusal must happen before reading the passage");
+                return false;
+            }
+        };
+        var recovery = new WaterRecovery();
+        assertEquals(MovementInput.Frame.IDLE, recovery.tick(body));
+        assertEquals("trapped_or_unknown", recovery.state());
+    }
+
+    @Test void revalidationCannotReopenTheOriginalSearchProbeBudget() {
+        var body = new Water() {
+            @Override public WaterRecovery.Medium eyesAt(Vec3 feet) { return WaterRecovery.Medium.WATER; }
+        };
+        var recovery = new WaterRecovery();
+        recovery.tick(body);
+        int before = recovery.observation().get("search_probes").getAsInt();
+        for (int i = 0; i < 25; i++) recovery.tick(body);
+        assertTrue(recovery.observation().get("search_probes").getAsInt() > before);
+        assertEquals(2, recovery.observation().get("searches").getAsInt());
+        assertEquals(0, recovery.observation().getAsJsonObject("anchor").get("x").getAsDouble());
+        assertTrue(recovery.observation().get("search_probes").getAsInt() <= 4096);
     }
 }

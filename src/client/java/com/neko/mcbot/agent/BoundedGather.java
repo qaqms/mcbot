@@ -327,10 +327,9 @@ final class BoundedGather {
             if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; targetGroup = 0; }
             progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
             if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
-            if (state.has("eyes_in_water") && flag(state, "eyes_in_water")
-                    || state.has("in_lava") && flag(state, "in_lava")) {
+            if (com.neko.mcbot.agentcore.loop.BodyFacts.environmentUnsafe(state)) {
                 lastData = state.deepCopy();
-                finish(false, "ENVIRONMENT_UNSAFE:当前身体没入水中或接触岩浆，停止普通采集；先核对身体避险状态。");
+                finish(false, "ENVIRONMENT_UNSAFE:当前身体环境或避险恢复尚不安全，停止普通采集；先核对身体避险状态。");
                 return;
             }
             if (goal.progress() > lastProgress) {

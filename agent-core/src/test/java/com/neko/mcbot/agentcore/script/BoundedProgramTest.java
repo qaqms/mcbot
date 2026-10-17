@@ -53,6 +53,23 @@ class BoundedProgramTest {
         return new ToolOutcome(true, "actual", JsonParser.parseString(data).getAsJsonObject());
     }
 
+    @Test void environmentFailureAndNativeAirRemainVisibleWhenProgramQueriesAreCompacted() throws Exception {
+        try (var f = new Fixture("""
+                local r=mc.call("status",{details=true})
+                return r.data.body_environment.goal_satisfied
+                """)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(actual(
+                    "{\"environment_active\":false,\"environment_state\":\"limit\",\"environment_work_safe\":false,"
+                            + "\"air_supply\":19,\"max_air_supply\":300,\"body_environment\":{\"goal_satisfied\":false}}"));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertTrue(result.feedback().contains("\"environment_state\":\"limit\""));
+            assertTrue(result.feedback().contains("\"environment_work_safe\":false"));
+            assertTrue(result.feedback().contains("\"air_supply\":19"));
+            assertFalse(result.data().get("returned").getAsBoolean());
+            assertEquals(1, f.calls.size());
+        }
+    }
     @Test void automaticBodyRiskSurvivesSuccessfulQueryCompactionWithoutExtraAction() throws Exception {
         try (var f = new Fixture("""
                 local r=mc.call("status",{details=true})

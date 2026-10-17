@@ -21,9 +21,13 @@ class DefenseSchedulerTest {
         if (previous == BodyControl.Owner.WORK) scheduler.preempt(body);
     });
     private final AtomicBoolean valid = new AtomicBoolean(true);
+    private ServerTool.Result environmentFailure;
     private final CompanionScheduler.Bodies bodies = new CompanionScheduler.Bodies() {
         @Override public CompanionPlayer get(UUID id) { return null; }
         @Override public boolean same(CompanionPlayer old, CompanionPlayer fresh) { return true; }
+        @Override public ServerTool.Result environmentFailure(CompanionPlayer ignored) {
+            return environmentFailure;
+        }
     };
 
     private final class Work extends TickTask {
@@ -125,5 +129,40 @@ class DefenseSchedulerTest {
         assertNotNull(other);
         assertTrue(other.reserve(target, region));
         other.close();
+    }
+
+    @Test void exhaustedEnvironmentRecoveryStopsOriginalWorkBeforeResumeOrAnotherAction() {
+        var work = new Work();
+        var receipt = start(work, 40);
+        scheduler.tick(bodies);
+        var lease = scheduler.reflexLease(body);
+        control.reflex(true);
+        scheduler.tick(bodies);
+        lease.close();
+        control.reflex(false);
+        environmentFailure = new ServerTool.Result(false, "ENVIRONMENT_UNSAFE:original rescue limit", null);
+        scheduler.tick(bodies);
+        assertTrue(receipt.join().feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+        assertEquals(1, work.ticks);
+        assertEquals(0, work.resumed);
+        assertFalse(scheduler.busy(body));
+        assertEquals(BodyControl.Owner.IDLE, control.owner());
+    }
+
+    @Test void environmentPauseCannotExtendDeadlineAndBorrowedAuthorityDiesWithTheOriginalWork() {
+        var work = new Work();
+        var receipt = start(work, 3);
+        var lease = scheduler.reflexLease(body);
+        control.reflex(true);
+        scheduler.tick(bodies);
+        scheduler.tick(bodies);
+        scheduler.tick(bodies);
+        assertTrue(receipt.join().feedback().startsWith("TIMEOUT:"));
+        assertFalse(lease.valid());
+        assertEquals(0, work.ticks);
+        control.reflex(false);
+        scheduler.tick(bodies);
+        assertEquals(0, work.resumed);
+        lease.close();
     }
 }

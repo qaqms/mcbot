@@ -31,6 +31,7 @@ class ServerToolDispatcherTest {
     private final com.neko.mcbot.body.BodyChangeFixtures facts = new com.neko.mcbot.body.BodyChangeFixtures();
     private CompletableFuture<ServerTool.Result> nextResult;
     private Runnable onRun = () -> {};
+    private ServerTool.Result environmentFailure;
     private ActionPermissions.Context receivedContext;
     private ActionPermissions receivedPermissions;
     private final ServerToolDispatcher dispatcher;
@@ -59,6 +60,9 @@ class ServerToolDispatcherTest {
                     @Override public com.neko.mcbot.body.BodyChangeLog changes(ServerToolDispatcher.Body body) {
                         return facts.log;
                     }
+                    @Override public ServerTool.Result environmentFailure(ServerToolDispatcher.Body body) {
+                        return environmentFailure;
+                    }
                     @Override public CompletableFuture<ServerTool.Result> run(ServerTool tool,
                             ServerToolDispatcher.Body body, JsonObject args, ActionPermissions permissions,
                             ActionPermissions.Context context) {
@@ -78,6 +82,23 @@ class ServerToolDispatcherTest {
 
     private static JsonObject json(String text) {
         return JsonParser.parseString(text).getAsJsonObject();
+    }
+
+    @Test void sameEnvironmentGateStopsShortAndStageActionsWhileQueriesRemainAvailableAfterRescueEnds() {
+        begin(sender, 1, false);
+        environmentFailure = new ServerTool.Result(false, "ENVIRONMENT_UNSAFE:oxygen limit", null);
+        for (String tool : List.of("craft", "move_to", "attack", "follow", "build_nearby")) {
+            assertTrue(call(1, tool, "{}").str("feedback").startsWith("ENVIRONMENT_UNSAFE:"), tool);
+        }
+        assertTrue(effects.isEmpty());
+        assertEquals(com.neko.mcbot.body.BodyControl.Owner.IDLE, control.owner());
+        assertTrue(call(1, "status", "{}").bool("ok"));
+        assertTrue(call(1, "place_block", "{\"query\":true}").bool("ok"));
+        assertEquals(List.of("status", "place_block"), effects);
+        begin(sender, 2, false);
+        assertTrue(call(2, "move_to", "{}").str("feedback").startsWith("ENVIRONMENT_UNSAFE:"));
+        environmentFailure = null;
+        assertTrue(call(2, "craft", "{}").bool("ok"));
     }
     @Test void followUsesOriginalPermissionControlAcceptedDeadlineAndTerminalChannel() {
         begin(sender, 1, true);

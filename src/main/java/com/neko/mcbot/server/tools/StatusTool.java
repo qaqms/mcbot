@@ -46,6 +46,7 @@ public final class StatusTool implements ServerTool {
             var recent = companion.recentBodyChanges();
             result.data().add("body_changes", recent);
             result = defenseReport(result, companion.defense().observation());
+            result = environmentReport(result, companion.environmentObservation());
             result.data().add("drop_changes", com.neko.mcbot.server.DropTracker.recent(companion));
             result.data().add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
                     companion.level(), companion.blockPosition(), 64));
@@ -87,6 +88,16 @@ public final class StatusTool implements ServerTool {
                 + "，活动=" + defense.get("active").getAsBoolean() + "；详情见body_defense，局部拉开不代表甩掉追兵。", data);
     }
 
+    static Result environmentReport(Result result, JsonObject environment) {
+        var data = result.data();
+        data.add("body_environment", environment);
+        data.addProperty("environment_active", environment.get("active").getAsBoolean());
+        data.addProperty("environment_state", environment.get("state").getAsString());
+        data.addProperty("environment_work_safe", environment.get("work_safe").getAsBoolean());
+        return new Result(result.ok(), result.feedback() + "\n环境避险：" + environment.get("state").getAsString()
+                + "，工作安全=" + environment.get("work_safe").getAsBoolean()
+                + "；空气与局部恢复不验收外层目标。", data);
+    }
     static Result report(JsonObject args, Body body, Inventory inventory, JsonObject task) {
         for (String key : args.keySet()) if (!key.equals("details")) return denied();
         if (args.has("details") && (!args.get("details").isJsonPrimitive()

@@ -3,6 +3,18 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## S1 原生环境推进与共用避险（2026-10-17）
+
+原CompanionPhysics以baseTick替换手动流体更新，补原生空气/环境/效果维护，
+不调用doTick或另加travel，不改无敌；原生作用后重验活体、世界与加载再移动。
+EnvironmentRecovery协调原WaterRecovery、BodyControl和冻结BodyPermit/ReflexLease；
+移动后新危险先取得原工作范围/租约，再由原调度处理，不借工作结束重新放宽范围。
+固定起点/工作与工地交集，600刻含回气，4096探针/400ms搜索及每身体64次上限。
+岩浆/窒息等保守停工，真实脱离/回满空气连续20刻才归还，原onResume再验；
+失败/取消不重开同次危险账、原工作或模型/探索/许可。
+status.body_environment及Lua概要、BodyFacts/采集/地下前进与返程、原派发/调度共用安全事实；
+局部恢复不验收外层目标。完整参考取舍、支持边界和实机待验见S1-ENVIRONMENT-RECOVERY。
+
 ## D3 共用休眠与持续跟随（2026-10-17）
 
 TickTask只读poll/wantsBody在原CompanionScheduler的身份/许可门内决定是否需要身体；

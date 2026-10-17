@@ -24,17 +24,30 @@ final class CompanionPhysics {
         default boolean inWater() { return false; }
         default void swimUp() {}
         default void refreshEyes() {}
+        default Object worldIdentity() { return this; }
+        default void unavailable() {}
+        default void afterMovement() {}
     }
 
     private CompanionPhysics() {}
 
     static void tick(Access body) {
         MovementInput.Frame input = body.takeInput();
-        if (!body.active()) return;
+        if (!body.active()) { body.unavailable(); return; }
         // Native movement may inspect the support block and adjacent collision/fluid cells.
-        if (!body.loaded(body.bounds().expandTowards(body.velocity()).inflate(1))) return;
+        if (!body.loaded(body.bounds().expandTowards(body.velocity()).inflate(1))) {
+            body.unavailable();
+            return;
+        }
         Vec3 before = body.position();
+        Object world = body.worldIdentity();
         body.updateFluids();
+        // Native environmental effects can kill the body or enter a portal before movement.
+        if (!body.active() || body.worldIdentity() != world
+                || !body.loaded(body.bounds().expandTowards(body.velocity()).inflate(1))) {
+            body.unavailable();
+            return;
+        }
         MovementInput.Frame recovery = body.recoveryInput();
         if (recovery != null) input = recovery;
         if (input.jump()) {
@@ -48,5 +61,6 @@ final class CompanionPhysics {
         // Server players normally receive this settlement from movement packets.
         body.checkFall(movement);
         body.recordMovement(movement);
+        body.afterMovement();
     }
 }

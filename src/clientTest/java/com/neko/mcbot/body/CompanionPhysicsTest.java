@@ -138,4 +138,41 @@ class CompanionPhysicsTest {
         CompanionPhysics.tick(body);
         assertEquals(List.of("fluids", "swim", "travel", "blocks", "eyes", "fall", "record"), body.calls);
     }
+
+    @Test void nativeEnvironmentalDeathPreventsTravelRecoveryAndSettlementInTheSameTick() {
+        var body = new Body() {
+            @Override public void updateFluids() { calls.add("environment"); active = false; }
+            @Override public MovementInput.Frame recoveryInput() { fail("dead body cannot acquire input"); return null; }
+            @Override public void unavailable() { calls.add("release"); }
+        };
+        CompanionPhysics.tick(body);
+        assertEquals(List.of("environment", "release"), body.calls);
+        assertEquals(0, body.steps);
+        assertNull(body.recorded);
+    }
+
+    @Test void nativeWorldTransitionPreventsOldWorldInputAndFallAccounting() {
+        var body = new Body() {
+            Object world = new Object();
+            @Override public Object worldIdentity() { return world; }
+            @Override public void updateFluids() { world = new Object(); }
+            @Override public void unavailable() { calls.add("release"); }
+        };
+        CompanionPhysics.tick(body);
+        assertEquals(List.of("release"), body.calls);
+        assertEquals(0, body.steps);
+    }
+
+    @Test void unloadedOrInactivePhysicsReleasesRescueBeforeAnyNativeWorldRead() {
+        for (boolean inactive : new boolean[]{false, true}) {
+            var body = new Body() {
+                @Override public void unavailable() { calls.add("release"); }
+            };
+            body.active = !inactive;
+            body.loaded = false;
+            CompanionPhysics.tick(body);
+            assertEquals(List.of("release"), body.calls);
+            assertEquals(0, body.steps);
+        }
+    }
 }

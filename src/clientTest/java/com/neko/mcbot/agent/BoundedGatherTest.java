@@ -67,7 +67,7 @@ class BoundedGatherTest {
         List<JsonObject> blockTargets;
         long now;
         int count, dug, moved, cancelled, breakAttempts;
-        boolean ground;
+        boolean ground, environmentSafe = true;
         boolean missing;
         boolean noYield;
         int yieldAfter;
@@ -106,6 +106,7 @@ class BoundedGatherTest {
                     data = state(count);
                     data.addProperty("x", stateX);
                     data.addProperty("eyes_in_water", submerged);
+                    data.addProperty("environment_work_safe", environmentSafe);
                 }
                 case "scan_area" -> {
                     var items = new JsonArray();
@@ -276,6 +277,16 @@ class BoundedGatherTest {
         assertEquals(0, entered.moved);
         assertEquals(1, result.data().get("mined_blocks").getAsInt());
         assertEquals(0, result.data().get("actual_progress").getAsInt());
+    }
+
+    @Test void sharedEnvironmentFailureStopsDryGatherWithoutSpendingAnotherSearchOrWorkCall() {
+        for (String scope : new String[]{"task", "subtask"}) {
+            var f = new Fixture(1, 0, scope);
+            f.environmentSafe = false;
+            assertTrue(f.run().feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+            assertEquals(List.of("status"), f.calls);
+            assertEquals(0, f.dug);
+        }
     }
 
     @Test void unsafeResourceDoesNotConsumeAWorkRouteOrHideAnotherSafeCandidate() {

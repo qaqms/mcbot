@@ -3,6 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## S1 共用环境事实与停工（2026-10-17）
+
+工具仍30项。status的air_supply/max_air_supply为原生推进后的身体空气读数，
+body_environment含active/state、hazard/work_safe、600刻原期限、calm_ticks、episodes及
+water原锚点/累计探针/搜索CPU；environment_active/environment_state/environment_work_safe为概要。
+water_recovery兼容字段是最后水中执行器状态，不单独表示正在游。
+没顶触发原有限换气；岩浆、火、窒息、细雪、世界底部/未知保守停工，无自动挖放/传送。
+原生空气回满且真实安全20刻才归还，原任务恢复仍须原onResume/许可/期限。
+超过原范围/搜索/租约/期限不重开，取消后不自动接旧活；局部local_clear不验收外层目标。
+直接动作、跨刻调度、材料/整任务采集、地下前进/返程及Lua读取同安全事实；
+ENVIRONMENT_UNSAFE不能吞或靠换阶段刷新预算，查询仍可用。完整边界见S1-ENVIRONMENT-RECOVERY。
+
 ## D3 有界持续跟随（2026-10-17）
 
 新增follow，当前30工具（21服务端+9本地）。仅可选target_uuid、distance整数2-6、

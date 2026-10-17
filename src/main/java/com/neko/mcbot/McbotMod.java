@@ -122,7 +122,7 @@ public final class McbotMod implements ModInitializer {
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             for (var player : server.getPlayerList().getPlayers())
-                if (player instanceof com.neko.mcbot.body.CompanionPlayer companion) companion.defense().cancel();
+                if (player instanceof com.neko.mcbot.body.CompanionPlayer companion) companion.cancelBodyBehaviors();
             scheduler.cancelAll("服务器已关闭。");
             com.neko.mcbot.server.DropTracker.clear();
             com.neko.mcbot.path.PathTask.clearPlanCache();

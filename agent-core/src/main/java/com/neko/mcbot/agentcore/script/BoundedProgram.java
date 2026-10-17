@@ -377,7 +377,8 @@ public final class BoundedProgram {
                     "work_truncated", "next_offset", "in_water", "eyes_in_water", "in_lava", "water_recovery",
                     "goal_satisfied", "observation_complete", "spatial_stable", "material_bill_complete",
                     "work_assessment_complete", "budget_exhausted", "material_next_offset",
-                    "defense_active", "defense_state", "threat_scan_complete")) {
+                    "defense_active", "defense_state", "threat_scan_complete",
+                    "environment_active", "environment_state", "environment_work_safe", "air_supply", "max_air_supply")) {
                 var value = receipt.data().get(key);
                 if (value != null && value.isJsonPrimitive() && bytes(value.toString()) <= 128)
                     signals.add(key, value);

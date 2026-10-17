@@ -45,14 +45,56 @@ public final class CompanionPlayer extends ServerPlayer {
             }
         }
     });
-    private final WaterRecovery waterRecovery = new WaterRecovery();
+    private final EnvironmentRecovery environment = new EnvironmentRecovery();
     private final com.neko.mcbot.server.DefenseDriver defense = new com.neko.mcbot.server.DefenseDriver(this);
     private boolean waterControlling, defenseDriving;
-    private final WaterRecovery.Access waterAccess = new WaterRecovery.Access() {
+    private com.neko.mcbot.server.ActionPermissions.BodyPermit environmentPermit;
+    private com.neko.mcbot.task.CompanionScheduler.ReflexLease environmentLease;
+    private com.neko.mcbot.path.PathSpec environmentScope;
+    private com.neko.mcbot.path.PathSpec environmentSiteScope;
+    private final EnvironmentRecovery.Access waterAccess = new EnvironmentRecovery.Access() {
         @Override public boolean allowed() {
             var dispatcher = McbotMod.dispatcher();
-            return !isSpectator() && dispatcher != null && dispatcher.belongsTo(level().getServer())
+            return isAlive() && !isRemoved() && !isPassenger() && !isSleeping() && gameMode.isSurvival()
+                    && level().getServer().getPlayerList().getPlayer(getUUID()) == CompanionPlayer.this
+                    && level().getServer().getPlayerList().getPlayer(ownerUuid) != null
+                    && dispatcher != null && dispatcher.belongsTo(level().getServer())
                     && dispatcher.passiveBodyActionAllowed(CompanionPlayer.this);
+        }
+        @Override public int air() { return getAirSupply(); }
+        @Override public int maxAir() { return getMaxAirSupply(); }
+        @Override public String hazard() { return environmentHazard(); }
+        @Override public boolean acquire() {
+            defense.stopCurrent();
+            var dispatcher = McbotMod.dispatcher();
+            environmentPermit = dispatcher == null ? null : dispatcher.defensePermit(CompanionPlayer.this);
+            if (environmentPermit == null) return false;
+            bindSpatialTask(environmentPermit.context());
+            environmentScope = McbotMod.scheduler().movementScope(getUUID());
+            environmentSiteScope = buildSite.active() ? buildSite.scope() : com.neko.mcbot.path.PathSpec.DEFAULT;
+            environmentLease = McbotMod.scheduler().reflexLease(CompanionPlayer.this);
+            if (environmentLease == null) { environmentPermit = null; return false; }
+            bodyControl.reflex(true);
+            return true;
+        }
+        @Override public boolean valid() {
+            return environmentPermit != null && environmentPermit.valid()
+                    && environmentLease != null && environmentLease.valid();
+        }
+        @Override public void release() {
+            try {
+                if (environmentLease != null) environmentLease.close();
+            } finally {
+                environmentLease = null;
+                environmentPermit = null;
+                releaseMovement();
+                bodyControl.reflex(defense.active());
+            }
+        }
+        @Override public boolean withinScope(Vec3 feet) {
+            BlockPos pos = BlockPos.containing(feet);
+            return environmentScope != null && environmentScope.contains(pos.getX(), pos.getY(), pos.getZ())
+                    && environmentSiteScope.contains(pos.getX(), pos.getY(), pos.getZ());
         }
         @Override public boolean submerged() { return isEyeInFluid(net.minecraft.tags.FluidTags.WATER); }
         @Override public Object worldIdentity() { return level(); }
@@ -70,7 +112,13 @@ public final class CompanionPlayer extends ServerPlayer {
                     ? WaterRecovery.Medium.AIR : WaterRecovery.Medium.BLOCKED;
         }
         @Override public boolean passage(Vec3 from, Vec3 to) {
-            if (from.distanceToSqr(to) > 4 || from.distanceToSqr(position()) > 256) return false;
+            if (from.distanceToSqr(to) > 4 || from.distanceToSqr(position()) > 256
+                    || !withinScope(from) || !withinScope(to)) return false;
+            BlockPos start = BlockPos.containing(from), end = BlockPos.containing(to);
+            if (!start.equals(end) && (!environmentScope.allowsStep(start.getX(), start.getY(), start.getZ(),
+                    end.getX(), end.getY(), end.getZ())
+                    || !environmentSiteScope.allowsStep(start.getX(), start.getY(), start.getZ(),
+                    end.getX(), end.getY(), end.getZ()))) return false;
             Vec3 delta = from.subtract(position());
             var sweep = getBoundingBox().move(delta).expandTowards(to.subtract(from));
             for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(sweep.minX, sweep.minY, sweep.minZ),
@@ -97,23 +145,30 @@ public final class CompanionPlayer extends ServerPlayer {
             return level().hasChunksAt(from.getX(), from.getZ(), to.getX(), to.getZ());
         }
         @Override public Vec3 position() { return CompanionPlayer.this.position(); }
+        @Override public Object worldIdentity() { return level(); }
+        @Override public void unavailable() {
+            environment.unavailable();
+            waterControlling = false;
+            bodyControl.reflex(defense.active());
+        }
         @Override public MovementInput.Frame takeInput() { return movementInput.take(); }
         @Override public float yaw() { return getYRot(); }
         @Override public boolean grounded() { return onGround(); }
         @Override public void jump() { jumpFromGround(); }
         @Override public void updateFluids() {
-            updateInWaterStateAndDoFluidPushing();
-            refreshEyes();
+            // ServerPlayer.tick omits the living base tick. It includes fluids/eyes exactly once,
+            // native air/effects/fire/suffocation rules, but no Player.tick or extra travel.
+            CompanionPlayer.this.baseTick();
         }
         @Override public void refreshEyes() {
             ((com.neko.mcbot.mixin.EntityFluidAccess) (net.minecraft.world.entity.Entity) CompanionPlayer.this)
                     .mcbot$updateFluidOnEyes();
         }
         @Override public MovementInput.Frame recoveryInput() {
-            MovementInput.Frame frame = waterRecovery.tick(waterAccess);
-            waterControlling = frame != null;
+            MovementInput.Frame frame = environment.tick(waterAccess);
+            waterControlling = environment.active();
             bodyControl.reflex(waterControlling || defense.active());
-            return frame;
+            return frame == null && environmentFailure() != null ? MovementInput.Frame.IDLE : frame;
         }
         @Override public boolean inWater() { return isInWater(); }
         @Override public void swimUp() { jumpInLiquid(net.minecraft.tags.FluidTags.WATER); }
@@ -126,6 +181,15 @@ public final class CompanionPlayer extends ServerPlayer {
             setKnownMovement(movement);
             calculateEntityAnimation(false);
             if (movement.lengthSqr() > 0) level().getChunkSource().move(CompanionPlayer.this);
+        }
+        @Override public void afterMovement() {
+            // Capture the original scope/lease before the scheduler can settle newly unsafe work.
+            // A new danger discovered after travel has not advanced an active episode this tick.
+            if (!environment.holdsWork() && environmentFailure() != null) {
+                environment.tick(waterAccess);
+                waterControlling = environment.active();
+                bodyControl.reflex(waterControlling || defense.active());
+            }
         }
     };
     private final BodyPickup.Access pickup = new BodyPickup.Access() {
@@ -182,7 +246,7 @@ public final class CompanionPlayer extends ServerPlayer {
 
     public void tickDefense() {
         defenseDriving = true;
-        try { defense.tick(waterControlling); }
+        try { defense.tick(waterControlling || environmentFailure() != null); }
         finally { defenseDriving = false; }
     }
 
@@ -219,7 +283,41 @@ public final class CompanionPlayer extends ServerPlayer {
         }
     }
 
-    public String waterRecoveryState() { return waterRecovery.state(); }
+    public String waterRecoveryState() { return environment.waterState(); }
+
+    private String environmentHazard() {
+        if (!level().isLoaded(blockPosition())) return "unknown";
+        return EnvironmentRecovery.hazard(isInLava(), isOnFire(), isInWall(),
+                isInPowderSnow || wasInPowderSnow,
+                getY() < level().getMinY());
+    }
+
+    public com.google.gson.JsonObject environmentObservation() {
+        var data = environment.observation();
+        data.addProperty("hazard", environmentHazard());
+        data.addProperty("air_supply", getAirSupply());
+        data.addProperty("max_air_supply", getMaxAirSupply());
+        data.addProperty("eyes_in_water", isEyeInFluid(net.minecraft.tags.FluidTags.WATER));
+        data.addProperty("work_safe", environmentFailure() == null);
+        return data;
+    }
+
+    public com.neko.mcbot.server.ServerTool.Result environmentFailure() {
+        return EnvironmentRecovery.workFailure(environmentHazard(),
+                isEyeInFluid(net.minecraft.tags.FluidTags.WATER), environment.holdsWork());
+    }
+
+    public boolean environmentActive() { return environment.active(); }
+
+    public void cancelBodyBehaviors() {
+        try { environment.cancel(); }
+        finally { defense.cancel(); }
+    }
+    public void stopBodyBehaviors() {
+        try { environment.stopCurrent(); }
+        finally { defense.stopCurrent(); }
+    }
+    public void newBodyTask() { environment.newTask(); defense.newTask(); }
 
     public void facePoint(Vec3 point) {
         if (getEyePosition().distanceToSqr(point) < 1e-10) return;
@@ -232,19 +330,18 @@ public final class CompanionPlayer extends ServerPlayer {
     public void tick() {
         observeHealth(HealthObservation.Phase.BEFORE_TICK);
         super.tick();
-        updateSwingTime();
         // FakeConnection has no listener tick, so Player.tick cannot supply these updates.
         ((com.neko.mcbot.mixin.LivingEquipmentAccess) (net.minecraft.world.entity.LivingEntity) this)
                 .mcbot$detectEquipmentUpdates();
         var state = meleeClock.tick(getMainHandItem(), attackStrengthTicker, itemSwapTicker);
         attackStrengthTicker = state.attackTicks();
         itemSwapTicker = state.swapTicks();
-        String previousWater = waterRecovery.state();
+        String previousWater = environment.state();
         CompanionPhysics.tick(physics);
-        if (!previousWater.equals(waterRecovery.state())) {
-            McbotMod.LOG.info("[body-water] companion={} state={} in_water={} eyes_in_water={} pos={} tick={}",
-                    getUUID(), waterRecovery.state(), isInWater(),
-                    isEyeInFluid(net.minecraft.tags.FluidTags.WATER), blockPosition().toShortString(), level().getGameTime());
+        updateSwingTime();
+        if (!previousWater.equals(environment.state())) {
+            McbotMod.LOG.info("[body-environment] body_id={} facts={} pos={} tick={}",
+                    observationBodyId, environmentObservation(), blockPosition().toShortString(), level().getGameTime());
         }
         BodyPickup.tick(pickup);
         observeHealth(HealthObservation.Phase.AFTER_TICK);

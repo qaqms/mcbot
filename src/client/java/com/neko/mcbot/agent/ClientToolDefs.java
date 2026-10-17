@@ -70,6 +70,9 @@ public final class ClientToolDefs {
                     + "登记不改世界或授予许可，return_guaranteed=false；只保护声明通道，不证明全局逃生。";
             case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
                     + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
+                    + "air_supply/max_air_supply为原版空气读数；body_environment含真实危险、单次避险期限/累计搜索账及结果，"
+                    + "environment_active/state/work_safe为概要。environment_work_safe=false时先停工观察；"
+                    + "换气/停工不等于潜水或岩浆脱困能力，local_clear不验收原目标，取消不自动恢复。"
                     + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
                     + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。"
                     + "drop_changes为本身体近期有界来源摘要，拾取事件不替代当前inventory。"

@@ -22,6 +22,16 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AwarenessToolTest {
+    @Test void environmentFactsAndUnsafeWorkStayVisibleAlongsideOriginalAirAndBodyFacts() {
+        var facts = json("{\"active\":false,\"state\":\"limit\",\"work_safe\":false,"
+                + "\"air_supply\":12,\"max_air_supply\":300,\"goal_satisfied\":false}");
+        var result = StatusTool.environmentReport(new ServerTool.Result(true, "body", new JsonObject()), facts);
+        assertSame(facts, result.data().get("body_environment"));
+        assertFalse(result.data().get("environment_active").getAsBoolean());
+        assertFalse(result.data().get("environment_work_safe").getAsBoolean());
+        assertEquals("limit", result.data().get("environment_state").getAsString());
+        assertTrue(result.feedback().contains("不验收外层目标"));
+    }
     @Test void statusExposesSharedDefenseFactsAndExplicitIncompleteThreatScan() {
         var defense = json("{\"active\":true,\"state\":\"retreat\",\"strikes\":2,"
                 + "\"threats\":{\"scan_complete\":false}}");

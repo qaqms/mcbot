@@ -9,6 +9,19 @@ import java.util.TreeMap;
 public final class BodyFacts {
     private BodyFacts() { }
 
+    /** Older servers lack the shared signal; explicit native danger still stops dry work. */
+    public static boolean environmentUnsafe(JsonObject state) {
+        boolean unsafe = false;
+        for (String key : List.of("environment_work_safe", "eyes_in_water", "in_lava", "on_fire")) {
+            var value = state.get(key);
+            if (value == null) continue;
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean())
+                throw new IllegalArgumentException("invalid environment fact");
+            unsafe |= key.equals("environment_work_safe") ? !value.getAsBoolean() : value.getAsBoolean();
+        }
+        return unsafe;
+    }
+
     public static String fingerprint(JsonObject state) {
         ItemGoal.count(state, "minecraft:air");
         var items = new TreeMap<String, Integer>();
