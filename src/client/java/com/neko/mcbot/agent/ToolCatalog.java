@@ -27,6 +27,10 @@ public final class ToolCatalog {
                     + "不按脚本行数缩小嵌套采集预算。错误按program_error.kind/line核对，已完成动作勿重放。";
         if (spec.name().equals("tool_help")) return spec.description();
         String text = switch (spec.name()) {
+            case "consume" -> "按inventory的实际slot原生食用一次，最多100用物刻/120总刻。"
+                    + "ACCEPTED等真终态，consumed_count核真实消耗；抢占/取消不重吃，原目标另验。";
+            case "equip" -> "按实际slot切主手；target省略/mainhand，或head/chest/legs/feet补空盔甲槽。"
+                    + "不卸装或升级、不切副手；原版槽资格与真实库存共用。";
             case "build_blueprint" -> "只读查看世界内有界原版结构.nbt，按source_revision显式完整导入B4设计；"
                     + "不支持格/载荷阻止导入，实例与施工仍走原建筑入口，无直接世界写入或预算重开。";
             case "build_record" -> "保存/分页修改可复用设计，显式创建或修订隔离实例；target引用复用原差异/工地/施工/Lua。"

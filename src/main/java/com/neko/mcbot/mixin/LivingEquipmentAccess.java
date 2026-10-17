@@ -9,4 +9,7 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 public interface LivingEquipmentAccess {
     @Invoker("detectEquipmentUpdates")
     void mcbot$detectEquipmentUpdates();
+
+    @Invoker("updatingUsingItem")
+    void mcbot$updatingUsingItem();
 }

@@ -30,6 +30,7 @@ public final class DefenseDriver implements BodyDefense.Access {
 
     public DefenseDriver(CompanionPlayer body) { this.body = body; }
     public boolean active() { return defense.active(); }
+    public boolean maintenanceSafe() { return latest.complete() && latest.threats().isEmpty(); }
     public void cancel() { defense.cancel(); }
     public void stopCurrent() { defense.stopCurrent(); }
     public void newTask() { unavailable = false; defense.newTask(); }
@@ -45,6 +46,7 @@ public final class DefenseDriver implements BodyDefense.Access {
         allowed &= !unavailable;
         try {
             latest = allowed ? ThreatFacts.scan(body) : new ThreatFacts.Snapshot(List.of(), false);
+            if (!maintenanceSafe() || waterActive) body.maintenance().preempt();
             defense.tick(new BodyDefense.Frame(body.level(), allowed, higherPriority,
                     McbotMod.scheduler().meleeActive(body.getUUID()), body.position(), body.getBoundingBox(),
                     body.getHealth(), body.getMaxHealth(),
@@ -105,7 +107,7 @@ public final class DefenseDriver implements BodyDefense.Access {
             lease = null;
             permit = null;
             body.releaseMovement();
-            body.bodyControl().reflex(higherPriority);
+            body.bodyControl().reflex(higherPriority || body.maintenance().active());
         }
     }
     public JsonObject observation() {

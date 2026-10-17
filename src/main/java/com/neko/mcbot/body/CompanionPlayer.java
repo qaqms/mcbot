@@ -47,6 +47,7 @@ public final class CompanionPlayer extends ServerPlayer {
     });
     private final EnvironmentRecovery environment = new EnvironmentRecovery();
     private final com.neko.mcbot.server.DefenseDriver defense = new com.neko.mcbot.server.DefenseDriver(this);
+    private final com.neko.mcbot.server.MaintenanceDriver maintenance = new com.neko.mcbot.server.MaintenanceDriver(this);
     private boolean waterControlling, defenseDriving;
     private com.neko.mcbot.server.ActionPermissions.BodyPermit environmentPermit;
     private com.neko.mcbot.task.CompanionScheduler.ReflexLease environmentLease;
@@ -65,6 +66,7 @@ public final class CompanionPlayer extends ServerPlayer {
         @Override public int maxAir() { return getMaxAirSupply(); }
         @Override public String hazard() { return environmentHazard(); }
         @Override public boolean acquire() {
+            maintenance.preempt();
             defense.stopCurrent();
             var dispatcher = McbotMod.dispatcher();
             environmentPermit = dispatcher == null ? null : dispatcher.defensePermit(CompanionPlayer.this);
@@ -88,7 +90,7 @@ public final class CompanionPlayer extends ServerPlayer {
                 environmentLease = null;
                 environmentPermit = null;
                 releaseMovement();
-                bodyControl.reflex(defense.active());
+                bodyControl.reflex(defense.active() || maintenance.active());
             }
         }
         @Override public boolean withinScope(Vec3 feet) {
@@ -149,7 +151,7 @@ public final class CompanionPlayer extends ServerPlayer {
         @Override public void unavailable() {
             environment.unavailable();
             waterControlling = false;
-            bodyControl.reflex(defense.active());
+            bodyControl.reflex(defense.active() || maintenance.active());
         }
         @Override public MovementInput.Frame takeInput() { return movementInput.take(); }
         @Override public float yaw() { return getYRot(); }
@@ -167,7 +169,7 @@ public final class CompanionPlayer extends ServerPlayer {
         @Override public MovementInput.Frame recoveryInput() {
             MovementInput.Frame frame = environment.tick(waterAccess);
             waterControlling = environment.active();
-            bodyControl.reflex(waterControlling || defense.active());
+            bodyControl.reflex(waterControlling || defense.active() || maintenance.active());
             return frame == null && environmentFailure() != null ? MovementInput.Frame.IDLE : frame;
         }
         @Override public boolean inWater() { return isInWater(); }
@@ -179,6 +181,7 @@ public final class CompanionPlayer extends ServerPlayer {
         }
         @Override public void recordMovement(Vec3 movement) {
             setKnownMovement(movement);
+            checkMovementStatistics(movement.x, movement.y, movement.z);
             calculateEntityAnimation(false);
             if (movement.lengthSqr() > 0) level().getChunkSource().move(CompanionPlayer.this);
         }
@@ -188,7 +191,7 @@ public final class CompanionPlayer extends ServerPlayer {
             if (!environment.holdsWork() && environmentFailure() != null) {
                 environment.tick(waterAccess);
                 waterControlling = environment.active();
-                bodyControl.reflex(waterControlling || defense.active());
+                bodyControl.reflex(waterControlling || defense.active() || maintenance.active());
             }
         }
     };
@@ -243,11 +246,13 @@ public final class CompanionPlayer extends ServerPlayer {
     }
 
     public com.neko.mcbot.server.DefenseDriver defense() { return defense; }
+    public com.neko.mcbot.server.MaintenanceDriver maintenance() { return maintenance; }
 
     public void tickDefense() {
         defenseDriving = true;
         try { defense.tick(waterControlling || environmentFailure() != null); }
         finally { defenseDriving = false; }
+        maintenance.tick();
     }
 
     public void releaseMovement() { movementInput.clear(); }
@@ -311,13 +316,13 @@ public final class CompanionPlayer extends ServerPlayer {
 
     public void cancelBodyBehaviors() {
         try { environment.cancel(); }
-        finally { defense.cancel(); }
+        finally { try { defense.cancel(); } finally { maintenance.cancel(); } }
     }
     public void stopBodyBehaviors() {
         try { environment.stopCurrent(); }
-        finally { defense.stopCurrent(); }
+        finally { try { defense.stopCurrent(); } finally { maintenance.stopCurrent(); } }
     }
-    public void newBodyTask() { environment.newTask(); defense.newTask(); }
+    public void newBodyTask() { environment.newTask(); defense.newTask(); maintenance.newTask(); }
 
     public void facePoint(Vec3 point) {
         if (getEyePosition().distanceToSqr(point) < 1e-10) return;
@@ -337,7 +342,12 @@ public final class CompanionPlayer extends ServerPlayer {
         attackStrengthTicker = state.attackTicks();
         itemSwapTicker = state.swapTicks();
         String previousWater = environment.state();
+        var previousLevel = level();
         CompanionPhysics.tick(physics);
+        if (isAlive() && !isRemoved() && level() == previousLevel && level().isLoaded(blockPosition())) {
+            getCooldowns().tick();
+            getFoodData().tick(this);
+        }
         updateSwingTime();
         if (!previousWater.equals(environment.state())) {
             McbotMod.LOG.info("[body-environment] body_id={} facts={} pos={} tick={}",
@@ -352,6 +362,7 @@ public final class CompanionPlayer extends ServerPlayer {
     public void onEquippedItemBroken(net.minecraft.world.item.Item item,
                                      net.minecraft.world.entity.EquipmentSlot slot) {
         super.onEquippedItemBroken(item, slot);
+        if (maintenance != null) maintenance.equipmentBroken(slot.getSerializedName());
         if (bodyChanges != null) {
             try {
                 bodyChanges.equipmentBroken(item, slot);

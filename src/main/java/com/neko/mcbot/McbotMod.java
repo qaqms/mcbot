@@ -93,6 +93,7 @@ public final class McbotMod implements ModInitializer {
             tools.register(new StatusTool());
             tools.register(new com.neko.mcbot.server.tools.InventoryTool());
             tools.register(new com.neko.mcbot.server.tools.EquipTool());
+            tools.register(new com.neko.mcbot.server.tools.ConsumeTool());
             tools.register(new com.neko.mcbot.server.tools.CraftTool());
             tools.register(new com.neko.mcbot.server.tools.SmeltTool());
             tools.register(new ScanAreaTool());

@@ -15,7 +15,7 @@ import java.util.function.LongSupplier;
 
 /** Fixed near-body steps; every action still crosses the server's normal permission gate. */
 final class BoundedWorkflow {
-    private static final Set<String> ALLOWED = Set.of("status", "inventory", "equip", "scan_area",
+    private static final Set<String> ALLOWED = Set.of("status", "inventory", "equip", "consume", "scan_area",
             "find_resource", "inspect_block", "break_block", "place_block", "craft", "smelt", "wait");
     record Step(String tool, JsonObject args) { }
     record Plan(List<Step> steps, int seconds, int itemRequests, int blockActions) {
@@ -47,6 +47,7 @@ final class BoundedWorkflow {
                     "steps[" + steps.size() + "].args");
             if (tool.equals("break_block") || tool.equals("place_block")) blocks++;
             if (tool.equals("place_block")) items++;
+            if (tool.equals("consume")) items++;
             if (tool.equals("wait")) {
                 if (args.has("seconds") == args.has("ticks")) throw new IllegalArgumentException("等待须二选一指定seconds或ticks");
                 if (args.has("seconds")) integer(args.get("seconds"), 1, 60);

@@ -61,7 +61,7 @@ public final class InventoryTool implements ServerTool {
         return new Result(true, feedback.toString(), data);
     }
 
-    static JsonObject stackData(ItemStack stack) {
+    public static JsonObject stackData(ItemStack stack) {
         JsonObject data = new JsonObject();
         String id = itemId(stack);
         data.addProperty("item", id);

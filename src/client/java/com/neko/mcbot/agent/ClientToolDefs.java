@@ -51,6 +51,13 @@ public final class ClientToolDefs {
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
+            case "consume" -> "ACCEPTED只受理，等一次原生用物真正终态；consumed_count为实际库存观测差额，"
+                    + "须ok且observation_known=true并为1才确认一次消费。food/hp及food_before/hp_before为实际读数，"
+                    + "不作独占归因。source_after保留原版返还物；hand_restored=false须重查主手。"
+                    + "goal_satisfied=false，automatic_resume=false；抢占/取消/超时不重新开始食用，部分效果不重放。";
+            case "equip" -> "target省略/mainhand保持选中/整堆交换；head/chest/legs/feet仅补空槽，"
+                    + "不替换已有装备。changed/equipped及source_after/worn为实际结果，consumed_count=0；"
+                    + "不支持副手或自动升级。";
             case "follow" -> "ACCEPTED只受理，到位休眠仍未终态，等原期限结束或失败；goal_satisfied=false。"
                     + "data.behavior_ended及follow.phase/target_uuid/owner_target为行为事实；in_band仅in_band_known=true时可用，"
                     + "target_present为原目标当前在场，position为实际身体位置。"
@@ -72,6 +79,8 @@ public final class ClientToolDefs {
                     + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
                     + "air_supply/max_air_supply为原版空气读数；body_environment含真实危险、单次避险期限/累计搜索账及结果，"
                     + "environment_active/state/work_safe为概要。environment_work_safe=false时先停工观察；"
+                    + "body_maintenance及maintenance_active/state为有限已有库存补给/空盔甲槽维护，"
+                    + "saturation/using_item为原生事实；消费不替代最终库存目标。"
                     + "换气/停工不等于潜水或岩浆脱困能力，local_clear不验收原目标，取消不自动恢复。"
                     + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
                     + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。"
@@ -275,7 +284,7 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512}},"
                             + "\"required\":[\"reason\"],\"additionalProperties\":false}"),
             new ToolSpec("workflow", "将已确认的近身采集/放置/制作/烧制组合成1-12个明确步骤，一轮执行，逐步等待真实终态。"
-                    + "steps每项为tool与args，支持status/inventory/equip/scan_area/find_resource/inspect_block/"
+                    + "steps每项为tool与args，支持status/inventory/equip/consume/scan_area/find_resource/inspect_block/"
                     + "break_block/place_block/craft/smelt/wait；不支持移动/攻击/存取/拾取/反问/嵌套。"
                     + "timeout_seconds默认180、最多300；制作count、装料input_count/fuel_count、取出count必须明确填写，"
                     + "请求数合计≤128（放置算1件），明确挖放≤12格。这是请求预算，不限制原版配方取整产量/消耗或真实掉落。"
@@ -423,8 +432,17 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{}}"),
             new ToolSpec("equip", "将 inventory 中指定槽的物品切换到主手。"
                     + "槽0-8直接选中；槽9-35与当前主手槽交换，原主手留在来源槽。"
-                    + "只切换主手，不穿戴盔甲或切换副手；忙时先等任务结束或取消",
-                    "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35}},\"required\":[\"slot\"]}"),
+                    + "target省略/mainhand保持原行为；head/chest/legs/feet仅穿戴空的原版盔甲槽，"
+                    + "原版槽不接受则拒绝；不卸装/升级或切副手，忙时等待终态或取消",
+                    "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35},"
+                            + "\"target\":{\"type\":\"string\",\"enum\":[\"mainhand\",\"head\",\"chest\",\"legs\",\"feet\"]}},"
+                            + "\"required\":[\"slot\"],\"additionalProperties\":false}"),
+            new ToolSpec("consume", "从实际slot消费一件有营养的食物，复用原版持续用物和食物/效果/返还物。"
+                    + "只支持原生用时1-100刻的食物，固定总帽120刻；不会连吃、找料、制作或直接回血。"
+                    + "ACCEPTED等真终态，消费和food/hp为真实观测，goal_satisfied=false。"
+                    + "临时持食后只在原位置未被外部改动时恢复原主手；手部/许可变动、抢占或取消立即停，不自动重吃",
+                    "{\"type\":\"object\",\"properties\":{\"slot\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":35}},"
+                            + "\"required\":[\"slot\"],\"additionalProperties\":false}"),
             new ToolSpec("scan_area", "环顾四周，返回附近实体与可行动方块分层摘要，绝对坐标；entity_id/target_uuid供attack，target_uuid也供follow，不可猜编号或身份。"
                     + "另含地上item_targets数量/延迟/站位；item可过滤掉落物品，items_only=true只查掉落，不扫方块，实际拾取仍需走近",
                     "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\",\"description\":\"扫描半径1-32，默认16\"},"

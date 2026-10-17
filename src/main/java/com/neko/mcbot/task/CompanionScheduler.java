@@ -204,6 +204,10 @@ public final class CompanionScheduler {
         var slot = active.get(companion);
         return slot != null && slot.task() instanceof com.neko.mcbot.server.tools.AttackTool.Task;
     }
+    public boolean consumptionActive(UUID companion) {
+        var slot = active.get(companion);
+        return slot != null && slot.task() instanceof com.neko.mcbot.server.ConsumptionWork;
+    }
 
     private static CompletableFuture<ServerTool.Result> completed(String feedback) {
         return CompletableFuture.completedFuture(new ServerTool.Result(false, feedback, null));

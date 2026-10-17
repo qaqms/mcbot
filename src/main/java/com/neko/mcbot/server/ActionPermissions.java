@@ -124,7 +124,7 @@ public final class ActionPermissions {
 
     public static boolean allowed(Context context, String tool, JsonObject args) {
         return TaskPolicy.observation(tool, args) || context != null && !context.readOnly()
-                && java.util.Set.of("equip", "craft", "smelt", "move_to", "break_block", "place_block",
+                && java.util.Set.of("equip", "consume", "craft", "smelt", "move_to", "break_block", "place_block",
                         "collect", "transfer", "wait", "attack", "follow", "build_nearby", "build_site", "build_record", "build_blueprint").contains(tool);
     }
 

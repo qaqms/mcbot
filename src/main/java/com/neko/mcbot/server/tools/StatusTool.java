@@ -47,6 +47,9 @@ public final class StatusTool implements ServerTool {
             result.data().add("body_changes", recent);
             result = defenseReport(result, companion.defense().observation());
             result = environmentReport(result, companion.environmentObservation());
+            result = maintenanceReport(result, companion.maintenance().observation());
+            result.data().addProperty("saturation", companion.getFoodData().getSaturationLevel());
+            result.data().addProperty("using_item", companion.isUsingItem());
             result.data().add("drop_changes", com.neko.mcbot.server.DropTracker.recent(companion));
             result.data().add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
                     companion.level(), companion.blockPosition(), 64));
@@ -97,6 +100,15 @@ public final class StatusTool implements ServerTool {
         return new Result(result.ok(), result.feedback() + "\n环境避险：" + environment.get("state").getAsString()
                 + "，工作安全=" + environment.get("work_safe").getAsBoolean()
                 + "；空气与局部恢复不验收外层目标。", data);
+    }
+    static Result maintenanceReport(Result result, JsonObject maintenance) {
+        var data = result.data();
+        data.add("body_maintenance", maintenance);
+        data.addProperty("maintenance_active", maintenance.get("active").getAsBoolean());
+        data.addProperty("maintenance_state", maintenance.get("state").getAsString());
+        return new Result(result.ok(), result.feedback() + "\n身体补给：" + maintenance.get("state").getAsString()
+                + "，活动=" + maintenance.get("active").getAsBoolean()
+                + "；只用已有库存，实际消费见body_maintenance，原目标另行核验。", data);
     }
     static Result report(JsonObject args, Body body, Inventory inventory, JsonObject task) {
         for (String key : args.keySet()) if (!key.equals("details")) return denied();
