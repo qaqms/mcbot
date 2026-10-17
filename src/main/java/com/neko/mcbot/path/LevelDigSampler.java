@@ -93,7 +93,7 @@ public final class LevelDigSampler implements DigSampler {
         if (!inBounds(x, y, z) || !level.isLoaded(p)) {
             return INFEASIBLE;
         }
-        if (preserved(workTarget, p)) return INFEASIBLE;
+        if (protectedWork(p)) return INFEASIBLE;
         // 起点脚下不挖：不从自己站的地方开始掘坟
         var startFoot = geometry == null ? null : geometry.foot(start.getX(), start.getY(), start.getZ(), TerrainEdits.EMPTY);
         if (startFoot == null ? x == start.getX() && z == start.getZ() && y == start.getY() - 1
@@ -108,7 +108,7 @@ public final class LevelDigSampler implements DigSampler {
             return 0; // 已经清了
         }
         // 本格不许挖：方块实体/神圣名册/床；它的正上方是神圣方块的支撑也不许挖
-        if (level.getBlockEntity(p) != null || isSacred(st) || sacredAbove(p)) {
+        if (protectedTerrain(p)) {
             return INFEASIBLE;
         }
         if (lavaAdjacent(p)) {
@@ -145,7 +145,7 @@ public final class LevelDigSampler implements DigSampler {
             return false;
         }
         BlockPos p = new BlockPos(x, y, z);
-        if (preserved(workTarget, p)) return false;
+        if (protectedTerrain(p)) return false;
         if (!level.isLoaded(p)) {
             return false; // 同上：不在未加载区动放置规划
         }
@@ -241,14 +241,13 @@ public final class LevelDigSampler implements DigSampler {
         return PathMaterials.count(inv);
     }
 
-    private boolean sacredAbove(BlockPos p) {
-        if (!level.isInWorldBounds(p.above()) || !level.isLoaded(p.above())) return true;
-        var up = level.getBlockState(p.above());
-        if (up.isAir()) {
-            return false;
-        }
-        return level.getBlockEntity(p.above()) != null || isSacred(up);
+    public boolean protectedTerrain(BlockPos cell) {
+        return com.neko.mcbot.server.WorksiteProtection.protectedCell(cell,
+                pos -> level.isInWorldBounds(pos) && level.isLoaded(pos), level::getBlockState,
+                pos -> level.getBlockEntity(pos) != null, this::protectedWork);
     }
+
+    public static boolean protectedFacility(BlockState state) { return isSacred(state); }
 
     /** 注册表反查每 Block 只算一次（javap：BuiltInRegistries.BLOCK.getKey 是哈希查表，
      *  但 memo 命中前的首次+重复邻居仍省掉大量路径字符串分配）。身份键安全：Block 单例。 */
@@ -257,6 +256,11 @@ public final class LevelDigSampler implements DigSampler {
 
     static boolean preserved(BlockPos target, BlockPos cell) {
         return target != null && (target.equals(cell) || target.below().equals(cell));
+    }
+
+    private boolean protectedWork(BlockPos cell) {
+        return preserved(workTarget, cell) || companion instanceof com.neko.mcbot.body.CompanionPlayer body
+                && body.workTargets().protects(cell);
     }
 
     static boolean isSacred(BlockState st) {

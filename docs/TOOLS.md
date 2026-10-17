@@ -3,6 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## N3 地形与返程事实（2026-10-17）
+
+status.spatial_facts含dimension及chunks映射；值为不透明版本串或null（未知/未加载）。
+find_resource附同源版本及spatial_stable，完整分页期间变更会停止，不自动重开。
+版本只说明已观察地形，不证明可达、可采或许可；未知不能补失败尝试。
+status/move_to的navigation_trail含有界实际waypoints、feet_y、原bounds/underground、
+actual_edits及省略/缺口/截断；return_guaranteed=false、requires_fresh_navigation=true。
+move_to可提供return_waypoint正整数ID，必须同时exact=true、walk_only=true，
+坐标与当前任务路标一致且保留原bounds/underground，不带工作目标。
+失效支撑/脚高、旧任务/身体或范围变化拒绝，仍按原导航与预算重新检查途中路线。
+不是回放命令，也不保证整段无编辑返回。细则见N3-SPATIAL-FACTS及STATUS。
+
 ## F2 来源与去向（2026-10-16）
 
 break_block不再凭附近新实体认领产物。drop_accounting_known声明原生观察是否可用，

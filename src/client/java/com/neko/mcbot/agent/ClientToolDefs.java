@@ -18,7 +18,8 @@ public final class ClientToolDefs {
                     + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
                     + "details=true才有data.inventory：selected_slot、slots[{slot,item,count,damage?,max_damage?}]、equipment。"
                     + "slots是Lua从1起的列表，但slot字段是实际0-35槽号；空槽item为空字符串、count=0。"
-                    + "drop_changes为本身体近期有界来源摘要，拾取事件不替代当前inventory。";
+                    + "drop_changes为本身体近期有界来源摘要，拾取事件不替代当前inventory。"
+                    + "spatial_facts为区块版本；navigation_trail给当前任务实际路标和有限改动，非可返保证。";
             case "inventory" -> "data.selected_slot、storage_size、slots_used；"
                     + "data.slots是[{slot,item,count,damage?,max_damage?}]，data.equipment是装备列表。"
                     + "slots是从1起的列表，传给equip的是entry.slot实际0-35槽号。";
@@ -69,6 +70,8 @@ public final class ClientToolDefs {
                     + "放置工作可加place_item和face，can_work_here仅当前放置预检，到站未执行放置。"
                     + "remaining_items是开路来源当前在地量，picked_up_self_items/picked_up_other_items/"
                     + "destroyed_drop_items/unresolved_drop_items分别结算，未知不冒充入包。"
+                    + "navigation_trail.waypoints最多16项含原起点/近期实际路标{id,x,y,z,feet_y,bounds?,underground}；"
+                    + "return_waypoint引用本任务ID，沿用原bounds/underground并exact=true、walk_only=true重新导航，不能据路标保证零编辑可返。"
                     + "失败数据可能仅含已知部分效果，须status details=true重新核对，不假定到了请求格。";
             case "gather" -> "data.goal_satisfied、actual_progress、scope、mined_blocks、cleared_blocks、"
                     + "primitive_calls、skipped_blocks/skipped_items及last_observation。"
@@ -318,6 +321,8 @@ public final class ClientToolDefs {
                             + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向目标坐标：会用 DigAStar 规划绕路/挖穿/搭路（≤水平64/垂直32格）。"
                     + "walk_only=true只走路/跳跃/下落，规划/重规划与执行均不挖放，探索使用此模式。"
+                    + "return_waypoint可填status/move_to实际路标id，坐标须匹配、exact=true、walk_only=true且保留路标bounds/underground；"
+                    + "先核当前支撑再正常导航，不继承许可，不自动连续返回或重开预算。"
                     + "默认到目标相邻一格范围；拾取或精确工作站位用exact=true，要求指定脚格实际站稳。"
                     + "work_target={x,y,z}且exact=true保留工作对象；arrival='work'让寻路选择实际够得着/看得见或可有限清理的工作终点，x/y/z此时填工作对象坐标。"
                     + "放置站位另填place_item=物品ID、face（默认up），须exact=true、arrival=work且x/y/z与work_target相同；"
@@ -344,6 +349,7 @@ public final class ClientToolDefs {
                             + "\"z\":{\"type\":\"integer\"},\"radius\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},"
                             + "\"required\":[\"x\",\"y\",\"z\",\"radius\"],\"additionalProperties\":false},"
                             + "\"walk_only\":{\"type\":\"boolean\"},"
+                            + "\"return_waypoint\":{\"type\":\"integer\",\"minimum\":1},"
                             + "\"may_alter_terrain\":{\"type\":\"boolean\",\"description\":\"旧兼容字段，不授予权限\"},\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("transfer", "与6.5格内未锁定普通容器存取物品：dir=out取出/in存入，item可选过滤；熔炉类机器改用smelt。"
                     + "遵守槽位、接触面与堆叠限制，忙时先等待或取消。可以部分搬运，回执给实际已搬及留在来源的数量；"

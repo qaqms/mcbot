@@ -20,7 +20,8 @@ final class ExplorationRoute {
     private boolean pending;
     private int attempts, regions;
     private double headingX, headingZ;
-    private record Coverage(String query, JsonObject center, int radius, long time) { }
+    private record Coverage(String query, JsonObject center, int radius, long time, JsonObject terrain) { }
+    private JsonObject scanTerrain;
     private final List<Coverage> coverage = new ArrayList<>();
     private final SearchPages pages = new SearchPages();
     private String searchQuery = "";
@@ -33,7 +34,19 @@ final class ExplorationRoute {
 
     int coverageRegions() { return coverage.size(); }
     double selectedCoverage() { return selectedCoverage; }
-    void invalidateCoverage() { coverage.clear(); pages.reset(); }
+    void invalidateCoverage() { coverage.clear(); pages.reset(); scanTerrain = null; }
+
+    void terrainObserved(JsonObject state) {
+        var fresh = com.neko.mcbot.agentcore.loop.SpatialFacts.read(state);
+        if (fresh == null) return;
+        coverage.removeIf(c -> c.terrain() != null
+                && !com.neko.mcbot.agentcore.loop.SpatialFacts.retained(c.terrain(), fresh));
+        if (scanTerrain != null
+                && !com.neko.mcbot.agentcore.loop.SpatialFacts.retained(scanTerrain, fresh)) {
+            pages.reset();
+            scanTerrain = null;
+        }
+    }
 
     void searchPage(JsonObject args, ToolOutcome receipt, long time) {
         now = time;
@@ -48,6 +61,13 @@ final class ExplorationRoute {
         int offset = integer(data, "offset");
         if (offset == 0) searchUnknown = 0;
         else if (!continued) return;
+        var terrain = com.neko.mcbot.agentcore.loop.SpatialFacts.read(data);
+        if (offset == 0) scanTerrain = terrain;
+        if (data.has("spatial_stable") && !data.get("spatial_stable").getAsBoolean()
+                || (scanTerrain == null) != (terrain == null)
+                || scanTerrain != null && !scanTerrain.equals(terrain)) {
+            pages.reset(); scanTerrain = null; return;
+        }
         int missing = integer(data, "unknown"), read = integer(data, "cells_read");
         if (missing < 0 || read < 0 || missing + read != integer(data, "samples_examined")) {
             pages.reset(); return;
@@ -58,7 +78,7 @@ final class ExplorationRoute {
         int size = integer(data, "radius");
         coverage.removeIf(c -> c.query().equals(searchQuery) && c.center().equals(center));
         if (coverage.size() >= 64) coverage.removeFirst();
-        coverage.add(new Coverage(searchQuery, center, size, time));
+        coverage.add(new Coverage(searchQuery, center, size, time, scanTerrain));
     }
 
     // Coarse volume samples rank future views; they never certify cells as empty.
@@ -152,6 +172,7 @@ final class ExplorationRoute {
     }
 
     boolean observe(JsonObject state) {
+        terrainObserved(state);
         var point = new JsonObject();
         for (String key : List.of("x", "y", "z")) point.addProperty(key, number(state, key));
         String world = state.get("dimension").getAsString();

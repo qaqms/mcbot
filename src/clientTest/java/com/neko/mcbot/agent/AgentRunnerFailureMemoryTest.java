@@ -16,6 +16,29 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class AgentRunnerFailureMemoryTest {
+    @Test void originalTaskUsesFreshTerrainEvidenceAcrossDirectAndProgramEntryPoints() {
+        long task = start();
+        var state = BoundedGatherTest.state(0);
+        state.add("spatial_facts", com.google.gson.JsonParser.parseString(
+                "{\"dimension\":\"minecraft:overworld\",\"chunks\":{\"0,0\":\"chunk:1\"}}"));
+        runner.execute("status", "{\"details\":true}"); client.drain();
+        runner.handleS2c(receipt(client.lastTool().num("seq", -1), true, "fresh", state));
+        exhaust();
+        var denied = runner.execute("move_to", POINT); client.drain();
+        assertTrue(denied.join().feedback().startsWith("REPEATED_FAILURE:"));
+        state.getAsJsonObject("spatial_facts").getAsJsonObject("chunks").addProperty("0,0", "chunk:2");
+        runner.execute("status", "{\"details\":true}"); client.drain();
+        runner.handleS2c(receipt(client.lastTool().num("seq", -1), true, "fresh terrain", state));
+        var program = new JsonObject();
+        program.addProperty("code", "return mc.try_call('move_to',{x=2,y=90,z=0})");
+        var result = runner.execute("run_program", program.toString());
+        until(() -> client.lastTool().str("tool").equals("move_to"));
+        fail(99);
+        until(result::isDone);
+        assertEquals(task, runner.currentTaskId());
+        assertEquals(1, client.sent.stream().filter(e -> e.kind().equals("task_begin")).count());
+        assertFalse(result.join().feedback().contains("REPEATED_FAILURE:"));
+    }
     private static final String POINT = "{\"x\":2,\"y\":90,\"z\":0}";
     private final OfflineAgentClient client = new OfflineAgentClient();
     private final AgentRunner runner = client.create();

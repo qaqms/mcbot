@@ -99,6 +99,12 @@ public final class MoveToTool implements ServerTool {
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:walk_only须为布尔。", null));
         }
+        Long returnId;
+        try { returnId = returnWaypoint(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:return_waypoint须正整数ID，并使用exact=true、walk_only=true且不带工作目标。", null));
+        }
         if (args.has("may_alter_terrain") && (!args.get("may_alter_terrain").isJsonPrimitive()
                 || !args.get("may_alter_terrain").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:may_alter_terrain 须为布尔。", null));
@@ -112,6 +118,18 @@ public final class MoveToTool implements ServerTool {
             }
             id = value.getAsString();
         }
+        c.bindSpatialTask(context);
+        if (returnId != null) {
+            var failure = returnGuard(c.navigationTrail(), returnId, to, spec, () -> {
+                var foot = com.neko.mcbot.server.StandingGeometry.forPlayer(c, c.level()::isLoaded)
+                        .foot(to.getX(), to.getY(), to.getZ(), com.neko.mcbot.path.TerrainEdits.EMPTY);
+                return foot == null ? Double.NaN : foot.height();
+            });
+            if (failure != null) return CompletableFuture.completedFuture(failure);
+        }
+        if (workTarget != null && !c.workTargets().add(workTarget))
+            return CompletableFuture.completedFuture(new Result(false,
+                    "ACTION_LIMIT:当前任务工作目标保护集合已满，未淘汰旧保护或继续开路。", null));
         BlockPos from = com.neko.mcbot.server.StandingGeometry.feetCell(c);
         if (!PathTask.withinCap(from, to)) {
             return CompletableFuture.completedFuture(new Result(false,
@@ -165,6 +183,32 @@ public final class MoveToTool implements ServerTool {
         var value = args.get("walk_only");
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) throw new IllegalArgumentException();
         return value.getAsBoolean();
+    }
+
+    static Long returnWaypoint(JsonObject args) {
+        if (!args.has("return_waypoint")) return null;
+        var value = args.get("return_waypoint");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) throw new IllegalArgumentException();
+        long id = value.getAsBigDecimal().longValueExact();
+        if (id <= 0 || !args.has("exact") || !args.get("exact").getAsBoolean()
+                || !walkOnly(args) || args.has("work_target") || args.has("arrival"))
+            throw new IllegalArgumentException();
+        return id;
+    }
+
+    static Result returnGuard(com.neko.mcbot.path.NavigationTrail trail, long id, BlockPos to,
+            com.neko.mcbot.path.PathSpec spec, java.util.function.DoubleSupplier currentFoot) {
+        var recorded = trail.point(id);
+        if (recorded == null || !to.equals(new BlockPos(recorded.x(), recorded.y(), recorded.z())))
+            return new Result(false, "NO_ROUTE:当前任务/身体没有该实际路标或坐标不匹配，未猜测返程。", null);
+        if (!java.util.Objects.equals(spec.anchor(), recorded.scope().anchor())
+                || spec.radius() != recorded.scope().radius()
+                || spec.underground() != recorded.scope().underground())
+            return new Result(false, "SCOPE_CHANGED:返程须保留路标原bounds及underground约束，未放宽原范围。", null);
+        double height = currentFoot.getAsDouble();
+        if (!Double.isFinite(height) || Math.abs(height - recorded.feetY()) > 1e-5)
+            return new Result(false, "NO_ROUTE:路标的当前支撑或脚高已经变化，先重新观察。", null);
+        return null;
     }
 
     static BlockPos workTarget(JsonObject args) {

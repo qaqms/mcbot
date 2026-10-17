@@ -26,6 +26,7 @@ final class BoundedSearch {
     private JsonObject last = new JsonObject();
     private int pages, examined, read, unknown, matches;
     private boolean truncated;
+    private JsonObject terrain;
     private long started;
 
     BoundedSearch(JsonObject query, BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
@@ -63,6 +64,14 @@ final class BoundedSearch {
                     boolean continued = chain.continues("find_resource", args, receipt);
                     if (!chain.valid() || pages > 1 && !continued) throw new IllegalArgumentException();
                     last = receipt.data();
+                    var fresh = com.neko.mcbot.agentcore.loop.SpatialFacts.read(last);
+                    if (pages == 1) terrain = fresh;
+                    if (last.has("spatial_stable") && !last.get("spatial_stable").getAsBoolean()
+                            || (terrain == null) != (fresh == null)
+                            || terrain != null && !terrain.equals(fresh)) {
+                        stop("STATE_CHANGED:分页期间地形版本变化，未认定完整覆盖；按新鲜事实决定后续。");
+                        return;
+                    }
                     int cells = ExplorationRoute.integer(last, "cells_read");
                     int missing = ExplorationRoute.integer(last, "unknown");
                     int count = ExplorationRoute.integer(last, "samples_examined");

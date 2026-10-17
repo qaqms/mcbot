@@ -61,4 +61,21 @@ class WorksiteProtectionTest {
         assertFalse(LevelDigSampler.preserved(target, target.east()));
         assertFalse(LevelDigSampler.preserved(null, target));
     }
+
+    @Test void sharedLiveGuardProtectsFacilitiesTargetsFloorsAndUnknownWithoutProtectingOrdinaryTerrain() {
+        var workstation = new BlockPos(3, 70, 0);
+        var target = new BlockPos(6, 70, 0);
+        var targets = new WorkTargets();
+        targets.bind("task"); targets.add(target);
+        java.util.function.Predicate<BlockPos> guard = cell -> com.neko.mcbot.server.WorksiteProtection.protectedCell(
+                cell, p -> p.getX() != 9, p -> p.equals(workstation)
+                        ? Blocks.CRAFTING_TABLE.defaultBlockState() : Blocks.STONE.defaultBlockState(),
+                p -> false, targets::protects);
+        assertTrue(guard.test(workstation));
+        assertTrue(guard.test(workstation.below()));
+        assertTrue(guard.test(target));
+        assertTrue(guard.test(target.below()));
+        assertTrue(guard.test(new BlockPos(9, 70, 0)));
+        assertFalse(guard.test(target.east()));
+    }
 }

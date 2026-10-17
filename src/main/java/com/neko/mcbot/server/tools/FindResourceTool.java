@@ -44,7 +44,8 @@ public final class FindResourceTool implements ServerTool {
     }
     @Override public String name() { return "find_resource"; }
     @Override public Result run(CompanionPlayer companion, JsonObject args) {
-        return execute(args, new Access() {
+        var before = com.neko.mcbot.server.TerrainSnapshots.around(companion.level(), companion.blockPosition(), 16);
+        var result = execute(args, new Access() {
             @Override public BlockPos center() { return companion.blockPosition(); }
             @Override public boolean readable(BlockPos pos) {
                 return companion.level().isInWorldBounds(pos)
@@ -79,6 +80,12 @@ public final class FindResourceTool implements ServerTool {
                         ? integer(args.get("frontier_distance")) : 16);
             }
         });
+        if (result.data() != null) {
+            var after = com.neko.mcbot.server.TerrainSnapshots.around(companion.level(), companion.blockPosition(), 16);
+            result.data().add("spatial_facts", after);
+            result.data().addProperty("spatial_stable", before.equals(after));
+        }
+        return result;
     }
 
     static Input arguments(JsonObject args) {

@@ -88,6 +88,7 @@ public final class BoundedProgram {
     private boolean needsBodyCheck;
     private String signature = "";
     private String bodyFacts;
+    private JsonObject spatialFacts;
     private volatile int sourceLine, opcode = -1;
     private volatile boolean compiled;
     private JsonObject programError;
@@ -291,6 +292,10 @@ public final class BoundedProgram {
                 String fresh = BodyFacts.fingerprint(data);
                 if (bodyFacts != null && !bodyFacts.equals(fresh)) localFailureRepeats.clear();
                 bodyFacts = fresh;
+                var observed = com.neko.mcbot.agentcore.loop.SpatialFacts.read(data);
+                if (com.neko.mcbot.agentcore.loop.SpatialFacts.changed(spatialFacts, observed))
+                    localFailureRepeats.clear();
+                if (observed != null) spatialFacts = observed;
             } catch (RuntimeException incomplete) {
                 // An incomplete inventory cannot prove work progress or replenish recovery attempts.
             }

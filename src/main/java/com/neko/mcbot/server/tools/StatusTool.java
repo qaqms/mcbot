@@ -46,6 +46,8 @@ public final class StatusTool implements ServerTool {
             var recent = companion.recentBodyChanges();
             result.data().add("body_changes", recent);
             result.data().add("drop_changes", com.neko.mcbot.server.DropTracker.recent(companion));
+            result.data().add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
+                    companion.level(), companion.blockPosition(), 64));
             result = new Result(true, result.feedback()
                     + com.neko.mcbot.body.BodyChangeLog.sentence(recent), result.data());
         }
@@ -55,7 +57,11 @@ public final class StatusTool implements ServerTool {
     @Override public java.util.concurrent.CompletableFuture<Result> runAuthorized(
             CompanionPlayer companion, JsonObject args, CompanionScheduler scheduler,
             ActionPermissions permissions, ActionPermissions.Context context) {
-        return runAsync(companion, args, scheduler).thenApply(result -> permissionReport(result, context));
+        companion.bindSpatialTask(context);
+        return runAsync(companion, args, scheduler).thenApply(result -> {
+            if (result.ok()) result.data().add("navigation_trail", companion.navigationTrail().report());
+            return permissionReport(result, context);
+        });
     }
 
     static Result permissionReport(Result result, ActionPermissions.Context context) {

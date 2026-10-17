@@ -3,6 +3,33 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## N3 空间事实与返程候选（2026-10-17 09:09，Asia/Shanghai）
+
+- 维护者本轮恢复两卡模式，顺序N3→B1。N3已独立完成离线验收，
+  当前七卡完成、15卡待实施；本轮下一B1，尚不记B1完成。
+  原六卡及交接文档已在main，开工本地/远端HEAD均0535549。
+- 机制、参考完整链及边界见docs/N3-SPATIAL-FACTS-2026-10-17.md。
+  同源区块版本供任务失败账/同程序、完整分页与探索覆盖失效；
+  未知/卸载不补失败次数，失效不清探索尝试或累计预算。
+  工位/实体/工作目标及直接地板保护贯通搜索、缓存与活体复核。
+  实际路标与实际挖放按身体/任务/世界有界记录，返程引用只走原导航新鲜复核；
+  不保证普通路线零编辑返回，不保存永久成品实例或自动恢复任务。
+- 旧码build/n3-before-20261017.log复现静止身体地形变化后仍拒发1失败；
+  focused1/focused2通过，首次强制全量1250项通过，补Lua预算回归后再强制全量。
+  build/n3-final2-20261017.log第61–62行：53秒、20任务全部执行。
+  XML为1251项/146 suites，failures/errors/skipped全0，较F2新增17项。
+  覆盖生产runner/Lua同入口、静止版本变化与不补调用预算、分页中途变更、
+  未知/卸载/范围保持、保护与返程新鲜拒绝及记录帽；世界/网络边界受控。
+- build/libs/mcbot-0.1.0.jar：1,371,018 bytes，末写09:08:56，SHA256
+  `ac6057cc56ede06e640ffd07819c7dcf8b033dcac960a0ef90b532eab6ccc5da`。
+  已核TerrainVersionMixin/配置、NavigationTrail、嵌入agent-core/LuaJ/许可；
+  javap确认LevelChunk.setBlockState(BlockPos,BlockState,int)返回BlockState，
+  ServerChunkCache.getChunkNow(int,int)返回LevelChunk。描述符/回调测试不证明原生注入已验。
+- 只改本体；宿主/连接器/参考/玩家实例不改，未安装或启动游戏/服务器/模型。
+  list-java见一个环境已有MC-RUN进程，未停止或干预；不写成无进程。
+  原预算/许可/取消保持，原生区块钩子、外部模组绕过写入和实际返程待实机补证。
+  提交/推送以Git实际记录为准。
+
 ## 换环境开发交接（2026-10-16）
 
 - 已核本地HEAD与远端main均为`218242d4a6e78c33a1736dcaca7fc45e253ceded`，

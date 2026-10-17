@@ -24,6 +24,8 @@ public final class CompanionPlayer extends ServerPlayer {
     private final MeleeClock meleeClock = new MeleeClock();
     private final HealthObservation healthObservation = new HealthObservation();
     private final UUID observationBodyId = UUID.randomUUID();
+    private final com.neko.mcbot.path.WorkTargets workTargets = new com.neko.mcbot.path.WorkTargets();
+    private final com.neko.mcbot.path.NavigationTrail navigationTrail = new com.neko.mcbot.path.NavigationTrail();
     private final BodyChangeLog bodyChanges = BodyChangeLog.forPlayer(observationBodyId, this);
     private boolean observationWarning;
     private boolean bodyChangeWarning;
@@ -153,6 +155,14 @@ public final class CompanionPlayer extends ServerPlayer {
     }
 
     public UUID observationBodyId() { return observationBodyId; }
+
+    public com.neko.mcbot.path.WorkTargets workTargets() { return workTargets; }
+    public com.neko.mcbot.path.NavigationTrail navigationTrail() { return navigationTrail; }
+
+    public void bindSpatialTask(com.neko.mcbot.server.ActionPermissions.Context context) {
+        workTargets.bind(context);
+        navigationTrail.bind(context, level());
+    }
 
     public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }
 

@@ -195,8 +195,10 @@ public final class PathTask extends TickTask {
         var environment = com.neko.mcbot.server.MiningEnvironment.bodyFailure(c);
         if (environment != null) return terminal(environment);
         BlockPos current = StandingGeometry.feetCell(c);
+        c.bindSpatialTask(context);
         if (!spec.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
+        c.navigationTrail().observe(current.getX(), current.getY(), current.getZ(), c.getY(), c.onGround(), spec);
         // While steering, the next landing belongs to the route, including its airborne ticks.
         PathGrounding.Decision grounded = steering == null
                 ? grounding.poll(c.onGround(), c.getY()) : PathGrounding.Decision.READY;
@@ -230,6 +232,11 @@ public final class PathTask extends TickTask {
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
+        if (drivenBody != null) {
+            data.add("navigation_trail", drivenBody.navigationTrail().report());
+            data.add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
+                    level, StandingGeometry.feetCell(drivenBody), 64));
+        }
         if (!result.ok()) addDiagnostics(data);
         var dropSnapshot = drops.snapshot(level);
         dropSnapshot.entrySet().forEach(entry -> data.add(entry.getKey(), entry.getValue()));
@@ -1118,6 +1125,7 @@ public final class PathTask extends TickTask {
         digPos = null;
         if (!result.data().get("removed").getAsBoolean()) return new Progress.Done(result);
         actualDigs++;
+        c.navigationTrail().edited("dig", x, y, z);
         authorization.observed("dig", pos.asLong());
         drops.record(result.data());
         McbotMod.LOG.info("[path] 开路 {} 收进={} 留地={}", pos.toShortString(),
@@ -1143,9 +1151,12 @@ public final class PathTask extends TickTask {
                 "NO_PATH:计划的搭路格现在不可安全放置；重新查看路线。", null));
         Result result = BlockPlacement.placeAttached(BlockPlacement.forPlayer(c), pos,
                 PathMaterials.find(c.getInventory()));
+        if (result.data() != null && result.data().has("changed") && result.data().get("changed").getAsBoolean()) {
+            actualPlaces++;
+            c.navigationTrail().edited("place", x, y, z);
+            authorization.observed("place", pos.asLong());
+        }
         if (!result.ok()) return new Progress.Done(result);
-        actualPlaces++;
-        authorization.observed("place", pos.asLong());
         if (!sampler.support(x, y, z)) return new Progress.Done(new Result(false,
                 "PLACE_FAILED:材料已放置但未形成可站立支撑，已停止移动；查看现场。", result.data()));
         return null;

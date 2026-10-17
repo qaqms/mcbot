@@ -12,6 +12,8 @@ public final class WorkFailureMemory {
     private static final int ENTRY_LIMIT = 128;
     private record Key(String tool, JsonObject args, String reason) { }
     private final LinkedHashMap<Key, Integer> failures = new LinkedHashMap<>();
+    private final LinkedHashMap<Key, JsonObject> terrain = new LinkedHashMap<>();
+    private JsonObject spatial;
     private String bodyFacts;
 
     public static boolean localFailure(String tool, String feedback) {
@@ -62,22 +64,39 @@ public final class WorkFailureMemory {
         if (result.ok() && tool.equals("status") && flag(args, "details")) {
             try {
                 String fresh = BodyFacts.fingerprint(data);
-                if (bodyFacts != null && !bodyFacts.equals(fresh)) failures.clear();
+                if (bodyFacts != null && !bodyFacts.equals(fresh)) clear();
                 bodyFacts = fresh;
+                var observed = SpatialFacts.read(data);
+                if (observed != null) {
+                    failures.keySet().removeIf(key -> {
+                        if (!SpatialFacts.changed(terrain.get(key), observed)) return false;
+                        terrain.remove(key);
+                        return true;
+                    });
+                    spatial = observed;
+                }
             } catch (RuntimeException incomplete) {
                 // Incomplete observations cannot establish a new body baseline.
             }
         }
         if (!TaskPolicy.observation(tool, args) && effect(tool, data)) {
-            failures.clear();
+            clear();
             return;
         }
         if (tracked(tool) && !result.ok() && localFailure(tool, result.feedback())) {
             var key = new Key(tool, args.deepCopy(), result.feedback().split(":", 2)[0]);
-            if (failures.containsKey(key) || failures.size() < ENTRY_LIMIT)
+            if (failures.containsKey(key) || failures.size() < ENTRY_LIMIT) {
                 failures.merge(key, 1, (count, ignored) -> Math.min(FAILURE_LIMIT, count + 1));
+                if (!terrain.containsKey(key)) {
+                    var observed = SpatialFacts.read(data);
+                    var evidence = SpatialFacts.forWork(observed == null ? spatial : observed, tool, args);
+                    if (evidence != null) terrain.put(key, evidence);
+                }
+            }
         }
     }
+
+    private void clear() { failures.clear(); terrain.clear(); }
 
     private static boolean effect(String tool, JsonObject data) {
         return switch (tool) {

@@ -7,6 +7,45 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ExplorationRouteTest {
+    @Test void changingTerrainDuringPaginationCannotCertifyOneCompleteCoverageRegion() {
+        var route = new ExplorationRoute(8, 64);
+        route.observe(point(0, 70, 0));
+        var args = BoundedSearchTest.json("{\"targets\":[\"dirt\"],\"r\":16,\"offset\":0}");
+        for (int offset = 0; offset <= 16384; offset += 4096) {
+            args.addProperty("offset", offset);
+            if (offset > 0) args.add("scan_center", BoundedSearchTest.json("{\"x\":0,\"y\":70,\"z\":0}"));
+            var page = BoundedSearchTest.page(offset, false);
+            page.add("spatial_facts", BoundedSearchTest.json("{\"dimension\":\"minecraft:overworld\","
+                    + "\"chunks\":{\"0,0\":\"chunk:" + (offset < 8192 ? 1 : 2) + "\"}}"));
+            route.searchPage(args, new com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome(true, "page", page), 10);
+        }
+        assertEquals(0, route.coverageRegions());
+        assertEquals(0, route.attempts());
+    }
+
+    @Test void unloadInvalidatesCoverageWithoutResettingExplorationBudgetOrVisitedPositions() {
+        var route = new ExplorationRoute(8, 64);
+        route.observe(point(0, 70, 0));
+        route.attempt(point(8, 70, 0));
+        route.observe(point(8, 70, 0));
+        var args = BoundedSearchTest.json("{\"targets\":[\"dirt\"],\"r\":16,\"offset\":0}");
+        for (int offset = 0; offset <= 16384; offset += 4096) {
+            args.addProperty("offset", offset);
+            if (offset > 0) args.add("scan_center", BoundedSearchTest.json("{\"x\":0,\"y\":70,\"z\":0}"));
+            var page = BoundedSearchTest.page(offset, false);
+            page.add("spatial_facts", BoundedSearchTest.json("{\"dimension\":\"minecraft:overworld\","
+                    + "\"chunks\":{\"0,0\":\"chunk:1\"}}"));
+            route.searchPage(args, new com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome(true, "page", page), 10);
+        }
+        assertEquals(1, route.coverageRegions());
+        var state = point(8, 70, 0);
+        state.add("spatial_facts", BoundedSearchTest.json("{\"dimension\":\"minecraft:overworld\","
+                + "\"chunks\":{\"0,0\":null}}"));
+        route.terrainObserved(state);
+        assertEquals(0, route.coverageRegions());
+        assertEquals(1, route.attempts());
+        assertNull(route.choose(points(point(0, 70, 0)), 0));
+    }
     private static JsonObject point(int x, int y, int z) {
         var p = new JsonObject();
         p.addProperty("x", x); p.addProperty("y", y); p.addProperty("z", z);

@@ -277,6 +277,41 @@ class BoundedProgramTest {
         }
     }
 
+    @Test void terrainRevisionAllowsStationaryReevaluationWithoutResettingCallBudget() throws Exception {
+        try (var f = new Fixture("""
+                mc.call("status",{details=true})
+                for i=1,12 do
+                    mc.try_call("move_to",{x=2})
+                    mc.call("status",{details=true})
+                end
+                """, 14)) {
+            var observations = new java.util.concurrent.atomic.AtomicInteger();
+            f.host = (name, args) -> {
+                if (!name.equals("status"))
+                    return CompletableFuture.completedFuture(new ToolOutcome(false, "NO_PATH:wall"));
+                int i = observations.getAndIncrement();
+                var data = JsonParser.parseString("""
+                        {"x":0,"y":64,"z":0,"dimension":"fixture:world","inventory":{"slots":[]},
+                         "spatial_facts":{"dimension":"fixture:world","chunks":{"0,0":"terrain:0"}}}
+                        """).getAsJsonObject();
+                data.getAsJsonObject("spatial_facts").getAsJsonObject("chunks")
+                        .addProperty("0,0", "terrain:" + (i >= 4 ? 1 : 0));
+                for (int slot = 0; slot < 36; slot++) {
+                    var value = new JsonObject();
+                    value.addProperty("slot", slot);
+                    value.addProperty("item", "");
+                    value.addProperty("count", 0);
+                    data.getAsJsonObject("inventory").getAsJsonArray("slots").add(value);
+                }
+                return CompletableFuture.completedFuture(new ToolOutcome(true, "actual state", data));
+            };
+            var result = f.outcome();
+            assertTrue(result.feedback().startsWith("ACTION_LIMIT:"), result.feedback());
+            assertEquals(14, f.calls.size());
+            assertEquals(7, result.data().get("local_failures").getAsInt());
+        }
+    }
+
     @Test void localFailureCanChooseAnAlternativeOnlyAfterFreshCompleteBodyObservation() throws Exception {
         try (var f = new Fixture("""
                 local first=mc.try_call("move_to",{x=1,y=64,z=0})

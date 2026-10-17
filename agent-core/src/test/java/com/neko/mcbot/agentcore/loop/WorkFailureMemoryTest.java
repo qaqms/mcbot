@@ -134,6 +134,21 @@ class WorkFailureMemoryTest {
         assertNull(memory.refusal("move_to", POINT));
     }
 
+    @Test void freshTerrainChangeAllowsTheSameWorkWithoutInventingBodyProgress() {
+        var memory = new WorkFailureMemory();
+        var state = state();
+        state.add("spatial_facts", json("{\"dimension\":\"minecraft:overworld\","
+                + "\"chunks\":{\"0,0\":\"chunk:1\"}}"));
+        observe(memory, state);
+        exhaust(memory);
+        observe(memory, state);
+        assertNotNull(memory.refusal("move_to", POINT));
+        state.add("spatial_facts", json("{\"dimension\":\"minecraft:overworld\","
+                + "\"chunks\":{\"0,0\":\"chunk:2\"}}"));
+        observe(memory, state);
+        assertNull(memory.refusal("move_to", POINT), "same body, actual terrain version changed");
+    }
+
     @Test void successNoopQueriesAndAggregateCountersCannotReplenishAttempts() {
         var memory = new WorkFailureMemory();
         exhaust(memory);

@@ -3,6 +3,17 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## N3 空间事实与路线记录（2026-10-17）
+
+TerrainVersion/只读TerrainSnapshots按区块实例与实际修改提供有界版本；
+SpatialFacts供共用失败账、Lua局部重评及ExplorationRoute/完整分页失效。
+未知/缺失不能证明失败条件改善，覆盖失效不清tried/visited或增加原预算。
+WorksiteProtection统一工位、工作目标及直接地板保护，供搜索/缓存/执行前重验。
+每身体NavigationTrail绑定当前任务/世界，只记录实际接地与实际挖放；
+返程ID仍走原move_to/PathTask的新鲜支撑、原范围及walk_only复核。
+无自动倒放或普通路线必返承诺，无永久建筑实例/跨退出记录。
+完整限制、参考链和离线/原生区分见N3-SPATIAL-FACTS及STATUS。
+
 ## F2 共用掉落事实（2026-10-16）
 
 BlockMining请求与原生destroyBlock匹配区间捕获实际接受的掉落；

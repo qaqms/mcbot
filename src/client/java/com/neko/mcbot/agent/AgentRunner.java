@@ -1347,7 +1347,11 @@ public final class AgentRunner implements ToolExecutor {
         ToolTicket ticket = new ToolTicket(taskId, owner, f, terminalOnly, outcome -> {
             if (!closed && memory != null && memory == workFailures && bodyGeneration == companionGeneration
                     && owner == loop && taskId == currentTask)
+            {
                 memory.terminal(name, recordedArgs, outcome);
+                if (explorationRoute != null && outcome.ok() && name.equals("status"))
+                    explorationRoute.terrainObserved(outcome.data());
+            }
         });
         f.whenComplete((outcome, failure) -> {
             if (failure != null || outcome == null || !outcome.accepted())

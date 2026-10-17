@@ -65,7 +65,9 @@ public final class ServerToolDispatcher {
             }
             @Override public CompletableFuture<ServerTool.Result> run(ServerTool tool, Body body,
                     JsonObject args, ActionPermissions permissions, ActionPermissions.Context context) {
-                return tool.runAuthorized((CompanionPlayer) body.identity(), args, scheduler, permissions, context);
+                var companion = (CompanionPlayer) body.identity();
+                companion.bindSpatialTask(context);
+                return tool.runAuthorized(companion, args, scheduler, permissions, context);
             }
         };
     }

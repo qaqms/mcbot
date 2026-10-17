@@ -50,6 +50,9 @@ public final class McbotMod implements ModInitializer {
     @Override
     public void onInitialize() {
         LOG.info("mcbot initializing; agent-core version={}", AgentCore.VERSION);
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> {
+            if (chunk instanceof com.neko.mcbot.server.TerrainVersion version) version.mcbot$invalidateTerrain();
+        });
 
         PayloadTypeRegistry.playC2S().register(McbotPayloads.C2s.TYPE, McbotPayloads.C2s.CODEC);
         PayloadTypeRegistry.playS2C().register(McbotPayloads.S2c.TYPE, McbotPayloads.S2c.CODEC);

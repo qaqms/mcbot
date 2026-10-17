@@ -10,6 +10,23 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BoundedSearchTest {
+    @Test void terrainMutationMidScanStopsAtTheChangedPageWithoutRestartingTheSearch() {
+        var queue = new ArrayDeque<Runnable>();
+        int[] calls = {0};
+        var search = new BoundedSearch(json("{\"targets\":[\"stone\"]}"), (name, text) -> {
+            int offset = json(text).get("offset").getAsInt();
+            var data = page(offset, false);
+            data.add("spatial_facts", json("{\"dimension\":\"minecraft:overworld\","
+                    + "\"chunks\":{\"0,0\":\"stamp:" + ++calls[0] + "\"}}"));
+            return CompletableFuture.completedFuture(new ToolOutcome(true, "page", data));
+        }, queue::add, () -> 0, () -> {});
+        var result = search.start();
+        while (!queue.isEmpty()) queue.removeFirst().run();
+        assertFalse(result.join().ok());
+        assertTrue(result.join().feedback().startsWith("STATE_CHANGED:"));
+        assertFalse(result.join().data().get("coverage_complete").getAsBoolean());
+        assertEquals(2, calls[0]);
+    }
     static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     static JsonObject page(int offset, boolean found) {
         var data = json("{\"radius\":16,\"samples_planned\":17077,\"unknown\":0,"
