@@ -59,6 +59,8 @@ public final class BlockActionFixtures {
         public String dropRole = "target";
         public BlockPos dropSource = BlockPos.ZERO;
         public Runnable afterCapture = () -> {};
+        public JsonObject nativeEffects;
+        @Override public JsonObject effects() { return nativeEffects; }
         public BlockState state = Blocks.STONE.defaultBlockState();
         public String expectedBlock;
         public ServerTool.Result denied;

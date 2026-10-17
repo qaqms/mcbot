@@ -3,7 +3,15 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## B5 首格式（2026-10-17）
+## B5 双格门续卡（2026-10-17）
+
+普通原版DoorBlock门现在可经同build_blueprint/build_record/build_diff/build_site/build_nearby/
+mc.build施工：必须明确完整两半的half/facing/hinge，其他明确属性要求一致。
+保留两格验收，下半发一次原版动作/消费一件，上半paired_pending不单独施工；两格须空气。
+两格保护/占位/范围/来源共用，拆改须当前实例活来源且依赖解除；异常/取消保留部分效果。
+床/装饰/组件与其他格式仍不支持，B5未整卡完成；详细规则见B5-STRUCTURE-BLUEPRINTS。
+
+## B5 首格式历史检查点（2026-10-17）
 
 新增build_blueprint，当前29项（20服务端+9本地）。list/inspect只读当前世界
 mcbot/blueprints合法名称.nbt，inspect给source_revision、尺寸/格数及非法/不支持/载荷/实体计数。

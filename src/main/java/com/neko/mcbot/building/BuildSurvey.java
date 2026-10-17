@@ -30,7 +30,7 @@ public final class BuildSurvey {
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
-            "blocked", "not_assessed", "out_of_scope");
+            "blocked", "not_assessed", "out_of_scope", "paired_pending");
 
     private static final class Bill {
         final net.minecraft.world.item.Item item;
@@ -60,20 +60,24 @@ public final class BuildSurvey {
         var rows = new ArrayList<Row>();
         var observation = new StringBuilder(target.revision());
         var bills = new TreeMap<String, Bill>();
+        var actuals = new java.util.HashMap<BlockPos, BlockState>();
         boolean observationComplete = true, billComplete = true, budgetExhausted = false;
         for (var cell : target.cells()) {
-            var material = cell.material();
+            boolean inTime = clock.getAsLong() - start < MAX_NANOS;
+            budgetExhausted |= !inTime;
+            actuals.put(cell.pos(), inTime && access.inBounds(cell.pos()) ? access.state(cell.pos()) : null);
+        }
+        for (var cell : target.cells()) {
+            var material = target.material(cell);
             var data = cell.describe();
             data.addProperty("material_rule_supported", material.supported());
             data.addProperty("material_units", material.units());
             Bill bill = material.item() == null ? null : bills.computeIfAbsent(
                     BuiltInRegistries.ITEM.getKey(material.item()).toString(), ignored -> new Bill(material.item()));
             if (bill != null) bill.design += material.units();
-            boolean inBounds = access.inBounds(cell.pos());
-            boolean inTime = clock.getAsLong() - start < MAX_NANOS;
-            BlockState actual = inBounds && inTime ? access.state(cell.pos()) : null;
-            budgetExhausted |= !inTime;
+            BlockState actual = actuals.get(cell.pos());
             boolean matches = cell.matches(actual);
+            boolean objectMatches = BuildObjects.matches(target, cell, actuals::get);
             observation.append('|').append(actual);
             data.addProperty("matches_actual", matches);
             if (actual != null) {
@@ -85,8 +89,17 @@ public final class BuildSurvey {
                 billComplete = false;
                 if (bill != null) bill.unresolved++;
             }
-            if (bill != null && actual != null && !matches) bill.required += material.units();
-            String state = cellState(cell, access, actual);
+            if (bill != null && actual != null && !objectMatches) bill.required += material.units();
+            if (BuildObjects.door(cell.authored())) {
+                var partner = BuildObjects.at(target, BuildObjects.other(cell.pos(), cell.desired()));
+                data.addProperty("placement_primary", !BuildObjects.upper(cell.authored()));
+                if (partner != null) data.add("paired_cell", BuildTarget.coordinates(partner.pos()));
+                if (partner == null || actuals.get(partner.pos()) == null) {
+                    billComplete = false;
+                    if (bill != null) bill.unresolved++;
+                }
+            }
+            String state = cellState(target, cell, access, actual, actuals::get);
             if (!material.supported()) {
                 billComplete = false;
                 data.addProperty("unsupported_reason", material.reason());
@@ -123,7 +136,7 @@ public final class BuildSurvey {
                     break;
                 }
                 checks++;
-                var failure = BlockPlacement.assessDesired(access.placement(), row.cell().pos(), slot, face, row.cell()::matches);
+                var failure = BlockPlacement.assessDesired(access.placement(), row.cell().pos(), slot, face, target, row.cell());
                 if (clock.getAsLong() - start >= MAX_NANOS) {
                     budgetExhausted = true;
                     break;
@@ -229,6 +242,26 @@ public final class BuildSurvey {
         if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";
         if (!access.near(cell.pos())) return "out_of_reach";
         return "not_assessed";
+    }
+
+    public static String cellState(BuildTarget target, BuildTarget.Cell cell, Access access, BlockState actual) {
+        return cellState(target, cell, access, actual, access::state);
+    }
+
+    private static String cellState(BuildTarget target, BuildTarget.Cell cell, Access access, BlockState actual,
+                                    java.util.function.Function<BlockPos, BlockState> states) {
+        if (!target.material(cell).supported()) return "unsupported";
+        if (!BuildObjects.door(cell.authored())) return cellState(cell, access, actual);
+        var partner = BuildObjects.at(target, BuildObjects.other(cell.pos(), cell.desired()));
+        if (!access.inBounds(cell.pos()) || !access.inBounds(partner.pos())) return "out_of_scope";
+        var other = states.apply(partner.pos());
+        if (actual == null || other == null) return "unknown";
+        if (BuildObjects.matches(target, cell, states)) return "satisfied";
+        if (access.protectedCell(cell.pos()) || access.protectedCell(partner.pos())) return "protected";
+        if (!actual.isAir() || !other.isAir())
+            return access.clearable(cell) ? "needs_clear" : "state_conflict";
+        if (BuildObjects.upper(cell.authored())) return "paired_pending";
+        return access.near(cell.pos()) ? "not_assessed" : "out_of_reach";
     }
 
     private static String classify(ServerTool.Result failure) {

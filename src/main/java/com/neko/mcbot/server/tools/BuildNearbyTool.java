@@ -63,7 +63,8 @@ public final class BuildNearbyTool implements ServerTool {
             }
             @Override public boolean reserve(BuildTarget.Cell cell) {
                 var p = cell.pos();
-                return (body.buildSite().same(input.target().revision()) || body.workTargets().canAdd(p))
+                return (body.buildSite().same(input.target().revision()) || body.workTargets().canAdd(
+                        com.neko.mcbot.building.BuildObjects.footprint(p,cell.desired())))
                         && scheduler.reserve(body.getUUID(), java.util.List.of(new ResourceLocks.Region(
                         context.dimension(), p.getX() - 1, p.getY() - 1, p.getZ() - 1,
                         p.getX() + 1, p.getY() + 1, p.getZ() + 1)));
@@ -71,7 +72,8 @@ public final class BuildNearbyTool implements ServerTool {
             @Override public void recorded(BuildTarget.Cell cell, Result result) {
                 if (result.data() != null && result.data().has("changed")
                         && result.data().get("changed").getAsBoolean()
-                        && !body.buildSite().same(input.target().revision())) body.workTargets().add(cell.pos());
+                        && !body.buildSite().same(input.target().revision()))
+                    com.neko.mcbot.building.BuildObjects.footprint(cell.pos(),cell.desired()).forEach(body.workTargets()::add);
             }
         }, input.offset(), input.maxActions(), System::nanoTime);
         var future = new CompletableFuture<Result>();

@@ -225,6 +225,29 @@ class AgentRunnerProgramTest {
         runner.submitTask("inspect current world"); client.drain();
         assertFalse(outcome().ok()); assertEquals(5,client.toolCount());
     }
+    @Test void bundledConstructionKeepsDoorSecondaryRequirementsWithoutIssuingASecondPlacementOrBudget() {
+        start("build the selected door", """
+                local t={anchor={x=4,y=90,z=0},cells={
+                  {x=0,y=0,z=0,block="oak_door",properties={{name="half",value="lower"},{name="facing",value="north"},{name="hinge",value="left"}}},
+                  {x=0,y=1,z=0,block="oak_door",properties={{name="half",value="upper"},{name="facing",value="north"},{name="hinge",value="left"}}}}}
+                return mc.build(t,{access_route={{x=0,y=90,z=0},{x=1,y=90,z=0}},max_actions=1,max_rounds=1})
+                """,6);
+        tool("build_site",1); receipt(true,"frozen pair",siteFacts());
+        tool("status",2); receipt(true,"fresh body","{}");
+        var diff=JsonParser.parseString(siteDiff("ready",false)).getAsJsonObject();
+        var primary=diff.getAsJsonArray("cells").get(0).getAsJsonObject(); primary.addProperty("item","minecraft:oak_door");
+        var secondary=primary.deepCopy(); secondary.addProperty("y",91); secondary.addProperty("state","paired_pending");
+        diff.getAsJsonArray("cells").add(secondary);
+        tool("build_diff",3); receipt(true,"both cells",diff.toString());
+        tool("build_site",4); receipt(true,"same account",siteFacts());
+        tool("build_nearby",5);
+        assertEquals(2,client.lastTool().body().getAsJsonObject("args").getAsJsonObject("target").getAsJsonArray("cells").size());
+        long seq=client.lastTool().num("seq",-1); ack("pair");
+        terminal(seq,"pair","{\"placed_blocks\":1,\"consumed_count\":1,\"goal_satisfied\":false}");
+        tool("build_diff",6); receipt(true,"independent both-cell verification",siteDiff("satisfied",true));
+        assertTrue(outcome().ok()); assertEquals(6,client.toolCount());
+        assertTrue(outcome().content().contains("\"outer_goal_verified\":false"));
+    }
     @Test void readOnlyTaskCannotRegisterAWorksiteThroughTheLuaHelper() {
         start("[只读] inspect selected worksite",SITE_BUILD,20);
         assertFalse(outcome().ok());

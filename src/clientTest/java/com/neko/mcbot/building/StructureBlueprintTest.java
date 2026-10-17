@@ -246,6 +246,48 @@ class StructureBlueprintTest {
                 instance.target().cells().getFirst()::matches).ok());
         assertEquals(1,inventory.getItem(0).getCount());
     }
+    static CompoundTag doorFixture() {
+        var root=fixture(); root.put("size",vector(1,2,1));
+        var palette=new ListTag();
+        for (String half:List.of("lower","upper")) {
+            var entry=palette("minecraft:oak_door"); var properties=new CompoundTag();
+            properties.putString("half",half); properties.putString("facing","north"); properties.putString("hinge","left");
+            entry.put("Properties",properties); palette.add(entry);
+        }
+        root.put("palette",palette); var blocks=new ListTag();
+        blocks.add(block(0,0,0,0)); blocks.add(block(0,1,0,1)); root.put("blocks",blocks); return root;
+    }
+    @Test void doorBlueprintKeepsBothRequirementsAndChargesOneMaterialThroughTheSameB4Target() throws Exception {
+        write("door",doorFixture()); var inspection=source().inspect("door");
+        assertTrue(inspection.importable(),inspection.report().toString()); assertEquals(2,inspection.target().cells().size());
+        assertEquals(1,inspection.report().getAsJsonArray("materials").get(0).getAsJsonObject().get("design_required").getAsInt());
+        var records=records(); var owner=UUID.randomUUID();
+        assertTrue(BuildBlueprintTool.execute(source(),records,owner,json("""
+                {"operation":"import","name":"door","source_revision":"%s","design_id":"door"}
+                """.formatted(inspection.sourceRevision()))).ok());
+        var instance=records.createInstance(owner,UUID.randomUUID(),"world","door",1,BuildSiteTest.TARGET,90);
+        assertEquals(2,instance.target().cells().size());
+        assertEquals("",BuildObjects.problem(instance.target(),instance.target().cells().getFirst()));
+        var restored=new BuildRecords(worldRoot); restored.load(); assertTrue(restored.healthy());
+    }
+    @Test void incompleteConflictingOrPayloadDoorBlueprintCannotImportASanitizedOrExpandedDesign() throws Exception {
+        for (String kind:List.of("missing","conflict","payload")) {
+            var root=doorFixture();
+            switch (kind) {
+                case "missing" -> root.getListOrEmpty("blocks").remove(1);
+                case "conflict" -> root.getListOrEmpty("palette").getCompoundOrEmpty(1)
+                        .getCompoundOrEmpty("Properties").putString("facing","east");
+                default -> root.getListOrEmpty("blocks").getCompoundOrEmpty(1).put("nbt",new CompoundTag());
+            }
+            write(kind,root); var inspected=source().inspect(kind); assertFalse(inspected.importable(),kind);
+            assertEquals(kind.equals("missing") ? 1 : 2,inspected.report().get("cells").getAsInt());
+            assertEquals(kind.equals("payload") ? 1 : 0,inspected.report().get("payload_cells").getAsInt());
+            assertFalse(BuildBlueprintTool.execute(source(),records(),UUID.randomUUID(),json("""
+                    {"operation":"import","name":"%s","source_revision":"%s","design_id":"bad"}
+                    """.formatted(kind,inspected.sourceRevision()))).ok());
+        }
+        assertFalse(Files.exists(worldRoot.resolve("mcbot/buildings.json")));
+    }
     @Test void listingIsPagedAndArgumentModesCannotFallBackToImport() throws Exception {
         for (int index=0;index<20;index++) write("n"+index,fixture());
         assertEquals(16,source().list(0).getAsJsonArray("names").size());

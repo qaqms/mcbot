@@ -24,6 +24,12 @@ public final class WorkTargets {
     public boolean canAdd(BlockPos target) {
         return task == null || cells.size() < LIMIT || cells.contains(target);
     }
+    public boolean canAdd(java.util.Collection<BlockPos> targets) {
+        if (task == null) return true;
+        var combined = new HashSet<>(cells);
+        combined.addAll(targets);
+        return combined.size() <= LIMIT;
+    }
 
     public boolean protects(BlockPos cell) {
         return cells.contains(cell) || cells.contains(cell.above());

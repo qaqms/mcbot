@@ -59,7 +59,8 @@ public final class ToolCatalog {
                     + "多站位用run_program的mc.build(target,{access_route=...})，临时工程及回收规则先tool_help。"
                     + "query只读；登记不授予许可，不自动找料，不保证全局返程，取消不自动恢复。";
             case "build_diff" -> "只读建筑格集或fill线/面/体差异与材料；最多128格，锚点/旋转/作者属性固定，未指定格不动。"
-                    + "明细及料单独立分页；未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
+                    + "明细及料单独立分页；双格门保留两半验收，仅下半动作/一件料。"
+                    + "未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
             case "move_to" -> "规划有界行走/挖穿/搭路；walk_only=true不挖放，exact=true指定脚格，"
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
                     + "拾取须用新鲜stand_positions和exact=true；默认相邻到达不保证触碰。"

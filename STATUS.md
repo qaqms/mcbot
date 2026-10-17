@@ -3,6 +3,45 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## B5 普通双格门续卡验收（2026-10-17 12:39，Asia/Shanghai）
+
+- 当前十三张完整离线卡，B5首格式及一类复杂对象完成、床/装饰/组件仍未关账，另8卡未开。
+  本轮先独立收B5续卡，再接D3，不启第三卡；提交推送以Git为准。
+  参考全链/与参考过滤次半及直写状态的差异见docs/B5-STRUCTURE-BLUEPRINTS-2026-10-17.md。
+- BuildObjects统一普通原版精确DoorBlock的两格配对与原生占位；两半明确half/facing/hinge，
+  同种/相邻且其余作者要求一致，两格均保留目标与独立验收，下半一次原动作/一件材料。
+  缺半/矛盾为unsupported，不自动扩图；上半跨页不派发，部分满足仍报价一件而不假完成。
+  原build_diff/instance/工地/Lua、单放/工作导航及原BlockPlacement/BlockMining同源；
+  无新工具、仍29项，未增加成品链、依赖规划器或补原预算/范围/探索/许可。
+- 两格空气/加载/边界/交互/身体与实体占位、原保护/控制/区域租约均先核，原版选择朝向/
+  合页/支撑和实际消费；不覆盖上半草，不直写状态，不支持临时双格工程。
+  一次尝试共原工地/Lua动作账、预留两条真实变化记录；主格记消费、次格记0，原空气且
+  实际匹配的生成格才有来源。原生异常/取消/写盘失败保留部分效果，整目标另行新鲜扫描。
+  退役门两格显式air，拆改须同实例/修订、两格活来源、真实材料/工具、无外部替换/依赖/
+  通道/未知；缺半可显式清剩余来源格，已满足成品不拆，重载不恢复拆除权。
+  原挖掘finally记录实际两格变化，native_effects贯通普通/异常/取消回执，F2入包语义保持。
+- before1新测试误用JsonArray.getFirst，编译13秒失败；修夹具后before2按预期缺双格支持
+  1失败22秒。compile1变量重名15秒失败，修正后focused1通过30秒；focused2
+  两个循环场景共享临时存档导致design_exists_or_limit，隔离夹具后focused3/4通过31/26秒。
+  final1全量44秒发现破坏异常被提前转回执、破坏旧中断契约；恢复原异常路径后final2
+  40秒暴露新增中断效果投影断言失败。补齐refreshDrops的原生效果，保留旧异常断言，
+  中断/门专项16秒通过，final3全量41秒通过；同步工具帮助后最终强制全量：
+  build/b5-door-final4-20261017.log第61–62行，**45秒/20任务全部执行**。
+- XML **1456项/163 suites**（核心347/40、根137/20、客户端972/103），
+  failures/errors/skipped全0，较首格式新增23项/1类。真实gzip/NBT/临时存档、
+  生产目标/料单/旋转/放置核/独立扫描、Lua/runner及原中断路径参与；
+  世界/身体/原生动作回调与网络/模型仍受控，不冒充原生门施工/拆改/重进验收。
+- build/libs/mcbot-0.1.0.jar **1,553,356 bytes**，末写12:38:02，SHA256
+  `a5bae680d462d601a8ca3d99bc2e2a29e08552377b075f662a43ceb5a86e57de`。
+  已核BuildObjects/原挖放类、内嵌agent-core/LuaJ与许可；list-java无输出，
+  原测试日志目录仍不存在，无新实机证据。只改本体，不安装/启动游戏/服务器/真实模型，
+  宿主/连接器/参考/玩家实例保持，未改无敌或玩家配置。
+- 本轮javap确认DoubleHighBlockItem.placeBlock先处理上格，再走父类真实放置；
+  DoorBlock.getStateForPlacement查上格/朝向/信号/合页，setPlacedBy写上半；
+  updateShape会联动另一半，canSurvive下半读脚下sturdy面，上半读下半。
+  UseOnContext.getClickedFace/getItemInHand为public。仍须原生放置钩子/邻居更新/
+  真实碰撞、掉落归因与保存重进补证；编译与离线受控世界不代替实机。
+
 ## B5 首格式导入验收，复杂对象扩展未关账（2026-10-17 12:08，Asia/Shanghai）
 
 - 本轮B4→B5按序推进，B4已独立提交推送0cde9be；B5本轮收原版gzip结构.nbt首阶段，

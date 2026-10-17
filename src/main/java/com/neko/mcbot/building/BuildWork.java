@@ -98,7 +98,7 @@ public final class BuildWork extends TickTask {
             if (invalid != null) return done(invalid, false);
             var fresh = access.survey();
             var actual = fresh.inBounds(pos) ? fresh.state(pos) : null;
-            String state = BuildSurvey.cellState(cell, fresh, actual);
+            String state = BuildSurvey.cellState(target, cell, fresh, actual);
             if ("satisfied".equals(state)) return running();
             if (!"not_assessed".equals(state)) {
                 failure = new ServerTool.Result(false, "TARGET_BLOCKED:执行前目标条件变化：" + state + "；未放置。", null);
@@ -110,7 +110,7 @@ public final class BuildWork extends TickTask {
             attempts++;
             attempted.add(pos);
             var result = BlockPlacement.placeDesired(fresh.placement(), pos, slot,
-                    Direction.byName(ready.get("face").getAsString()), cell::matches);
+                    Direction.byName(ready.get("face").getAsString()), target, cell);
             var row = cell.describe();
             row.addProperty("ok", result.ok());
             if (result.data() != null) {

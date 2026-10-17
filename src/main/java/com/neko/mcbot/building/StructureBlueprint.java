@@ -146,14 +146,15 @@ public final class StructureBlueprint {
             }
             var cell=entries.get(paletteIndex).deepCopy();
             cell.addProperty("x",pos.getX()); cell.addProperty("y",pos.getY()); cell.addProperty("z",pos.getZ());
-            var resolved=BuildRecords.definition(definition(cell)).cells().getFirst();
-            if (!resolved.material().supported()) {
-                unsupported++; diagnostic(diagnostics,pos,resolved.material().reason());
-            }
             cells.add(cell);
         }
         BuildTarget target=null;
         if (!cells.isEmpty()) { var definition=new JsonObject(); definition.add("cells",cells); target=BuildRecords.definition(definition); }
+        if (target!=null) for (var cell:target.cells()) {
+            check(started);
+            var material=target.material(cell);
+            if (!material.supported()) { unsupported++; diagnostic(diagnostics,cell.pos(),material.reason()); }
+        }
         String revision;
         try { revision=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
         catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }

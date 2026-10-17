@@ -3,6 +3,8 @@ package com.neko.mcbot.server;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.building.BuildObjects;
+import com.neko.mcbot.building.BuildTarget;
 import com.neko.mcbot.path.DigAStar;
 import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
@@ -44,6 +46,11 @@ public final class BlockPlacement {
         InteractionResult place(BlockPos pos, ItemStack stack, Direction face);
         default ServerTool.Result beforePlace() { return null; }
         default void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) { }
+        default void recordedObject(BlockPos primary, java.util.Map<BlockPos, BlockState> before,
+                                    java.util.Map<BlockPos, BlockState> after, int consumed) {
+            recorded(primary, before.get(primary), after.get(primary), consumed);
+        }
+        default ServerTool.Result secondaryCell(BlockPos pos, BlockState proposed) { return null; }
         default boolean recordingKnown() { return true; }
     }
 
@@ -94,6 +101,21 @@ public final class BlockPlacement {
         return new ServerTool.Result(false, "TARGET_BLOCKED:原版预检选出的状态不能确认满足目标要求，未放置或改写状态。", data);
     }
 
+    public static ServerTool.Result assessDesired(Access access, BlockPos pos, int slot, Direction face,
+                                                  BuildTarget target, BuildTarget.Cell cell) {
+        var failure = assessDesired(access, pos, slot, face, cell::matches);
+        return failure != null ? failure : desiredObject(access, target, cell);
+    }
+
+    private static ServerTool.Result desiredObject(Access access, BuildTarget target, BuildTarget.Cell cell) {
+        if (!BuildObjects.door(cell.authored())) return null;
+        var other = BuildObjects.at(target, cell.pos().above());
+        if (!BuildObjects.problem(target, cell).isEmpty() || BuildObjects.upper(cell.authored())
+                || other == null || !other.matches(BuildObjects.upperState(access.proposedState())))
+            return failed("DENIED:双格门须明确两半的相同状态要求，且只从下半执行原版放置。", false, 0);
+        return null;
+    }
+
     public static ServerTool.Result assessAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
                                              Vec3 eye, AABB body, TerrainEdits edits) {
         return assessAt(player, pos, slot, face, eye, body, edits, null);
@@ -138,14 +160,27 @@ public final class BlockPlacement {
 
     public static ServerTool.Result placeDesired(Access access, BlockPos pos, int slot, Direction face,
                                                   java.util.function.Predicate<BlockState> matches) {
+        return placeDesired(access, pos, slot, face, matches, null, null);
+    }
+    public static ServerTool.Result placeDesired(Access access, BlockPos pos, int slot, Direction face,
+                                                  BuildTarget target, BuildTarget.Cell cell) {
+        return placeDesired(access, pos, slot, face, cell::matches, target, cell);
+    }
+    private static ServerTool.Result placeDesired(Access access, BlockPos pos, int slot, Direction face,
+                                                  java.util.function.Predicate<BlockState> matches,
+                                                  BuildTarget target, BuildTarget.Cell selected) {
         ServerTool.Result failure = matches == null ? preflight(access, pos, slot, face)
                 : assessDesired(access, pos, slot, face, matches);
         if (failure != null) return failure;
+        if (target != null && (failure = desiredObject(access, target, selected)) != null) return failure;
         Container inventory = access.inventory();
         ItemStack stack = inventory.getItem(slot);
         if (matches != null && !ItemStack.isSameItemSameComponents(stack, new ItemStack(stack.getItem())))
             return failed("NO_ITEM:建筑材料组件已变化，未使用非默认组件物品。", false, 0);
         BlockState before = access.state(pos);
+        var footprint = BuildObjects.footprint(pos, access.proposedState());
+        var objectBefore = new java.util.LinkedHashMap<BlockPos, BlockState>();
+        footprint.forEach(p -> objectBefore.put(p, access.state(p)));
         var neighborhood = new java.util.LinkedHashMap<BlockPos, BlockState>();
         for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1)))
             neighborhood.put(near.immutable(), access.state(near));
@@ -163,7 +198,9 @@ public final class BlockPlacement {
         }
         BlockState after = access.state(pos);
         int consumed = Math.max(0, count - stack.getCount());
-        access.recorded(pos, before, after, consumed);
+        var objectAfter = new java.util.LinkedHashMap<BlockPos, BlockState>();
+        footprint.forEach(p -> objectAfter.put(p, access.state(p)));
+        access.recordedObject(pos, objectBefore, objectAfter, consumed);
         boolean changed = before != after;
         inventory.setChanged();
         JsonObject data = new JsonObject();
@@ -200,6 +237,13 @@ public final class BlockPlacement {
         data.addProperty("z", pos.getZ());
         if (contact != null) data.add("placement_contact", contact.deepCopy());
         boolean matched = after != null && (matches == null || matches.test(after));
+        if (footprint.size() == 2) {
+            matched &= BuildObjects.door(after) && !BuildObjects.upper(after)
+                    && objectAfter.get(pos.above()) == BuildObjects.upperState(after);
+            if (target != null) matched &= BuildObjects.matches(target, selected, objectAfter::get);
+            data.addProperty("object_cells", 2);
+            data.addProperty("object_satisfied", matched);
+        }
         data.addProperty("desired_satisfied", matched);
         if (threw || !result.consumesAction() || !changed || after == null || after.isAir() || consumed != 1 || !matched)
             return new ServerTool.Result(false, (threw ? "INTERNAL:" : "PLACE_FAILED:")
@@ -240,6 +284,11 @@ public final class BlockPlacement {
         }
         failure = access.sight(pos, face);
         if (failure == null) failure = access.prepare(pos, stack, face);
+        if (failure == null && BuildObjects.door(access.proposedState())) {
+            if (!ItemStack.isSameItemSameComponents(stack, new ItemStack(stack.getItem())))
+                return failed("DENIED:双格门只支持默认组件的真实材料。", false, 0);
+            failure = doorGuard(access, pos, access.proposedState());
+        }
         if (failure != null) {
             var data = failure.data() == null ? new JsonObject() : failure.data().deepCopy();
             data.addProperty("changed", false);
@@ -247,6 +296,18 @@ public final class BlockPlacement {
             return new ServerTool.Result(false, failure.feedback(), data);
         }
         return null;
+    }
+
+    /** Both the native temporary upper write and the final upper callback must be authorized before either runs. */
+    private static ServerTool.Result doorGuard(Access access, BlockPos pos, BlockState proposed) {
+        if (BuildObjects.upper(proposed)) return failed("DENIED:不直接放置门上半格。", false, 0);
+        var other = pos.above();
+        var failure = access.guard(other);
+        if (failure != null) return failure;
+        var actual = access.state(other);
+        if (actual == null) return failed("TARGET_LOST:门上半格未知，未放置。", false, 0);
+        if (!actual.isAir()) return failed("TARGET_BLOCKED:门上半格须为真实空气，不覆盖已有或可替换方块。", false, 0);
+        return access.secondaryCell(other, BuildObjects.upperState(proposed));
     }
 
     /** Bounded alternatives are observations, never an instruction to replace the requested cell. */
@@ -502,11 +563,30 @@ public final class BlockPlacement {
             };
         }
         @Override public JsonObject contact() { return contact; }
+        @Override public ServerTool.Result secondaryCell(BlockPos pos, BlockState proposed) {
+            if (!player.mayUseItemAt(pos,context.getClickedFace(),context.getItemInHand()))
+                return failed("DENIED:物品或玩家规则不允许门上半格的改动。",false,0);
+            var failure = player.buildSite().placementGuard(pos, proposed, new BuildSiteAccess(player));
+            if (failure != null) return failure;
+            var shape = proposed.getCollisionShape(player.level(), pos, CollisionContext.of(player))
+                    .move(pos.getX(), pos.getY(), pos.getZ());
+            if (shape.toAabbs().stream().anyMatch(box -> box.intersects(bounds))
+                    || !player.level().isUnobstructed(player, shape))
+                return failed("TARGET_BLOCKED:门上半格有身体或实体占位，未执行双格放置。", false, 0);
+            return null;
+        }
         @Override public ServerTool.Result beforePlace() {
             var failure=BuildRecordAccess.guard(player,context.getClickedPos(),false,null);
             if (failure==null) failure=player.buildSite().placementGuard(context.getClickedPos(),proposedState,
                     new BuildSiteAccess(player),temporaryPurpose!=null);
+            if (failure==null && BuildObjects.door(proposedState))
+                failure=doorGuard(this,context.getClickedPos(),proposedState);
             return failure!=null ? failure : player.buildSite().charge();
+        }
+        @Override public void recordedObject(BlockPos primary, java.util.Map<BlockPos, BlockState> before,
+                                              java.util.Map<BlockPos, BlockState> after, int consumed) {
+            if (before.size() == 1) { recorded(primary,before.get(primary),after.get(primary),consumed); return; }
+            player.buildSite().recordObjectPlacement(primary,before,after,consumed,new BuildSiteAccess(player));
         }
         @Override public void recorded(BlockPos pos, BlockState before, BlockState after, int consumed) {
             player.buildSite().recordPlacement(pos,before,after,consumed,new BuildSiteAccess(player));
@@ -570,7 +650,8 @@ public final class BlockPlacement {
                 || block instanceof net.minecraft.world.level.block.SlabBlock
                 || block instanceof net.minecraft.world.level.block.StairBlock
                 || block instanceof net.minecraft.world.level.block.CraftingTableBlock
-                || block instanceof net.minecraft.world.level.block.AbstractFurnaceBlock;
+                || block instanceof net.minecraft.world.level.block.AbstractFurnaceBlock
+                || BuildObjects.door(block.defaultBlockState());
     }
 
 }

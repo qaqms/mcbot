@@ -69,10 +69,15 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
             return data;
         }
 
-        /** This rule is deliberately restricted to the same single-cell native placement families as navigation. */
+        /** The native footprint owns material cost; a door's upper requirement never issues another placement. */
         public Material material() {
             if (authored.isAir()) return new Material(null, 0, true, "");
             Item item = authored.getBlock().asItem();
+            if (BuildObjects.door(authored)) {
+                if (!properties.containsAll(Set.of("half", "facing", "hinge")))
+                    return new Material(item, 0, false, "door_requires_explicit_half_facing_hinge");
+                return new Material(item, BuildObjects.upper(authored) ? 0 : 1, true, "");
+            }
             if (!(item instanceof BlockItem blockItem) || blockItem.getBlock() != authored.getBlock()
                     || !BlockPlacement.supported(blockItem)
                     || !BlockPlacement.projectable(blockItem, new ItemStack(item)))
@@ -103,6 +108,12 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
     public BuildTarget {
         anchor = anchor.immutable();
         cells = List.copyOf(cells);
+    }
+
+    public Material material(Cell cell) {
+        var material = cell.material();
+        String problem = BuildObjects.problem(this, cell);
+        return problem.isEmpty() ? material : new Material(material.item(), material.units(), false, problem);
     }
 
     public JsonObject input() {

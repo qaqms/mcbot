@@ -30,6 +30,7 @@ public final class BlockMining {
         boolean destroy();
         default ServerTool.Result beforeDestroy() { return null; }
         default boolean recordingKnown() { return true; }
+        default JsonObject effects() { return null; }
         void crack(int stage);
     }
 
@@ -111,6 +112,7 @@ public final class BlockMining {
         if (destructionStarted) {
             var data = new JsonObject();
             data.addProperty("removal_known", false);
+            data.addProperty("recording_known", access.recordingKnown());
             addDropReport(data);
             return finish(new ServerTool.Result(false,
                     "TOOL_EXCEPTION:原破坏调用已发出，结果不完整，未重试；先核对现场。", data));
@@ -167,6 +169,7 @@ public final class BlockMining {
         if (!destructionStarted) return result;
         var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         addDropReport(data);
+        addEffects(data);
         var observations = new DropObservations();
         observations.record(data);
         // Counters at removal are historical; the appended observation is the terminal state.
@@ -188,7 +191,21 @@ public final class BlockMining {
     private ServerTool.Result finish(ServerTool.Result result) {
         clearCrack();
         terminal = result.data() == null ? failure(result.feedback()) : result;
+        if (destructionStarted) {
+            var data = terminal.data().deepCopy();
+            addEffects(data);
+            terminal = new ServerTool.Result(terminal.ok(),terminal.feedback(),data);
+        }
         return terminal;
+    }
+    private void addEffects(JsonObject data) {
+        if (!destructionStarted) return;
+        data.addProperty("recording_known",access.recordingKnown());
+        var effects=access.effects();
+        if (effects!=null) {
+            data.add("native_effects",effects.deepCopy());
+            data.addProperty("changed",effects.get("changed").getAsBoolean());
+        }
     }
 
     private void clearCrack() {
@@ -215,6 +232,7 @@ public final class BlockMining {
         private final String siteRevision;
         private final boolean cleanup;
         private BlockAim.Aim aim;
+        private JsonObject effects;
 
         private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock, String role,
                              String siteRevision, boolean cleanup) {
@@ -239,6 +257,29 @@ public final class BlockMining {
             if (recordFailure!=null) return recordFailure;
             var siteFailure = player.buildSite().miningGuard(pos, siteRevision, cleanup, new BuildSiteAccess(player));
             if (siteFailure != null) return siteFailure;
+            if (com.neko.mcbot.building.BuildObjects.door(state())) {
+                var other=com.neko.mcbot.building.BuildObjects.other(pos,state());
+                if (!level.isLoaded(other) || !level.isInWorldBounds(other)
+                        || !level.getWorldBorder().isWithinBounds(other) || !level.mayInteract(player,other))
+                    return failure("DENIED:门另一半未知或不允许交互，未破坏任一半。");
+                var otherFailure=BuildRecordAccess.guard(player,other,true,siteRevision);
+                if (otherFailure!=null) return otherFailure;
+                var otherState=level.getBlockState(other);
+                if (!otherState.isAir()) {
+                    if (!MiningEnvironment.safe(MiningEnvironment.world(level),other))
+                        return failure("ENVIRONMENT_UNSAFE:门另一半邻域有流体、重力方块或未知，未破坏任一半。");
+                    otherFailure=player.buildSite().miningGuard(other,siteRevision,cleanup,new BuildSiteAccess(player));
+                    if (otherFailure!=null) return otherFailure;
+                }
+                if (!otherState.isAir() && (!com.neko.mcbot.building.BuildObjects.door(otherState)
+                        || otherState.getBlock()!=state().getBlock()
+                        || com.neko.mcbot.building.BuildObjects.upper(otherState)
+                        ==com.neko.mcbot.building.BuildObjects.upper(state())
+                        || otherState.getDestroySpeed(level,other)<0 || !player.hasCorrectToolForDrops(otherState)
+                        || player.blockActionRestricted(level,other,player.gameMode.getGameModeForPlayer())
+                        || !player.getMainHandItem().canDestroyBlock(otherState,level,other,player)))
+                    return failure("DENIED:门另一半已变更或工具不能处理，未破坏。");
+            }
             for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
                 if (!level.isInWorldBounds(near) || !level.isLoaded(near)) {
                     return failure("TARGET_LOST:挖掘邻域未加载或超出世界范围，换目标或先靠近。");
@@ -280,15 +321,29 @@ public final class BlockMining {
         @Override public HandSnapshot.Pickups handPickups() { return player.handPickups(); }
         @Override public boolean destroy() {
             var before=state();
+            var footprint=com.neko.mcbot.building.BuildObjects.footprint(pos,before);
+            var previous=new java.util.LinkedHashMap<BlockPos,BlockState>();
+            footprint.forEach(p -> previous.put(p,level.getBlockState(p)));
             try { return DropTracker.destroy(dropRequest, () -> player.gameMode.destroyBlock(pos)); }
             finally {
-                player.buildSite().recordRemoval(pos,before,state());
+                var after=new java.util.LinkedHashMap<BlockPos,BlockState>();
+                footprint.forEach(p -> after.put(p,level.getBlockState(p)));
+                if (footprint.size()==1) player.buildSite().recordRemoval(pos,before,state());
+                else player.buildSite().recordObjectRemoval(previous,after);
+                effects=new JsonObject(); var cells=new com.google.gson.JsonArray();
+                for (var p:footprint) if (previous.get(p)!=after.get(p)) {
+                    var row=com.neko.mcbot.building.BuildTarget.coordinates(p);
+                    row.add("before",com.neko.mcbot.building.BuildTarget.exactState(previous.get(p)));
+                    row.add("after",com.neko.mcbot.building.BuildTarget.exactState(after.get(p))); cells.add(row);
+                }
+                effects.add("cells",cells); effects.addProperty("changed",!cells.isEmpty());
+                effects.addProperty("scope","native_object_footprint_not_global");
                 if (cleanup && state().isAir()) player.buildSite().removedTemporary(pos);
             }
         }
+        @Override public JsonObject effects() { return effects; }
         @Override public ServerTool.Result beforeDestroy() {
-            var failure=BuildRecordAccess.guard(player,pos,true,siteRevision);
-            if (failure==null) failure=player.buildSite().miningGuard(pos,siteRevision,cleanup,new BuildSiteAccess(player));
+            var failure=guard(6.5);
             return failure!=null ? failure : player.buildSite().charge();
         }
         @Override public boolean recordingKnown() {

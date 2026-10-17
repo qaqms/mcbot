@@ -223,6 +223,40 @@ public final class BuildRecords {
                 && (instance.placed.containsKey(pos) || instance.placed.size()<BuildTarget.LIMIT)
                 && serializedBytes < FILE_LIMIT-8192;
     }
+    public boolean hasCapacity(Instance instance, Collection<BlockPos> positions) {
+        var combined = new HashSet<>(instance.placed.keySet());
+        combined.addAll(positions);
+        return healthy && instance.actions.size() + positions.size() <= ACTION_LIMIT
+                && combined.size() <= BuildTarget.LIMIT && serializedBytes < FILE_LIMIT - 8192;
+    }
+    public void placedObject(Instance instance, BlockPos primary, Map<BlockPos, BlockState> before,
+                             Map<BlockPos, BlockState> after, int consumed, BuildSite.Access access) {
+        boolean changed=false;
+        for (var pos : before.keySet()) {
+            var previous = before.get(pos); var actual = after.get(pos);
+            if (previous == null || actual == null || previous == actual) continue;
+            changed=true;
+            action(instance,pos,"place",previous,actual,pos.equals(primary) ? consumed : 0);
+            // One consumed item can own both native cells, but never an existing or substituted block.
+            var expected = BuildObjects.at(instance.target,pos);
+            if (consumed == 1 && previous.isAir() && !actual.isAir()
+                    && expected != null && expected.matches(actual))
+                instance.placed.put(pos.immutable(),new Placed(pos,actual,access.chunk(pos),access.watch(pos)));
+        }
+        if (changed) persistEffect();
+    }
+    public void removedObject(Instance instance, Map<BlockPos, BlockState> before, Map<BlockPos, BlockState> after) {
+        boolean changed=false;
+        for (var pos : before.keySet()) {
+            var previous = before.get(pos); var actual = after.get(pos);
+            if (previous == null || actual == null || previous == actual) continue;
+            changed=true;
+            action(instance,pos,"break",previous,actual,0);
+            var record = instance.placed.get(pos);
+            if (record != null && record.witness != null) record.witness.invalidate();
+        }
+        if (changed) persistEffect();
+    }
     public void placed(Instance instance, BlockPos pos, BlockState before, BlockState after,
                        int consumed, BuildSite.Access access) {
         if (before==null || after==null || before==after) return;

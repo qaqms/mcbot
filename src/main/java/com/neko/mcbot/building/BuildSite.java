@@ -69,6 +69,17 @@ public final class BuildSite {
     public void recordRemoval(BlockPos pos, BlockState before, BlockState after) {
         if (instance!=null && cell(pos)!=null) records.removed(instance,pos,before,after);
     }
+    public void recordObjectPlacement(BlockPos primary, Map<BlockPos,BlockState> before,
+                                       Map<BlockPos,BlockState> after, int consumed, Access access) {
+        if (instance!=null && cell(primary)!=null) records.placedObject(instance,primary,before,after,consumed,access);
+    }
+    public void recordObjectRemoval(Map<BlockPos,BlockState> before, Map<BlockPos,BlockState> after) {
+        if (instance!=null) {
+            var selected=new LinkedHashMap<BlockPos,BlockState>();
+            before.forEach((pos,state) -> { if (cell(pos)!=null) selected.put(pos,state); });
+            if (!selected.isEmpty()) records.removedObject(instance,selected,after);
+        }
+    }
 
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet, Access access) {
         return begin(next, accessRoute, feet, active() ? scope
@@ -77,6 +88,8 @@ public final class BuildSite {
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet,
                                    com.neko.mcbot.path.PathSpec selectedScope, Access access) {
         if (task == null || stopped) return failed("DENIED:没有有效施工任务或工地已停止。");
+        if (next.cells().stream().anyMatch(c -> !BuildObjects.problem(next,c).isEmpty()))
+            return failed("DENIED:双格门须明确完整且一致的两半目标，不登记缺半或冲突工地。");
         if (target != null) {
             if (!same(next.revision()) || !route.equals(accessRoute) || !scope.equals(selectedScope))
                 return failed("TARGET_REVISION_CHANGED:任务内工地与通道已冻结，不换图、换通道或重开账。");
@@ -152,8 +165,12 @@ public final class BuildSite {
         return target == null ? null : target.cells().stream().filter(c -> c.pos().equals(pos)).findFirst().orElse(null);
     }
     private boolean dependent(BlockPos pos, Access access) {
+        return dependent(pos, access, Set.of());
+    }
+    private boolean dependent(BlockPos pos, Access access, Set<BlockPos> removing) {
         for (Direction side : Direction.values()) {
             var near = pos.relative(side);
+            if (removing.contains(near)) continue;
             var state = access.state(near);
             if (state == null || access.facility(near)) return true;
             if (state.isAir()) continue;
@@ -182,6 +199,9 @@ public final class BuildSite {
         if (selected != null) {
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
                 return failed("DENIED:实例格来源冲突、未知或累计记录额度耗尽，不覆盖外部改动。");
+            if (instance!=null && BuildObjects.door(proposed)
+                    && !records.hasCapacity(instance,BuildObjects.footprint(pos,proposed)))
+                return failed("ACTION_LIMIT:双格实际变化所需记录额度不足，未开始原版动作。");
             if (selected.matches(access.state(pos)) || !selected.matches(proposed))
                 return failed("DENIED:不覆盖已满足格或放入偏离冻结目标的状态。");
         } else if (protects(pos) && !temporaryPlacement) return failed("DENIED:不覆盖完整目标的直接支撑。");
@@ -197,6 +217,7 @@ public final class BuildSite {
                 ? failed("DENIED:工地目标、支撑、通道、工位或临时工程不可作为普通清障。") : null;
         if (!same(revision) || accessCell(pos) || access.occupied(pos))
             return failed("DENIED:施工修订不符，或目标承担通道/身体支撑。");
+        if (BuildObjects.door(access.state(pos))) return doorMiningGuard(pos, cleanup, access);
         if (cleanup) {
             var record = temporary.get(pos);
             if (record == null || record.witness == null || !record.witness.intact()
@@ -216,6 +237,30 @@ public final class BuildSite {
                 return failed("DENIED:旧实例格来源不可证、已被外部修改或累计记录额度耗尽，未拆除。");
         }
         return null;
+    }
+    private ServerTool.Result doorMiningGuard(BlockPos pos, boolean cleanup, Access access) {
+        var actual = access.state(pos);
+        var footprint = Set.copyOf(BuildObjects.footprint(pos,actual));
+        if (cleanup || instance==null || !records.hasCapacity(instance,footprint))
+            return failed("DENIED:双格拆改须当前实例两格的活来源与足量累计记录，不回收为临时工程。");
+        boolean complete = true;
+        for (var p : footprint) {
+            var selected = cell(p); var state = access.state(p);
+            if (selected==null || state==null || !inScope(p) || accessCell(p) || access.passage(p)
+                    || access.occupied(p) || access.facility(p) || !selected.material().supported()
+                    || !access.material(selected) || !records.mayChange(instance,p,access)
+                    || !access.canMine(state) || dependent(p,access,footprint)
+                    || target.cells().stream().anyMatch(c -> !c.authored().isAir()
+                    && !footprint.contains(c.pos()) && c.pos().below().equals(p)))
+                return failed("DENIED:双格拆改的占位、来源、材料、支撑或依赖不满足；未触碰任一半。");
+            if (!state.isAir() && (!BuildObjects.door(state) || !p.equals(pos)
+                    && state != actual.setValue(net.minecraft.world.level.block.DoorBlock.HALF,
+                    BuildObjects.upper(actual) ? net.minecraft.world.level.block.state.properties.DoubleBlockHalf.LOWER
+                            : net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER)))
+                return failed("DENIED:门的另一半已被替换或状态不一致，未连带拆除。");
+            complete &= selected.matches(state);
+        }
+        return complete ? failed("DENIED:完整双格目标已满足，不拆成品。") : null;
     }
     public ServerTool.Result temporaryGuard(BlockPos pos, String purpose, Access access) {
         var failure = live(access);

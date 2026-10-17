@@ -87,12 +87,17 @@ class MiningInterruptionTest {
             access.drops.add(new BlockActionFixtures.Drop(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIRT)));
         };
         access.afterCapture = () -> { throw new IllegalStateException("controlled native boundary"); };
+        access.nativeEffects=com.google.gson.JsonParser.parseString("""
+                {"changed":true,"scope":"native_object_footprint_not_global","cells":[
+                  {"x":0,"y":90,"z":0},{"x":0,"y":91,"z":0}]}
+                """).getAsJsonObject();
         var mining = new BlockMining(access);
         var task = new BreakBlockTool.Task(mining);
         assertThrows(IllegalStateException.class, () -> task.tickSafe(null));
         var repeated = mining.tick();
         assertFalse(repeated.ok());
         assertFalse(repeated.data().get("removal_known").getAsBoolean());
+        assertEquals(2,repeated.data().getAsJsonObject("native_effects").getAsJsonArray("cells").size());
         assertEquals(1, access.destroys);
         var result = task.interruptedResult(new ServerTool.Result(false, "TOOL_EXCEPTION:observed", null));
         task.onAbort();
@@ -100,5 +105,7 @@ class MiningInterruptionTest {
         assertEquals(1, result.data().getAsJsonObject("drop_accounting").get("spawned_count").getAsInt());
         assertEquals(1, access.destroys);
         assertEquals(0, result.data().get("collected_count").getAsInt());
+        assertTrue(result.data().get("changed").getAsBoolean());
+        assertEquals(2,result.data().getAsJsonObject("native_effects").getAsJsonArray("cells").size());
     }
 }
