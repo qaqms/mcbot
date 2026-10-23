@@ -17,7 +17,7 @@ import java.util.PriorityQueue;
  * ③ 分帧：每次 advance(budget) 限量展开，绝不一口气算崩主线程。
  *
  * 纯算法，零 Minecraft 依赖：地形判断全部经 {@link DigSampler} 接口（可单测）。
- * 分段模式先找可行答案再改善；两遍共享资源账，耗尽资源不丢弃已找到的答案。
+ * 分段模式先找可行答案再改善；两遍共享展开账，可选预估另受有界资源保护。
  * 线程约定：单线程独占使用，无内部锁；后台发布后由世界线程采用。
  */
 public final class DigAStar {
@@ -70,6 +70,7 @@ public final class DigAStar {
 
     private final DigSampler s;
     private final int maxNodes;
+    private int nodeLimit;
     private final int maxDigs;
     private final int sx, sy, sz;
     private final double hWeight;
@@ -93,6 +94,7 @@ public final class DigAStar {
     private int maxStoredNodes = MAX_STORED_NODES;
 
     private int expanded;
+    private int batches = 1;
     /** 累计搜索 CPU 时长（验尸/双帽口径用）；totalBudgetNanos 到点即撞帽，与节点帽同位。 */
     private long usedNanos;
     private long totalBudgetNanos = Long.MAX_VALUE / 8;
@@ -102,6 +104,9 @@ public final class DigAStar {
     private boolean budgetReached;
     /** 已扩展（settled）节点中距目标体积最近者（同 L1 取 g 小）——部分提交候选。 */
     private Node bestPartial;
+    private java.util.Iterator<Node> partialCandidates;
+    private Node partialProbe, partialCursor;
+    private boolean preparingPartial;
     private List<Step> path;
     /** 命中目标时的 settled 节点（pathCost 供抑抖断言/观测）。 */
     private Node goalNode;
@@ -124,6 +129,7 @@ public final class DigAStar {
         this.sy = sy;
         this.sz = sz;
         this.maxNodes = maxNodes;
+        this.nodeLimit = maxNodes;
         this.maxDigs = maxDigs;
         this.hWeight = hWeight;
         if (goalRadius < 0 || goalRadius > 1) throw new IllegalArgumentException("Invalid goal radius");
@@ -183,6 +189,18 @@ public final class DigAStar {
         long t0 = System.nanoTime();
         try {
         for (int i = 0; i < budget; i++) {
+            if (preparingPartial) {
+                if (usedNanos + System.nanoTime() - t0 >= totalBudgetNanos) {
+                    preparingPartial = false;
+                    partialCandidates = null;
+                    finished = true;
+                    return true;
+                }
+                if (System.nanoTime() - t0 >= sliceNanos) return false;
+                if (preparePartial()) return true;
+                i--; // Candidate inspection spends slice time, not forward expansion nodes.
+                continue;
+            }
             if (!prepared) {
                 if (estimate == null) {
                     if (goal.remaining(sx, sy, sz) == 0
@@ -240,9 +258,11 @@ public final class DigAStar {
                         && cur.g < bestPartial.g)) {
                 bestPartial = cur;
             }
-            if (expanded + estimateExpanded() >= maxNodes) {
-                return budgetFailure("NODES", "预估与路线展开超过 " + maxNodes
-                        + " 节点。目标太远或地形太纠缠，请分短段移动。");
+            if (chargedNodes() >= nodeLimit) {
+                // This node has not been expanded yet. Retain it for the next batch.
+                open.add(cur);
+                return budgetFailure("NODES", "本批路线搜索已展开 " + expanded
+                        + " 节点，尚未证明目标不可达。");
             }
             expanded++;
             expand(cur);
@@ -291,7 +311,68 @@ public final class DigAStar {
         if (stoppingNode != null) return arrive(stoppingNode, stoppingCost);
         budgetReached = true;
         budgetKind = kind;
+        if (segmented && !"TIME".equals(kind)) {
+            failure = "BUDGET_EXCEEDED:" + why;
+            preparingPartial = true;
+            partialCandidates = best.values().iterator();
+            partialProbe = partialCursor = bestPartial;
+            bestPartial = null;
+            return false;
+        }
+        if (segmented) bestPartial = null;
         return fail("BUDGET_EXCEEDED:" + why);
+    }
+
+    /** Keep the frontier and edit histories; another batch does not repeat the settled search. */
+    boolean continueSearch(int nodes) {
+        if (!finished || !segmented || !budgetReached || !"NODES".equals(budgetKind)
+                || nodes < 1 || nodes > NavigationBudget.NODES || nodeLimit > Integer.MAX_VALUE - nodes)
+            return false;
+        nodeLimit += nodes;
+        batches++;
+        finished = budgetReached = false;
+        failure = budgetKind = null;
+        partialCandidates = null;
+        partialProbe = partialCursor = null;
+        return true;
+    }
+
+    /**
+     * Inspect candidates and return legs inside advance's time slice. A bad tail is cut before
+     * its failing edge, then the shorter prefix is checked against its own final terrain.
+     */
+    private boolean preparePartial() {
+        if (partialProbe != null) {
+            if (partialCursor.prev == null) {
+                if (betterPartial(partialProbe)) bestPartial = partialProbe;
+                partialProbe = partialCursor = null;
+            } else if (PathTransition.check(s, partialProbe.key.terrain(),
+                    partialCursor.x, partialCursor.y, partialCursor.z,
+                    partialCursor.prev.x, partialCursor.prev.y, partialCursor.prev.z, 0, 0).plan() == null) {
+                partialProbe = partialCursor = partialCursor.prev;
+                if (!betterPartial(partialProbe)) partialProbe = partialCursor = null;
+            } else {
+                partialCursor = partialCursor.prev;
+            }
+            return false;
+        }
+        if (partialCandidates.hasNext()) {
+            Node candidate = partialCandidates.next();
+            if (betterPartial(candidate)) partialProbe = partialCursor = candidate;
+            return false;
+        }
+        partialCandidates = null;
+        preparingPartial = false;
+        finished = true;
+        return true;
+    }
+
+    private boolean betterPartial(Node candidate) {
+        if (candidate.prev == null || goal.remaining(sx, sy, sz) - l1(candidate.x, candidate.y, candidate.z) < 1)
+            return false;
+        return bestPartial == null || l1(candidate.x, candidate.y, candidate.z) < l1(bestPartial.x, bestPartial.y, bestPartial.z)
+                || l1(candidate.x, candidate.y, candidate.z) == l1(bestPartial.x, bestPartial.y, bestPartial.z)
+                && candidate.g < bestPartial.g;
     }
 
     /** 累计搜索 CPU 预算（纳秒）；PathTask 传 SEARCH_TOTAL_NS。越界后与节点帽同位撞帽。 */
@@ -341,6 +422,9 @@ public final class DigAStar {
     }
 
     public int estimateExpanded() { return estimate == null ? 0 : estimate.expanded(); }
+    /** Segmented route expansion and optional preprocessing have separate bounded accounts. */
+    public int chargedNodes() { return expanded + (segmented ? 0 : estimateExpanded()); }
+    public int batches() { return batches; }
     public int estimateSeedProbes() { return estimate == null ? 0 : estimate.seedProbes(); }
     public String budgetKind() { return budgetKind; }
     public Map<String, Integer> rejections() { return Map.copyOf(rejected); }
@@ -352,21 +436,17 @@ public final class DigAStar {
     }
 
     /**
-     * Legacy searches require PARTIAL_MIN_GAIN; segmented searches accept any strict progress
-     * after checking that the whole prefix can be walked back without further edits.
+     * Legacy searches require PARTIAL_MIN_GAIN; segmented candidates have already been cut
+     * and checked inside advance, including alternative frontiers and their final edit history.
      * 非撞帽结束（成功/真封闭/推进不足）返回 false。
      */
     public boolean partialAvailable() {
-        if (!budgetReached || bestPartial == null) {
+        if (!finished || !budgetReached || bestPartial == null) {
             return false;
         }
+        if (segmented) return true;
         if (goal.remaining(sx, sy, sz) - l1(bestPartial.x, bestPartial.y, bestPartial.z)
-                < (segmented ? 1 : PARTIAL_MIN_GAIN)) return false;
-        if (segmented) {
-            for (Node node = bestPartial; node.prev != null; node = node.prev)
-                if (PathTransition.check(s, bestPartial.key.terrain(), node.x, node.y, node.z,
-                        node.prev.x, node.prev.y, node.prev.z, 0, 0).plan() == null) return false;
-        }
+                < PARTIAL_MIN_GAIN) return false;
         return true;
     }
 

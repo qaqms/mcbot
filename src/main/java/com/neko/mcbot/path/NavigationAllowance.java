@@ -18,7 +18,7 @@ final class NavigationAllowance {
             charged = search;
             observed = 0;
         }
-        int count = Math.max(1, search.expanded() + search.estimateExpanded());
+        int count = Math.max(1, search.chargedNodes());
         used += Math.max(0, count - observed);
         observed = count;
     }

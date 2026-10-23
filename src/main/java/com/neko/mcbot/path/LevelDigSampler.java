@@ -23,7 +23,7 @@ public final class LevelDigSampler implements DigSampler {
     /** Per-segment observation window, recentered at each actual landing. */
     public static final int RADIUS_XZ = 64;
     public static final int RADIUS_Y = 32;
-    public static final double MAX_DIG_SECONDS = 20.0; // 单格超过这个秒数视为"不值得挖"
+    public static final double MAX_DIG_SECONDS = 60.0;
 
     /** 注册路径名命中即神圣（BlockEntity 检查兜不住的装饰性/机关方块在这里补）。 */
     private static final Set<String> SACRED_NAMES = Set.of(
@@ -154,7 +154,7 @@ public final class LevelDigSampler implements DigSampler {
 
     @Override
     public boolean placeable(int x, int y, int z) {
-        if (!inBounds(x, y, z) || placeStock <= 0 || spec.underground()) {
+        if (!inBounds(x, y, z) || placeStock <= 0) {
             return false;
         }
         BlockPos p = new BlockPos(x, y, z);

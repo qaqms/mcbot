@@ -111,4 +111,43 @@ class NavigationSearchTest {
         assertTrue(exited.await(3, TimeUnit.SECONDS));
         assertThrows(java.util.concurrent.CancellationException.class, pending::take);
     }
+
+    @Test void aPublishedSnapshotFrontierContinuesThroughTheProductionTripPolicy() throws Exception {
+        var snapshot = capture(sections());
+        var search = new DigAStar(snapshot, 4, 0, 4, 10, 0, 4, 2, 0,
+                NavigationGoal.position(10, 0, 4, 0)).segments();
+        var pending = NavigationSearch.submit(search);
+        await(pending);
+        var completed = pending.take();
+        assertSame(search, completed);
+        assertEquals("NODES", completed.budgetKind());
+        var shared = new NavigationBudget();
+        shared.recordCompleted(completed);
+        var allowance = new NavigationAllowance(6);
+        assertTrue(PathTask.continueSearch(completed, allowance, shared));
+        assertEquals(2, allowance.used());
+        while (!completed.advance(300, 6_000_000L)) { }
+        shared.observe(completed);
+        allowance.observe(completed);
+        assertNull(completed.failure());
+        assertEquals(2, completed.batches());
+        assertEquals(completed.chargedNodes(), shared.nodes());
+        assertEquals(completed.chargedNodes(), allowance.used());
+        assertNull(PathTask.planFailure(completed.path(), snapshot, 0));
+    }
+
+    @Test void exhaustedTripCannotResumeAFinishedSearch() throws Exception {
+        var snapshot = capture(sections());
+        var search = new DigAStar(snapshot, 4, 0, 4, 10, 0, 4, 2, 0,
+                NavigationGoal.position(10, 0, 4, 0)).segments();
+        while (!search.advance(1)) { }
+        var allowance = new NavigationAllowance(6);
+        var used = NavigationAllowance.class.getDeclaredField("used");
+        used.setAccessible(true);
+        used.setLong(allowance, allowance.limit() - 2);
+        assertFalse(PathTask.continueSearch(search, allowance, null));
+        assertEquals(allowance.limit(), allowance.used());
+        assertTrue(search.done());
+        assertEquals(1, search.batches());
+    }
 }

@@ -18,6 +18,61 @@ import static org.junit.jupiter.api.Assertions.*;
 class NavigationWorkTest {
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
 
+    @Test void anUndergroundGapCanUseARealVisibleSupportWithoutInventingMaterials() {
+        for (int stock : new int[]{0, 1}) {
+            var world = new BlockAimTest.Grid();
+            world.blocks.clear();
+            world.blocks.put(new BlockPos(0, 0, 0), Blocks.STONE.defaultBlockState());
+            world.blocks.put(new BlockPos(2, 0, 0), Blocks.STONE.defaultBlockState());
+            var geometry = new StandingGeometry(new StandingGeometry.Access() {
+                @Override public boolean known(BlockPos pos) { return world.loaded(pos); }
+                @Override public List<net.minecraft.world.phys.AABB> boxes(BlockPos pos) {
+                    return StandingGeometry.collision(world.getBlockState(pos), world, pos);
+                }
+            }, .6, 1.8, .6);
+            var spec = new PathSpec(false, false, true, 0, null, 0);
+            DigSampler terrain = new DigSampler() {
+                @Override public com.neko.mcbot.path.NavigationGeometry geometry() { return geometry; }
+                @Override public boolean inBounds(int x, int y, int z) {
+                    return x >= 0 && x <= 2 && y >= 0 && y <= 3 && z == 0;
+                }
+                @Override public boolean passable(int x, int y, int z) {
+                    return inBounds(x, y, z) && !world.blocks.containsKey(new BlockPos(x, y, z));
+                }
+                @Override public boolean support(int x, int y, int z) {
+                    return world.blocks.containsKey(new BlockPos(x, y, z));
+                }
+                @Override public double digSeconds(int x, int y, int z) { return INFEASIBLE; }
+                @Override public boolean placeable(int x, int y, int z) { return stock > 0 && passable(x, y, z); }
+                @Override public double placeCost(int x, int y, int z) { return 1; }
+                @Override public int maxPlaces() { return stock; }
+                @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+                    return spec.allowsStep(fx, fy, fz, x, y, z);
+                }
+                @Override public boolean canPlaceFrom(int x, int y, int z, long cell, TerrainEdits edits) {
+                    var floor = new BlockPos(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell));
+                    var eye = BlockAim.fromEye(world, new net.minecraft.world.phys.Vec3(x + .5, y + 1.62, z + .5));
+                    for (var face : net.minecraft.core.Direction.values())
+                        if (BlockAim.placementContact(eye, floor.relative(face.getOpposite()), face, 4.5).ok())
+                            return true;
+                    return false;
+                }
+            };
+            var route = new DigAStar(terrain, 0, 1, 0, 2, 1, 0, 4000, 0,
+                    NavigationGoal.position(2, 1, 0, 0)).segments();
+            while (!route.advance(300)) { }
+            assertEquals(2, world.blocks.size(), "planning and contact rays must not change the world");
+            if (stock == 0) {
+                assertNotNull(route.failure());
+            } else {
+                assertNull(route.failure(), () -> route.failure() + " " + route.rejections());
+                assertEquals(List.of(DigAStar.pack(1, 0, 0)),
+                        route.path().stream().flatMap(step -> step.place().stream()).toList());
+                assertTrue(route.path().stream().allMatch(step -> step.dig().isEmpty()));
+            }
+        }
+    }
+
     @Test void laterWorkRaysSeeAllEarlierRemovalsAndPlannedSupports() {
         var world = new BlockAimTest.Grid();
         world.wall();

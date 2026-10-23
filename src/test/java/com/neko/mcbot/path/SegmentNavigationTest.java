@@ -44,7 +44,8 @@ class SegmentNavigationTest {
             assertFalse(route.segmentEnd());
             assertEquals(4, route.path().getLast().x());
             assertEquals(ty, route.path().getLast().y());
-            assertTrue(route.expanded() + route.estimateExpanded() <= 4000);
+            assertTrue(route.expanded() <= 4000);
+            assertTrue(route.estimateExpanded() <= 1000);
             var edits = TerrainEdits.EMPTY;
             var before = route.path().getFirst();
             for (var step : route.path().subList(1, route.path().size())) {
@@ -79,7 +80,28 @@ class SegmentNavigationTest {
         var route = run(new Rock(), 4, 36, 40, true);
         assertNull(route.failure(), "a search cap must not discard the greedy answer");
         assertNotNull(route.path());
-        assertTrue(route.expanded() + route.estimateExpanded() <= 40);
+        assertTrue(route.expanded() <= 40);
+        assertTrue(route.estimateExpanded() <= 10);
+    }
+
+    @Test void optionalPreparationDoesNotConsumeTheSegmentExpansionAllowance() {
+        var position = NavigationGoal.position(4, 36, 0, 0);
+        NavigationGoal notYetUsable = new NavigationGoal() {
+            @Override public boolean reached(int x, int y, int z) { return false; }
+            @Override public double remaining(int x, int y, int z) { return position.remaining(x, y, z); }
+            @Override public Bounds estimateBounds() { return position.estimateBounds(); }
+        };
+        var route = new DigAStar(new Rock(), 0, 40, 0, 4, 36, 0, 100, Integer.MAX_VALUE,
+                notYetUsable).segments();
+        while (!route.advance(50)) { }
+        assertEquals("NODES", route.budgetKind());
+        assertEquals(100, route.expanded());
+        assertTrue(route.estimateExpanded() > 0 && route.estimateExpanded() <= 25);
+        assertEquals(100, route.chargedNodes());
+        var allowance = new NavigationAllowance(8);
+        allowance.observe(route);
+        assertEquals(100, allowance.used());
+        assertTrue(route.storedNodes() <= DigAStar.MAX_STORED_NODES);
     }
 
     @Test void sealedTerrainStillFailsAndFiniteDigAllowancesRemainBinding() {
@@ -137,5 +159,93 @@ class SegmentNavigationTest {
         assertTrue(near.used() > spent);
         assertTrue(near.used() >= near.limit());
         assertEquals(0, near.next());
+    }
+
+    private static class Corridors implements DigSampler {
+        final Set<Long> cells = new HashSet<>();
+        Corridors add(int x, int z) { cells.add(DigAStar.pack(x, 0, z)); return this; }
+        @Override public boolean inBounds(int x, int y, int z) {
+            return y >= -1 && y <= 2 && cells.contains(DigAStar.pack(x, 0, z));
+        }
+        @Override public boolean passable(int x, int y, int z) { return inBounds(x, y, z) && y >= 0; }
+        @Override public boolean support(int x, int y, int z) { return inBounds(x, y, z) && y == -1; }
+        @Override public double digSeconds(int x, int y, int z) { return INFEASIBLE; }
+        @Override public boolean placeable(int x, int y, int z) { return false; }
+        @Override public double placeCost(int x, int y, int z) { return INFEASIBLE; }
+        @Override public int maxPlaces() { return 0; }
+        @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+            return fy == y && Math.abs(x - fx) + Math.abs(z - fz) == 1;
+        }
+    }
+
+    @Test void anIrreversibleTailKeepsTheVerifiedReversiblePrefix() {
+        var hall = new Corridors() {
+            @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+                return super.allowsStep(fx, fy, fz, x, y, z) && !(fx == 4 && x == 3);
+            }
+        };
+        for (int x = 0; x <= 60; x++) hall.add(x, 0);
+        var search = new DigAStar(hall, 0, 0, 0, 60, 0, 0, 4, 0,
+                NavigationGoal.position(60, 0, 0, 0)).segments();
+        while (!search.advance(1)) { }
+        assertTrue(search.budgetReached());
+        assertTrue(search.partialAvailable());
+        assertEquals(3, search.partialPath().getLast().x());
+    }
+
+    @Test void anotherCandidateSurvivesWhenTheNearestBranchHasNoReturn() {
+        var hall = new Corridors() {
+            @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+                return super.allowsStep(fx, fy, fz, x, y, z) && !(fx == 1 && fz == 0 && x == 0);
+            }
+        };
+        for (int x = 0; x <= 6; x++) hall.add(x, 0);
+        hall.add(0, 1);
+        for (int x = 0; x <= 20; x++) hall.add(x, 2);
+        var search = new DigAStar(hall, 0, 0, 0, 10, 0, 0, 18, 0,
+                NavigationGoal.position(10, 0, 0, 0)).segments();
+        while (!search.advance(1)) { }
+        assertTrue(search.budgetReached());
+        assertTrue(search.partialAvailable(), "the closest branch must not hide another usable prefix");
+        var end = search.partialPath().getLast();
+        assertEquals(2, end.z());
+        assertTrue(end.x() > 2);
+    }
+
+    @Test void furtherBatchesKeepTheUnexpandedFrontierWhenTheRouteMustInitiallyMoveAway() {
+        var hall = new Corridors().add(0, 0).add(-1, 0).add(-1, 1).add(-1, 2)
+                .add(0, 2).add(1, 2).add(2, 2).add(2, 1).add(2, 0);
+        var search = new DigAStar(hall, 0, 0, 0, 2, 0, 0, 2, 0,
+                NavigationGoal.position(2, 0, 0, 0)).segments();
+        while (!search.advance(1)) { }
+        assertTrue(search.budgetReached());
+        assertFalse(search.partialAvailable(), "the beginning of this detour is farther from the goal");
+        int stored = search.storedNodes(), batches = 1;
+        while (search.failure() != null) {
+            assertTrue(search.continueSearch(2));
+            assertEquals(stored, search.storedNodes(), "continuing must not rebuild the initial queue");
+            while (!search.advance(1)) { }
+            stored = search.storedNodes();
+            assertTrue(++batches < 10);
+        }
+        assertEquals(2, search.path().getLast().x());
+        assertEquals(0, search.path().getLast().z());
+        assertTrue(search.path().stream().anyMatch(step -> step.x() == -1));
+        assertTrue(search.expanded() < 12, "settled nodes must not be searched again each batch");
+    }
+
+    @Test void timeAndStorageBoundariesCannotBeResumedAsNodeBatches() {
+        for (boolean time : new boolean[]{true, false}) {
+            var hall = new Corridors();
+            for (int x = 0; x <= 60; x++) hall.add(x, 0);
+            var search = new DigAStar(hall, 0, 0, 0, 60, 0, 0, 4000, 0,
+                    NavigationGoal.position(60, 0, 0, 0)).segments();
+            if (time) search.totalBudget(0);
+            else search.storageBudget(3);
+            while (!search.advance(1)) { }
+            assertEquals(time ? "TIME" : "STORAGE", search.budgetKind());
+            assertFalse(search.continueSearch(4000));
+            if (time) assertFalse(search.partialAvailable());
+        }
     }
 }

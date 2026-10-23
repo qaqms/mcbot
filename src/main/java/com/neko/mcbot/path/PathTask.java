@@ -330,6 +330,7 @@ public final class PathTask extends TickTask {
         if (search != null) {
             var diagnostics = new JsonObject();
             diagnostics.addProperty("expanded", search.expanded());
+            diagnostics.addProperty("batches", search.batches());
             diagnostics.addProperty("estimate_expanded", search.estimateExpanded());
             diagnostics.addProperty("estimate_seed_probes", search.estimateSeedProbes());
             diagnostics.addProperty("stored_nodes", search.storedNodes());
@@ -451,25 +452,46 @@ public final class PathTask extends TickTask {
                         partialRemain, plan.size(), planDigs, planPlaces, memoStats());
                 return afterPlanReady(c, plan);
             }
+            if (search.budgetReached() && "NODES".equals(search.budgetKind())
+                    && memo != null && memo.worldChanged()) {
+                beginReplan(c);
+                return running();
+            }
+            if (continueSearch(search, allowance, sharedBudget)) {
+                // The completed worker has released ownership; subsequent work uses normal slices.
+                detachedSearch = false;
+                McbotMod.LOG.info("[path] 保留搜索边界继续下一批 expanded={} nodes={}/{} route={}",
+                        search.expanded(), allowance.used(), allowance.limit(), timing.id());
+                return running();
+            }
             McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {} route={}", c.blockPosition().toShortString(),
                     target.toShortString(), search.failure(), memoStats(), timing.id());
             McbotMod.LOG.info("[path] 原搜索局部拒绝 counts={} samples={}", search.rejections(),
                     search.rejectionSamples().stream().map(PathFailure::summary).toList());
-            // 撞帽但推进不足下限：不再冒充 BUDGET，换成对模型有行动意义的 NO_PROGRESS（§C）；
-            // open 空的真 NO_PATH 永不降级（D 基岩笼场景钉死）
+            // Search exhaustion is evidence about this observation and its actual edit conditions.
             String lead = wasReplan ? "路被改变后重规划失败：" : "";
             String why = search.budgetReached()
                     ? "NO_PROGRESS:" + lead
                             + (search.storedNodes() >= DigAStar.MAX_STORED_NODES ? "路径状态存储到上限；" : "")
-                            + "本段搜索资源已用完（展开 " + search.expanded()
-                            + " 节点/" + search.elapsedMillis() + "ms）而没能向目标实质推进。"
-                            + "换条路绕开或分更短的段，别硬撞同一方向。"
-                    : "NO_PATH:" + lead + search.failure();
+                            + "本次路线搜索已停止（展开 " + search.expanded()
+                            + " 节点/" + search.elapsedMillis() + "ms，资源类型=" + search.budgetKind()
+                            + "，整趟使用 " + allowance.used() + "/" + allowance.limit()
+                            + "），尚未证明目标不可达。"
+                    : "NO_PATH:" + lead + "当前观测和实际挖放条件下未找到完整路线。";
+            why += " 局部拒绝计数=" + search.rejections()
+                    + "；其中DIG_LIMIT表示剩余挖掘额度或工具耐久不足，PLACE_LIMIT表示缺少可用支撑材料；"
+                    + "单项计数不代表所有路线均受该项阻挡。";
             return new Progress.Done(new Result(false, why, null));
         }
         // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
         segmentTail = search.segmentEnd();
         return afterPlanReady(c, liveify(search.path()));
+    }
+
+    static boolean continueSearch(DigAStar search, NavigationAllowance allowance, NavigationBudget shared) {
+        allowance.observe(search);
+        if (shared != null && shared.exhausted()) return false;
+        return search.continueSearch(allowance.next());
     }
 
     /**
@@ -921,7 +943,7 @@ public final class PathTask extends TickTask {
 
     private LevelDigSampler samplerFor(CompanionPlayer c, BlockPos from) {
         return new LevelDigSampler(level, c, from,
-                walkOnly || spec.underground() ? 0 : LevelDigSampler.countPlaceables(c.getInventory()),
+                walkOnly ? 0 : LevelDigSampler.countPlaceables(c.getInventory()),
                 workTarget, spec, outerScope).constrainSteps(stepConstraint);
     }
 
@@ -933,7 +955,7 @@ public final class PathTask extends TickTask {
         }
         if (detachedSearch) return "search_mode=BACKGROUND_SNAPSHOT expanded=" + search.expanded()
                 + " worker_ms=" + search.elapsedMillis() + " stored=" + search.storedNodes();
-        String preparation = " prep=" + search.estimateExpanded() + "/" + search.estimateSeedProbes()
+        String preparation = " batches=" + search.batches() + " prep=" + search.estimateExpanded() + "/" + search.estimateSeedProbes()
                 + " stored=" + search.storedNodes();
         return memo == null ? "memo=off(验尸超限)" + preparation : "[memo] expanded=" + search.expanded()
                 + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()

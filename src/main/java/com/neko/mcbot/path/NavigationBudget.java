@@ -26,7 +26,7 @@ public final class NavigationBudget {
     public void observe(DigAStar search) {
         if (search == null) return;
         if (current != search) throw new IllegalArgumentException("retired or foreign search");
-        int used = search.expanded() + search.estimateExpanded();
+        int used = search.chargedNodes();
         nodes = (int) Math.min(Integer.MAX_VALUE, (long) nodes + Math.max(0, used - lastNodes));
         records = (int) Math.min(Integer.MAX_VALUE, (long) records + Math.max(0, search.storedNodes() - lastRecords));
         long delta = Math.max(0, search.elapsedNanos() - lastNanos);
@@ -69,10 +69,13 @@ public final class NavigationBudget {
 
     public void recordCompleted(DigAStar search) {
         if (!perSearch) throw new IllegalStateException("detached search requires per-search bounds");
-        nodes = (int) Math.min(Integer.MAX_VALUE, (long) nodes + search.expanded() + search.estimateExpanded());
-        records = (int) Math.min(Integer.MAX_VALUE, (long) records + search.storedNodes());
-        long delta = search.elapsedNanos();
-        nanos = Math.min(Long.MAX_VALUE - delta, nanos) + delta;
+        if (current != search) {
+            observe(current);
+            current = search;
+            lastNodes = lastRecords = 0;
+            lastNanos = 0;
+        }
+        observe(search);
     }
 
     public com.google.gson.JsonObject snapshot() {

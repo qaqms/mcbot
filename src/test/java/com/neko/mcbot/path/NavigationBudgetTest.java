@@ -5,6 +5,23 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationBudgetTest {
+    @Test void aCompletedWorkerSearchCanContinueOnTheWorldThreadWithoutDoubleCharging() {
+        var budget = new NavigationBudget();
+        var route = new DigAStar(FLOOR, 0, 0, 0, 30, 0, 0, 2, 0,
+                NavigationGoal.position(30, 0, 0, 0)).segments();
+        while (!route.advance(1)) { }
+        budget.recordCompleted(route);
+        int nodes = budget.nodes(), records = budget.records();
+        budget.recordCompleted(route);
+        assertEquals(nodes, budget.nodes());
+        assertEquals(records, budget.records());
+        assertTrue(route.continueSearch(2));
+        while (!route.advance(1)) { }
+        budget.observe(route);
+        assertEquals(route.chargedNodes(), budget.nodes());
+        assertEquals(route.storedNodes(), budget.records());
+        assertTrue(budget.nodes() > nodes);
+    }
     @Test void tripRemainderAlsoBoundsTheSharedPerSearchAccount() {
         var budget = new NavigationBudget();
         var route = budget.search(FLOOR, 0, 0, 0, 30, 0, 0,
