@@ -52,4 +52,39 @@ class ModelConnectionTestTest {
                 : CompletableFuture.failedFuture(new LlmFailure(LlmFailure.Kind.HTTP, 401));
         assertThrows(CompletionException.class, () -> ModelConnectionTest.run(engine).join());
     }
+
+    @Test
+    void taskSchemasAreCheckedInBothRequestsWithoutExecutingAnyTaskTool() {
+        var tool = ToolSpec.of("break_block", "synthetic tool", "{\"type\":\"object\"}");
+        AtomicInteger requests = new AtomicInteger();
+        ChatEngine engine = (system, history, tools) -> {
+            assertEquals(List.of("connection_probe", "break_block"), tools.stream().map(ToolSpec::name).toList());
+            assertEquals(tool, tools.get(1));
+            return requests.getAndIncrement() == 0
+                    ? CompletableFuture.completedFuture(reply("", List.of(
+                    new ToolCall("probe", "connection_probe", "{}"))))
+                    : CompletableFuture.completedFuture(reply("OK", List.of()));
+        };
+        assertTrue(ModelConnectionTest.run(engine, List.of(tool)).join());
+        assertEquals(2, requests.get());
+        requests.set(0);
+        ChatEngine unsafe = (system, history, tools) -> {
+            requests.incrementAndGet();
+            return CompletableFuture.completedFuture(reply("", List.of(new ToolCall("game", "break_block", "{}"))));
+        };
+        assertFalse(ModelConnectionTest.run(unsafe, List.of(tool)).join());
+        assertEquals(1, requests.get(), "a game tool must not receive a fabricated receipt");
+    }
+
+    @Test
+    void rejectedTaskSchemasCannotPassTheConnectionCheck() {
+        AtomicInteger requests = new AtomicInteger();
+        ChatEngine rejecting = (system, history, tools) -> {
+            requests.incrementAndGet();
+            return CompletableFuture.failedFuture(new LlmFailure(LlmFailure.Kind.HTTP, 400));
+        };
+        assertThrows(CompletionException.class, () -> ModelConnectionTest.run(rejecting,
+                List.of(ToolSpec.of("wait", "synthetic tool", "{\"type\":\"object\"}"))).join());
+        assertEquals(1, requests.get());
+    }
 }

@@ -3,6 +3,7 @@ package com.neko.mcbot.bridge;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neko.mcbot.agentcore.bridge.BridgeBackend;
+import com.neko.mcbot.cfg.ClientConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -83,6 +84,25 @@ class BridgeHttpContractTest {
                 "exactly 65536 bytes passes the size gate and reaches JSON validation");
         assertEquals(413, send("/v1/task", "\u4e2d".repeat(22000), true).statusCode(),
                 "the limit is UTF-8 bytes, not Java character count");
+    }
+
+    @Test
+    void configuredPortCanAvoidAnOccupiedListenerWhileKeepingAuthentication() throws Exception {
+        try (var occupied = new java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))) {
+            var blocked = new ClientConfig("", "", "", "").withBridgePort(occupied.getLocalPort());
+            assertThrows(java.net.BindException.class,
+                    () -> new BridgeHttp(new Backend(), TOKEN, blocked.bridgePort));
+            int available;
+            try (var reserved = new java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))) {
+                available = reserved.getLocalPort();
+            }
+            var config = ClientConfig.fromJson(ClientConfig.toJson(blocked.withBridgePort(available)), java.util.Map.of());
+            bridge = new BridgeHttp(new Backend(), TOKEN, config.bridgePort);
+            assertEquals(available, bridge.port());
+            assertEquals(401, send("/v1/status", null, false).statusCode());
+            assertEquals("1.0", json(send("/v1/status", null, true).body()).get("contract_version").getAsString());
+            assertFalse(occupied.isClosed(), "the other listener must remain untouched");
+        }
     }
 
     @Test

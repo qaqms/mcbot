@@ -18,6 +18,7 @@ import java.util.Set;
  *   "api_key": "sk-...", "persona": "可选人设文本", "accept_mode": true }
  */
 public final class ClientConfig {
+    public static final int DEFAULT_BRIDGE_PORT = 17897;
 
     public final String baseUrl;
     public final String model;
@@ -34,6 +35,7 @@ public final class ClientConfig {
      * 不需要换服务端），所以它必须走配置文件而不是写死常量。
      */
     public final boolean acceptMode;
+    public final int bridgePort;
     public final Preferences preferences;
     public final Set<String> environmentOverrides;
 
@@ -74,22 +76,34 @@ public final class ClientConfig {
 
     public ClientConfig(String baseUrl, String model, String apiKey, String persona,
                         boolean acceptMode, Preferences preferences, Set<String> overrides) {
+        this(baseUrl, model, apiKey, persona, acceptMode, preferences, overrides, DEFAULT_BRIDGE_PORT);
+    }
+
+    private ClientConfig(String baseUrl, String model, String apiKey, String persona,
+                         boolean acceptMode, Preferences preferences, Set<String> overrides, int bridgePort) {
+        if (bridgePort < 1 || bridgePort > 65535)
+            throw new IllegalArgumentException("任务桥端口须为1至65535的整数。");
         this.baseUrl = baseUrl == null ? "" : baseUrl;
         this.model = model == null ? "" : model;
         this.apiKey = apiKey == null ? "" : apiKey;
         this.persona = persona == null ? "" : persona;
         this.brainEnabled = notBlank(baseUrl) && notBlank(model) && notBlank(apiKey);
         this.acceptMode = acceptMode;
+        this.bridgePort = bridgePort;
         this.preferences = java.util.Objects.requireNonNull(preferences);
         this.environmentOverrides = Set.copyOf(overrides);
     }
 
     public ClientConfig withConnection(String url, String model, String key, String persona) {
-        return new ClientConfig(url, model, key, persona, acceptMode, preferences, environmentOverrides);
+        return new ClientConfig(url, model, key, persona, acceptMode, preferences, environmentOverrides, bridgePort);
     }
 
     public ClientConfig withPreferences(Preferences preferences) {
-        return new ClientConfig(baseUrl, model, apiKey, persona, acceptMode, preferences, environmentOverrides);
+        return new ClientConfig(baseUrl, model, apiKey, persona, acceptMode, preferences, environmentOverrides, bridgePort);
+    }
+
+    public ClientConfig withBridgePort(int port) {
+        return new ClientConfig(baseUrl, model, apiKey, persona, acceptMode, preferences, environmentOverrides, port);
     }
 
     public boolean connectionChanged(ClientConfig other) {
@@ -132,9 +146,17 @@ public final class ClientConfig {
         } catch (IllegalArgumentException invalid) {
             LoggerFactory.getLogger("mcbot").warn("client.json 上下文设置无效，使用默认值。");
         }
+        int port = DEFAULT_BRIDGE_PORT;
+        try {
+            int configured = integer(json, "bridge_port", DEFAULT_BRIDGE_PORT);
+            if (configured < 1 || configured > 65535) throw new IllegalArgumentException();
+            port = configured;
+        } catch (IllegalArgumentException invalid) {
+            LoggerFactory.getLogger("mcbot").warn("client.json 任务桥端口无效，使用默认端口。");
+        }
         return new ClientConfig(values[0], values[1], values[2], string(json, "persona", ""),
                 bool(json, "accept_mode", true),
-                p.withAutonomousActions(bool(json, "autonomous_actions", false)), overrides);
+                p.withAutonomousActions(bool(json, "autonomous_actions", false)), overrides, port);
     }
 
     public static JsonObject toJson(ClientConfig cfg) {
@@ -144,6 +166,7 @@ public final class ClientConfig {
         json.addProperty("api_key", cfg.apiKey);
         json.addProperty("persona", cfg.persona);
         json.addProperty("accept_mode", cfg.acceptMode);
+        json.addProperty("bridge_port", cfg.bridgePort);
         Preferences p = cfg.preferences;
         json.addProperty("context_window", p.contextWindow());
         json.addProperty("compact_threshold", p.compactThreshold());

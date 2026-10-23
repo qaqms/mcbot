@@ -18,6 +18,7 @@ class ClientConfigTest {
         assertTrue(config.preferences.autoCompact());
         assertFalse(config.preferences.autonomousActions());
         assertTrue(config.preferences.showHud());
+        assertEquals(17897, config.bridgePort);
     }
 
     @Test void autonomousPreferenceIsPersistedAndSurvivesUnrelatedDraftEdits() {
@@ -69,5 +70,29 @@ class ClientConfigTest {
         assertEquals(java.util.Set.of("model", "api_key"), config.environmentOverrides);
         assertEquals(config.environmentOverrides, config.withPreferences(config.preferences).environmentOverrides);
         assertEquals("override-model", config.model);
+    }
+
+    @Test void bridgePortRoundTripsAndSurvivesConnectionAndPreferenceEdits() {
+        var original = new ClientConfig("http://127.0.0.1", "offline", "synthetic", "persona", false)
+                .withBridgePort(17898);
+        var restored = ClientConfig.fromJson(ClientConfig.toJson(original), Map.of());
+        assertEquals(17898, restored.bridgePort);
+        assertEquals(17898, restored.withConnection("http://127.0.0.1", "other", "synthetic", "").bridgePort);
+        assertEquals(17898, restored.withPreferences(ClientConfig.Preferences.defaults()).bridgePort);
+        assertFalse(original.connectionChanged(restored));
+        assertFalse(original.connectionChanged(original.withBridgePort(17899)));
+        assertFalse(restored.acceptMode);
+    }
+
+    @Test void bridgePortRejectsInvalidUiValuesAndLoadsMalformedFilesWithoutEchoingThem() {
+        for (int value : new int[]{0, -1, 65536, Integer.MAX_VALUE})
+            assertThrows(IllegalArgumentException.class,
+                    () -> new ClientConfig("", "", "", "").withBridgePort(value));
+        for (String value : new String[]{"0", "-1", "65536", "1.5", "\"private-port\"", "null", "true", "[]"})
+            assertEquals(17897, ClientConfig.fromJson(com.google.gson.JsonParser.parseString(
+                    "{\"bridge_port\":" + value + "}").getAsJsonObject(), Map.of()).bridgePort);
+        for (int value : new int[]{1, 65535})
+            assertEquals(value, ClientConfig.fromJson(ClientConfig.toJson(
+                    new ClientConfig("", "", "", "").withBridgePort(value)), Map.of()).bridgePort);
     }
 }

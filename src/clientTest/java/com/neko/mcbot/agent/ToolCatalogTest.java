@@ -10,6 +10,20 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void actualWireToolSchemasHaveObjectRootsWithoutTopLevelCombinators() {
+        var provider = new OpenAiCompatProvider("offline", "http://127.0.0.1", "synthetic", "fixture");
+        var tools = provider.buildBody("system", List.of(), ToolCatalog.MODEL_SPECS).getAsJsonArray("tools");
+        assertEquals(31, tools.size());
+        for (var value : tools) {
+            var function = value.getAsJsonObject().getAsJsonObject("function");
+            var schema = function.getAsJsonObject("parameters");
+            String name = function.get("name").getAsString();
+            assertEquals("object", schema.get("type").getAsString(), name);
+            for (String keyword : List.of("oneOf", "anyOf", "allOf"))
+                assertFalse(schema.has(keyword), name + " has unsupported root " + keyword);
+        }
+    }
+
     @Test void followHasABoundedContinuousContractInsteadOfArrivalAsCompletion() {
         var help = ToolCatalog.read("{\"names\":[\"follow\"]}");
         assertTrue(help.ok(), help.feedback());

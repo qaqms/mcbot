@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotClient;
 import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.agent.AgentRunner;
+import com.neko.mcbot.cfg.ClientConfig;
 import com.neko.mcbot.agentcore.bridge.BridgeBackend;
 import com.neko.mcbot.agentcore.bridge.BridgeService;
 import com.neko.mcbot.agentcore.bridge.EventRing;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.BindException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,16 +31,17 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * neko 入口（设计 §9）：127.0.0.1:17897，Bearer token 鉴权（token 存 mcbot/bridge.token，跨重启稳定）。
+ * neko 入口（设计 §9）：127.0.0.1，默认端口17897可配置，Bearer token 鉴权。
  * REST /v1/* 与 MCP /mcp 全部路由进 BridgeService（agent-core 内核）；SSE /v1/events 在这里直连环形缓冲。
  * 只绑回环——绝不裸监听 0.0.0.0。
  */
 public final class BridgeHttp implements BridgeEvents.Sink {
 
-    public static final int PORT = 17897;
+    public static final int PORT = ClientConfig.DEFAULT_BRIDGE_PORT;
     private static final int MAX_BODY = 64 * 1024;
 
     private static volatile BridgeHttp instance;
+    private static volatile String startupFailure = "";
 
     private final HttpServer server;
     private final ExecutorService executor;
@@ -66,10 +69,19 @@ public final class BridgeHttp implements BridgeEvents.Sink {
             if (instance != null) {
                 return;
             }
+            int port = configuredPort();
             try {
-                instance = new BridgeHttp();
+                BridgeHttp bridge = new BridgeHttp(new RunnerBackend(McbotClient.runner()), loadOrCreateToken(), port);
+                BridgeEvents.attach(bridge);
+                instance = bridge;
+                startupFailure = "";
+                McbotMod.LOG.info("桥接已启动 {}（token 见 mcbot/bridge.token）", endpoint());
+            } catch (BindException e) {
+                startupFailure = "端口 " + port + " 无法绑定；请修改任务桥端口";
+                McbotMod.LOG.warn("任务桥无法绑定端口 {}，请在 G → 设置 → 通用中更换任务桥端口。", port);
             } catch (IOException e) {
-                McbotMod.LOG.error("桥接启动失败（端口 {} 被占？）", PORT, e);
+                startupFailure = "任务桥启动失败，请检查本地日志";
+                McbotMod.LOG.error("桥接启动失败（端口 {}）", port, e);
             }
         }
     }
@@ -77,24 +89,29 @@ public final class BridgeHttp implements BridgeEvents.Sink {
     public static void shutdown() {
         BridgeHttp b = instance;
         instance = null;
+        startupFailure = "";
         if (b != null) {
             b.stop();
         }
     }
 
     public static String endpoint() {
-        return "http://127.0.0.1:" + PORT;
+        BridgeHttp b = instance;
+        return "http://127.0.0.1:" + (b == null ? configuredPort() : b.port());
+    }
+
+    public static String statusText() {
+        return instance != null ? endpoint() : startupFailure.isEmpty() ? "未启动" : startupFailure;
+    }
+
+    private static int configuredPort() {
+        AgentRunner runner = McbotClient.runner();
+        return runner == null ? PORT : runner.config().bridgePort;
     }
 
     public static String tokenOrNull() {
         BridgeHttp b = instance;
         return b == null ? null : b.token;
-    }
-
-    private BridgeHttp() throws IOException {
-        this(new RunnerBackend(McbotClient.runner()), loadOrCreateToken(), PORT);
-        BridgeEvents.attach(this);
-        McbotMod.LOG.info("桥接已启动 {}（token 见 mcbot/bridge.token）", endpoint());
     }
 
     BridgeHttp(BridgeBackend backend, String token, int port) throws IOException {

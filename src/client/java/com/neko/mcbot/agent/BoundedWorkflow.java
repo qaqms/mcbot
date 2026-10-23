@@ -141,6 +141,10 @@ final class BoundedWorkflow {
                 JsonObject properties = schema.getAsJsonObject("properties");
                 if (!properties.keySet().containsAll(object.keySet()))
                     throw new ArgumentFailure(path, "含未声明字段；可用字段=" + properties.keySet());
+                int min = schema.has("minProperties") ? schema.get("minProperties").getAsInt() : 0;
+                int max = schema.has("maxProperties") ? schema.get("maxProperties").getAsInt() : Integer.MAX_VALUE;
+                if (object.size() < min || object.size() > max)
+                    throw new ArgumentFailure(path, "字段数量须为[" + min + "," + max + "]；可用字段=" + properties.keySet());
                 if (schema.has("required")) for (JsonElement key : schema.getAsJsonArray("required"))
                     if (!object.has(key.getAsString()))
                         throw new ArgumentFailure(path + "." + key.getAsString(), "缺少必要参数");

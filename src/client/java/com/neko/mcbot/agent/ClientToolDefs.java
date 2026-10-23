@@ -601,8 +601,7 @@ public final class ClientToolDefs {
             new ToolSpec("wait", "原地等待：整数 seconds（1-60秒）或 ticks（1-1200游戏刻）二选一。短拾取延迟用ticks，长工艺用seconds；结束后核对实际结果",
                     "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60},"
                             + "\"ticks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1200}},"
-                            + "\"oneOf\":[{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60}},\"required\":[\"seconds\"],\"additionalProperties\":false},"
-                            + "{\"type\":\"object\",\"properties\":{\"ticks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1200}},\"required\":[\"ticks\"],\"additionalProperties\":false}],\"additionalProperties\":false}"),
+                            + "\"minProperties\":1,\"maxProperties\":1,\"additionalProperties\":false}"),
             new ToolSpec("ask_owner", "拿不准就问主人（会推送给主人与 neko，等待回复最长 2 分钟；游戏内主人可用 @bot 答 <文本> 回答）。"
                     + "只在方向性决策上用：要不要卖这批货/挖这条洞/用哪个方案。别为琐碎小事滥用",
                     "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"},\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"text\"]}"));

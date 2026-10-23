@@ -32,7 +32,7 @@ class ModelProbe {
                     diagnostic -> System.out.println("request " + diagnostic.summary()),
                     diagnostic -> System.out.println("response " + diagnostic.summary()));
             if ("connection".equals(args[1])) {
-                boolean compatible = ModelConnectionTest.run(engine).get(100, TimeUnit.SECONDS);
+                boolean compatible = ModelConnectionTest.run(engine, ToolCatalog.MODEL_SPECS).get(100, TimeUnit.SECONDS);
                 System.out.println("tool_round_trip=" + compatible);
             } else {
                 String persona = config.has("persona") ? config.get("persona").getAsString() : "";

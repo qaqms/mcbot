@@ -53,4 +53,15 @@ class WorkflowArgumentTest {
             assertThrows(IllegalArgumentException.class, () -> BoundedWorkflow.parse(
                     "{\"steps\":[{\"tool\":\"wait\",\"args\":" + args + "}]}"));
     }
+
+    @Test void directAndProgramWaitValidationKeepsExactlyOneBoundedDuration() {
+        var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("wait")).findFirst().orElseThrow();
+        var schema = JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject();
+        for (String args : new String[]{"{\"ticks\":1}", "{\"ticks\":1200}", "{\"seconds\":1}", "{\"seconds\":60}"})
+            assertDoesNotThrow(() -> BoundedWorkflow.validate(JsonParser.parseString(args), schema));
+        for (String args : new String[]{"{}", "{\"ticks\":3,\"seconds\":1}", "{\"ticks\":0}",
+                "{\"ticks\":1201}", "{\"seconds\":61}", "{\"ticks\":null}", "{\"seconds\":\"1\"}",
+                "{\"ticks\":2.5}", "{\"ticks\":1,\"private-field\":true}"})
+            assertFalse(error("wait", args).isBlank(), args);
+    }
 }

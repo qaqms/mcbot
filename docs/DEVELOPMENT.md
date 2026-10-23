@@ -977,6 +977,8 @@ finally观察不吞原异常；诊断RuntimeException每身体固定警告一次
 先区分任务与只读按钮：状态/扫描按钮不经过模型，成功不证明模型任务可用。
 模型页“测试连接”检查独立两轮工具往返；真正模型任务的诊断在
 `[brain] llm response`，连接测试在 `[model-test] llm response`。
+2026-10-23起面板检查携带正式31项工具Schema及本地connection_probe，共32项声明；
+只有connection_probe可取得本地回执，游戏工具不执行。声明被拒不能记为连接检查通过。
 配对的 `[brain] llm request` / `[model-test] llm request` 记录实际出站 JSON 的结构计数。
 两类摘要均只含本地枚举、布尔与数值，不记录密钥、URL、模型名、提示词、工具参数、
 回执正文或内容哈希；`request` 是本进程内唯一的 HTTP 尝试编号，响应必须按它匹配请求，
@@ -1032,7 +1034,7 @@ finally观察不吞原异常；诊断RuntimeException每身体固定警告一次
 （平台路径分隔符 Windows 为 `;`，其他系统为 `:`）。
 参数是 `<实例目录>/mcbot/client.json` 与 `task` 或 `connection`，**不要把密钥写成命令行参数**。
 `task` 单请求使用真实提示词/技能/当前工具定义，只统计响应，不执行任何游戏工具；
-`connection` 最多两请求，只使用本地 connection_probe 回执。会产生实际 API 用量，
+`connection` 最多两请求，携带正式工具Schema，只使用本地 connection_probe 回执。会产生实际 API 用量，
 不得加入 build/定时任务或自动循环。它读取磁盘配置，不模拟启动器的环境变量覆盖与游戏历史。
 
 ### 4.2 反问回答离线回归

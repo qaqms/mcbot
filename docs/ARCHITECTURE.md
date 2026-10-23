@@ -1020,8 +1020,8 @@ CompanionScheduler.observation取得当前实际槽与TickTask计数，不把age
 - 查看状态入口及同伴页刷新直接派发白名单只读游戏工具，不调用模型、不生成agent task；
   身体快照按runner/身体代际隔离；未召唤仍由owner闸拒绝工具。
   物品图标按注册ID展示基础外观，不假设未回传组件，点槽不操作背包。详见 `PANEL.md`。
-- 设置的模型子页连接测试：ModelConnectionTest 使用独立 LlmClient，仅声明 connection_probe，
-  本地补配对工具回执后再请求最终文字，游戏工具不参与，配置不自动保存。
+- 设置的模型子页连接测试：ModelConnectionTest 使用独立 LlmClient，声明正式任务工具Schema及connection_probe，
+  仅本地补测试工具的配对回执后再请求最终文字；选择游戏工具则失败，游戏工具不执行，配置不自动保存。
   非 200 为 LlmFailure（HTTP 状态/网页类别），未知异常不回显原文；200 空流不作为成功作答。
 - 模型通信当前仅实现 OpenAI 兼容 Chat Completions SSE；模型名称可自定义，
   但尚未实现 Responses 或 Anthropic Messages。LlmClient 向宿主回调 ResponseDiagnostics：

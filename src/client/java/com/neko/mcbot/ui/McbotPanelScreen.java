@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.neko.mcbot.McbotClient;
 import com.neko.mcbot.agent.AgentRunner;
 import com.neko.mcbot.agent.PanelHistory;
+import com.neko.mcbot.agent.ToolCatalog;
 import com.neko.mcbot.agentcore.llm.LlmClient;
 import com.neko.mcbot.agentcore.llm.LlmFailure;
 import com.neko.mcbot.agentcore.llm.ModelConnectionTest;
@@ -52,7 +53,7 @@ public final class McbotPanelScreen extends Screen {
     private final List<Bubble> bubbles = new ArrayList<>();
     private final List<Slot> slots = new ArrayList<>();
     private final Set<Long> expandedTools = new HashSet<>();
-    private EditBox baseUrl, model, apiKey, summonName, windowTokens, threshold, recentBudget;
+    private EditBox baseUrl, model, apiKey, summonName, windowTokens, threshold, recentBudget, bridgePort;
     private MultiLineEditBox persona, chatInput;
     private ClientConfig.Preferences preferences;
     private boolean advanced, testing, compacting, draggingScroll, draftBound;
@@ -92,8 +93,9 @@ public final class McbotPanelScreen extends Screen {
             windowTokens = numeric("模型窗口", cfg.preferences.contextWindow());
             threshold = numeric("整理阈值", cfg.preferences.compactThreshold());
             recentBudget = numeric("近期保留量", cfg.preferences.recentBudget());
+            bridgePort = numeric("任务桥端口", cfg.bridgePort);
         }
-        for (var field : List.of(baseUrl, model, apiKey, summonName, windowTokens, threshold, recentBudget)) {
+        for (var field : List.of(baseUrl, model, apiKey, summonName, windowTokens, threshold, recentBudget, bridgePort)) {
             field.setTextColor(ink());
             field.setTextColorUneditable(muted());
         }
@@ -413,19 +415,22 @@ public final class McbotPanelScreen extends Screen {
                 .setTooltip(Tooltip.create(Component.literal(
                         "免去动作批准。保存模式变更将停止当前及排队任务；明确只读的任务仍只读。")));
         int y = text("本地任务桥", 4, 204, viewport.width() - 12, ink()) + 9;
-        y = text(BridgeHttp.tokenOrNull() == null ? "未启动" : BridgeHttp.endpoint(), 4, y, viewport.width() - 12, muted()) + 12;
+        y = text(BridgeHttp.statusText(), 4, y, viewport.width() - 12, muted()) + 12;
+        addField("任务桥端口", bridgePort, y);
+        bridgePort.setTooltip(Tooltip.create(Component.literal("1–65535；保存后生效，连接器需使用相同端口。")));
+        y += 50;
         var copy = formButton("复制连接令牌", y, 104, () -> {
             String token = BridgeHttp.tokenOrNull();
             if (token != null) { minecraft.keyboardHandler.setClipboard(token); toast("连接令牌已复制"); }
         });
         copy.active = BridgeHttp.tokenOrNull() != null;
         contentHeight = y + 30;
-        button("保存设置", layout.input(), PanelButton.Tone.PRIMARY, this::savePreferences);
+        button("保存设置", layout.input(), PanelButton.Tone.PRIMARY, this::saveGeneral);
     }
     private void addField(String label, AbstractWidget field, int y) {
         text(label, 4, y, viewport.width() - 12, muted());
         int w = field instanceof MultiLineEditBox ? Math.min(400, viewport.width() - 8)
-                : field == windowTokens || field == threshold || field == recentBudget ? Math.min(140, viewport.width() - 8)
+                : field == windowTokens || field == threshold || field == recentBudget || field == bridgePort ? Math.min(140, viewport.width() - 8)
                 : Math.min(400, viewport.width() - 8);
         var rect = new PanelLayout.Rect(viewport.x() + 4, viewport.y() + y + 16, w, field.getHeight());
         addRenderableWidget(field); scrolling.add(new Control(field, rect));
@@ -472,9 +477,34 @@ public final class McbotPanelScreen extends Screen {
         if (runner() == null) { toast("尚未连接世界"); return; }
         apply(runner().config().withPreferences(preferences));
     }
+    private void saveGeneral() {
+        AgentRunner r = runner();
+        if (r == null) { toast("尚未连接世界"); return; }
+        ClientConfig draft;
+        try {
+            draft = r.config().withPreferences(preferences).withBridgePort(Integer.parseInt(bridgePort.getValue()));
+        } catch (IllegalArgumentException invalid) {
+            toast("任务桥端口须为1至65535的整数");
+            return;
+        }
+        if (draft.bridgePort != r.config().bridgePort && r.contextSnapshot().busy()) {
+            toast("请先停止或完成任务，再修改任务桥端口");
+            return;
+        }
+        apply(draft);
+    }
     private void apply(ClientConfig cfg) {
         if (runner() == null) return;
-        try { runner().reconfigure(cfg); connectionResult = ""; toast("设置已保存"); rebuildWidgets(); }
+        boolean portChanged = runner().config().bridgePort != cfg.bridgePort;
+        try {
+            runner().reconfigure(cfg);
+            if (portChanged) BridgeHttp.shutdown();
+            if (portChanged || setting == Setting.GENERAL && BridgeHttp.tokenOrNull() == null)
+                BridgeHttp.ensureStarted();
+            connectionResult = "";
+            toast("设置已保存");
+            rebuildWidgets();
+        }
         catch (java.io.UncheckedIOException failure) { toast("保存失败，请检查本地文件权限"); }
     }
     private void updatePreferences(int window, int threshold, int recent, boolean automatic, boolean folded, boolean dark, boolean hud) {
@@ -495,15 +525,15 @@ public final class McbotPanelScreen extends Screen {
                     Duration.ofSeconds(30),
                     d -> com.neko.mcbot.McbotMod.LOG.info("[model-test] llm request {}", d.summary()),
                     d -> com.neko.mcbot.McbotMod.LOG.info("[model-test] llm response {}", d.summary()));
-            testing = true; connectionResult = "正在检查流式接口与工具往返";
+            testing = true; connectionResult = "正在检查工具声明与两轮往返";
             AgentRunner owner = runner();
-            connectionTest = ModelConnectionTest.run(engine);
+            connectionTest = ModelConnectionTest.run(engine, ToolCatalog.MODEL_SPECS);
             connectionTest.whenComplete((compatible, failure) -> minecraft.execute(() -> {
                 testing = false;
                 if (runner() != owner) return;
                 connectionResult = cfg.connectionChanged(draftConfig()) ? "配置已修改，请重新检查"
                         : failure != null ? LlmFailure.userMessage(failure)
-                        : Boolean.TRUE.equals(compatible) ? "连接成功，工具往返通过"
+                        : Boolean.TRUE.equals(compatible) ? "连接成功，工具声明与往返通过"
                         : "连接成功，工具往返未通过";
                 if (minecraft.screen == this) rebuildWidgets();
             }));
