@@ -295,7 +295,38 @@ class EntityAttackTest {
     }
 
     @Test void unsupportedBudgetFailsBeforeAccess() {
-        assertThrows(IllegalArgumentException.class, () -> new EntityAttack(new Access(), 0));
-        assertThrows(IllegalArgumentException.class, () -> new EntityAttack(new Access(), 11));
+        assertThrows(IllegalArgumentException.class, () -> new EntityAttack(new Access(), -1));
+        assertDoesNotThrow(() -> new EntityAttack(new Access(), 11));
+    }
+
+    @Test void unlimitedAttackContinuesPastTenStrikesUntilObservedDeath() {
+        var access = new Access();
+        access.health = 500;
+        access.effect = () -> { access.health--; if (access.health == 0) access.alive = false; };
+        var attack = new EntityAttack(access, 0);
+        for (int i = 0; i < 499; i++) assertNull(attack.tick());
+        var result = attack.tick();
+        assertTrue(result.ok());
+        assertEquals(500, result.data().get("strikes").getAsInt());
+        assertTrue(result.data().get("target_dead").getAsBoolean());
+        assertFalse(result.feedback().contains("上限"));
+        assertSame(result, attack.tick());
+    }
+
+    @Test void nativePickupFillingAnEmptyHandDoesNotInterruptCombatButExternalChangesDo() {
+        var access = new Access();
+        var pickups = new HandSnapshot.Pickups();
+        access.pickups = pickups;
+        access.inventory.setItem(0, ItemStack.EMPTY);
+        var attack = new EntityAttack(access, 0);
+        assertNull(attack.preflight());
+        var meat = new ItemStack(Items.BEEF, 2);
+        access.inventory.setItem(0, meat);
+        pickups.recorded(0, ItemStack.EMPTY, 0, meat, 2);
+        assertNull(attack.tick());
+        assertEquals(1, access.strikes);
+        access.inventory.setItem(0, new ItemStack(Items.IRON_AXE));
+        assertTrue(attack.tick().feedback().startsWith("WRONG_TOOL:"));
+        assertEquals(1, access.strikes);
     }
 }

@@ -19,7 +19,7 @@ import java.util.concurrent.CompletableFuture;
 
 /** Timed mining; final removal, harvest and durability use the vanilla player entry point. */
 public final class BreakBlockTool implements ServerTool {
-    public static final int CAP_TICKS = 1200;
+    public static final int CAP_TICKS = com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS;
 
     @Override public String name() { return "break_block"; }
     @Override public int capTicks(JsonObject args) { return CAP_TICKS; }
@@ -68,11 +68,11 @@ public final class BreakBlockTool implements ServerTool {
         try {
             clear = clearObstructions(args);
             id = authorizationId(args);
-            clearLimit = args.has("clear_limit") ? integer(args, "clear_limit") : BlockAim.MAX_CLEAR_BLOCKS;
-            if (clearLimit < 0 || clearLimit > BlockAim.MAX_CLEAR_BLOCKS) throw new IllegalArgumentException();
+            clearLimit = args.has("clear_limit") ? integer(args, "clear_limit") : BlockAim.DEFAULT_CLEAR_LIMIT;
+            if (clearLimit < 0) throw new IllegalArgumentException();
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
-                    "DENIED:clear_obstructions须为布尔，clear_limit为0-3整数，authorization_id须为短字符串。", null));
+                    "DENIED:clear_obstructions须为布尔，clear_limit为非负整数，authorization_id须为短字符串。", null));
         }
         if (sched.busy(c.getUUID())) return CompletableFuture.completedFuture(
                 new Result(false, "BUSY:我正忙着上一件事，等它结束或取消。", null));
@@ -151,7 +151,7 @@ public final class BreakBlockTool implements ServerTool {
         move.add("work_target", target);
         // Navigation has no smaller terminal clearing allowance; do not widen a stricter request.
         move.addProperty("clear_obstructions", clearObstructions(args)
-                && (!args.has("clear_limit") || integer(args, "clear_limit") == BlockAim.MAX_CLEAR_BLOCKS));
+                && (!args.has("clear_limit") || integer(args, "clear_limit") == BlockAim.DEFAULT_CLEAR_LIMIT));
         data.addProperty("recommended_tool", "move_to");
         data.add("recommended_args", move);
         return new Result(false, result.feedback()

@@ -71,6 +71,25 @@ class GatherMaterialTest {
                 ARGS.replace("\"count\":2","\"count\":2,\"targets\":[\"oak_log\"]")))
             assertThrows(RuntimeException.class,()->BoundedGather.parse(text));
     }
+
+    @Test void existingRecipeAlternativeSatisfiesDefaultMaterialSubtaskBeforeAnyWorldAction() {
+        var calls = new ArrayList<String>();
+        var gather = new BoundedGather(BoundedGather.parse(ARGS), state(0,0,0), () -> 0, (name,text) -> {
+            calls.add(name);
+            var data = switch (name) {
+                case "craft" -> json("{\"material\":{\"truncated\":false,\"sources\":["
+                        + "{\"item\":\"minecraft:oak_log\",\"block\":\"minecraft:oak_log\"},"
+                        + "{\"item\":\"minecraft:birch_log\",\"block\":\"minecraft:birch_log\"}]}}");
+                case "status" -> state(0,2,64);
+                default -> throw new AssertionError("existing materials must avoid world actions: " + name);
+            };
+            return CompletableFuture.completedFuture(new ToolOutcome(true, "fresh", data));
+        }, Runnable::run, () -> fail("no child"), text -> {});
+        var result = gather.start().join();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(2, result.data().get("actual_progress").getAsInt());
+        assertEquals(List.of("craft", "status"), calls);
+    }
     @Test void incompleteRecipeOptionsStopBeforeAnyWorldAction() {
         var queue=new ArrayDeque<Runnable>();
         var gather=new BoundedGather(BoundedGather.parse(ARGS),state(0,0,0),()->0,(name,text)->{

@@ -28,7 +28,7 @@ import java.util.List;
  * （该清的还清着、支撑还在、放过的没被拆）；变了就切 REPLAN_SEARCH 相位从当前
  * 位置**分帧**重搜（R1-S3：旧版单拍同步 while 的单帧冻结点已杀），旧路格 ×0.7 降权
  * 抑抖动，不以累计重规划次数停工。普通只行走候选使用世界快照和后台搜索；
- * 工作到达与编辑路线保留主线程分帧搜索。每次搜索节点 8000 / 400ms，
+ * 工作到达与编辑路线保留主线程分帧搜索。每次搜索最多 4000 节点，无默认累计时间门，
  * 撞帽且推进≥4 格提交 PARTIAL 半程段，不足则 NO_PROGRESS。
  *
  * 取消/超时：onAbort 清掉进行中的裂纹动画；future 由调度器统一完成。
@@ -36,14 +36,14 @@ import java.util.List;
 public final class PathTask extends TickTask {
 
     private static final int EXPAND_PER_TICK = 300; // 主线程每拍最多展开节点数
-    private static final int MAX_NODES = 8000;
-    private static final int MAX_DIGS = 128;
+    private static final int MAX_NODES = NavigationBudget.NODES;
+    private static final int MAX_DIGS = Integer.MAX_VALUE;
     private static final int RECHECK_EVERY = 20;
     private static final int RECHECK_AHEAD = 5;
     /** 单帧搜索时间切片（R1-S3 双帽之一）：节点帽 300 防无界，时间帽 6ms 防重节点撑爆单帧。 */
     private static final long SEARCH_SLICE_NS = 6_000_000L;
-    /** 单次搜索累计 CPU 预算（另一帽）：越界即撞帽走 PARTIAL/NO_PROGRESS 定性，TPS 无关。 */
-    private static final long SEARCH_TOTAL_NS = 400_000_000L;
+    /** Node and storage bounds terminate searches; slices keep the world thread responsive. */
+    private static final long SEARCH_TOTAL_NS = NavigationBudget.NANOS;
     /**
      * NEED_CONFIRM 清单内联进回执文本的字节预算（效率评估 §5.4）。
      * 取 1200B：足够列十余种方块（同类合并后通常全列得下），同时把这段

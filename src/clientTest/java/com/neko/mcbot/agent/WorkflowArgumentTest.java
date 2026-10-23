@@ -29,7 +29,7 @@ class WorkflowArgumentTest {
     }
 
     @Test void integersBooleansAndArrayElementsRetainTheirStrictTypesAndBounds() {
-        assertTrue(error("move_to", "{\"x\":2,\"y\":90,\"z\":0,\"max_digs\":129}").contains("[0,128]"));
+        assertTrue(error("move_to", "{\"x\":2,\"y\":90,\"z\":0,\"max_digs\":-1}").contains("[0,2147483647]"));
         assertTrue(error("move_to", "{\"x\":2,\"y\":90,\"z\":0,\"exact\":\"true\"}").contains("args.exact"));
         assertTrue(error("find_resource", "{\"targets\":[\"stone\",17]}").startsWith("args.targets[1]："));
         assertTrue(error("equip", "{\"slot\":2.5}").contains("integer"));

@@ -43,7 +43,7 @@ public final class BlockAim {
         public boolean ok() { return aim.ok(); }
     }
 
-    public static final int MAX_CLEAR_BLOCKS = 3;
+    public static final int DEFAULT_CLEAR_LIMIT = Integer.MAX_VALUE;
     public static final int MAX_PLAN_TRACES = 64;
 
     public static final class TraceBudget {
@@ -170,7 +170,7 @@ public final class BlockAim {
                         if (blockers.isEmpty()) return plan;
                         break;
                     }
-                    if (blockers.size() >= MAX_CLEAR_BLOCKS || !access.loaded(pos)
+                    if (!access.loaded(pos)
                             || !clearable.test(pos) || !ignored.add(pos)) break;
                     blockers.add(pos);
                 }

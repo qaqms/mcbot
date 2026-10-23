@@ -25,6 +25,7 @@ class ClearingMiningTest {
         final ActionPermissions.Context context;
         final Map<BlockPos, BlockState> cells = new HashMap<>();
         final List<BlockPos> removed = new ArrayList<>();
+        final List<BlockPos> covers = new ArrayList<>(List.of(COVER));
         boolean safe = true, hand = true, reserved = true, reported = true, correctTarget = true;
         float gain = 1;
         boolean emitDrops;
@@ -41,7 +42,7 @@ class ClearingMiningTest {
         }
         @Override public BlockAim.MiningPlan plan() {
             return new BlockAim.MiningPlan(new BlockAim.Aim(Vec3.atCenterOf(TARGET), null),
-                    cells.containsKey(COVER) ? List.of(COVER) : List.of());
+                    covers.stream().filter(cells::containsKey).toList());
         }
         @Override public BlockState state(BlockPos pos) { return cells.getOrDefault(pos, Blocks.AIR.defaultBlockState()); }
         @Override public boolean safe(BlockPos pos) { return safe; }
@@ -85,6 +86,24 @@ class ClearingMiningTest {
         assertTrue(result.data().get("removed").getAsBoolean());
         assertEquals(1, result.data().get("cleared_blocks").getAsInt());
         assertEquals(1, result.data().getAsJsonArray("clearing_results").size());
+    }
+
+    @Test void concretePlanCanClearMoreThanThreeCellsWhileExplicitLimitsAndNewBlockersStillStop() {
+        var f = new Fixture(true);
+        for (int y = 2; y <= 5; y++) {
+            var pos = TARGET.above(y);
+            f.covers.add(pos);
+            f.cells.put(pos, Blocks.DIRT.defaultBlockState());
+        }
+        assertTrue(f.sequence(null, 3).prepare().feedback().startsWith("BLOCK_LIMIT:"));
+        assertTrue(f.removed.isEmpty());
+        var sequence = f.sequence(null, BlockAim.DEFAULT_CLEAR_LIMIT);
+        assertNull(sequence.prepare());
+        for (int i = 0; i < 5; i++) assertNull(sequence.tick());
+        var result = sequence.tick();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(5, result.data().get("cleared_blocks").getAsInt());
+        assertEquals(6, f.removed.size());
     }
 
     @Test void clearingAndTargetOriginsStaySeparateAndCancellationRefreshesCompletedClearing() {

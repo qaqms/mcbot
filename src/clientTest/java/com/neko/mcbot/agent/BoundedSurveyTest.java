@@ -96,7 +96,7 @@ class BoundedSurveyTest {
         assertTrue(back.join().ok(), back.join().feedback());
         assertEquals(0, w.x); assertEquals(90, w.y);
         assertEquals(4, w.route.attempts());
-        assertEquals(128, w.route.remainingDigs());
+        assertEquals(Integer.MAX_VALUE, w.route.remainingDigs());
         assertEquals(24, w.route.undergroundDigs());
         assertTrue(w.moves.subList(2, 4).stream().allMatch(p -> p.get("walk_only").getAsBoolean()));
     }
@@ -148,7 +148,7 @@ class BoundedSurveyTest {
         assertTrue(future.join().feedback().startsWith("PARTIAL:"));
         assertEquals("status", w.calls.getLast());
         assertEquals(1, w.route.returnSteps());
-        assertEquals(128, w.route.remainingDigs());
+        assertEquals(Integer.MAX_VALUE, w.route.remainingDigs());
         assertEquals(12, w.route.undergroundDigs());
     }
     @Test void cancellationAndLateMovementNeverStartAnotherSearchOrReturn() {
@@ -184,7 +184,7 @@ class BoundedSurveyTest {
         var w = new World(); w.failMove = true; w.moveFailure = "TOOL_CHANGED:actual tool change";
         var future = w.survey(false).start(); w.drain();
         assertTrue(future.join().feedback().startsWith("TOOL_CHANGED:"));
-        assertEquals(128, w.route.remainingDigs());
+        assertEquals(Integer.MAX_VALUE, w.route.remainingDigs());
         assertEquals(12, w.route.undergroundDigs());
         assertEquals(1, w.route.returnSteps());
         assertEquals("status", w.calls.getLast());
@@ -206,7 +206,7 @@ class BoundedSurveyTest {
         moved.pending.complete(new ToolOutcome(false, "PARTIAL:external movement", json("{\"removed_blocks\":12}")));
         moved.drain();
         assertTrue(outside.join().feedback().startsWith("SCOPE_CHANGED:"));
-        assertEquals(128, moved.route.remainingDigs());
+        assertEquals(Integer.MAX_VALUE, moved.route.remainingDigs());
         assertEquals(12, moved.route.undergroundDigs());
         assertEquals("status", moved.calls.getLast());
     }

@@ -344,7 +344,7 @@ class AgentRunnerGatherTest {
         reply(found);
         assertEquals("break_block", client.lastTool().str("tool"));
         assertTrue(client.lastTool().obj("args").get("clear_obstructions").getAsBoolean());
-        assertEquals(3, client.lastTool().obj("args").get("clear_limit").getAsInt());
+        assertEquals(Integer.MAX_VALUE - 1, client.lastTool().obj("args").get("clear_limit").getAsInt());
         reply(JsonParser.parseString("{\"removed\":true,\"cleared_blocks\":2}").getAsJsonObject());
         assertEquals("status", client.lastTool().str("tool"));
         assertEquals(1, client.engine().responses.size());
@@ -395,7 +395,7 @@ class AgentRunnerGatherTest {
         assertEquals("break_block", client.lastTool().str("tool"));
         assertEquals("clear-plan", client.lastTool().obj("args").get("authorization_id").getAsString());
         assertEquals("minecraft:dirt", client.lastTool().obj("args").get("expected_block").getAsString());
-        assertEquals(3, client.lastTool().obj("args").get("clear_limit").getAsInt());
+        assertEquals(Integer.MAX_VALUE - 1, client.lastTool().obj("args").get("clear_limit").getAsInt());
         assertTrue(runner.taskState().contains("挖掘目标"));
         reply(JsonParser.parseString("{\"removed\":true,\"cleared_blocks\":2}").getAsJsonObject());
         reply(BoundedGatherTest.state(1));
@@ -557,7 +557,7 @@ class AgentRunnerGatherTest {
         client.drain();
         reply(BoundedGatherTest.state(5));
         client.engine().tools(1, new ToolCall("material", "gather",
-                "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"scope\":\"subtask\"}"));
+                "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,\"scope\":\"subtask\",\"mode\":\"additional\"}"));
         client.drain();
         assertEquals("status", client.lastTool().str("tool"));
         reply(BoundedGatherTest.state(5));

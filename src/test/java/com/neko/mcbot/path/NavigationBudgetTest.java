@@ -6,14 +6,46 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationBudgetTest {
     @Test void oldDefaultSnapshotMigratesToPerSearchPolicyWithoutLosingDiagnostics() {
-        var old = new NavigationBudget(8000, 32768, NavigationBudget.NANOS, 2).snapshot();
+        var old = new NavigationBudget(8000, 32768, 400_000_000L, 2).snapshot();
         old.remove("per_search");
         old.addProperty("replans", 2);
         var restored = NavigationBudget.restore(old);
         assertTrue(restored.perSearch());
         assertTrue(restored.takeReplan());
         assertEquals(3, restored.replans());
+        assertEquals(4000, restored.snapshot().get("node_cap").getAsInt());
+        assertEquals(Long.MAX_VALUE, restored.snapshot().get("time_cap").getAsLong());
         assertNotNull(search(restored));
+    }
+
+    @Test void defaultSearchCanFinishAfterOldCpuDeadlineWhileNodeBoundsStillTerminate() throws Exception {
+        var budget = new NavigationBudget();
+        var route = search(budget);
+        var elapsed = DigAStar.class.getDeclaredField("usedNanos");
+        elapsed.setAccessible(true);
+        elapsed.setLong(route, 500_000_000L);
+        while (!route.advance(20)) { }
+        budget.observe(route);
+        assertNull(route.failure(), "400ms is not a default search completion deadline");
+        assertTrue(budget.nanos() >= 500_000_000L);
+
+        var unreachable = new NavigationGoal() {
+            @Override public boolean reached(int x, int y, int z) { return false; }
+            @Override public double remaining(int x, int y, int z) { return 1; }
+        };
+        var limited = budget.search(FLOOR, 0, 0, 0, 30, 0, 0, unreachable);
+        while (!limited.advance(300)) { }
+        assertEquals("NODES", limited.budgetKind());
+        assertEquals(4000, limited.expanded() + limited.estimateExpanded());
+    }
+
+    @Test void explicitFiniteTimeAccountIsNotConvertedIntoUnlimitedByRestore() {
+        var explicit = new NavigationBudget(1000, 1000, 1, 2);
+        var restored = NavigationBudget.restore(explicit.snapshot());
+        assertFalse(restored.perSearch());
+        var route = search(restored);
+        assertTrue(route.advance(300));
+        assertEquals("TIME", route.budgetKind());
     }
     @Test void snapshotPreservesCustomCapsAndAlreadySpentSearchAndReplanBudget() {
         var original = new NavigationBudget(5, 1000, NavigationBudget.NANOS, 1);

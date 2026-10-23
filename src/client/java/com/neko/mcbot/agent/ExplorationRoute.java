@@ -159,7 +159,7 @@ final class ExplorationRoute {
     void abandon() { pending = false; }
     int remainingSteps() { return maxSteps == Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(0, maxSteps - attempts); }
     String stepLimitText() { return maxSteps == Integer.MAX_VALUE ? "不限" : Integer.toString(maxSteps); }
-    int remainingDigs() { return 128; } // Per-route edit envelope, not a task quota.
+    int remainingDigs() { return Integer.MAX_VALUE; }
     int undergroundDigs() { return undergroundDigs; }
     void recordDigs(JsonObject movement) {
         if (!movement.has("removed_blocks")) throw new IllegalArgumentException();

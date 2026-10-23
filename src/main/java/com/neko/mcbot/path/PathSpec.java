@@ -6,7 +6,7 @@ import net.minecraft.core.BlockPos;
 /** Per-route constraints are reapplied to search, cached plans and every live edit. */
 public record PathSpec(boolean workArrival, boolean clear, boolean underground, int maxDigs,
                        BlockPos anchor, int radius) {
-    public static final PathSpec DEFAULT = new PathSpec(false, false, false, 128, null, 64);
+    public static final PathSpec DEFAULT = new PathSpec(false, false, false, Integer.MAX_VALUE, null, 64);
 
     public static PathSpec parse(JsonObject args) {
         boolean work = false;
@@ -19,8 +19,8 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
         }
         boolean clear = bool(args, "clear_obstructions");
         boolean underground = bool(args, "underground");
-        int digs = args.has("max_digs") ? integer(args, "max_digs") : 128;
-        if (digs < 0 || digs > 128) throw new IllegalArgumentException();
+        int digs = args.has("max_digs") ? integer(args, "max_digs") : Integer.MAX_VALUE;
+        if (digs < 0) throw new IllegalArgumentException();
         BlockPos anchor = null;
         int radius = 64;
         if (args.has("bounds")) {

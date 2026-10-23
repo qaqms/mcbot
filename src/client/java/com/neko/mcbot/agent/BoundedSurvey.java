@@ -159,7 +159,7 @@ final class BoundedSurvey {
         if (route.remainingSteps() <= route.returnSteps() + 1) {
             finish(false, "EXPLORATION_LIMIT:已预留返程移动次数，停止向外推进；可用explore mode=return返回。"); return;
         }
-        int budget = Math.min(24, route.remainingDigs());
+        int budget = route.remainingDigs();
         var slots = state.getAsJsonObject("inventory");
         var selected = slots.getAsJsonArray("slots").get(ExplorationRoute.integer(slots, "selected_slot")).getAsJsonObject();
         int reserve = option("reserve_durability", 16);

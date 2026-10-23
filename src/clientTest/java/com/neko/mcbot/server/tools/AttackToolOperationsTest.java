@@ -15,11 +15,11 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AttackToolOperationsTest {
-    @Test void dynamicApproachRequiresAnExplicitBooleanAndKeepsTheOriginalHitAndTimeCaps() {
+    @Test void dynamicApproachRequiresAnExplicitBooleanWithoutADefaultTimeCap() {
         assertNotNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"approach\":true,\"max_hits\":2}")));
         for (String invalid : new String[]{"\"true\"", "1", "null", "[]"})
             assertNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"approach\":" + invalid + "}")));
-        assertEquals(400, new AttackTool().capTicks(json("{\"approach\":true}")));
+        assertEquals(-1, new AttackTool().capTicks(json("{\"approach\":true}")));
     }
     @BeforeAll static void registriesOnly() { BlockActionFixtures.bootstrap(); }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
@@ -45,7 +45,8 @@ class AttackToolOperationsTest {
         input = AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\"}"));
         assertNotNull(input);
         assertTrue(input.nearby());
-        assertEquals(1, input.maxHits());
+        assertEquals(0, input.maxHits());
+        assertEquals(100, AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"max_hits\":100}")).maxHits());
         assertNull(AttackTool.arguments(json("{\"entity_id\":47}")));
         assertNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"target_uuid\":\"" + uuid + "\"}")));
         assertNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"authorization_id\":\"proposal\"}")));
@@ -55,7 +56,7 @@ class AttackToolOperationsTest {
         for (String value : new String[]{"0", "-1", "1.5", "2147483648", "\"47\"", "null", "true", "{}", "[]", "\"nearby\""}) {
             assertNull(AttackTool.arguments(json("{\"entity_id\":" + value + ",\"target_uuid\":\"" + uuid + "\"}")), value);
         }
-        for (String value : new String[]{"0", "11", "2.1", "\"2\"", "false", "null", "1e100"}) {
+        for (String value : new String[]{"-1", "2147483648", "2.1", "\"2\"", "false", "null", "1e100"}) {
             assertNull(AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\",\"max_hits\":" + value + "}")), value);
         }
         for (String value : new String[]{"\"1-1-1-1-1\"", "\"bad\"", "null", "47", "true"}) {
@@ -76,7 +77,7 @@ class AttackToolOperationsTest {
         }
         assertFalse(AttackTool.ready(1, 11, false));
         assertFalse(AttackTool.ready(1, 0, true));
-        assertEquals(400, new AttackTool().capTicks(new JsonObject()));
+        assertEquals(-1, new AttackTool().capTicks(new JsonObject()));
         assertEquals(com.neko.mcbot.server.ServerTool.Acceptance.ACCEPT, new AttackTool().acceptanceMode());
     }
 
@@ -130,6 +131,14 @@ class AttackToolOperationsTest {
         var renamed = new EntityAttack.Target(47, UUID.fromString(uuid), "minecraft:pig",
                 false, true, false, true, 20, 0);
         assertTrue(AttackTool.permission(permissions, context, approved, renamed, 2).feedback().startsWith("NEED_CONFIRM:"));
+        assertTrue(AttackTool.permission(permissions, context, approved, target, 0).feedback().startsWith("NEED_CONFIRM:"),
+                "finite approval must never become an unlimited attack");
+        var unlimited = AttackTool.permission(permissions, context, unapproved, target, 0);
+        assertTrue(unlimited.data().get("authorization_summary").getAsString().contains("不设挥击次数"));
+        token = unlimited.data().get("authorization_id").getAsString();
+        assertTrue(permissions.approve(context, token));
+        var ongoing = new ActionPermissions.Execution(permissions.take(context, token, 47));
+        assertNull(AttackTool.permission(permissions, context, ongoing, target, 0));
     }
 
     @Test void approvalBindsApproachModeAndOriginalAnchorWithoutUpgradingStationaryApproval() {

@@ -23,8 +23,8 @@ import java.util.function.Supplier;
  */
 public final class MoveToTool implements ServerTool {
 
-    /** 一次寻路+走完的能力帽：3600 tick = 180s（远路要挖要垫，短帽会把它砍在半路）。 */
-    public static final int CAP_TICKS = 3600;
+    /** Progress and per-search resource checks govern movement, without a fixed total deadline. */
+    public static final int CAP_TICKS = com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS;
 
     @Override
     public String name() {

@@ -13,7 +13,8 @@ import java.util.Set;
 
 /** Trigger and lifecycle only. Native strikes and movement remain ordinary shared tasks. */
 public final class BodyDefense {
-    public static final int CAP_TICKS = 400, CALM_TICKS = 20, SOURCE_LIMIT = 64;
+    public static final int CAP_TICKS = com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS;
+    public static final int CALM_TICKS = 20, SOURCE_LIMIT = 64;
     public record Frame(Object world, boolean allowed, boolean higherPriority, boolean meleeActive,
                         Vec3 position, AABB bounds, float health, float maxHealth, boolean armed,
                         ThreatFacts.Snapshot facts) { }
@@ -30,8 +31,9 @@ public final class BodyDefense {
     }
 
     private final Access access;
-    // No eviction buys a failed identity another attack, route, permission or time allowance.
+    // Recent-source deduplication stays bounded without becoming a lifetime defense quota.
     private final Set<Object> handled = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final java.util.ArrayDeque<Object> handledOrder = new java.util.ArrayDeque<>();
     private ThreatFacts.Threat target;
     private BlockPos anchor, haven;
     private Object world;
@@ -59,8 +61,9 @@ public final class BodyDefense {
             boolean flee = mustRetreat(frame, candidate) || candidate.recentAttacker()
                     && !candidate.dangerous(frame.bounds(), .75);
             if (frame.meleeActive() && !flee) return;
-            if (handled.size() >= SOURCE_LIMIT) { state = "source_limit"; return; }
+            if (handled.size() >= SOURCE_LIMIT) handled.remove(handledOrder.removeFirst());
             handled.add(candidate.identity());
+            handledOrder.addLast(candidate.identity());
             anchor = BlockPos.containing(frame.position());
             if (!access.acquire(anchor)) { state = "busy"; return; }
             target = candidate;
@@ -81,10 +84,7 @@ public final class BodyDefense {
             finish("DENIED:自保原身体、世界或许可已失效，未续旧动作。");
             return;
         }
-        if (++elapsed >= CAP_TICKS) {
-            finish("TIMEOUT:自保达到原400刻总帽（含水中避险暂停），未重开。");
-            return;
-        }
+        if (elapsed < Integer.MAX_VALUE) elapsed++;
         if (frame.higherPriority()) {
             if (!suspended && work != null) work.onSuspend();
             suspended = true;
@@ -140,7 +140,7 @@ public final class BodyDefense {
                 work = access.retreat(haven, budget);
                 state = "retreat";
             } else {
-                if (!target.attackAllowed() || target.explosive() || strikes >= 10
+                if (!target.attackAllowed() || target.explosive()
                         || frame.facts().threats().stream().anyMatch(t -> t.explosive() && t.dangerous(frame.bounds(), 1.5))) {
                     finish("DENIED:当前来源不能自动攻击，未以撤退失败扩大许可。");
                     return;
@@ -150,7 +150,7 @@ public final class BodyDefense {
                     return;
                 }
                 if (!cornered) lastPlan = elapsed;
-                work = access.attack(target, 10 - strikes, !cornered, budget);
+                work = access.attack(target, 0, !cornered, budget);
                 state = cornered ? "cornered" : "defend";
             }
         }
@@ -183,7 +183,7 @@ public final class BodyDefense {
 
     private void noRetreat(Frame frame) {
         access.stopInput();
-        if (target.attackAllowed() && !target.explosive() && strikes < 10
+        if (target.attackAllowed() && !target.explosive()
                 && frame.facts().threats().stream().noneMatch(t -> t.explosive() && t.dangerous(frame.bounds(), 1.5))) {
             cornered = true;
             state = "cornered";

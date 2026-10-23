@@ -33,7 +33,7 @@ class ExplorationRouteTest {
         var movement = new JsonObject(); movement.addProperty("removed_blocks", 3); route.recordDigs(movement);
         var restored = ExplorationRoute.restore(route.snapshot());
         assertEquals(1, restored.attempts()); assertEquals(2, restored.remainingSteps());
-        assertEquals(128, restored.remainingDigs()); assertEquals(3, restored.undergroundDigs());
+        assertEquals(Integer.MAX_VALUE, restored.remainingDigs()); assertEquals(3, restored.undergroundDigs());
         assertEquals(route.bounds(), restored.bounds());
         assertEquals(route.trail(), restored.trail()); assertEquals(route.returnPoint(), restored.returnPoint());
         assertTrue(restored.tried(point(1, 69, 0)));
@@ -48,8 +48,11 @@ class ExplorationRouteTest {
         for (int i = 0; i < 20; i++) route.recordDigs(movement);
         var restored = ExplorationRoute.restore(route.snapshot());
         assertEquals(480, restored.undergroundDigs());
-        assertEquals(128, restored.remainingDigs());
+        assertEquals(Integer.MAX_VALUE, restored.remainingDigs());
         movement.addProperty("removed_blocks", 129);
+        restored.recordDigs(movement);
+        assertEquals(609, restored.undergroundDigs());
+        movement.addProperty("removed_blocks", -1);
         assertThrows(IllegalArgumentException.class, () -> restored.recordDigs(movement));
     }
     @Test void changingTerrainDuringPaginationCannotCertifyOneCompleteCoverageRegion() {

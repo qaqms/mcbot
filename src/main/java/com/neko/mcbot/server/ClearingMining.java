@@ -106,7 +106,7 @@ public final class ClearingMining {
             var live = access.plan();
             if (!live.ok()) return finish(false, live.aim().failure(), null);
             active = live.blockers().isEmpty() ? target : live.blockers().getFirst();
-            if (!active.equals(target) && clears.size() >= BlockAim.MAX_CLEAR_BLOCKS)
+            if (!active.equals(target) && clears.size() >= clearLimit)
                 return finish(false, "BLOCK_LIMIT:本次局部清理预算已到。", null);
             mining = access.mining(active);
         }

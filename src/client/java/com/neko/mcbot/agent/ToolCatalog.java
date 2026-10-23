@@ -39,8 +39,9 @@ public final class ToolCatalog {
             case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"
                     + "首次max_steps/radius固定，与gather共享原任务预算；发现不等于入包，取消不返程。";
             case "gather" -> "连续扫描、工作导航、挖掘、触碰拾取并核对实际背包。item是入包物品，targets是来源方块；先核对工具。"
-                    + "材料阶段scope=subtask，已有材料用mode=total；默认task登记最终目标。"
-                    + "material_for查询真实替代材料，不自动转换；explore_steps=0只在当前工区采集，原探索账不重置。";
+                    + "材料阶段scope=subtask默认mode=total复用已有材料，要求再收集才用additional；默认task登记最终目标。"
+                    + "任意木材等可替换材料用material_for查询真实配方来源，勿固定oak_log再挖spruce_log；不自动转换。"
+                    + "完整实际掉落不匹配时SOURCE_MISMATCH交回调整；explore_steps=0只在当前工区采集，原探索账不重置。";
             case "set_goal" -> "固定最终条件：type省略/item验背包数量，building验target/expected_revision全目标，"
                     + "delivery验container/item/count，additional须登记后本任务净存入及同容器净增量，transfer须item过滤。"
                     + "多阶段首次lifecycle=long_term，默认不限模型轮数和阶段数；结束前新鲜核验，持续跟随结束不替代目标完成。";
@@ -56,7 +57,7 @@ public final class ToolCatalog {
             case "smelt" -> "近身熔炉query只读，load按实际背包槽装料，take取出；装料不是烧制完成，wait后query/take。"
                     + "取消任务不熄炉，停产须取出原料。";
             case "break_block" -> "挖一格，主手须有采收资格；按实际进度消耗耐久，掉落留地，走近后核对背包。"
-                    + "expected_block保护观测目标，clear_obstructions最多3格且须原权限；ACCEPTED等真终态，不重发。";
+                    + "expected_block保护观测目标，clear_obstructions按具体安全清单且须原权限，默认无格数/总时长上限；ACCEPTED等真终态，不重发。";
             case "place_block" -> "放置到准确目标格，须真实命中可替换轮廓或邻接面；face默认up。"
                     + "query只读，须看preflight_passed；执行重验，失败核对实际消耗/变化，不自动重试。";
             case "build_nearby" -> "按build_diff同一target/expected_revision，在原地施工指定16格页，max_actions默认/最多12；"
@@ -79,6 +80,7 @@ public final class ToolCatalog {
                     + "数字entity_id必须同时带同一扫描条目的target_uuid；"
                     + "entity_id=\"hostile_nearby\"才不带UUID，且只选择附近未命名敌对生物。"
                     + "确认模式NEED_CONFIRM后ask_owner取得具体授权，保持approach。"
+                    + "默认持续至目标死亡/失效/受阻或取消，不设挥击及总时长上限；max_hits省略或0，只有主人指定次数才填正数。"
                     + "ACCEPTED等真终态，挥击次数不等于伤害或击杀。";
             case "collect" -> "兼容触碰拾取，身体会自动拾取；r只是查询范围，远处先走近。"
                     + "ok=false可能已部分拾取，按新鲜背包核对成果。";

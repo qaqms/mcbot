@@ -56,6 +56,8 @@ class JobEnvelopeTest {
         assertTrue(m.contains("180 秒"), "3600 tick 必须说成 180 秒：" + m);
         String b = ServerToolDispatcher.acceptText(new BreakBlockTool(), args(0, 0, 0), "j2", 1200);
         assertTrue(b.contains("60 秒"), "1200 tick 必须说成 60 秒：" + b);
+        String unlimited = ServerToolDispatcher.acceptText(new MoveToTool(), args(0, 0, 0), "j3", -1);
+        assertTrue(unlimited.contains("不设总时长上限") && unlimited.contains("取消"), unlimited);
     }
 
     @Test
@@ -93,9 +95,10 @@ class JobEnvelopeTest {
      */
     @Test
     void capTicksIsTheSingleSourceForBothSides() {
-        assertEquals(3600, new MoveToTool().capTicks(new JsonObject()));
-        assertEquals(1200, new BreakBlockTool().capTicks(new JsonObject()));
-        assertEquals(400, new com.neko.mcbot.server.tools.AttackTool().capTicks(new JsonObject()));
+        assertEquals(-1, new MoveToTool().capTicks(new JsonObject()));
+        assertEquals(-1, new BreakBlockTool().capTicks(new JsonObject()));
+        assertEquals(-1, new com.neko.mcbot.server.tools.AttackTool().capTicks(new JsonObject()));
+        assertEquals(Long.MAX_VALUE, com.neko.mcbot.agentcore.loop.PendingJobs.jobTimeoutMs(-1));
         // 客户端据此算的等待上限必须严格大于服务端帽（agent-core 的那条不变式）
         assertTrue(com.neko.mcbot.agentcore.loop.PendingJobs.jobTimeoutMs(3600) > 3600L * 50L);
     }

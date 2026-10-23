@@ -24,6 +24,7 @@ public final class AttackFixtures {
         public Runnable effect = () -> health -= 3;
         public Runnable movement = () -> {};
         public ServerTool.Result movementFailure;
+        public HandSnapshot.Pickups pickups;
 
         public Access() { inventory.setItem(0, new ItemStack(Items.IRON_SWORD)); }
         @Override public EntityAttack.Target target() {
@@ -33,6 +34,7 @@ public final class AttackFixtures {
         @Override public ServerTool.Result permission(EntityAttack.Target target, int maxHits) { return permission; }
         @Override public int selectedSlot() { return inventory.getSelectedSlot(); }
         @Override public ItemStack held() { return inventory.getItem(selectedSlot()); }
+        @Override public HandSnapshot.Pickups handPickups() { return pickups; }
         @Override public boolean ready() { return ready; }
         @Override public boolean reserve() { reservations++; return reserved; }
         @Override public void strike() { strikes++; effect.run(); }

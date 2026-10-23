@@ -129,21 +129,21 @@ class AgentRunnerTaskBubbleTest {
         receipt(BoundedGatherTest.state(0));
         client.engine().tools(0, new ToolCall("goal", "set_goal", "{\"item\":\"diamond\",\"count\":1}"));
         client.drain(); receipt(BoundedGatherTest.state(0));
-        runner.execute("gather", "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":3,\"scope\":\"subtask\"}");
+        runner.execute("gather", "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":4,\"scope\":\"subtask\"}");
         assertNull(runner.taskBubbleSnapshot().progress(), "no fresh subtask baseline yet");
         client.drain(); receipt(BoundedGatherTest.state(2));
         assertEquals("minecraft:dirt", runner.taskBubbleSnapshot().progress().item());
-        assertEquals(0, runner.taskBubbleSnapshot().progress().current());
+        assertEquals(2, runner.taskBubbleSnapshot().progress().current());
         receipt(json("{\"item_targets\":[]}"));
         var targets = new com.google.gson.JsonArray(); targets.add(BoundedGatherTest.block(true));
         var data = new JsonObject(); data.add("targets", targets);
         receipt(data);
         assertEquals("正在挖掘", runner.taskBubbleSnapshot().action());
         receipt(json("{\"removed\":true,\"drop_count\":64}"));
-        assertEquals(0, runner.taskBubbleSnapshot().progress().current());
+        assertEquals(2, runner.taskBubbleSnapshot().progress().current());
         receipt(BoundedGatherTest.state(3));
-        assertEquals(1, runner.taskBubbleSnapshot().progress().current());
-        assertEquals(3, runner.taskBubbleSnapshot().progress().target());
+        assertEquals(3, runner.taskBubbleSnapshot().progress().current());
+        assertEquals(4, runner.taskBubbleSnapshot().progress().target());
     }
     @Test void lateResultsAndQueuedTaskCancellationDoNotChangeTheNewTask() {
         start();

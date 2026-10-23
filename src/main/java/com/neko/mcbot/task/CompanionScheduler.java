@@ -62,6 +62,7 @@ public final class CompanionScheduler {
         TickTask task() { return task; }
         CompletableFuture<ServerTool.Result> future() { return future; }
         int capTicks() { return capTicks; }
+        boolean timedOut() { return capTicks > 0 && elapsed >= capTicks; }
         net.minecraft.server.level.ServerLevel level() { return level; }
     }
 
@@ -81,7 +82,8 @@ public final class CompanionScheduler {
             if (!control.control.claim(control)) return false;
         }
         active.put(id, new Slot(id, companion, task, future,
-                capTicks <= 0 ? DEFAULT_CAP_TICKS : capTicks, control));
+                capTicks == com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS
+                        ? capTicks : capTicks <= 0 ? DEFAULT_CAP_TICKS : capTicks, control));
         return true;
     }
 
@@ -335,7 +337,7 @@ public final class CompanionScheduler {
                     finish(slot, new ServerTool.Result(false, "BODY_DIED:原身体已终止，未继续旧工作。", null), true);
                     continue;
                 }
-                slot.elapsed++;
+                if (slot.elapsed < Integer.MAX_VALUE) slot.elapsed++;
                 if (slot.control != null && !slot.control.valid.getAsBoolean()) {
                     finish(slot, new ServerTool.Result(false, "DENIED:原任务身份或许可已失效，未续接工作。", null), true);
                     continue;
@@ -358,19 +360,19 @@ public final class CompanionScheduler {
                 if (active.get(slot.id()) != slot) continue;
                 if (slot.dormant) {
                     preempt(slot.id());
-                    if (active.get(slot.id()) == slot && slot.elapsed >= slot.capTicks())
+                    if (active.get(slot.id()) == slot && slot.timedOut())
                         finish(slot, timeout(slot), true);
                     continue;
                 }
                 if (slot.control != null && !slot.control.control.owns(slot.control)) {
                     preempt(slot.id());
                     if (active.get(slot.id()) != slot) continue;
-                    if (slot.elapsed >= slot.capTicks()) finish(slot, timeout(slot), true);
+                    if (slot.timedOut()) finish(slot, timeout(slot), true);
                     continue;
                 }
                 if (slot.suspended) {
                     // The original deadline includes preemption; returning the body cannot buy a new tick.
-                    if (slot.elapsed >= slot.capTicks()) {
+                    if (slot.timedOut()) {
                         finish(slot, timeout(slot), true);
                         continue;
                     }
@@ -391,7 +393,7 @@ public final class CompanionScheduler {
             if (p instanceof TickTask.Progress.Done d) {
                 finish(slot, d.result() == null
                         ? new ServerTool.Result(false, "INTERNAL:任务没有返回结果。", null) : d.result(), false);
-            } else if (slot.elapsed >= slot.capTicks()) {
+            } else if (slot.timedOut()) {
                 // 文案必须**按实际帽算**：这里原来硬写"60 秒"，而 move_to 的帽是 3600tick=180s，
                 // 于是模型看到的是"60 秒没做完"、实际等了 3 分钟——一句自相矛盾的读数会把
                 // "到底该不该重试"的判断带偏。（效率评估 §5.6 点名的那处。）

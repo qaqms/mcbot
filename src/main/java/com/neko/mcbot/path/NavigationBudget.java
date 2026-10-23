@@ -2,8 +2,9 @@ package com.neko.mcbot.path;
 
 /** Per-search resource bounds with cumulative diagnostics; explicit accounts can still impose a total. */
 public final class NavigationBudget {
-    public static final int NODES = 8000, RECORDS = 32768, REPLANS = Integer.MAX_VALUE;
-    public static final long NANOS = 400_000_000L;
+    public static final int NODES = 4000, RECORDS = 32768, REPLANS = Integer.MAX_VALUE;
+    public static final long NANOS = Long.MAX_VALUE;
+    private static final int LEGACY_NODE_CAP = 8000;
     private final int nodeCap, recordCap, replanCap;
     private final long timeCap;
     private int nodes, records, replans;
@@ -16,7 +17,7 @@ public final class NavigationBudget {
     public NavigationBudget() { this(NODES, RECORDS, NANOS, REPLANS); perSearch = true; }
 
     NavigationBudget(int nodes, int records, long nanos, int replans) {
-        if (nodes < 1 || nodes > NODES || records < 1 || records > RECORDS
+        if (nodes < 1 || nodes > LEGACY_NODE_CAP || records < 1 || records > RECORDS
                 || nanos < 1 || nanos > NANOS || replans < 0 || replans > REPLANS)
             throw new IllegalArgumentException("budget");
         nodeCap = nodes; recordCap = records; timeCap = nanos; replanCap = replans;
@@ -80,13 +81,21 @@ public final class NavigationBudget {
     }
 
     public static NavigationBudget restore(com.google.gson.JsonObject data) {
-        var value = new NavigationBudget(count(data, "node_cap", NODES), count(data, "record_cap", RECORDS),
-                number(data, "time_cap", NANOS), count(data, "replan_cap", REPLANS));
+        int nodeLimit = count(data, "node_cap", LEGACY_NODE_CAP);
+        int recordLimit = count(data, "record_cap", RECORDS);
+        long timeLimit = number(data, "time_cap", NANOS);
+        var value = new NavigationBudget(nodeLimit, recordLimit,
+                timeLimit, count(data, "replan_cap", REPLANS));
         if (data.has("per_search")) {
             if (!data.get("per_search").isJsonPrimitive() || !data.getAsJsonPrimitive("per_search").isBoolean())
                 throw new IllegalArgumentException();
             value.perSearch = data.get("per_search").getAsBoolean();
         } else value.perSearch = true; // Old default accounts used a cumulative two-replan policy.
+        if (value.perSearch) {
+            // Old default snapshots must not restore the retired 400ms search deadline.
+            value = new NavigationBudget(Math.min(nodeLimit, NODES), recordLimit, NANOS, REPLANS);
+            value.perSearch = true;
+        }
         value.nodes = count(data, "nodes", value.perSearch ? Integer.MAX_VALUE : value.nodeCap);
         value.records = count(data, "records", value.perSearch ? Integer.MAX_VALUE : value.recordCap);
         value.nanos = number(data, "nanos", value.perSearch ? Long.MAX_VALUE : value.timeCap);

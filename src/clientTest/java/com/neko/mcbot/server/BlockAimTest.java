@@ -84,6 +84,19 @@ class BlockAimTest {
         assertEquals(new Vec3(2.5, 1.5, .5), aim.point());
     }
 
+    @Test void workRayCanPlanFourRealBlockersWithoutAnArbitraryThreeBlockQuota() {
+        var grid = new Grid();
+        grid.blocks.clear();
+        var target = new BlockPos(5, 1, 0);
+        for (int x = 1; x <= 5; x++) grid.blocks.put(new BlockPos(x, 1, 0), Blocks.STONE.defaultBlockState());
+        var plan = BlockAim.miningPlan(grid, target, 5.5, pos -> true);
+        assertTrue(plan.ok(), plan.aim().failure());
+        assertEquals(4, plan.blockers().size());
+        assertEquals(new BlockPos(1, 1, 0), plan.blockers().getFirst());
+        assertEquals(new BlockPos(4, 1, 0), plan.blockers().getLast());
+        assertTrue(grid.traces <= BlockAim.MAX_PLAN_TRACES);
+    }
+
     @Test void aWallCannotBeMinedThroughEvenWhenTheTargetIsClose() {
         Grid grid = new Grid();
         grid.wall();
@@ -341,13 +354,15 @@ class BlockAimTest {
         assertFalse(BlockAim.miningPlan(grid, target, 4.5, pos -> false).ok());
     }
 
-    @Test void clearingPlanRejectsTooManyBlockersUnknownCellsAndDeniedChanges() {
+    @Test void clearingPlanAllowsConcreteBlockersButRejectsUnknownCellsAndDeniedChanges() {
         Grid grid = new Grid();
         grid.blocks.clear();
         BlockPos target = new BlockPos(0, 0, 0);
         grid.eye = new Vec3(.5, 5.62, .5);
         for (int y = 0; y <= 4; y++) grid.blocks.put(target.above(y), Blocks.STONE.defaultBlockState());
-        assertFalse(BlockAim.miningPlan(grid, target, 6.5, pos -> true).ok());
+        var plan = BlockAim.miningPlan(grid, target, 6.5, pos -> true);
+        assertTrue(plan.ok());
+        assertEquals(4, plan.blockers().size());
         grid = new Grid();
         grid.wall();
         assertFalse(BlockAim.miningPlan(grid, TARGET, 4.5, pos -> false).ok());

@@ -3,6 +3,18 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 动作与采集验收修正（2026-10-23）
+
+当前动作契约见[ACTION-LIMITS-AND-GATHER](ACTION-LIMITS-AND-GATHER-2026-10-23.md)。
+EntityAttack默认max_hits=0持续执行，attack/break_block/move_to的cap_ticks=-1
+同时贯通scheduler和PendingJobs；显式有限额度/批准、取消与实际失败仍有效。
+自保去掉400刻/10次及来源满64条停用，近期来源滚动去重。
+BoundedGather材料subtask默认total，完整实际生成错源后先新鲜status核验再交回模型；
+最终目标、精确物品与真实效果不放宽。旧单路线128格、射线清障3格门已取消。
+搜索、射线、身体与来源存储仍有资源保护；工作到达主线程回退和段间/坡地缺口保持。
+按维护者追加要求，逐次搜索改为4000节点、无默认400ms总时间门；
+旧默认账户恢复迁移，显式有限账户不放宽。参考整趟估价账户/32格接续仍未完整迁移。
+
 ## 快照导航与执行策略（2026-10-23）
 
 当前以[NAVIGATION-AND-EXECUTION-POLICY](NAVIGATION-AND-EXECUTION-POLICY-2026-10-23.md)为准。

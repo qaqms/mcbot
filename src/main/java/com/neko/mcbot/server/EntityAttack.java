@@ -4,7 +4,7 @@ import net.minecraft.world.item.ItemStack;
 
 import java.util.UUID;
 
-/** A bounded attack against one identity; native damage remains behind Access.strike. */
+/** Attack one identity until its outcome is known; native damage stays behind Access.strike. */
 public final class EntityAttack {
     public record Target(int id, UUID uuid, String type, boolean hostile, boolean named,
                          boolean protectedTarget, boolean alive, float health, float absorption) {
@@ -20,6 +20,7 @@ public final class EntityAttack {
         ServerTool.Result permission(Target target, int maxHits);
         int selectedSlot();
         ItemStack held();
+        default HandSnapshot.Pickups handPickups() { return null; }
         boolean ready();
         boolean reserve();
         void strike();
@@ -41,7 +42,7 @@ public final class EntityAttack {
     private ServerTool.Result strikeGuard;
 
     public EntityAttack(Access access, int maxHits) {
-        if (maxHits < 1 || maxHits > 10) throw new IllegalArgumentException("maxHits");
+        if (maxHits < 0) throw new IllegalArgumentException("maxHits");
         this.access = access;
         this.maxHits = maxHits;
     }
@@ -87,7 +88,7 @@ public final class EntityAttack {
         failure = access.permission(fresh, maxHits);
         if (failure != null) return finish(false, failure.feedback(), failure.data());
         if (held == null) {
-            held = new HandSnapshot(access.selectedSlot(), access.held());
+            held = new HandSnapshot(access.selectedSlot(), access.held(), access.handPickups());
         } else if (!held.matches(access.selectedSlot(), access.held())) {
             return finish(false, "WRONG_TOOL:攻击期间主手或选中槽改变，已停手；核对 inventory/equip。", null);
         }
@@ -119,13 +120,14 @@ public final class EntityAttack {
         absorptionLoss += Math.max(0, before.absorption() - after.absorption());
         observationKnown = true;
         // Native durability/breakage is accepted only after our own strike.
-        held = new HandSnapshot(access.selectedSlot(), access.held());
+        held = new HandSnapshot(access.selectedSlot(), access.held(), access.handPickups());
         target = after;
         if (!after.alive()) return finish(true, "目标已观察为死亡，本次停止。", null);
         if (before.health() <= after.health() && before.absorption() <= after.absorption()) {
             return finish(false, "ATTACK_FAILED:出手后没有观察到生命或吸收值减少，已停手；核对目标，勿自动重试。", null);
         }
-        if (strikes >= maxHits) return finish(true, "已达到本次挥击上限，目标仍存活。", null);
+        if (maxHits > 0 && strikes >= maxHits)
+            return finish(true, "已完成明确指定的挥击次数，目标仍存活。", null);
         return null;
     }
 
@@ -168,7 +170,8 @@ public final class EntityAttack {
             data.addProperty("health", target.health());
             data.addProperty("absorption", target.absorption());
         }
-        terminal = new ServerTool.Result(ok, feedback + " 本次调用原版攻击 " + strikes + "/" + maxHits
+        terminal = new ServerTool.Result(ok, feedback + " 本次调用原版攻击 " + strikes
+                + (maxHits > 0 ? "/" + maxHits : "")
                 + " 次，已观察生命减少 " + healthLoss + "、吸收减少 " + absorptionLoss
                 + "；死亡不等于本次独占击杀归因，未主动追捡掉落，身体触碰仍按原规则处理。"
                 + (observationKnown ? "" : " 最后一次出手结果未知，可能已有副作用，不能重投。"), data);

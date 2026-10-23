@@ -660,8 +660,10 @@ public final class AgentRunner implements ToolExecutor {
             LOG.warn("[brain] 迟到受理 seq={} job={}（该 seq 已被收走，丢弃）", seq, jobId);
             return;
         }
-        LOG.info("[brain] job {} 受理 {}（帽 {}tick ⇒ 本地等 {}s）",
-                jobId, j.tool(), capTicks, j.timeoutMs() / 1000);
+        if (capTicks == PendingJobs.UNLIMITED_CAP_TICKS)
+            LOG.info("[brain] job {} 受理 {}（无总时长上限，等待终态或主人取消）", jobId, j.tool());
+        else LOG.info("[brain] job {} 受理 {}（帽 {}tick ⇒ 本地等 {}s）",
+                    jobId, j.tool(), capTicks, j.timeoutMs() / 1000);
         if (!j.ticket().terminalOnly()) j.ticket().complete(ToolOutcome.accepted(jobId, env.str("text")));
     }
 
@@ -1486,7 +1488,7 @@ public final class AgentRunner implements ToolExecutor {
         }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
-                    "DENIED:流程参数无效；须1-12步、时限1-300秒、请求数合计≤128，动作数量明确填写。"
+                    "DENIED:流程参数无效；须1-12步，默认无总时限，可显式timeout_seconds=0-300，动作数量明确填写。"
                             + "只支持近身采集/放置/制作/烧制/等待/换主手与只读查询，先核对整个清单。"));
         }
         long taskId = currentTask;

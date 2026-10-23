@@ -98,16 +98,20 @@ class BodyDefenseTest {
         }
     }
 
-    @Test void nativeMeleeIsSharedAndFailedIdentityCannotRestartOrChangeTarget() {
+    @Test void nativeMeleeContinuesPastOldStrikeAndTimeCapsUntilTargetDies() {
         var a = new Access();
-        a.nativeAttack.effect = () -> a.nativeAttack.health--;
+        a.nativeAttack.health = 500;
+        a.nativeAttack.effect = () -> {
+            a.nativeAttack.health--;
+            if (a.nativeAttack.health <= 0) a.nativeAttack.alive = false;
+        };
         var defense = new BodyDefense(a);
         for (int i = 0; i < 500; i++) defense.tick(a.frame());
-        assertEquals(10, a.nativeAttack.strikes);
+        assertEquals(500, a.nativeAttack.strikes);
         assertEquals(1, a.attacks);
         assertEquals(1, a.claims);
         assertFalse(defense.active());
-        assertEquals(10, defense.observation().get("strikes").getAsInt());
+        assertEquals(500, defense.observation().get("strikes").getAsInt());
         assertEquals(1, a.releases);
     }
 
@@ -198,7 +202,7 @@ class BodyDefenseTest {
         defense.cancel();
     }
 
-    @Test void corneredFallbackUsesRemainingNativeStrikeAllowanceWithoutMovement() {
+    @Test void corneredFallbackUsesNativeAttackWithoutMovement() {
         var a = new Access();
         a.health = 3;
         a.destination = null;
@@ -226,17 +230,20 @@ class BodyDefenseTest {
         assertEquals(1, defense.observation().getAsJsonObject("last_result").get("episode_strikes").getAsInt());
     }
 
-    @Test void waterSuspensionCountsOriginalDeadlineAndCannotEmitAnotherStrike() {
+    @Test void waterSuspensionCanExceedOldDeadlineWithoutEmittingAnotherStrikeAndStillCancels() {
         var a = new Access();
         a.nativeAttack.ready = false;
         var defense = new BodyDefense(a);
         defense.tick(a.frame());
         a.water = true;
-        for (int i = 1; i < BodyDefense.CAP_TICKS; i++) defense.tick(a.frame());
-        assertFalse(defense.active());
+        for (int i = 1; i < 4000; i++) defense.tick(a.frame());
+        assertTrue(defense.active());
         assertEquals(1, a.advances);
-        assertEquals("timeout", defense.observation().get("state").getAsString());
-        assertEquals(400, defense.observation().get("elapsed_ticks").getAsInt());
+        assertEquals(-1, defense.observation().get("cap_ticks").getAsInt());
+        assertEquals(4000, defense.observation().get("elapsed_ticks").getAsInt());
+        defense.cancel();
+        assertFalse(defense.active());
+        assertEquals(1, a.releases);
         a.water = false;
         defense.tick(a.frame());
         assertEquals(1, a.claims);
@@ -322,7 +329,7 @@ class BodyDefenseTest {
         assertEquals(1, a.nativeAttack.strikes);
     }
 
-    @Test void sourceLedgerIsBoundedAndNeverEvictsAnOldFailure() {
+    @Test void sourceLedgerRollsWithoutEndingDefenseAfterSixtyFourSources() {
         var a = new Access();
         a.nativeAttack.effect = () -> {};
         var defense = new BodyDefense(a);
@@ -330,8 +337,9 @@ class BodyDefenseTest {
             a.source = new Object();
             defense.tick(a.frame());
         }
-        assertEquals(64, a.claims);
-        assertEquals(64, a.attacks);
-        assertEquals("source_limit", defense.observation().get("state").getAsString());
+        assertEquals(66, a.claims);
+        assertEquals(66, a.attacks);
+        assertEquals(64, defense.observation().get("handled_sources").getAsInt());
+        assertEquals("attack_failed", defense.observation().get("state").getAsString());
     }
 }

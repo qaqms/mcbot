@@ -31,9 +31,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-/** Shared native melee; optional bounded approach uses the same path and strike implementations. */
+/** Shared native melee; optional approach uses the same path and strike implementations. */
 public final class AttackTool implements ServerTool {
-    public static final int CAP_TICKS = 400;
+    public static final int CAP_TICKS = com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS;
     public static final double LOCAL_RADIUS = 6.5;
 
     public record Input(Integer entityId, UUID uuid, int maxHits, String authorizationId, boolean approach) {
@@ -59,9 +59,9 @@ public final class AttackTool implements ServerTool {
         NEARBY_TARGET_UUID("target_uuid", "hostile_nearby 模式不得携带此字段",
                 "移除此字段；如要指定目标，改用该目标的数字编号和 UUID。"),
         MAX_HITS_TYPE("max_hits", "JSON 数字形式的整数",
-                "用数字填写挥击上限，不加引号；省略时默认 1。"),
-        MAX_HITS_VALUE("max_hits", "1-10 的整数",
-                "将挥击上限设为 1-10，不用小数或溢出数值。"),
+                "用数字填写，省略或0持续攻击同一目标；仅明确要求有限挥击时填写正数。"),
+        MAX_HITS_VALUE("max_hits", "0-2147483647 的整数",
+                "省略或0不设挥击次数上限，不用负数、小数或溢出数值。"),
         APPROACH_TYPE("approach", "JSON 布尔值",
                 "true允许原范围内有限只行走接近，false或省略保持原地。"),
         AUTHORIZATION_ID_TYPE("authorization_id", "服务端授权编号字符串",
@@ -102,7 +102,8 @@ public final class AttackTool implements ServerTool {
     @Override public int capTicks(JsonObject args) { return CAP_TICKS; }
     @Override public String acceptSubject(JsonObject args) {
         Input input = arguments(args);
-        return input == null ? "有界近战" : "有界近战，最多挥击 " + input.maxHits() + " 次";
+        return input == null || input.maxHits() == 0 ? "持续攻击指定目标"
+                : "近战，指定挥击 " + input.maxHits() + " 次";
     }
 
     public static Input arguments(JsonObject args) {
@@ -148,7 +149,7 @@ public final class AttackTool implements ServerTool {
             }
             if (args.has("target_uuid")) return ParsedArguments.invalid(ArgumentError.NEARBY_TARGET_UUID);
         }
-        int hits = 1;
+        int hits = 0;
         if (args.has("max_hits")) {
             var value = args.get("max_hits");
             if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
@@ -160,7 +161,7 @@ public final class AttackTool implements ServerTool {
                 return ParsedArguments.invalid(ArgumentError.MAX_HITS_VALUE);
             }
         }
-        if (hits < 1 || hits > 10) return ParsedArguments.invalid(ArgumentError.MAX_HITS_VALUE);
+        if (hits < 0) return ParsedArguments.invalid(ArgumentError.MAX_HITS_VALUE);
         String authorization = null;
         if (args.has("authorization_id")) {
             var value = args.get("authorization_id");
@@ -430,6 +431,7 @@ public final class AttackTool implements ServerTool {
         }
         @Override public int selectedSlot() { return player.getInventory().getSelectedSlot(); }
         @Override public ItemStack held() { return player.getMainHandItem(); }
+        @Override public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return player.handPickups(); }
         @Override public boolean ready() {
             float charge = player.getAttackStrengthScale(0);
             return AttackTool.ready(charge, entity.invulnerableTime, player.cannotAttackWithItem(held(), 0));
@@ -465,8 +467,9 @@ public final class AttackTool implements ServerTool {
         String summary = "确认对实体 " + target.type() + "（entity_id=" + target.id() + "，target_uuid="
                 + target.uuid() + "）" + (approach ? "以" + BlockPos.of(anchor).toShortString()
                 + "为固定脚格锚点，在64格范围内只行走接近并执行" : "在当前位置执行")
-                + "原版近战，最多挥击 " + maxHits
-                + " 次、最多20秒；可能伤害或杀死该目标，已完成攻击不能撤销。";
+                + "原版近战，" + (maxHits > 0 ? "指定最多挥击 " + maxHits + " 次"
+                : "不设挥击次数及总时长上限，持续至目标死亡、失效、实际受阻或主人取消")
+                + "；可能伤害或杀死该目标，已完成攻击不能撤销。";
         if (com.neko.mcbot.common.WireSize.utf8Bytes(summary) > 12000) {
             return failed("DENIED:目标确认清单超出长度限制，不能批准截断清单。");
         }

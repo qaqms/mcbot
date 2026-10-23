@@ -63,13 +63,33 @@ class AttackSchedulerTest {
     @Test void perpetualCooldownEndsAtActualCapWithZeroStrikes() {
         var access = new AttackFixtures.Access();
         access.ready = false;
-        var receipt = start(access, AttackTool.CAP_TICKS);
-        for (int i = 1; i < AttackTool.CAP_TICKS; i++) scheduler.tick(present);
+        var receipt = start(access, 400);
+        for (int i = 1; i < 400; i++) scheduler.tick(present);
         assertFalse(receipt.isDone());
         scheduler.tick(present);
         assertTrue(receipt.join().feedback().startsWith("TIMEOUT:"));
         assertEquals(0, receipt.join().data().get("strikes").getAsInt());
         assertEquals(0, access.strikes);
+        assertReleased();
+    }
+
+    @Test void unlimitedActionSurvivesTheOldDeadlineAndStillCancelsWithEffects() {
+        var access = new AttackFixtures.Access();
+        access.effect = () -> access.health--;
+        access.health = 6000;
+        var receipt = scheduler.execute(body, List.of(), () -> {
+            var future = new CompletableFuture<ServerTool.Result>();
+            assertTrue(scheduler.submit(body, null, new AttackTool.Task(new EntityAttack(access, 0)),
+                    future, AttackTool.CAP_TICKS));
+            return future;
+        });
+        for (int i = 0; i < 4000; i++) scheduler.tick(present);
+        assertFalse(receipt.isDone(), "must survive both the old 400 and 3600 tick limits");
+        assertEquals(4000, access.strikes);
+        assertTrue(scheduler.cancel(body, "owner"));
+        assertEquals(4000, receipt.join().data().get("strikes").getAsInt());
+        scheduler.tick(present);
+        assertEquals(4000, access.strikes);
         assertReleased();
     }
 

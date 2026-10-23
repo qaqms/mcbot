@@ -38,8 +38,8 @@ class NavigationSearchTest {
                 }, new BlockPos(4, 0, 4), .6, 1.8, .6, PathSpec.DEFAULT, PathSpec.DEFAULT);
     }
     private DigAStar search(DigSampler terrain, NavigationGoal goal) {
-        var search = new DigAStar(terrain, 4, 0, 4, 10, 0, 4, 8000, 0, goal);
-        search.totalBudget(400_000_000L);
+        var search = new DigAStar(terrain, 4, 0, 4, 10, 0, 4, NavigationBudget.NODES, 0, goal);
+        search.totalBudget(NavigationBudget.NANOS);
         return search;
     }
     private void await(NavigationSearch pending) throws Exception {

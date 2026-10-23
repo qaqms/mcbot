@@ -91,9 +91,14 @@ class BoundedGatherTest {
             this(requested, baseline, scope, 8, null);
         }
         Fixture(int requested, int baseline, String scope, int exploreSteps, ExplorationRoute route) {
+            this(requested, baseline, scope, exploreSteps, route, null);
+        }
+        Fixture(int requested, int baseline, String scope, int exploreSteps, ExplorationRoute route, String mode) {
             count = baseline;
             gather = new BoundedGather(BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":"
-                    + requested + ",\"timeout_seconds\":600,\"max_blocks\":128,\"scope\":\"" + scope + "\",\"explore_steps\":" + exploreSteps + "}"),
+                    + requested + ",\"timeout_seconds\":600,\"max_blocks\":128,\"scope\":\"" + scope
+                    + "\"" + (mode == null ? "" : ",\"mode\":\"" + mode + "\"")
+                    + ",\"explore_steps\":" + exploreSteps + "}"),
                     state(baseline), () -> now, this::remote,
                     queue::addLast, () -> cancelled++, text -> { }, null, route);
         }
@@ -561,7 +566,7 @@ class BoundedGatherTest {
         assertEquals(1, result.data().get("exploration_max_steps").getAsInt());
         assertEquals(trail, route.trail());
         assertEquals(bounds, route.bounds());
-        assertEquals(128, route.remainingDigs());
+        assertEquals(Integer.MAX_VALUE, route.remainingDigs());
         assertEquals(12, route.undergroundDigs());
         assertTrue(route.exhausted());
         assertEquals(1, f.dug);
@@ -795,6 +800,35 @@ class BoundedGatherTest {
         assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
         assertEquals(0, result.data().get("actual_progress").getAsInt());
         assertEquals(128, f.dug);
+    }
+
+    @Test void completeMismatchedYieldReturnsToModelAfterFreshInventoryWithoutMiningAnotherBlock() {
+        var f = new Fixture(4, 0);
+        f.noYield = true;
+        f.nativeSpawns = JsonParser.parseString("[{\"item\":\"minecraft:acacia_log\"}]").getAsJsonArray();
+        f.nativeSpawnsComplete = true;
+        f.blockTargets = nearbyBatch(8);
+        var result = f.run();
+        assertFalse(result.ok());
+        assertTrue(result.feedback().startsWith("SOURCE_MISMATCH:"), result.feedback());
+        assertEquals(1, f.dug);
+        assertEquals("status", f.calls.getLast());
+        assertEquals(0, result.data().get("actual_progress").getAsInt());
+        assertEquals(0, result.data().getAsJsonObject("mismatched_source")
+                .getAsJsonObject("inventory_counts").get("minecraft:acacia_log").getAsInt());
+        assertFalse(result.data().get("goal_satisfied").getAsBoolean());
+    }
+
+    @Test void freshInventoryAcceptanceWinsOverAnUnrelatedSourceObservation() {
+        var f = new Fixture(1, 0);
+        f.pickupDuringMining = true;
+        f.nativeSpawns = JsonParser.parseString("[{\"item\":\"minecraft:acacia_log\"}]").getAsJsonArray();
+        f.nativeSpawnsComplete = true;
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(1, f.dug);
+        assertEquals(1, result.data().get("actual_progress").getAsInt());
+        assertTrue(result.data().get("goal_satisfied").getAsBoolean());
     }
 
     @Test void truncatedNativeSourceSamplesCannotInventAMismatchOrRelaxTheNoProgressBudget() {
@@ -1151,7 +1185,7 @@ class BoundedGatherTest {
     }
 
     @Test void materialSubtaskCountsOnlyWhatIsAddedAfterItsOwnFreshStart() {
-        var f = new Fixture(2, 5, "subtask");
+        var f = new Fixture(2, 5, "subtask", 8, null, "additional");
         f.count = 8;
         var result = f.run();
         assertTrue(result.ok(), result.feedback());
@@ -1203,5 +1237,14 @@ class BoundedGatherTest {
         assertTrue(result.ok(), result.feedback());
         assertEquals(5, result.data().get("actual_progress").getAsInt());
         assertEquals(List.of("status"), calls);
+    }
+
+    @Test void materialSubtaskDefaultsToExistingInventoryAndDoesNotMineAgain() {
+        var f = new Fixture(3, 5, "subtask");
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(5, result.data().get("actual_progress").getAsInt());
+        assertEquals(0, f.dug);
+        assertEquals(List.of("status"), f.calls);
     }
 }

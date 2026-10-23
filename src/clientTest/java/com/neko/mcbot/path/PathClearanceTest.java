@@ -80,6 +80,24 @@ class PathClearanceTest {
         @Override public int maxPlaces() { return 0; }
     }
 
+    @Test void livePlanValidationHasNoImplicit128DigQuota() {
+        var cells = new Cells();
+        var plan = new java.util.ArrayList<DigAStar.Step>();
+        plan.add(new DigAStar.Step(0, 64, 0, List.of(), List.of(), DigAStar.ACT_START));
+        for (int x = 1; x <= 40; x++)
+            plan.add(new DigAStar.Step(x, 64, 0, List.of(), List.of(), DigAStar.ACT_DIG));
+        for (int x = 40; x >= 0; x--)
+            plan.add(new DigAStar.Step(x, 64, 1, List.of(), List.of(), DigAStar.ACT_DIG));
+        for (var step : plan.subList(1, plan.size())) {
+            cells.blocked.add(DigAStar.pack(step.x(), 64, step.z()));
+            cells.blocked.add(DigAStar.pack(step.x(), 65, step.z()));
+        }
+        var live = PathTask.liveSteps(plan, 64, cells);
+        assertTrue(live.stream().mapToInt(step -> step.dig().size()).sum() > 128);
+        assertTrue(PathTask.editsFeasible(live, cells));
+        assertNotNull(PathTask.planFailure(live, cells, 128), "an explicit finite cap still applies");
+    }
+
     @Test void cachedAndFreshPlansRebuildTheSameCompleteClearance() {
         var cells = new Cells();
         var expected = DigAStar.clearanceCells(66, 88, 65, -12);

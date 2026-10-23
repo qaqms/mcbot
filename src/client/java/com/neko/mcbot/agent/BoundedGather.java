@@ -30,10 +30,12 @@ final class BoundedGather {
                 .containsAll(args.keySet())) throw new IllegalArgumentException();
         var goal = new JsonObject();
         for (String key : List.of("item", "count", "mode")) if (args.has(key)) goal.add(key, args.get(key));
+        var scope = ItemGoal.Scope.parse(args);
+        if (scope == ItemGoal.Scope.SUBTASK && !goal.has("mode")) goal.addProperty("mode", "total");
         JsonObject materialFor = null;
         if (args.has("material_for")) {
             materialFor = args.getAsJsonObject("material_for");
-            if (ItemGoal.Scope.parse(args) != ItemGoal.Scope.SUBTASK || args.has("item") || args.has("targets")
+            if (scope != ItemGoal.Scope.SUBTASK || args.has("item") || args.has("targets")
                     || !Set.of("item","ingredient","sources","recipe").containsAll(materialFor.keySet())
                     || !materialFor.has("item")) throw new IllegalArgumentException();
             integer(materialFor,"ingredient",0,0,8);
@@ -58,7 +60,7 @@ final class BoundedGather {
         }
         return new Plan(target, List.copyOf(names), integer(args, "r", 16, 1, 16),
                 integer(args, "timeout_seconds", 0, 0, 900), integer(args, "max_blocks", Integer.MAX_VALUE, 1, Integer.MAX_VALUE),
-                ItemGoal.Scope.parse(args), integer(args, "explore_steps", Integer.MAX_VALUE, 0, Integer.MAX_VALUE),
+                scope, integer(args, "explore_steps", Integer.MAX_VALUE, 0, Integer.MAX_VALUE),
                 integer(args, "explore_radius", 64, 16, 64), materialFor == null ? null : materialFor.deepCopy());
     }
 
@@ -116,6 +118,7 @@ final class BoundedGather {
     private int dropSettleWaits;
     private String lastProblem = "";
     private JsonObject lastData = new JsonObject();
+    private JsonObject mismatchedSource;
 
     BoundedGather(Plan plan, JsonObject baseline, LongSupplier clock,
                   BiFunction<String, String, CompletableFuture<ToolOutcome>> remote,
@@ -326,6 +329,19 @@ final class BoundedGather {
             if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; targetGroup = 0; }
             progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
             if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
+            if (mismatchedSource != null) {
+                lastData = state.deepCopy();
+                var counts = new JsonObject();
+                for (var item : mismatchedSource.getAsJsonArray("observed_items"))
+                    counts.addProperty(item.getAsString(), ItemGoal.count(state, item.getAsString()));
+                mismatchedSource.add("inventory_counts", counts);
+                finish(false, "SOURCE_MISMATCH:本次目标方块的完整实际掉落中未见所需物品，已核对新鲜背包，"
+                        + "停止沿错误来源继续采集，交回模型调整item/targets。"
+                        + "实际来源物品当前背包数量=" + counts + "。本次掉落不是未来掉落的保证；未禁止后续新调用。"
+                        + "已有材料用mode=total；通用配方材料用scope=subtask与material_for查询真实替代来源，"
+                        + "不要把一种木材的精确ID用于要求任意木材的阶段。");
+                return;
+            }
             if (com.neko.mcbot.agentcore.loop.BodyFacts.environmentUnsafe(state)) {
                 lastData = state.deepCopy();
                 finish(false, "ENVIRONMENT_UNSAFE:当前身体环境或避险恢复尚不安全，停止普通采集；先核对身体避险状态。");
@@ -571,7 +587,7 @@ final class BoundedGather {
         tried.add(blockKey(point));
         point.addProperty("exact", true);
         point.addProperty("clear_obstructions", true);
-        point.addProperty("max_digs", Math.min(128, Math.max(0, plan.maxBlocks() - dug - cleared - 1)));
+        point.addProperty("max_digs", Math.max(0, plan.maxBlocks() - dug - cleared - 1));
         var target = new JsonObject();
         for (String key : List.of("x", "y", "z")) target.addProperty(key, exact(block, key));
         point.add("work_target", target);
@@ -626,7 +642,7 @@ final class BoundedGather {
         for (String key : List.of("x", "y", "z")) args.addProperty(key, exact(block, key));
         args.addProperty("expected_block", block.get("block").getAsString());
         args.addProperty("clear_obstructions", true);
-        args.addProperty("clear_limit", Math.min(3, plan.maxBlocks() - dug - cleared - 1));
+        args.addProperty("clear_limit", Math.max(0, plan.maxBlocks() - dug - cleared - 1));
         call("break_block", args, receipt -> {
             lastData = receipt.data();
             int incidental = receipt.data().has("cleared_blocks")
@@ -646,7 +662,9 @@ final class BoundedGather {
                 if (!receipt.data().has("drop_spawns_complete")
                         || receipt.data().get("drop_spawns_complete").getAsBoolean())
                     recordYield(block, receipt.data().has("drop_spawns")
-                            ? receipt.data().getAsJsonArray("drop_spawns") : drops);
+                            ? receipt.data().getAsJsonArray("drop_spawns") : drops,
+                            receipt.data().has("drop_spawns_complete")
+                                    && flag(receipt.data(), "drop_spawns_complete"));
                 if (drops != null) for (var drop : drops) {
                     var item = drop.getAsJsonObject();
                     if (acceptedItems.contains(item.get("item").getAsString())) dropSettlePending = true;
@@ -663,9 +681,9 @@ final class BoundedGather {
         });
     }
 
-    private void recordYield(JsonObject block, JsonArray drops) {
+    private void recordYield(JsonObject block, JsonArray drops, boolean complete) {
         // Only the requested block's receipt is evidence here, never incidental clearing_results.
-        if (drops == null || drops.isEmpty() || sourceObservations.size() >= 8) return;
+        if (drops == null || drops.isEmpty()) return;
         if (drops.size() > 32) throw new IllegalArgumentException();
         var items = new java.util.TreeSet<String>();
         for (var drop : drops) {
@@ -683,7 +701,8 @@ final class BoundedGather {
         evidence.addProperty("observed_item_count", items.size());
         evidence.addProperty("items_truncated", items.size() > 8);
         evidence.addProperty("observed_goal_item", items.stream().anyMatch(acceptedItems::contains));
-        sourceObservations.add(evidence);
+        if (complete && items.stream().noneMatch(acceptedItems::contains)) mismatchedSource = evidence.deepCopy();
+        if (sourceObservations.size() < 8) sourceObservations.add(evidence);
     }
 
     private void walk(List<JsonObject> positions, int index, Set<String> tried, Runnable unavailable) {
@@ -692,7 +711,7 @@ final class BoundedGather {
         JsonObject point = positions.get(index).deepCopy();
         tried.add(blockKey(point));
         point.addProperty("exact", true);
-        point.addProperty("max_digs", Math.min(128, Math.max(0, plan.maxBlocks() - dug - cleared)));
+        point.addProperty("max_digs", Math.max(0, plan.maxBlocks() - dug - cleared));
         call("move_to", point, receipt -> {
             if (receipt.ok()) { afterMovement(receipt, null); return; }
             if (localRouteFailure(receipt.feedback())) {
@@ -789,6 +808,7 @@ final class BoundedGather {
         excludedItems.values().forEach(excluded::add);
         data.add("scope_exclusions", excluded);
         data.add("source_observations", sourceObservations.deepCopy());
+        if (mismatchedSource != null) data.add("mismatched_source", mismatchedSource.deepCopy());
         data.add("last_observation", lastData);
         for (String key : List.of("authorization_id", "authorization_summary"))
             if (lastData.has(key)) data.add(key, lastData.get(key).deepCopy());

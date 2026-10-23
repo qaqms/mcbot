@@ -638,7 +638,8 @@ public final class SelfTest {
         for (String n : names) {
             var t = registry.get(n);
             boolean isAccept = t.acceptanceMode() == com.neko.mcbot.server.ServerTool.Acceptance.ACCEPT;
-            boolean shouldAccept = "move_to".equals(n) || "break_block".equals(n) || "attack".equals(n);
+            boolean shouldAccept = java.util.Set.of("move_to", "break_block", "attack",
+                    "follow", "consume", "build_nearby").contains(n);
             policyOk &= isAccept == shouldAccept;
             if (isAccept) {
                 accept++;
@@ -657,12 +658,14 @@ public final class SelfTest {
         String prefix = com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome.ACCEPTED_PREFIX;
         boolean 前缀对 = text.startsWith(prefix);
         boolean 教学齐 = text.contains("还没有结果") && text.contains("别猜")
-                && text.contains("别等") && text.contains("j1");
-        boolean 秒数按帽 = text.contains(String.valueOf(cap / 20));
+                && text.contains("别重发") && text.contains("后续工具等") && text.contains("j1");
+        boolean unlimited = cap == com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS;
+        boolean 时限一致 = unlimited ? text.contains("不设总时长上限") && text.contains("取消")
+                : text.contains(Math.max(1, cap / 20) + " 秒");
 
         // ③ 超时口径：客户端等待上限必须**严格大于**服务端帽，否则 TIMEOUT 是"客户端先跑了"
         long clientWait = com.neko.mcbot.agentcore.loop.PendingJobs.jobTimeoutMs(cap);
-        boolean 客户端等更久 = clientWait > cap * 50L;
+        boolean 客户端等更久 = unlimited ? clientWait == Long.MAX_VALUE : clientWait > cap * 50L;
         // 相位映射：叫停/顶替与普通失败必须分得开（客户端补账话术不同）
         boolean 相位对 = "cancelled".equals(com.neko.mcbot.server.ServerToolDispatcher
                 .phaseOf(false, "CANCELLED:主人叫停了。"))
@@ -673,9 +676,9 @@ public final class SelfTest {
 
         McbotMod.LOG.info("[r2c] ACCEPT={} 条 SYNC={} 条 策略全对={}", accept, sync, policyOk);
         McbotMod.LOG.info("[r2c] 受理文案快照：{}", text);
-        McbotMod.LOG.info("[r2c] 前缀对={} 教学齐={} 秒数按帽({}s)={} 客户端等{}ms>帽{}ms={} 相位映射={}",
-                前缀对, 教学齐, cap / 20, 秒数按帽, clientWait, cap * 50L, 客户端等更久, 相位对);
-        McbotMod.LOG.info("[r2c] 判读基准：策略全对=true 且 前缀对/教学齐/秒数按帽/客户端等更久/相位映射 五 true。"
+        McbotMod.LOG.info("[r2c] 前缀对={} 教学齐={} 时限一致={} 无限={} 客户端等待一致={} 相位映射={}",
+                前缀对, 教学齐, 时限一致, unlimited, 客户端等更久, 相位对);
+        McbotMod.LOG.info("[r2c] 判读基准：策略全对=true 且 前缀对/教学齐/时限一致/客户端等待一致/相位映射 五 true。"
                 + "**本场景只验策略与契约**——job 往返（受理→PARK→事件→续跑）在 agent-core 单测里；"
                 + "真机对接看 [brain] job 受理/结束 与 [brain] park= 日志。");
         f0LifecycleScenario(cp);

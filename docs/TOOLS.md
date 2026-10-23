@@ -5,13 +5,22 @@
 
 ## 当前执行限制（2026-10-23）
 
+攻击/挖掘后续覆盖见[ACTION-LIMITS-AND-GATHER](ACTION-LIMITS-AND-GATHER-2026-10-23.md)。
+attack默认max_hits=0持续，attack/break_block/move_to无默认总时限；
+cap_ticks=-1贯通服务端及客户端等待，取消及有限批准仍有效。
+max_digs和clear_limit省略不限次数，非负显式值有效，0禁止相应挖掘/清障。
+gather材料subtask默认total复用现有库存，additional须明确指定；
+完整真实掉落错源后新鲜核验，未满足则SOURCE_MISMATCH交回模型，精确目标不放宽。
+维护者追加按参考核对保护：权限/取消/节点资源参考均有，故保留；
+当前每次4000节点/32768记录，无默认400ms搜索总时间门，仍分片且支持取消。
+
 以[NAVIGATION-AND-EXECUTION-POLICY](NAVIGATION-AND-EXECUTION-POLICY-2026-10-23.md)覆盖下方历史额度。
 仍31工具：run_program默认timeout_seconds/max_calls=0不限；长期max_runs默认0不限，
 默认模型轮数、重复五次/空搜三次/拒绝假完成三次门取消。正数可主动限制单次程序/阶段。
 gather默认不限时间/挖掘/探索次数，explore_steps=0仍关闭换区；explore省略max_steps不限。
 workflow省略时间不限，无128件总额度；仍为1–12个明确步骤载荷。
 mc.build的max_rounds默认0不限；工地轮数/编辑数、地下累计挖掘仅诊断。
-每次导航仍8000节点/32768记录/400ms，无默认累计两次重规划门；
+每次导航4000节点/32768记录，无默认搜索总时间或累计两次重规划门；
 move_to终态/观察有search_mode，后台结果有worker_search_ms，与主线程path_timing分列。
 显式approach范围64格，原目标UUID/实际出手距离/批准绑定保留，被动自保仍近场。
 权限、取消、身体控制、未知状态、来源/返程存储和单次动作保护保留。
@@ -139,14 +148,15 @@ records.status区分intact/absent/conflict/unknown，action_count为真实变化
 只读不触发，保护/命名/中立来源不自动还击。status.body_defense报告固定来源/范围、
 状态、实际出手/观察伤害、暂停及累计账；defense_active/defense_state/threat_scan_complete
 概要同步Lua。local_clear只表示连续20刻局部安全，不保证甩掉追兵或整项目标完成。
-400刻含暂停/10次出手/6格局部节点球交原工作范围，每身体最多64来源各一次自动处理。
+2026-10-23已去掉400刻/10次门，6格局部节点球交原工作范围仍有效。
+近期来源最多64条滚动去重，不因来源记录满而永久停用。
 cancel停止自动自保至新task_begin，新任务不清旧来源账。原显式工具仍走原许可。
 完整机制、边界与实机待验见D2-BODY-DEFENSE-2026-10-17.md。
 
 ## D1 动态近战（2026-10-17）
 
-attack新增严格布尔approach，默认false保持原地；true在固定初始脚格锚点6.5格内
-只行走接近同一实体，不挖放或换目标，400刻/1–10次原帽保持。
+attack新增严格布尔approach，默认false保持原地；true在固定初始脚格锚点64格内
+只行走接近同一实体，不挖放或换目标，2026-10-23已取消默认次数与总时限门。
 授权绑定模式与原锚点，原地许可不能升级；移动前与出手前都核保护/世界/任务及实际几何。
 迟滞、原累计导航账、真实效果及未覆盖见D1-DYNAMIC-MELEE，字段详见§2.7；
 工具仍26项，不另加依赖规划器或持续自卫触发。
@@ -416,8 +426,8 @@ data.failure_memory含reason/failures/limit/entry_limit/dispatched=false。
   范围/配置拒绝提示局部模式供模型选择，不等于已经执行恢复。
 - `break_block`仅在无已知挖除/清理效果的OUT_OF_REACH或TARGET_BLOCKED时，
   给`recommended_tool:"move_to"`与`recommended_args`，含exact/arrival=work/work_target。
-  原错误类型保留，建议不执行、不保证可达、不携带旧授权；原clear_limit小于3时，
-  不建议开启导航终点的三格清理。其他失败与部分效果不改写为可恢复。
+  原错误类型保留，建议不执行、不保证可达、不携带旧授权；显式有限clear_limit时，
+  不建议开启导航终点的不限次数清理评估。其他失败与部分效果不改写为可恢复。
 - `run_program`终态子回执有编号；print/return中与已记录反馈完全相同的文字显示为编号，
   不折叠实际调用或只相似的文本。Lua实际值、`data.returned`、终态/计数/失败和原预算保持。
   这是显示去重，不是省略查询结果或新的错误恢复语言。
@@ -470,10 +480,10 @@ data.failure_memory含reason/failures/limit/entry_limit/dispatched=false。
 
 - `move_to`新增可选`arrival:"work"`，须`exact:true`及`work_target:{x,y,z}`。
   搜索实际可工作的脚格，输入x/y/z仍必填且为规划盒校验位置，不要求最终站在该格。
-  `clear_obstructions:true`允许以原有最多3格清理判据评估终点，目标和其支撑不清；
+  `clear_obstructions:true`允许以实际射线安全清单评估终点，目标和其支撑不清；
   到站后再用活世界核对，不能把回执当成目标已挖除。
   可选`underground:true`限制相邻水平步/高差最多1、不搭桥或垫柱；
-  `max_digs:0..128`限制本趟实际开路累计，重规划不重置。
+  `max_digs`为可选非负整数，省略不限开路次数；显式有限值重规划不重置，0禁止开路。
   `bounds:{x,y,z,radius}`是球形范围，radius为1..64；起终点、节点、挖放格及实际位置均受限。
   `walk_only:true`继续禁止全部挖放，不因上述参数扩大许可；省略新参数兼容位置到达。
 - `explore`默认`mode:"surface"`保持只行走换区。
@@ -587,11 +597,11 @@ gather的move_to携带exact=true及work_target，移动真终态再次评估视�
 到站后仍受遮挡/超距或挖掘预检失败时，尝试剩余不同站位，不重复同一站位。
 仅耗尽本目标站位后计一次受阻；NO_PATH/NO_PROGRESS可换站位，
 TARGET_LOST放弃旧目标并重新观测，权限/缺工具/未知效果直接交回模型。
-真正移除方块后撤销此前的受阻目标记录，再按新查询评估，原三次无成果、
-1024调用/时间/矿格/共享预算不变。2026-10-14追加局部清理：
+真正移除方块后撤销此前的受阻目标记录，再按新查询评估。
+2026-10-23已取消默认三次无成果、总调用/时间/矿格门。局部清理：
 当前与假想站位、move_to终态和清理执行共用MiningWork/BlockAim.miningPlan，
-允许射线上最多3格已核对安全的遮挡，计划只读，不点击穿墙或改变世界。
-gather自动携带clear_obstructions=true及clear_limit=min(3,剩余挖掘预算-1)，
+允许实际射线上已核对安全的遮挡，保留射线资源保护，计划只读，不点击穿墙或改变世界。
+gather自动携带clear_obstructions=true及clear_limit=剩余挖掘预算-1，
 服务端按具体清单/自主模式裁决，不需模型逐格安排落叶或少量泥土清理。
 清理超限、神圣方块/支撑、脚下支撑、液体邻接、重力方块或不具采收资格时仍停止。
 目标与遮挡使用真实BlockMining，清理后重评射线；清单外新格/状态变化不自动扩大范围。
@@ -672,9 +682,9 @@ gather仍优先本地处理分页；workflow没有条件分支，空结果仍立
 {"item":"oak_log","targets":["oak_log"],"count":4,"scope":"subtask"}
 ```
 
-scope=subtask只建立局部材料条件，不登记/覆盖/降低最终目标。
+scope=subtask只建立局部材料条件，不登记/覆盖/降低最终目标，省略mode默认total。
 additional从本次gather的第一份新鲜完整36槽状态起算；total表示当前总量足够，
-因此已有足量材料时宜用total，避免重复采集。不同材料可先后调用，
+因此已有足量材料时直接验收；明确要求再收集才用additional。不同材料可先后调用，
 配方、工具和后续阶段仍据实际结果选择，没有成品专用流程。
 子任务成功不等于主人任务完成，最终结束仍重新核验set_goal；
 取消/超时发生在第一份状态前时明确无局部基线，不能编造进度。
@@ -804,11 +814,11 @@ status的实际服务端回执包含permission_mode=confirm/autonomous/read_only
 | `craft` | `item,count?,query?,recipe?,material_index?` | 同步 | 实际普通合成配方；query只读，可查分组材料与一层来源；2×2随身，3×3需5.5格内工作台；整批预检，失败不改背包 |
 | `smelt` | `x,y,z,action?,input_slot?,input_count?,fuel_slot?,fuel_count?,slot?,count?` | 同步 | query/load/take；三类原版机器三槽与真实计数，预检后移动物品；实现/离线完成，真实烧制待验 |
 | `scan_area` | `r`(1-32，默认16),`items_only?,item?,frontiers?` | 同步 | 附近实体与可行动方块分层摘要，绝对坐标与八向朝向；主人准星为提交时记录。附地上item_targets，最多16实体、可按item过滤；items_only=true只查掉落，frontiers=true另给最多8个探索落脚样本。不保证候选可达，泥土/沙用find_resource定向查 |
-| `break_block` | `x,y,z,expected_block?,clear_obstructions?,clear_limit?,authorization_id?` | 异步(≤60s) | 默认单格；可选射线安全清理≤3格，走原批准/自主模式与实际BlockMining；目标移除和遮挡清理分列，不直接入包；每拍核验目标/主手/距离/视线，原生视觉待测 |
-| `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?,approach?` | 异步(≤20s) | 默认原地，approach=true允许固定原6.5格范围内只行走接近同一目标；默认1次、最多10次，满冷却/恢复后出手；中立/命名目标沿原批准/自主模式，拒绝保护目标及不安全横扫 |
+| `break_block` | `x,y,z,expected_block?,clear_obstructions?,clear_limit?,authorization_id?` | 异步，无默认总时限 | 默认单格；可选实际射线安全清单，清障默认不限次数，走原批准/自主模式与实际BlockMining；目标移除和遮挡清理分列，不直接入包；每拍核验目标/主手/距离/视线 |
+| `attack` | `entity_id,target_uuid?,max_hits?,authorization_id?,approach?` | 异步，无默认总时限 | 默认原地，approach=true在初始64格范围只行走接近同一目标；max_hits省略/0持续，正数为明确有限挥击；满冷却/恢复后出手，保留批准及保护目标/横扫核验 |
 | `collect` | `x?,y?,z?,r?,item?` | 同步 | 坐标全省略为脚下，r=1-12默认3；查询半径不扩大身体触碰盒，生产调用原版playerTouch，尊重延迟/归属/余量；可过滤物品，忙时拒绝 |
 | `place_block` | `x,y,z,item,face?` | 同步 | 物品 ID、准确目标格；先检查遮挡/实际交互距离并转向，再用原版玩家放置上下文，face 默认 up；实际目标变化/消耗核验，忙时拒绝 |
-| `move_to` | `x,y,z,exact?,walk_only?,work_target?,clear_obstructions?,authorization_id?,may_alter_terrain?` | 异步(≤3min) | **DigAStar**：默认目标相邻一格范围，exact=true要求指定脚格站稳；walk_only=true从搜索/缓存/活体计划/执行共同禁用挖放。work_target={x,y,z}要求exact=true，终态按最新视线/距离验工作，clear_obstructions=true允许按安全清理计划评估，不额外执行目标清理；失败保留真实移动账。每刻输入驱动原版travel/跳跃，无路线传送。确认模式改世界先给具体批准方案；自主模式由主人任务放行。搜索预算8000节点/128挖/放≤背包存量；新增改动复核许可 |
+| `move_to` | `x,y,z,exact?,walk_only?,work_target?,clear_obstructions?,max_digs?,authorization_id?,may_alter_terrain?` | 异步，无默认总时限 | **DigAStar**：默认相邻到达，exact指定脚格；walk_only禁挖放。工作到达按最新视线/距离核验，不执行目标清理。每刻输入驱动原版travel/跳跃；确认模式改地形先批准，自主模式由主人任务放行。每次搜索4000节点/32768记录，无默认搜索总时间门；默认不限开路次数，放置受实际库存/来源保护，新增改动重验许可 |
 | `transfer` | `x,y,z,dir(in/out),item?` | 同步 | 6.5 格内未锁定有效普通容器，遵守槽/接触面与堆叠上限；允许部分搬运，余量留来源；忙时拒绝，熔炉类须用 smelt |
 | `wait` | `seconds`(1-60) | 异步 | 站定等待（熔炉/作物节奏用，别拿轮询代替等待） |
 | `ask_owner` | `text,authorization_id?` | **本地** | 普通问题沿用 text；路线确认携带服务端编号，实际展示服务端完整清单。120s 期限，明确批准后仍等服务端授权回执才续跑 |
@@ -1007,7 +1017,7 @@ BlockState.getDestroyProgress 的实时增量；零硬度的正无穷进度可�
 无效进度连续 10 tick 停手。失败、完成、取消和路径重规划清理当前裂纹。
 
 break_block默认仍为显式单格动作；可选clear_obstructions=true请求有界组合挖掘，
-clear_limit为0-3整数（默认3），authorization_id沿原主人批准回执使用。
+clear_limit为非负整数，省略不限清障次数，0禁止清障；authorization_id沿原主人批准回执使用。
 ClearingMining先生成目标及实际射线遮挡的完整BlockState清单，
 确认模式先NEED_CONFIRM，无世界效果；ask_owner显示服务端清单并确认后，
 以相同坐标/expected_block/clear_obstructions和批准编号重发。
@@ -1121,12 +1131,12 @@ collect 的中心需在身体6.5格内；实际候选同时在请求球体和身
 选择一只实际原版攻击距离内、可见、未命名且未受保护的 Enemy。
 此选择只发生一次；后续锁定原实体引用/编号/UUID，不换目标或自动打分裂产物。
 approach默认false保持原地；显式true可选择原范围内暂不可出手的目标，再只行走接近。
-身体/目标始终受固定初始脚格锚点6.5格三维球约束，路径另有保守6格节点球；
+显式approach的身体/目标受固定初始脚格锚点64格球约束；自保仍为近场范围；
 不挖放或自动换工具。目标位移明显才有界换路线，瞬时边缘变化不每刻重搜。
-换路线、memo失效、地形重规划和暂停恢复共用原8000节点/32768记录/400ms协作CPU/
-2次重规划；余额不够即停。工作到达按真实碰撞脚高、眼睛至目标AABB的AttackRange及射线，
+换路线、memo失效、地形重规划和暂停恢复累计诊断，每次搜索4000节点/32768记录，无默认总时间门，
+无默认累计重规划次数门。工作到达按真实碰撞脚高、眼睛至目标AABB的AttackRange及射线，
 出手仍须原版实际范围/视线，移动推进后同刻可合法挥击。详见D1-DYNAMIC-MELEE。
-max_hits 是**调用原版攻击的上限**，默认1、范围1-10；整个任务400tick（20秒，低TPS会更久）。
+max_hits省略/0持续攻击原目标，无默认总时限；正整数仅用于明确的有限挥击请求。
 ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发或轮询。
 
 参数拒绝保留 `DENIED:` 前缀，反馈现在包含固定原因码、字段及修正建议；
@@ -1141,7 +1151,7 @@ ACCEPTED 不代表伤害已发生，等真正终态后再决定，不能重发�
 | `ENTITY_ID_REQUIRED` / `ENTITY_ID_TYPE` / `ENTITY_ID_VALUE` | 缺编号、类型/字符串选择器错误、数字不为正整数或超出32位范围；数字字符串不自动转换。 |
 | `TARGET_UUID_REQUIRED` / `TARGET_UUID_TYPE` / `TARGET_UUID_FORMAT` | 显式编号缺UUID、UUID非字符串、不是标准小写36字符UUID；仍必须与扫描所得实体身份匹配。 |
 | `NEARBY_TARGET_UUID` / `NEARBY_AUTHORIZATION` | hostile_nearby与显式UUID或具体目标授权不兼容。 |
-| `MAX_HITS_TYPE` / `MAX_HITS_VALUE` | 挥击上限非数字、不是1-10的整数。 |
+| `MAX_HITS_TYPE` / `MAX_HITS_VALUE` | max_hits非数字、负数、小数或超出32位整数范围；省略/0表示持续。 |
 | `APPROACH_TYPE` | approach不是JSON布尔，不将字符串或数字自动转换。 |
 | `AUTHORIZATION_ID_TYPE` / `AUTHORIZATION_ID_VALUE` | 授权编号非字符串、空白或长度超过64；通过格式校验不等于已获许可。 |
 

@@ -76,7 +76,7 @@ class AttackArgumentDiagnosticsTest {
             denied(json("{\"entity_id\":\"hostile_nearby\",\"max_hits\":" + value + "}"),
                     "MAX_HITS_TYPE", "max_hits");
         }
-        for (String value : new String[]{"0", "-1", "11", "2.1", "2147483648", "1e100"}) {
+        for (String value : new String[]{"-1", "2.1", "2147483648", "1e100"}) {
             denied(json("{\"entity_id\":\"hostile_nearby\",\"max_hits\":" + value + "}"),
                     "MAX_HITS_VALUE", "max_hits");
         }
@@ -112,6 +112,6 @@ class AttackArgumentDiagnosticsTest {
         var nearby = AttackTool.arguments(json("{\"entity_id\":\"hostile_nearby\"}"));
         assertNotNull(nearby);
         assertTrue(nearby.nearby());
-        assertEquals(1, nearby.maxHits());
+        assertEquals(0, nearby.maxHits());
     }
 }

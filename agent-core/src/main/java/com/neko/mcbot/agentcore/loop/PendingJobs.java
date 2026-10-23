@@ -45,6 +45,8 @@ public final class PendingJobs<T> {
 
     /** 服务端没报 cap 时的兜底（与 CompanionScheduler.DEFAULT_CAP_TICKS 同值）。 */
     public static final int FALLBACK_CAP_TICKS = 1200;
+    /** Explicit wire value; missing/zero caps retain compatibility with older servers. */
+    public static final int UNLIMITED_CAP_TICKS = -1;
 
     /** 已发出、还没定性的工具调用。 */
     public record Tool<T>(long seq, String tool, long sentAtMs, long timeoutMs, T ticket) {
@@ -63,6 +65,7 @@ public final class PendingJobs<T> {
      * capTicks = 3600（move_to 帽）⇒ 180s + 15s = 195s。
      */
     public static long jobTimeoutMs(int capTicks) {
+        if (capTicks == UNLIMITED_CAP_TICKS) return Long.MAX_VALUE;
         int cap = capTicks > 0 ? capTicks : FALLBACK_CAP_TICKS;
         return cap * 50L + JOB_GRACE_MS;
     }

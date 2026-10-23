@@ -74,7 +74,9 @@ class AgentRunnerAttackTest {
         var attack = client.engine().definitions.getFirst().stream().filter(s -> s.name().equals("attack"))
                 .findFirst().orElseThrow();
         var schema = JsonParser.parseString(attack.paramsJsonSchema()).getAsJsonObject();
-        assertEquals(10, schema.getAsJsonObject("properties").getAsJsonObject("max_hits").get("maximum").getAsInt());
+        assertEquals(Integer.MAX_VALUE, schema.getAsJsonObject("properties").getAsJsonObject("max_hits").get("maximum").getAsInt());
+        assertEquals(0, schema.getAsJsonObject("properties").getAsJsonObject("max_hits").get("minimum").getAsInt());
+        assertTrue(attack.description().contains("不设挥击及总时长上限"));
         assertEquals("boolean", schema.getAsJsonObject("properties").getAsJsonObject("approach").get("type").getAsString());
         assertFalse(schema.get("additionalProperties").getAsBoolean());
         assertTrue(attack.description().contains("不追击"));
@@ -272,5 +274,27 @@ class AgentRunnerAttackTest {
         assertTrue(assertInstanceOf(Msg.Tool.class, client.engine().histories.get(1).getLast())
                 .content().startsWith("TIMEOUT:"));
         assertEquals(1, client.toolCount());
+    }
+
+    @Test void unlimitedAcknowledgementDoesNotTimeOutBeforeTerminalAndDoesNotReplay() {
+        runner.start();
+        runner.submitTask("attack the selected target until it is defeated");
+        call(0, "attack", ARGS.replace(",\"max_hits\":2", ""));
+        long seq = client.lastTool().num("seq", -1);
+        var accepted = ack(seq);
+        accepted.body().addProperty("cap_ticks", -1);
+        runner.handleS2c(accepted);
+        client.drain();
+        client.now += 86_400_000;
+        runner.tick();
+        client.drain();
+        assertEquals(1, client.engine().responses.size());
+        assertEquals(1, client.toolCount());
+        runner.handleS2c(done(seq, true, "target observed dead after 63 strikes"));
+        client.drain();
+        assertEquals(2, client.engine().responses.size());
+        assertEquals(1, client.toolCount());
+        assertTrue(client.engine().histories.getLast().stream().anyMatch(m -> m instanceof Msg.Tool t
+                && t.content().contains("63 strikes")));
     }
 }

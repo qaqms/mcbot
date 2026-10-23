@@ -501,7 +501,8 @@ public final class ServerToolDispatcher {
     public static String acceptText(ServerTool tool, JsonObject args, String jobId, int capTicks) {
         return com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome.ACCEPTED_PREFIX
                 + "我已开始「" + tool.acceptSubject(args) + "」编号 " + jobId
-                + "，最多约 " + Math.max(1, capTicks / 20) + " 秒。"
+                + (capTicks == com.neko.mcbot.agentcore.loop.PendingJobs.UNLIMITED_CAP_TICKS
+                ? "，不设总时长上限，可由主人取消。" : "，最多约 " + Math.max(1, capTicks / 20) + " 秒。")
                 + "这条还没有结果，别猜、别重发或轮询；后续工具等这件事结束，"
                 + "做完我会主动报 " + jobId + "。";
     }

@@ -74,6 +74,16 @@ class PendingJobsTest {
         assertEquals(0, p.pendingJobs());
     }
 
+    @Test void explicitUnlimitedJobWaitsForTerminalAndCanStillBeDrained() {
+        var pending = new PendingJobs<String>();
+        pending.registerTool(1, "attack", T0, 90000, "task");
+        var job = pending.acceptAsJob(1, "ongoing", PendingJobs.UNLIMITED_CAP_TICKS, T0);
+        assertEquals(Long.MAX_VALUE, job.timeoutMs());
+        assertTrue(pending.sweepJobs(T0 + 86_400_000).isEmpty());
+        assertEquals(List.of("task"), pending.drain(id -> true));
+        assertNull(pending.takeJob("ongoing"), "late terminal after cancel remains idempotent");
+    }
+
     @Test
     void secondAckForTheSameSeqIsLate() {
         PendingJobs<String> p = new PendingJobs<>();

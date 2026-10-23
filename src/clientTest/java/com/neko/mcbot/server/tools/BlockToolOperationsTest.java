@@ -128,7 +128,7 @@ class BlockToolOperationsTest {
         assertTrue(done.result().ok());
         assertTrue(done.result().data().get("removed").getAsBoolean());
         assertEquals(1, access.destroys);
-        assertEquals(1200, new BreakBlockTool().capTicks(new JsonObject()));
+        assertEquals(-1, new BreakBlockTool().capTicks(new JsonObject()));
     }
 
     @Test void failedOrAbortedMiningTaskTerminatesWithoutWorldEffects() {
