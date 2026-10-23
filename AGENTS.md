@@ -5,7 +5,9 @@
 1. 本文件（纪律）
 2. `docs/DEVELOPMENT.md`（环境、验收 harness、红线）
 3. `STATUS.md`（唯一进度事实源；含 **1.21.11 API 实测防漂移表**）
-   换设备接手时接着读 `docs/HANDOFF.md`（接手步骤、当前卡与本机材料边界）。
+   换设备接手时接着读 `docs/NEXT-STEPS-AND-ENVIRONMENT-HANDOFF-2026-10-23.md`
+   （后续优先级、验收门、新设备步骤与开工指令）；
+   `docs/HANDOFF.md` 保留历史检查点和本机材料边界，旧排期不能覆盖STATUS顶部。
 4. `docs/ARCHITECTURE.md`（as-built 结构）；动手范围相关的
    `docs/TOOLS.md` / `docs/BRIDGE.md` / `docs/ROADMAP.md` 再看
 
