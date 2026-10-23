@@ -3,6 +3,17 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## P1 首阶段诊断（2026-10-23）
+
+工具数与参数Schema不变。move_to普通/中断终态data增加path_timing，报告本路线单调时间、
+互斥阶段及输入/节点计数；不是进度百分比或预算，空输入也可能是必要工作。
+原出站上限不足时可省略此诊断，完整计时仍在path-perf日志，真实动作证据及结果不因此缩减。
+attack终态approach及follow原navigation观察增加plans/retargets/in_range_stops/
+route_arrivals/route_failures/budget_stops，原搜索和换位账保持。
+数字entity_id仍必须配同一扫描条目的target_uuid，只有hostile_nearby选择器不带UUID；
+search_resource仍targets=1–8、r=1–16。常驻短说明已补这些前提，不自动修参或重投。
+完整口径见P1-PERFORMANCE-TIMELINE-2026-10-23，P1仍部分完成。
+
 ## K1 技能知识读取（2026-10-23）
 
 技能正文不再全量进入系统提示，目录和任务快照说明见

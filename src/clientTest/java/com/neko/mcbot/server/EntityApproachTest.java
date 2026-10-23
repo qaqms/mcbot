@@ -105,6 +105,31 @@ class EntityApproachTest {
         assertEquals(3, access.plans);
     }
 
+    @Test void rangeReentryIsDistinguishedFromRetargetingWithoutBuyingMoreReplans() {
+        var access = new Access();
+        var move = new EntityApproach(access);
+        for (int run = 0; run < 3; run++) {
+            access.strike = false;
+            access.enterRange = true;
+            for (int tick = 0; tick < 3; tick++) assertNull(move.tick());
+        }
+        var observed = move.observation();
+        assertEquals(3, observed.get("plans").getAsInt());
+        assertEquals(3, observed.get("in_range_stops").getAsInt());
+        assertEquals(0, observed.get("retargets").getAsInt());
+        assertEquals(2, observed.get("replans").getAsInt());
+        assertEquals(0, observed.get("budget_stops").getAsInt());
+        access.strike = false;
+        access.enterRange = false;
+        assertNull(move.tick());
+        assertNull(move.tick());
+        var result = move.tick();
+        assertTrue(result.feedback().startsWith("ACTION_LIMIT:"));
+        assertSame(result, move.tick());
+        assertEquals(1, move.observation().get("budget_stops").getAsInt());
+        assertEquals(3, access.plans);
+    }
+
     @Test void trueRouteFailureAndObsoleteArrivalHaveDifferentResults() {
         var access = new Access();
         var failed = new ServerTool.Result(false, "NO_PATH:closed", null);

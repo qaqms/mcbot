@@ -197,5 +197,10 @@ class PathClearanceTest {
         assertTrue(diagnostics.getAsJsonArray("samples").size() <= 8);
         assertEquals(expanded, route.expanded());
         assertTrue(result.feedback().startsWith("CANCELLED:"));
+        var timing = result.data().getAsJsonObject("path_timing");
+        assertTrue(timing.get("closed").getAsBoolean());
+        assertEquals(0, timing.get("ticks").getAsInt(), "interrupting an unstarted route invents no motion");
+        var again = task.interruptedResult(new com.neko.mcbot.server.ServerTool.Result(false, "CANCELLED:test", null));
+        assertEquals(timing, again.data().get("path_timing"));
     }
 }

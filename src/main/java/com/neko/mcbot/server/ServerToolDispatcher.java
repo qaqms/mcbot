@@ -640,6 +640,15 @@ public final class ServerToolDispatcher {
         // 而本项目的回执几乎全是中文（一字三字节）：那等于把上限抬到了 ~96KB，
         // 正好越过原版入站 32767 字符/98301 字节的红线。
         int bytes = WireSize.utf8Bytes(json);
+        if (bytes > WireSize.MAX_BODY_BYTES && ("tool_result".equals(kind) || "job_event".equals(kind))
+                && body.has("data") && body.get("data").isJsonObject()
+                && body.getAsJsonObject("data").has("path_timing")) {
+            // The complete route timing is already logged; it must not displace real action evidence.
+            body = body.deepCopy();
+            body.getAsJsonObject("data").remove("path_timing");
+            json = new Envelope(kind, body).encode();
+            bytes = WireSize.utf8Bytes(json);
+        }
         if (bytes > WireSize.MAX_BODY_BYTES) {
             McbotMod.LOG.warn("S2C 信封超限({}B > {}B)，改发瘦身回执 kind={}",
                     bytes, WireSize.MAX_BODY_BYTES, kind);

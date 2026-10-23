@@ -3,6 +3,15 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## P1 导航诊断首阶段（2026-10-23）
+
+PathTask在原tick入口采样PathTiming的单调经过时间、互斥阶段及输入/节点计数，
+以原task/body及进程内route编号关联计划和退役摘要；普通/中断终态data增加path_timing。
+不把计时表加入每轮status路径progress或模型feedback；诊断不参与运动/搜索预算决策。
+EntityApproach沿原账户报告路线创建、目标更新及入攻击距离释放等原因计数。
+active不等于线程CPU，空输入不等于浪费；P1仍部分完成，未改导航连续性或模型等待契约。
+实机日志与测量边界见P1-PERFORMANCE-TIMELINE-2026-10-23，进度以STATUS为准。
+
 ## K1 知识目录与任务快照（2026-10-23）
 
 SkillCatalog在客户端从旧顶层Markdown/可选defaults和index.json生成有界不可变知识快照。

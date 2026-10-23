@@ -46,7 +46,8 @@ public final class ToolCatalog {
                     + "多阶段首次lifecycle=long_term；不重开原预算，结束前新鲜核验，持续跟随结束不替代目标完成。";
             case "workflow" -> "串行执行已知参数的1-12步，整份先验证；失败或放置负预检即停，保留已完成效果。"
                     + "不支持移动/反问/嵌套，制作及装取数量须明确；依赖结果用run_program。";
-            case "search_resource" -> "只读完整资源搜索，本地最多5页/30秒；work=true评估工作站位与采收/干燥安全。"
+            case "search_resource" -> "只读完整资源搜索，targets须1-8个方块ID/#标签，r默认/最多16（1-16）；"
+                    + "本地最多5页/30秒；work=true评估工作站位与采收/干燥安全。"
                     + "候选不证明可达或入包，空结果不证明未知区域没有资源。";
             case "find_resource" -> "单页资源查询，一般用search_resource；续页按next_offset及原scan_center，移动后从0重查。"
                     + "work=true时先核对harvestable_with_hand及dry_work_safe，不合格不为其开路。";
@@ -75,7 +76,9 @@ public final class ToolCatalog {
                     + "到位休眠不结束，拉开2格才唤醒；固定32格范围交原工地、原搜索账及期限含休眠/避险不重开。"
                     + "ACCEPTED等真终态，期限结束仅行为结束，goal_satisfied=false，取消不恢复。";
             case "attack" -> "默认原地不追击；approach=true在初始6.5格范围只走路接近同一目标，原搜索/重规划/20秒帽不重开。"
-                    + "先扫描entity_id/target_uuid，确认模式NEED_CONFIRM后ask_owner取得具体授权，保持approach。"
+                    + "数字entity_id必须同时带同一扫描条目的target_uuid；"
+                    + "entity_id=\"hostile_nearby\"才不带UUID，且只选择附近未命名敌对生物。"
+                    + "确认模式NEED_CONFIRM后ask_owner取得具体授权，保持approach。"
                     + "ACCEPTED等真终态，挥击次数不等于伤害或击杀。";
             case "collect" -> "兼容触碰拾取，身体会自动拾取；r只是查询范围，远处先走近。"
                     + "ok=false可能已部分拾取，按新鲜背包核对成果。";

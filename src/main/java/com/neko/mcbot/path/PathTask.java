@@ -154,6 +154,8 @@ public final class PathTask extends TickTask {
     private PathSteering steering;
     private CompanionPlayer drivenBody;
     private PathFailure planFailure;
+    private final PathTiming timing = new PathTiming();
+    private boolean timingLogged;
 
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
                     ActionPermissions.Context context, ActionPermissions.Scope approved,
@@ -218,6 +220,17 @@ public final class PathTask extends TickTask {
 
     @Override
     public Progress tick(CompanionPlayer c) {
+        timing.beginTick();
+        Progress progress;
+        try {
+            progress = tickBody(c);
+        } finally {
+            timing.endTick();
+        }
+        return progress instanceof Progress.Done done ? new Progress.Done(timed(done.result(), "TERMINAL")) : progress;
+    }
+
+    private Progress tickBody(CompanionPlayer c) {
         drivenBody = c;
         c.releaseMovement();
         if (navigationFailure != null) return terminal(navigationFailure);
@@ -241,6 +254,7 @@ public final class PathTask extends TickTask {
         PathGrounding.Decision grounded = steering == null
                 ? grounding.poll(c.onGround(), c.getY()) : PathGrounding.Decision.READY;
         if (grounded == PathGrounding.Decision.WAIT) {
+            timing.phase(PathTiming.Phase.GROUND_WAIT);
             clearCrack();
             return running();
         }
@@ -253,6 +267,7 @@ public final class PathTask extends TickTask {
         }
         if (navigationFailure != null) return terminal(navigationFailure);
         if (++tickWarmup < 2) {
+            timing.phase(PathTiming.Phase.WARMUP);
             return running(); // 等一拍出出生/传送的下坠，起点判据才稳
         }
         Progress progress = phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
@@ -261,6 +276,7 @@ public final class PathTask extends TickTask {
     }
 
     private Progress terminal(Result result) {
+        timing.phase(PathTiming.Phase.FINALIZE);
         stopMovement();
         if (mining != null) {
             var partial = mining.refreshDrops(new Result(false, "", null));
@@ -332,12 +348,29 @@ public final class PathTask extends TickTask {
     }
 
     @Override public Result interruptedResult(Result reason) {
-        return ((Progress.Done) terminal(reason)).result();
+        return timed(((Progress.Done) terminal(reason)).result(), "INTERRUPTED");
+    }
+
+    private Result timed(Result result, String outcome) {
+        timing.finish();
+        logTiming(outcome);
+        var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+        data.add("path_timing", timing.snapshot());
+        return new Result(result.ok(), result.feedback(), data);
+    }
+
+    private void logTiming(String outcome) {
+        if (timingLogged) return;
+        timingLogged = true;
+        McbotMod.LOG.info("[path-perf] task={} body={} outcome={} metrics={}",
+                context == null ? 0 : context.taskId(),
+                drivenBody == null ? "unknown" : drivenBody.observationBodyId(), outcome, timing.snapshot());
     }
 
     // ---- SEARCH ----
 
     private Progress searchTick(CompanionPlayer c) {
+        timing.phase(PathTiming.Phase.SEARCH);
         // 先看有没有"确认前刚算好的那条路"可用（R2-S4 lastPlan）：省掉一整次重搜。
         // 只在首搜阶段尝试；重规划（REPLAN_SEARCH）是"世界变了"的产物，必须重新搜。
         if (search == null && phase == Phase.SEARCH && !wasReplan && !walkOnly && spec.equals(PathSpec.DEFAULT)) {
@@ -380,8 +413,8 @@ public final class PathTask extends TickTask {
                         partialRemain, plan.size(), planDigs, planPlaces, memoStats());
                 return afterPlanReady(c, plan);
             }
-            McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {}", c.blockPosition().toShortString(),
-                    target.toShortString(), search.failure(), memoStats());
+            McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {} route={}", c.blockPosition().toShortString(),
+                    target.toShortString(), search.failure(), memoStats(), timing.id());
             McbotMod.LOG.info("[path] 原搜索局部拒绝 counts={} samples={}", search.rejections(),
                     search.rejectionSamples().stream().map(PathFailure::summary).toList());
             // 撞帽但推进不足下限：不再冒充 BUDGET，换成对模型有行动意义的 NO_PROGRESS（§C）；
@@ -408,6 +441,7 @@ public final class PathTask extends TickTask {
      * 两条路各写一份的话，迟早会在确认话术或计数上漂移。
      */
     private Progress afterPlanReady(CompanionPlayer c, List<DigAStar.Step> plan) {
+        timing.phase(PathTiming.Phase.VALIDATE);
         path = plan;
         cursor = path.size() > 1 && path.getFirst().action() == DigAStar.ACT_START ? 1 : 0;
         int digs = planDigs;
@@ -425,9 +459,9 @@ public final class PathTask extends TickTask {
                             + "未执行该方案，重新选择站位或相邻阶梯路线。", null));
         }
         rememberPlan(c, plan);
-        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {}",
+        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {} route={}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
-                digs, places, replans, partialTail, memoStats());
+                digs, places, replans, partialTail, memoStats(), timing.id());
         if (digs > 0 || places > 0) {
             StringBuilder sb = new StringBuilder();
             for (DigAStar.Step st : path) {
@@ -865,6 +899,7 @@ public final class PathTask extends TickTask {
     // ---- EXECUTE ----
 
     private Progress executeTick(CompanionPlayer c) {
+        timing.phase(PathTiming.Phase.VALIDATE);
         // 到达判定：路径走完且与末节点贴近
         if (cursor >= path.size()) {
             return arrived(c);
@@ -886,6 +921,7 @@ public final class PathTask extends TickTask {
 
         // 1) 本节点要挖的格：逐拍真计时（mineOne 完成/已清返回 null，推进清单）
         if (!next.dig().isEmpty()) {
+            timing.phase(PathTiming.Phase.DIG);
             if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不挖掘。", null));
             Progress p = mineOne(c, next.dig().get(0));
             if (p != null) {
@@ -898,12 +934,14 @@ public final class PathTask extends TickTask {
 
         // 2) 本节点要放的支撑
         if (!next.place().isEmpty()) {
+            timing.phase(PathTiming.Phase.PLACE);
             if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不放置。", null));
             if (next.x() == c.blockPosition().getX() && next.z() == c.blockPosition().getZ()
                     && next.y() > c.getY() + .02) {
                 if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
                 var command = steering.tick(bodyState(c));
                 if (command.stuck()) return stuck(c, next);
+                timing.input(0, 0, c.onGround());
                 c.walkForTick(0, 0, c.onGround());
                 return running();
             }
@@ -944,6 +982,7 @@ public final class PathTask extends TickTask {
             return running();
         }
         // 3) Native travel owns position, collision, jump arc and descent.
+        timing.phase(PathTiming.Phase.STEER);
         double facingX = next.x() + .5 - c.getX();
         double facingZ = next.z() + .5 - c.getZ();
         if (Math.hypot(facingX, facingZ) > 1e-5) {
@@ -951,15 +990,24 @@ public final class PathTask extends TickTask {
         }
         if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
         boolean through = canPassStraight();
-        var command = steering.tick(bodyState(c), through);
+        var body = bodyState(c);
+        if (!through && body.grounded()
+                && Math.hypot(next.x() + .5 - body.x(), next.z() + .5 - body.z()) <= .3
+                && Math.abs(next.feetY() - body.y()) <= .08
+                && Math.hypot(body.vx(), body.vz()) > .04) timing.settling();
+        var command = steering.tick(body, through);
         if (command.stuck()) return stuck(c, next);
         if (!command.arrived()) {
+            timing.input(command.x(), command.z(), command.jump());
             c.walkForTick(command.x(), command.z(), command.jump());
             return running();
         }
+        timing.phase(PathTiming.Phase.HANDOFF);
+        timing.node(through);
         stopMovement();
         if (through) {
             var following = path.get(cursor + 1);
+            timing.input(following.x() - next.x(), following.z() - next.z(), false);
             c.walkForTick(following.x() - next.x(), following.z() - next.z(), false);
         }
         cursor++;
@@ -1233,9 +1281,12 @@ public final class PathTask extends TickTask {
         stopMovement();
         clearCrack();
         dropPlan(); // 任务作废了，别把一条已废的路留在缓存里给下一趟复用
+        timing.finish();
+        logTiming("ABORTED");
     }
 
     @Override public void onSuspend() {
+        timing.suspend();
         stopMovement();
         clearCrack();
         dropPlan();

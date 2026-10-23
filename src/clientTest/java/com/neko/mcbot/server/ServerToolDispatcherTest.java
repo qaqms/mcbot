@@ -334,6 +334,42 @@ class ServerToolDispatcherTest {
         assertTrue(com.neko.mcbot.common.WireSize.fits(result.encode()));
     }
 
+    @Test void optionalPathTimingCannotTurnAnOtherwiseValidTerminalIntoAnOverflowFailure() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        var ack = call(1, "move_to", "{}");
+        var data = new JsonObject();
+        data.addProperty("removed_blocks", 2);
+        data.addProperty("evidence", "x".repeat(30000));
+        data.add("path_timing", json("{\"phases\":\"" + "y".repeat(4000) + "\"}"));
+        var original = data.deepCopy();
+        nextResult.complete(new ServerTool.Result(true, "arrived", data));
+        var result = receipts.getLast();
+        assertEquals("job_event", result.kind());
+        assertEquals(ack.str("job_id"), result.str("job_id"));
+        assertEquals("done", result.str("phase"));
+        assertEquals(30000, result.obj("data").get("evidence").getAsString().length());
+        assertEquals(2, result.obj("data").get("removed_blocks").getAsInt());
+        assertFalse(result.obj("data").has("path_timing"));
+        assertTrue(result.obj("data").has("body_delta"));
+        assertEquals(original, data, "outbound diagnostic omission must not mutate the producer's result");
+        assertTrue(com.neko.mcbot.common.WireSize.fits(result.encode()));
+
+        nextResult = CompletableFuture.completedFuture(new ServerTool.Result(false, "CANCELLED:owner", data));
+        var sync = call(1, "status", "{}");
+        assertEquals("tool_result", sync.kind());
+        assertFalse(sync.bool("ok"));
+        assertEquals("CANCELLED:owner", sync.str("feedback"));
+        assertEquals(30000, sync.obj("data").get("evidence").getAsString().length());
+        assertFalse(sync.obj("data").has("path_timing"));
+        assertTrue(com.neko.mcbot.common.WireSize.fits(sync.encode()));
+        assertEquals(original, data);
+
+        var small = json("{\"path_timing\":{\"ticks\":3},\"removed_blocks\":2}");
+        nextResult = CompletableFuture.completedFuture(new ServerTool.Result(true, "kept", small));
+        assertEquals(small.get("path_timing"), call(1, "status", "{}").obj("data").get("path_timing"));
+    }
+
     @Test void oversizedNativeDropReceiptKeepsBoundedOriginCountersAndExplicitlyOmitsYieldSamples() {
         begin(sender, 1, false);
         nextResult = new CompletableFuture<>();

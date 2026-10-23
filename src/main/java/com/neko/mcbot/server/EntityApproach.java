@@ -20,6 +20,7 @@ public final class EntityApproach {
     private Vec3 heading;
     private boolean started;
     private int ticks, lastPlan = -10, outside;
+    private int plans, retargets, rangeStops, arrivals, routeFailures, budgetStops;
     private ServerTool.Result failure;
 
     public EntityApproach(Access access) { this(access, new NavigationBudget()); }
@@ -32,6 +33,7 @@ public final class EntityApproach {
         ticks++;
         if (failure != null) return failure;
         if (access.canStrike()) {
+            if (route != null) rangeStops++;
             stop();
             outside = 0;
             return null;
@@ -40,21 +42,25 @@ public final class EntityApproach {
         if (++outside < 3) { access.stopInput(); return null; }
         Vec3 position = access.targetPosition();
         boolean retarget = route != null && position.distanceToSqr(heading) >= 4 && ticks - lastPlan >= 10;
-        if (retarget) stop();
+        if (retarget) { retargets++; stop(); }
         if (route == null) {
-            if (started && !budget.takeReplan() || budget.exhausted())
+            if (started && !budget.takeReplan() || budget.exhausted()) {
+                budgetStops++;
                 return fail("ACTION_LIMIT:动态目标接近的原搜索/换位账已到上限，未重开。");
+            }
             route = access.route(budget);
+            plans++;
             heading = position;
             lastPlan = ticks;
             started = true;
         }
         var progress = access.advance(route);
         // Movement and melee are independent: a target that entered native range is usable this tick.
-        if (access.canStrike()) { stop(); outside = 0; return null; }
+        if (access.canStrike()) { rangeStops++; stop(); outside = 0; return null; }
         if (progress instanceof TickTask.Progress.Done done) {
             stop();
-            if (!done.result().ok()) { failure = done.result(); return failure; }
+            if (!done.result().ok()) { routeFailures++; failure = done.result(); return failure; }
+            arrivals++;
             // Reaching an old target snapshot is only a route result, not an attack or kill.
         }
         return null;
@@ -77,6 +83,12 @@ public final class EntityApproach {
         data.addProperty("search_records", budget.records());
         data.addProperty("search_nanos", budget.nanos());
         data.addProperty("replans", budget.replans());
+        data.addProperty("plans", plans);
+        data.addProperty("retargets", retargets);
+        data.addProperty("in_range_stops", rangeStops);
+        data.addProperty("route_arrivals", arrivals);
+        data.addProperty("route_failures", routeFailures);
+        data.addProperty("budget_stops", budgetStops);
         data.addProperty("walk_only", true);
         if (route != null) data.add("route", route.observation());
         return data;
