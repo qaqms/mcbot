@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerPlayerGameMode;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
@@ -25,6 +26,14 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Native mapped descriptors and packaging only; this does not apply Mixins or start a world. */
 class DropNativeContractTest {
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
+
+    @Test void experienceContactAndItsPlayerCooldownUseTheMappedNativeApi() throws Exception {
+        assertEquals(void.class, ExperienceOrb.class.getDeclaredMethod("playerTouch", Player.class).getReturnType());
+        var delay = Player.class.getDeclaredField("takeXpDelay");
+        assertEquals(int.class, delay.getType());
+        assertTrue(Modifier.isPublic(delay.getModifiers()));
+        assertEquals(void.class, Player.class.getDeclaredMethod("giveExperiencePoints", int.class).getReturnType());
+    }
 
     @Test void eventTargetsMatchTheActualMappedRuntimeIncludingPrivateMergeAndFinalRemoval() throws Exception {
         assertEquals(boolean.class, ServerLevel.class.getDeclaredMethod("addFreshEntity", Entity.class).getReturnType());

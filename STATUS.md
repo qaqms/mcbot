@@ -3,6 +3,35 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 身体经验拾取修复（2026-10-24 01:48，Asia/Shanghai）
+
+- 从远端一致的main `5442a34`继续。维护者反馈无法吸取经验；本轮核到实例磁盘JAR
+  为上一地下分段候选`3b7d9504...`。本体BodyPickup只查询ItemEntity，未触碰经验球；
+  FakeConnection又不驱动Player.tick，takeXpDelay没有递减。两处缺口一起修正。
+- 只读参考副本的NumenPlayer.tick经Physics.step调用完整doTick，
+  原版玩家链自然包含接触与冷却。本体独立补BodyPickup经验接触，不切换物理入口，
+  不复制参考代码，不增加第二次travel/baseTick或绕过既有只读权限。
+- 每活动身体刻递减原takeXpDelay，冷却归零时在原物品触碰盒内选一个活经验球，
+  重验身体/许可、同世界、已加载与实际接触后调用ExperienceOrb.playerTouch。
+  合并球计数、冷却设置、经验修补及剩余经验由原版结算，不直接加经验或远程删球。
+  原BodyChangeLog继续记录实际经验/等级/装备变化；物品接触不受经验冷却阻塞。
+- 专项`build/experience-focused-20261024.log`28秒通过。
+  最终`build/experience-final-20261024.log`第61–62行：
+  **56秒、20任务强制全部执行；1744项/188 suites**，核心415/46、根153/22、
+  客户端1176/120，failures/errors/skipped均0。
+  新增8项覆盖连续多球与两刻冷却、每次单球、物品共存、只读及解除、未加载、
+  非活动身体和触物后死亡/撤权；原生经验回调受控，真实API描述符核对通过。
+  未创建真实玩家/世界，真实吸收、合并球与经验修补仍待维护者实测。
+- JAR `build/libs/mcbot-0.1.0.jar` **1,708,559 bytes**，SHA256
+  `7d8fdc8649caf5fc71ebd82eaad0d063ae081e101044096c0676d01d5c9146e0`；
+  内嵌core `eb29380d0bf60313a41773f37c4c89aa34242dc6ff5266355ce080c22f158e9c`
+  匹配独立产物，已核版本、依赖、LuaJ许可及新增接触类。
+  测试目录`build/test-kit-20261024-experience-pickup`，ZIP
+  `build/mcbot-0.1.0-test-kit-20261024-experience-pickup.zip` **1,655,542 bytes**，
+  SHA256 `58af473141361087a7f35737ee046e16654ab173fd3ba8e2db73b6d4b912e0fb`；
+  ZIP内JAR指纹匹配，旧地下分段包未覆盖。未安装或启动游戏/服务器/模型，
+  未改宿主、连接器、参考、玩家配置或无敌。提交推送以收尾Git为准。
+
 ## 地下探索范围与导航分段（2026-10-24 01:12，Asia/Shanghai）
 
 - 从已同步远端main `f66e064`继续；完整日志、参考机制、实现和剩余边界见
@@ -6009,7 +6038,7 @@ Player.experienceLevel/totalExperience公开，Entity.getVehicle():Entity公开�
 | 单输入烹饪事实（10-15 javap/编译/原版配方离线执行，未运行世界） | `AbstractCookingRecipe`继承`SingleItemRecipe`，公开`input():Ingredient`、`assemble(SingleRecipeInput,HolderLookup.Provider):ItemStack`，`cookingTime():int`；`RecipeHolder(ResourceKey<Recipe<?>>,T)`可构造供既有SmeltTool.cooking复用。仅确切SmeltingRecipe/BlastingRecipe/SmokingRecipe类进入支持范围，真实配方assemble已离线运行，不等于RecipeManager世界查询/机器tick已运行 |
 | 配方替代来源（10-15 javap/编译/离线注册表，未运行世界） | `Ingredient.items():Stream<Holder<Item>>`、`Ingredient.test(ItemStack):boolean`、`BlockItem.getBlock():Block`公开；`Item.getCraftingRemainder():ItemStack`公开final，不是Item。来源筛选只读这些事实，实际加载RecipeManager与原版世界采收仍待实测 |
 | 工作候选距离（10-14本地映射javap/编译） | Vec3i.distSqr(Vec3i):double公开，BlockPos继承可用；仅候选排序测试使用，生产假想眼睛沿用已核对的BlockAim原版shape/clip，不新增移动身体或世界读取API |
-| 自动触碰拾取（10-14后续javap/编译，未运行玩家） | Player.aiStep在非骑乘分支按body.inflate(1,.5,1)查询接触实体，非经验球经私有touch调用Entity.playerTouch；ItemEntity.playerTouch要求pickupDelay==0及target匹配，调用原版Inventory.add，discard后恢复原count用于包。ServerPlayer.tick不自动提供这段。本体单独补物品触碰，不调用aiStep/doTick而重复travel/时钟，不自动收经验，活动只读暂禁 |
+| 自动触碰拾取（10-14后续及10-24经验修正javap/编译，未运行玩家） | Player.aiStep按body.inflate(1,.5,1)查询非骑乘接触区，非经验球直接touch，经验球随机一个touch；Player.tick递减公开int takeXpDelay，ServerPlayer.tick不提供这两段。ExperienceOrb.playerTouch(Player)只接受ServerPlayer，冷却0时设2、调用take、原生repairPlayerItems，再giveExperiencePoints结算剩余经验并扣合并球count。本体分别补物品与经验接触/冷却，不调用完整doTick重复物理，活动只读仍禁拾取；原生修补未实机验收 |
 | 连续运动输入（10-14 javap/编译/受控动力与原版体素，未运行身体） | LivingEntity.jumpFromGround():void为public，使用原版跳跃属性并设置needsSync；不自动清onGround，后续move更新实际接触。calculateEntityAnimation(boolean):void为public，从实际位移推进行走动画。Player.getSpeed():float读取MOVEMENT_SPEED属性；LivingEntity.getFlyingSpeed在普通未骑乘分支为0.02。输入在消费时按yaw换算局部坐标，再调用travel；不是完整doTick，不以受控动力测试宣称原生速度/网络画面已验 |
 | 被动重力/落地（10-13 javap/编译/离线体素，未运行身体） | Player.travel(Vec3)公开，经LivingEntity.travelInAir/travelInFluid与Entity.move处理原版重力/碰撞。Entity.updateInWaterStateAndDoFluidPushing/applyEffectsFromBlocks为protected；doCheckFallDamage(double,double,double,boolean)公开final。Player.isClientAuthoritative恒true，Entity.move仅local-instance-authoritative自动checkFallDamage，因此玩家须额外结算一次实际位移。LevelReader.hasChunksAt(int,int,int,int)是水平块坐标范围，不检查Y，不生成区块；ServerPlayer.setKnownMovement(Vec3)与ServerChunkCache.move(ServerPlayer)公开。ServerLevel.tickNonPassenger在实体tick前设置旧位置并推进tickCount。本轮不调用完整doTick，不以编译/体素测试推定原生下落已验 |
 | 动作朝向/可见性（10-13 javap/编译/离线clip，未运行身体） | Entity.lookAt(EYES,Vec3)设置pitch/yaw/headYaw；ServerPlayer覆写另向自身连接发look包，不设置bodyYaw，因此同伴另调用setYBodyRot。ServerEntity根据yaw/headYaw向观察者同步。LivingEntity.updateSwingTime为protected，可直接复用推进/收尾swing；ServerPlayer.tick不执行它。Player.blockInteractionRange公开。BlockState.getShape(BlockGetter,BlockPos,CollisionContext)、VoxelShape.toAabbs、BlockGetter.clip(ClipContext)/traverseBlocks公开；OUTLINE/NONE可用。ServerPlayer.teleportTo(double,double,double)带Relative.ROTATION保留当前旋转。未启用完整doTick，不以编译/字节码推定原生画面已验 |

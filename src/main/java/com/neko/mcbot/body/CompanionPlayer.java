@@ -254,13 +254,29 @@ public final class CompanionPlayer extends ServerPlayer {
             return dispatcher != null && dispatcher.belongsTo(level().getServer())
                     && dispatcher.passivePickupAllowed(CompanionPlayer.this);
         }
+        @Override public int experienceDelay() { return takeXpDelay; }
+        @Override public void experienceDelay(int ticks) { takeXpDelay = ticks; }
         @Override public AABB bounds() { return getBoundingBox(); }
         @Override public boolean loaded(AABB region) { return physics.loaded(region); }
-        @Override public java.util.List<? extends BodyPickup.Item> items(AABB region) {
+        @Override public java.util.List<? extends BodyPickup.Contact> items(AABB region) {
             return level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, region,
                     item -> item.isAlive()).stream()
-                    .<BodyPickup.Item>map(item -> () -> com.neko.mcbot.server.GroundItems.pickup(
+                    .<BodyPickup.Contact>map(item -> () -> com.neko.mcbot.server.GroundItems.pickup(
                             CompanionPlayer.this, item)).toList();
+        }
+        @Override public BodyPickup.Contact experienceOrb(AABB region) {
+            var orbs = level().getEntitiesOfClass(net.minecraft.world.entity.ExperienceOrb.class, region,
+                    orb -> orb.isAlive());
+            if (orbs.isEmpty()) return null;
+            var orb = orbs.get(getRandom().nextInt(orbs.size()));
+            return () -> {
+                if (active() && allowed() && orb.isAlive() && orb.level() == level()
+                        && level().isLoaded(orb.blockPosition())
+                        && com.neko.mcbot.server.GroundItems.touches(getBoundingBox(), orb.getBoundingBox())) {
+                    // Native contact owns the cooldown, merged count, mending and remaining XP.
+                    orb.playerTouch(CompanionPlayer.this);
+                }
+            };
         }
     };
 

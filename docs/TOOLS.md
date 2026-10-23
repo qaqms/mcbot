@@ -1046,7 +1046,9 @@ data的removed仍只指请求目标；cleared_blocks/clearing_results单列实�
 成功移除后只观察目标AABB向外扩0.5格内、本次动作前不存在的物品实体；
 不改新旧实体、不写背包、不删除掉落；需要物品时走近后由身体原版触碰拾取。
 这是有界的附近新实体观测，不是所有掉落的精确归因：邻格钩子产生的物品可能在内，
-远处/延迟生成的模组掉落不在内，经验球不自动收取。
+远处/延迟生成的模组掉落不在内，经验球不计入这份物品清单。
+经验球由身体每刻在实际触碰范围内调用原版拾取，经验修补及冷却也由原版结算；
+不是挖掘回执远程收取，活动只读权限仍抑制身体拾取。
 data 含 removed、reported_success（已观察移除时）、collected_count、remaining_count、
 collected/leftover（各最多32组）及drops实体坐标；collected_count固定0，collected为空，
 remaining_count是移除时观测到的新掉落数量。留在地上是正常成功，不因未入包返回失败。
