@@ -7,6 +7,24 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ExplorationRouteTest {
+    @Test void defaultGatherAndExplorationHaveNoImplicitTaskQuota() {
+        var plan = BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1}");
+        assertEquals(0, plan.seconds());
+        assertEquals(Integer.MAX_VALUE, plan.maxBlocks());
+        assertEquals(Integer.MAX_VALUE, plan.exploreSteps());
+        var route = new ExplorationRoute(plan.exploreSteps(), 64);
+        route.observe(point(0, 70, 0));
+        for (int i = 0; i < 200; i++) {
+            route.attempt(point(i % 31 - 15, 70, i / 31 - 15));
+            route.abandon();
+        }
+        assertFalse(route.exhausted());
+        assertEquals(200, route.attempts());
+        var restored = ExplorationRoute.restore(route.snapshot());
+        assertFalse(restored.exhausted());
+        assertEquals(200, restored.attempts());
+        assertEquals(Integer.MAX_VALUE, restored.remainingSteps());
+    }
     @Test void checkpointKeepsOriginalScopeSpentAttemptsAndUndergroundReturnTrail() {
         var route = new ExplorationRoute(3, 32);
         route.beginUnderground(point(0, 70, 0));
@@ -15,12 +33,24 @@ class ExplorationRouteTest {
         var movement = new JsonObject(); movement.addProperty("removed_blocks", 3); route.recordDigs(movement);
         var restored = ExplorationRoute.restore(route.snapshot());
         assertEquals(1, restored.attempts()); assertEquals(2, restored.remainingSteps());
-        assertEquals(125, restored.remainingDigs()); assertEquals(route.bounds(), restored.bounds());
+        assertEquals(128, restored.remainingDigs()); assertEquals(3, restored.undergroundDigs());
+        assertEquals(route.bounds(), restored.bounds());
         assertEquals(route.trail(), restored.trail()); assertEquals(route.returnPoint(), restored.returnPoint());
         assertTrue(restored.tried(point(1, 69, 0)));
         assertThrows(IllegalArgumentException.class, () -> restored.observe(point(33, 70, 0)));
         restored.attemptReturn(restored.returnPoint());
         assertThrows(IllegalStateException.class, restored::snapshot);
+    }
+    @Test void undergroundEditsAreDiagnosticAcrossRoutesAndRecovery() {
+        var route = new ExplorationRoute(Integer.MAX_VALUE, 64);
+        route.beginUnderground(point(0, 70, 0));
+        var movement = new JsonObject(); movement.addProperty("removed_blocks", 24);
+        for (int i = 0; i < 20; i++) route.recordDigs(movement);
+        var restored = ExplorationRoute.restore(route.snapshot());
+        assertEquals(480, restored.undergroundDigs());
+        assertEquals(128, restored.remainingDigs());
+        movement.addProperty("removed_blocks", 129);
+        assertThrows(IllegalArgumentException.class, () -> restored.recordDigs(movement));
     }
     @Test void changingTerrainDuringPaginationCannotCertifyOneCompleteCoverageRegion() {
         var route = new ExplorationRoute(8, 64);

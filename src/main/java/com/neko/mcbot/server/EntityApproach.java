@@ -13,6 +13,7 @@ public final class EntityApproach {
         TickTask route(NavigationBudget budget);
         TickTask.Progress advance(TickTask route);
         void stopInput();
+        default boolean routeUseful(TickTask route) { return false; }
     }
     private final Access access;
     private final NavigationBudget budget;
@@ -33,15 +34,16 @@ public final class EntityApproach {
         ticks++;
         if (failure != null) return failure;
         if (access.canStrike()) {
-            if (route != null) rangeStops++;
-            stop();
+            if (route != null && outside > 0) rangeStops++;
+            access.stopInput();
             outside = 0;
             return null;
         }
         // A short boundary drift may delay movement, never permit an out-of-range strike.
         if (++outside < 3) { access.stopInput(); return null; }
         Vec3 position = access.targetPosition();
-        boolean retarget = route != null && position.distanceToSqr(heading) >= 4 && ticks - lastPlan >= 10;
+        boolean retarget = route != null && position.distanceToSqr(heading) >= 4
+                && ticks - lastPlan >= 10 && !access.routeUseful(route);
         if (retarget) { retargets++; stop(); }
         if (route == null) {
             if (started && !budget.takeReplan() || budget.exhausted()) {
@@ -56,7 +58,7 @@ public final class EntityApproach {
         }
         var progress = access.advance(route);
         // Movement and melee are independent: a target that entered native range is usable this tick.
-        if (access.canStrike()) { rangeStops++; stop(); outside = 0; return null; }
+        if (access.canStrike()) { rangeStops++; access.stopInput(); outside = 0; return null; }
         if (progress instanceof TickTask.Progress.Done done) {
             stop();
             if (!done.result().ok()) { routeFailures++; failure = done.result(); return failure; }
@@ -78,7 +80,7 @@ public final class EntityApproach {
     }
     public JsonObject observation() {
         var data = new JsonObject();
-        data.addProperty("moving", route != null);
+        data.addProperty("moving", route != null && outside > 0);
         data.addProperty("search_nodes", budget.nodes());
         data.addProperty("search_records", budget.records());
         data.addProperty("search_nanos", budget.nanos());

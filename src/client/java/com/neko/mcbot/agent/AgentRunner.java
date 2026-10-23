@@ -1358,10 +1358,10 @@ public final class AgentRunner implements ToolExecutor {
             if (mode.equals("underground") && (!args.has("direction") || !args.has("target_y") || !args.has("targets")))
                 throw new IllegalArgumentException();
             int steps = args.has("max_steps") ? ExplorationRoute.integer(args, "max_steps")
-                    : explorationRoute == null ? 8 : explorationRoute.maxSteps;
+                    : explorationRoute == null ? Integer.MAX_VALUE : explorationRoute.maxSteps;
             int radius = args.has("radius") ? ExplorationRoute.integer(args, "radius")
                     : explorationRoute == null ? 64 : explorationRoute.radius;
-            int seconds = args.has("timeout_seconds") ? ExplorationRoute.integer(args, "timeout_seconds") : 180;
+            int seconds = args.has("timeout_seconds") ? ExplorationRoute.integer(args, "timeout_seconds") : 0;
             if (explorationRoute == null) explorationRoute = new ExplorationRoute(steps, radius);
             else if (explorationRoute.maxSteps != steps || explorationRoute.radius != radius)
                 return CompletableFuture.completedFuture(explorationRoute.configurationMismatch());
@@ -1459,8 +1459,8 @@ public final class AgentRunner implements ToolExecutor {
             return run.start();
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
-                    "DENIED:连续采集须有效物品/方块targets、明确count/口径、r=1-16、时限1-900秒、"
-                            + "挖掘预算1-256、explore_steps=0-16、explore_radius=16-64，且有完整任务开始背包事实。"));
+                    "DENIED:连续采集须有效物品/方块targets、明确count/口径、r=1-16、可选时限0-900秒、"
+                            + "可选正整数挖掘/探索上限、explore_steps=0关闭换区、explore_radius=16-64，且有完整任务开始背包事实。"));
         }
     }
 
@@ -1529,7 +1529,7 @@ public final class AgentRunner implements ToolExecutor {
         BoundedProgram.Plan plan;
         try { plan = BoundedProgram.Plan.parse(argsJson); }
         catch (RuntimeException invalid) { return CompletableFuture.completedFuture(
-                new ToolOutcome(false, "DENIED:须提供有效Lua code（最多16384字节）、时限1-900秒、子调用1-256次。")); }
+                new ToolOutcome(false, "DENIED:须提供有效Lua code（最多16384字节）；可选时限0-900秒、max_calls非负整数，0或省略不限。")); }
         long taskId = currentTask;
         AgentLoop owner = loop;
         var run = new BoundedProgram(plan, client::nowMs, (tool, args) -> {
@@ -1599,10 +1599,10 @@ public final class AgentRunner implements ToolExecutor {
                 var input = com.google.gson.JsonParser.parseString(args).getAsJsonObject();
                 cost = input.has("max_actions") ? input.get("max_actions").getAsInt() : 12;
             }
-            if (cost > programPrimitiveLimit - programPrimitives)
+            if (programPrimitiveLimit > 0 && cost > programPrimitiveLimit - programPrimitives)
                 return CompletableFuture.completedFuture(new ToolOutcome(false, "ACTION_LIMIT:组合的原子调用预算已到，嵌套采集/清单共享此预算。"));
             // Reserve the complete batch before dispatch; cancellation and partial work do not refund it.
-            programPrimitives += cost;
+            programPrimitives = (int) Math.min(Integer.MAX_VALUE, (long) programPrimitives + cost);
         }
         return executeRemote(name, args, taskId, owner, true);
     }
@@ -1683,12 +1683,6 @@ public final class AgentRunner implements ToolExecutor {
             if (bodyGeneration != companionGeneration || bodyUnavailable && taskId != 0) {
                 pending.takeTool(seq);
                 f.complete(ToolOutcome.synthetic("CANCELLED:同伴身体已替换，旧调用未发送。"));
-                return;
-            }
-            ToolOutcome refused = memory == null ? null : memory.refusal(name, recordedArgs);
-            if (refused != null) {
-                pending.takeTool(seq);
-                f.complete(refused);
                 return;
             }
             if (client.canSend()) {

@@ -83,7 +83,7 @@ public final class AgentLoop {
     public record Config(int maxStepsPerDirective, int repeatNudgeAt, int repeatAbortAt) {
 
         public static Config defaults() {
-            return new Config(40, 3, 5);
+            return new Config(0, 3, 0);
         }
     }
 
@@ -193,7 +193,6 @@ public final class AgentLoop {
     private String lastCallKey;
     private int repeatCount;
     private boolean stuckAbort;
-    private boolean noTargetsAbort;
     private int contextWindow = 64000;
     private com.google.gson.JsonObject initialInventory;
     private com.google.gson.JsonObject latestObservation;
@@ -279,7 +278,8 @@ public final class AgentLoop {
     public synchronized void resume(long taskId, com.google.gson.JsonObject saved) {
         if (closed || busy() || taskId <= 0) throw new IllegalStateException("Recovery requires an idle loop");
         if (GoalCheckpoint.bounded(saved, "version", 1, 1) != 1
-                || GoalCheckpoint.bounded(saved, "step_limit", 1, 40) != cfg.maxStepsPerDirective()
+                || cfg.maxStepsPerDirective() > 0
+                && GoalCheckpoint.bounded(saved, "step_limit", 0, Integer.MAX_VALUE) != cfg.maxStepsPerDirective()
                 || WorldGoal.flag(saved, "stopped")
                 || !WorldGoal.flag(saved, "settled")
                 || saved.has("item_goal") == saved.has("world_goal")) throw new IllegalArgumentException();
@@ -289,10 +289,12 @@ public final class AgentLoop {
         BodyFacts.fingerprint(initial);
         GoalCheckpoint.scope(initial);
         var continuation = GoalContinuation.restore(saved.getAsJsonObject("continuation"), initial);
-        int used = GoalCheckpoint.bounded(saved, "steps", 0, cfg.maxStepsPerDirective());
-        int searches = GoalCheckpoint.bounded(saved, "empty_searches", 0, 3);
-        int repeats = GoalCheckpoint.bounded(saved, "repeat_count", 0, cfg.repeatAbortAt());
-        int finishes = GoalCheckpoint.bounded(saved, "rejected_finishes", 0, 3);
+        GoalCheckpoint.bounded(saved, "step_limit", 0, Integer.MAX_VALUE);
+        int used = GoalCheckpoint.bounded(saved, "steps", 0,
+                cfg.maxStepsPerDirective() > 0 ? cfg.maxStepsPerDirective() : Integer.MAX_VALUE);
+        int searches = GoalCheckpoint.bounded(saved, "empty_searches", 0, Integer.MAX_VALUE);
+        int repeats = GoalCheckpoint.bounded(saved, "repeat_count", 0, Integer.MAX_VALUE);
+        int finishes = GoalCheckpoint.bounded(saved, "rejected_finishes", 0, Integer.MAX_VALUE);
         int finishProgress = GoalCheckpoint.bounded(saved, "last_finish_progress", -1, Integer.MAX_VALUE);
         String callKey = saved.has("last_call_key") ? saved.get("last_call_key").getAsString() : null;
         if (callKey != null && callKey.length() > 65536) throw new IllegalArgumentException();
@@ -313,7 +315,6 @@ public final class AgentLoop {
         lastFinishProgress = finishProgress;
         lastCallKey = callKey;
         stuckAbort = false;
-        noTargetsAbort = false;
         blockReason = null;
         initialInventory = initial;
         latestObservation = null;
@@ -352,8 +353,8 @@ public final class AgentLoop {
                     finishCurrent(TaskStatus.COMPLETED, "恢复核验：当前现场已满足原目标条件。");
                     return;
                 }
-                if (continuation.exhausted() || used >= cfg.maxStepsPerDirective()
-                        || searches >= 3 || repeats >= cfg.repeatAbortAt() || finishes >= 3) {
+                if (continuation.exhausted()
+                        || cfg.maxStepsPerDirective() > 0 && used >= cfg.maxStepsPerDirective()) {
                     finishCurrent(TaskStatus.FAILED, "RECOVERY_LIMIT:原目标累计预算或失败限制已到，未追加预算。");
                     return;
                 }
@@ -636,7 +637,6 @@ public final class AgentLoop {
         lastCallKey = null;
         repeatCount = 0;
         stuckAbort = false;
-        noTargetsAbort = false;
         emptySearches = 0;
         searchPages.reset();
         initialInventory = null;
@@ -661,12 +661,11 @@ public final class AgentLoop {
             return;
         }
         if (stuckAbort) {
-            finishCurrent(TaskStatus.FAILED, blockReason != null ? blockReason : noTargetsAbort
-                    ? "NO_TARGETS:三次有界搜索未取得目标，先停止并汇报已查范围；空结果不证明资源不存在。"
-                    : "[内部] 我在同一个操作上反复无进展，先停下了。");
+            finishCurrent(TaskStatus.FAILED, blockReason != null ? blockReason : "BLOCKED:当前任务已停止。");
             return;
         }
-        if (++steps > cfg.maxStepsPerDirective()) {
+        if (steps < Integer.MAX_VALUE) steps++;
+        if (cfg.maxStepsPerDirective() > 0 && steps > cfg.maxStepsPerDirective()) {
             finishCurrent(TaskStatus.FAILED, "[内部] 这个任务步数超限，我停下了。");
             return;
         }
@@ -863,9 +862,7 @@ public final class AgentLoop {
                     }
                     String facts = goalFacts() + "\n" + goalContinuation.facts();
                     if (verdict != GoalContinuation.Verdict.CONTINUE) {
-                        finishCurrent(TaskStatus.FAILED, (verdict == GoalContinuation.Verdict.LIMIT
-                                ? "GOAL_RUN_LIMIT:长期目标阶段预算已到，需主人决定后续。"
-                                : "GOAL_NO_PROGRESS:连续阶段重复已见事实，已停止。") + "\n" + facts);
+                        finishCurrent(TaskStatus.FAILED, "GOAL_RUN_LIMIT:显式长期目标阶段预算已到，需主人决定后续。\n" + facts);
                         return;
                     }
                     convo.add(new Msg.Nudge("[长期目标阶段检查点]\n" + facts
@@ -875,13 +872,9 @@ public final class AgentLoop {
                     return;
                 }
                 int progress = itemGoal != null ? itemGoal.progress() : worldGoal.progress();
-                rejectedFinishes = progress > lastFinishProgress ? 1 : rejectedFinishes + 1;
+                rejectedFinishes = progress > lastFinishProgress ? 1
+                        : (int) Math.min(Integer.MAX_VALUE, (long) rejectedFinishes + 1);
                 lastFinishProgress = progress;
-                if (rejectedFinishes >= 3) {
-                    finishCurrent(TaskStatus.FAILED, "GOAL_NOT_MET:连续结束但实际目标未满足，已停止。"
-                            + goalFacts());
-                    return;
-                }
                 convo.add(new Msg.Nudge("[目标校验未通过] " + goalFacts()
                         + "\n继续按当前事实推进；若确实无法继续，用report_blocked说明实际障碍。不要再次声称完成。"));
                 listener.onNotice("目标现场条件未满足，继续当前任务；尚未发送done。");
@@ -1131,7 +1124,7 @@ public final class AgentLoop {
                     + (goalContinuation == null ? "" : "\n" + goalContinuation.facts()));
         } catch (RuntimeException invalid) {
             return new ToolOutcome(false, "DENIED:目标须为有效物品ID、1-4096整数count、additional或total口径；"
-                    + "lifecycle可为task/long_term，长期max_runs为1-16；须有任务开始的完整背包，长期还须有效位置/维度。");
+                    + "lifecycle可为task/long_term，长期max_runs为非负整数、0或省略不限；须有任务开始的完整背包，长期还须有效位置/维度。");
         }
     }
 
@@ -1329,11 +1322,7 @@ public final class AgentLoop {
         if (search && noTargets != null && noTargets.isJsonPrimitive()
                 && noTargets.getAsJsonPrimitive().isBoolean()) {
             if (noTargets.getAsBoolean() && !continuation) {
-                if (++emptySearches >= 3) {
-                    stuckAbort = true;
-                    noTargetsAbort = true;
-                    listener.onNotice("NO_TARGETS:累计三次无目标查询，停止；改变参数或穿插状态查询不会重置。");
-                }
+                if (emptySearches < Integer.MAX_VALUE) emptySearches++;
             } else if (!noTargets.getAsBoolean()) emptySearches = 0;
         }
     }
@@ -1341,15 +1330,12 @@ public final class AgentLoop {
     /** Repetition nudges follow the tool receipt, preserving the existing history order. */
     private void noteResult(String name, String argsJson, ToolOutcome r) {
         String key = signatureOf(name, argsJson) + '|' + r.ok() + '|' + r.feedback().hashCode();
-        repeatCount = key.equals(lastCallKey) ? repeatCount + 1 : 1;
+        repeatCount = key.equals(lastCallKey) ? Math.min(Integer.MAX_VALUE - 1, repeatCount) + 1 : 1;
         lastCallKey = key;
         if (repeatCount == cfg.repeatNudgeAt()) {
             convo.add(new Msg.Nudge("[系统] 你已连续 " + repeatCount
                     + " 次执行完全相同的操作且结果相同。换一个做法，或直接向主人说明障碍。"));
             listener.onNotice("nudge@" + repeatCount);
-        } else if (repeatCount >= cfg.repeatAbortAt()) {
-            stuckAbort = true;
-            listener.onNotice("abort@" + repeatCount);
         }
     }
 

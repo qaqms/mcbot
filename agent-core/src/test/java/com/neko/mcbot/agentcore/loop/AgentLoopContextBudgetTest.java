@@ -150,7 +150,7 @@ class AgentLoopContextBudgetTest {
         assertTrue(loop.awaitingModel());
         assertEquals(3, loop.steps());
         assertTrue(histories.getLast().stream().anyMatch(m -> m instanceof Msg.Nudge n
-                && n.text().contains("任务开始基线=5") && n.text().contains("阶段已核对=0/8")));
+                && n.text().contains("任务开始基线=5") && n.text().contains("阶段已核对=0/不限")));
         requests.getLast().complete(new AssistantTurn("", List.of(
                 new ToolCall("end-budget", "status", "{}")), 0, 0, -1, "tool_calls"));
         assertEquals(List.of(AgentLoop.TaskStatus.FAILED), finishes);

@@ -141,7 +141,7 @@ class AttackToolOperationsTest {
         long anchor = new net.minecraft.core.BlockPos(2, 64, 3).asLong();
         var proposal = AttackTool.permission(permissions, context, new ActionPermissions.Execution(null),
                 target, 2, true, anchor);
-        assertTrue(proposal.data().get("authorization_summary").getAsString().contains("初始6.5格"));
+        assertTrue(proposal.data().get("authorization_summary").getAsString().contains("64格"));
         String token = proposal.data().get("authorization_id").getAsString();
         assertTrue(permissions.approve(context, token));
         var approved = new ActionPermissions.Execution(permissions.take(context, token, 47));

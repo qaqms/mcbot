@@ -232,7 +232,7 @@ class BoundedExplorationTest {
         }
     }
     @Test void malformedExplorationOptionsAreRejected() {
-        for (String options : List.of(",\"explore_steps\":17", ",\"explore_steps\":-1",
+        for (String options : List.of(",\"explore_steps\":2147483648", ",\"explore_steps\":-1",
                 ",\"explore_radius\":65", ",\"explore_radius\":8", ",\"explore_steps\":\"8\""))
             assertThrows(RuntimeException.class, () -> new World().gather(options));
     }

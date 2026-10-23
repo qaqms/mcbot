@@ -61,6 +61,38 @@ class FractionalNavigationTest {
         return route;
     }
 
+    @Test void alreadySatisfiedFractionalStartIsAStandingNodeRatherThanASelfTransition() {
+        var terrain = new Terrain();
+        terrain.blocks.put(new BlockPos(0, 0, 0), Blocks.OAK_SLAB.defaultBlockState());
+        var route = new DigAStar(terrain, 0, 0, 0, 0, 0, 0, 1000, 0,
+                NavigationGoal.position(0, 0, 0, 0));
+        while (!route.advance(100)) { }
+        assertNull(route.failure());
+        assertEquals(1, route.path().size());
+        var start = route.path().getFirst();
+        assertEquals(.5, start.feetY());
+        assertTrue(PathTask.standingStart(start, terrain));
+        assertFalse(new PathSteering(0, .5, 0, false)
+                .tick(new PathSteering.Body(.2, .5, .5, 0, 0, true)).arrived(),
+                "an off-center body must still recenter before arrival");
+        terrain.blocks.put(new BlockPos(0, 1, 0), Blocks.STONE.defaultBlockState());
+        assertFalse(PathTask.standingStart(start, terrain));
+    }
+
+    @Test void levelTurnsCanCarryMotionButReversalsEditsAndFinalArrivalCannot() {
+        var a = new DigAStar.Step(0, 0, 0, java.util.List.of(), java.util.List.of(), DigAStar.ACT_START);
+        var b = new DigAStar.Step(1, 0, 0, java.util.List.of(), java.util.List.of(), DigAStar.ACT_WALK);
+        var c = new DigAStar.Step(1, 0, 1, java.util.List.of(), java.util.List.of(), DigAStar.ACT_WALK);
+        assertTrue(PathTask.continuous(a, b, c));
+        assertFalse(PathTask.continuous(a, b, a));
+        var edited = new DigAStar.Step(1, 0, 1, java.util.List.of(1L), java.util.List.of(), DigAStar.ACT_WALK);
+        assertFalse(PathTask.continuous(a, b, edited));
+        var steering = new PathSteering(1, 0, 0, false);
+        var moving = new PathSteering.Body(1.5, 0, .5, .2, 0, true);
+        assertTrue(steering.tick(moving, true).arrived());
+        assertFalse(steering.tick(moving).arrived());
+    }
+
     @Test void bottomSlabIsReachedWithoutDestroyingTheSlabOrAddingSupport() {
         var terrain = new Terrain();
         terrain.blocks.put(new BlockPos(1, 0, 0), Blocks.OAK_SLAB.defaultBlockState());

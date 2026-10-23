@@ -8,7 +8,6 @@ import java.util.Set;
 
 /** Task-owned evidence at the primitive terminal boundary, independent of program lifetimes. */
 public final class WorkFailureMemory {
-    public static final int FAILURE_LIMIT = 5;
     private static final int ENTRY_LIMIT = 128;
     private record Key(String tool, JsonObject args, String reason) { }
     private final LinkedHashMap<Key, Integer> failures = new LinkedHashMap<>();
@@ -28,33 +27,15 @@ public final class WorkFailureMemory {
         return tool.equals("move_to") || tool.equals("break_block") || tool.equals("follow");
     }
 
-    /** Null permits normal permission checks and dispatch; a refusal never dispatches or retries. */
-    public synchronized ToolOutcome refusal(String tool, JsonObject args) {
-        if (!tracked(tool)) return null;
+    /** Diagnostic count only. This ledger never authorizes or blocks dispatch. */
+    public synchronized int failures(String tool, JsonObject args) {
+        int count = 0;
         for (var entry : failures.entrySet()) {
             Key key = entry.getKey();
-            if (key.tool().equals(tool) && key.args().equals(args) && entry.getValue() >= FAILURE_LIMIT)
-                return stopped("REPEATED_FAILURE", key.reason(), entry.getValue());
+            if (key.tool().equals(tool) && key.args().equals(args))
+                count = (int) Math.min(Integer.MAX_VALUE, (long) count + entry.getValue());
         }
-        // Do not evict old evidence and silently give repeated work a new allowance.
-        if (failures.size() >= ENTRY_LIMIT)
-            return stopped("FAILURE_MEMORY_LIMIT", "CAPACITY", 0);
-        return null;
-    }
-
-    private static ToolOutcome stopped(String code, String reason, int count) {
-        var evidence = new JsonObject();
-        evidence.addProperty("reason", reason);
-        evidence.addProperty("failures", count);
-        evidence.addProperty("limit", FAILURE_LIMIT);
-        evidence.addProperty("entry_limit", ENTRY_LIMIT);
-        evidence.addProperty("dispatched", false);
-        var data = new JsonObject();
-        data.add("failure_memory", evidence);
-        return new ToolOutcome(false, code + ":当前任务的相同工作已反复失败或失败账已满，未再次派发。"
-                + "原因=" + reason + "，次数=" + count
-                + "；先核对新鲜完整status及真实环境，选择有依据的替代方案或报告受阻。"
-                + "换程序、空动作和重复查询不补次数。", data);
+        return count;
     }
 
     /** Called only for a real, matched terminal; acknowledgments and synthetic stops are excluded. */
@@ -85,13 +66,16 @@ public final class WorkFailureMemory {
         }
         if (tracked(tool) && !result.ok() && localFailure(tool, result.feedback())) {
             var key = new Key(tool, args.deepCopy(), result.feedback().split(":", 2)[0]);
-            if (failures.containsKey(key) || failures.size() < ENTRY_LIMIT) {
-                failures.merge(key, 1, (count, ignored) -> Math.min(FAILURE_LIMIT, count + 1));
-                if (!terrain.containsKey(key)) {
-                    var observed = SpatialFacts.read(data);
-                    var evidence = SpatialFacts.forWork(observed == null ? spatial : observed, tool, args);
-                    if (evidence != null) terrain.put(key, evidence);
-                }
+            if (!failures.containsKey(key) && failures.size() >= ENTRY_LIMIT) {
+                var oldest = failures.keySet().iterator().next();
+                failures.remove(oldest);
+                terrain.remove(oldest);
+            }
+            failures.merge(key, 1, (count, ignored) -> count == Integer.MAX_VALUE ? count : count + 1);
+            if (!terrain.containsKey(key)) {
+                var observed = SpatialFacts.read(data);
+                var evidence = SpatialFacts.forWork(observed == null ? spatial : observed, tool, args);
+                if (evidence != null) terrain.put(key, evidence);
             }
         }
     }
@@ -125,7 +109,7 @@ public final class WorkFailureMemory {
             if (!tracked(tool) || !localFailure(tool, reason + ":") || args == null
                     || args.toString().length() > 20000) throw new IllegalArgumentException();
             var key = new Key(tool, args.deepCopy(), reason);
-            if (memory.failures.put(key, GoalCheckpoint.bounded(value, "count", 1, FAILURE_LIMIT)) != null)
+            if (memory.failures.put(key, GoalCheckpoint.bounded(value, "count", 1, Integer.MAX_VALUE)) != null)
                 throw new IllegalArgumentException();
         }
         if (data.has("body_facts")) {

@@ -5,6 +5,8 @@ public interface NavigationGoal {
     boolean reached(int x, int y, int z);
     double remaining(int x, int y, int z);
 
+    /** Null keeps goals with live premises on the world thread. */
+    default NavigationGoal snapshot(DigSampler terrain) { return null; }
     default boolean reached(int x, int y, int z, TerrainEdits edits) {
         return reached(x, y, z);
     }
@@ -21,6 +23,7 @@ public interface NavigationGoal {
 
     static NavigationGoal position(int tx, int ty, int tz, int radius) {
         return new NavigationGoal() {
+            @Override public NavigationGoal snapshot(DigSampler terrain) { return this; }
             @Override public Bounds estimateBounds() {
                 return new Bounds(tx - radius, ty - radius, tz - radius,
                         tx + radius, ty + radius, tz + radius);

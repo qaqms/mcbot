@@ -166,8 +166,10 @@ public final class DigAStar {
                 if (estimate == null) {
                     if (goal.remaining(sx, sy, sz) == 0
                             && usedNanos + System.nanoTime() - t0 < totalBudgetNanos
-                            && goal.arrivalCost(s, sx, sy, sz, TerrainEdits.EMPTY) == 0)
+                            && goal.arrivalCost(s, sx, sy, sz, TerrainEdits.EMPTY) == 0) {
+                        prepared = true;
                         return arrive(start(), 0);
+                    }
                     estimate = new ApproachEstimate(s, goal, sx, sy, sz, maxDigs > 0 ? maxNodes / 4 : 0);
                 }
                 if (!estimate.done()) {

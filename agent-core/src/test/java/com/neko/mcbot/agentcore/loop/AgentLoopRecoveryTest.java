@@ -98,11 +98,13 @@ class AgentLoopRecoveryTest {
         assertTrue(fresh.reasons.getFirst().startsWith("RECOVERY_UNVERIFIABLE:"));
         assertTrue(fresh.requests.isEmpty()); assertTrue(fresh.actions.isEmpty());
     }
-    @Test void exhaustedModelAllowanceIsNeverRefilledButFinalFactsStillTakePriority() {
+    @Test void oldModelAllowanceMigratesToUnlimitedWithoutLosingFinalVerification() {
         var original = new Fixture(); original.seed();
-        var saved = original.saved.deepCopy(); saved.addProperty("steps", 40);
+        var saved = original.saved.deepCopy(); saved.addProperty("steps", 40); saved.addProperty("step_limit", 40);
         var fresh = new Fixture(); fresh.loop.resume(91, saved);
-        assertTrue(fresh.reasons.getFirst().startsWith("RECOVERY_LIMIT:")); assertTrue(fresh.requests.isEmpty());
+        assertTrue(fresh.reasons.isEmpty()); assertEquals(1, fresh.requests.size());
+        assertEquals(41, fresh.loop.steps());
+        fresh.loop.close();
         var met = new Fixture(); met.state = state(8); met.loop.resume(92, saved);
         assertEquals(List.of(AgentLoop.TaskStatus.COMPLETED), met.finishes);
     }
@@ -112,7 +114,9 @@ class AgentLoopRecoveryTest {
         var saved = original.saved.deepCopy();
         assertEquals(1, saved.getAsJsonObject("continuation").get("stalled").getAsInt());
         var fresh = new Fixture(); fresh.loop.resume(91, saved); fresh.reply();
-        assertTrue(fresh.reasons.getFirst().startsWith("GOAL_NO_PROGRESS:"));
+        assertTrue(fresh.reasons.isEmpty());
+        assertEquals(2, fresh.requests.size());
+        fresh.loop.close();
         var capped = saved.deepCopy();
         capped.getAsJsonObject("continuation").addProperty("completed_runs", 4);
         var exhausted = new Fixture(); exhausted.loop.resume(92, capped);
@@ -138,7 +142,7 @@ class AgentLoopRecoveryTest {
         var memory = new WorkFailureMemory(); var args = new JsonObject(); args.addProperty("x", 2);
         for (int i = 0; i < 5; i++) memory.terminal("move_to", args, new ToolOutcome(false, "NO_PATH:blocked"));
         var copy = WorkFailureMemory.restore(memory.snapshot());
-        assertNotNull(copy.refusal("move_to", args));
+        assertEquals(5, copy.failures("move_to", args));
         assertEquals(memory.snapshot(), copy.snapshot());
     }
     @Test void sharedTransferBalancesSurviveButPendingEffectsCannotBeSnapshotted() {

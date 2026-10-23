@@ -83,15 +83,16 @@ class AgentLoopGoalTest {
         f.loop.close();
     }
 
-    @Test void repeatedFalseFinishesStopWithoutPretendingSuccess() {
+    @Test void repeatedFalseFinishesRequestMoreWorkWithoutPretendingSuccess() {
         var f = new Fixture();
         f.loop.submit(8, "collect diamonds");
         f.goal();
         f.reply();
         f.reply();
         f.reply();
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), f.statuses);
-        assertFalse(f.loop.busy());
+        assertTrue(f.statuses.isEmpty());
+        assertTrue(f.loop.busy());
+        f.loop.close();
     }
 
     @Test void loweredGoalIsRejectedAndCancellationNeverRestartsTheGoal() {

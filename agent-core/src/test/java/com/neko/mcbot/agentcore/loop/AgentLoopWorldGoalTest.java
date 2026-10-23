@@ -66,8 +66,8 @@ class AgentLoopWorldGoalTest {
         f.state.addProperty("game_tick",999); f.reply();
         f.state.getAsJsonObject("goal_evidence").addProperty("observation_key","irrelevant-material-and-terrain-version");
         f.reply();
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED),f.finishes);
-        assertTrue(f.endings.getLast().startsWith("GOAL_NO_PROGRESS:"));
+        assertTrue(f.finishes.isEmpty());
+        f.loop.close();
     }
     @Test void frozenWorldGoalRejectsItemGoalDefaultGatherAndChangedRevisionButAllowsMaterialSubtasks() {
         var f=new Fixture(); f.goal(false);

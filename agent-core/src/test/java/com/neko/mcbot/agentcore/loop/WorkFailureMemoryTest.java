@@ -4,188 +4,108 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorkFailureMemoryTest {
-    @Test void followSharesOriginalFailureLedgerAndDormancyFactsNeverReplenishIt() {
-        var memory = new WorkFailureMemory();
-        var args = json("{\"target_uuid\":\"00000000-0000-0000-0000-000000000001\",\"seconds\":30}");
-        var state = state();
-        observe(memory, state);
-        for (int i = 0; i < 5; i++) {
-            assertNull(memory.refusal("follow", args));
-            memory.terminal("follow", args, ToolOutcome.accepted("follow", "ACCEPTED:waiting"));
-            memory.terminal("follow", args, new ToolOutcome(false, "NO_PATH:unchanged-" + i));
-            memory.terminal("follow", args, new ToolOutcome(true, "duration ended",
-                    json("{\"behavior_ended\":true,\"goal_satisfied\":false,\"follow\":{\"wake_count\":99,\"in_band\":true}}")));
-            state.addProperty("game_tick", i);
-            observe(memory, state);
-        }
-        assertTrue(memory.refusal("follow", args).feedback().startsWith("REPEATED_FAILURE:"));
-        state.addProperty("x", 2);
-        observe(memory, state);
-        assertNull(memory.refusal("follow", args));
-        assertTrue(WorkFailureMemory.localFailure("follow", "NO_PATH:dry gap"));
-        assertFalse(WorkFailureMemory.localFailure("follow", "SCOPE_LIMIT:original"));
-    }
     private static final JsonObject POINT = json("{\"x\":4,\"y\":70,\"z\":0}");
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     private static JsonObject state() {
-        var state = AgentLoopGoalTest.state(1);
-        state.addProperty("x", 0);
-        state.addProperty("y", 70);
-        state.addProperty("z", 0);
-        state.addProperty("dimension", "minecraft:overworld");
-        return state;
+        var value = AgentLoopGoalTest.state(1);
+        value.addProperty("x", 0); value.addProperty("y", 70); value.addProperty("z", 0);
+        value.addProperty("dimension", "minecraft:overworld");
+        return value;
     }
-    private void exhaust(WorkFailureMemory memory) {
-        for (int i = 0; i < 5; i++) {
-            assertNull(memory.refusal("move_to", POINT));
-            memory.terminal("move_to", POINT, new ToolOutcome(false, "NO_PATH:elapsed=" + i));
-        }
-        assertNotNull(memory.refusal("move_to", POINT));
-    }
-    private void observe(WorkFailureMemory memory, JsonObject state) {
+    private static void observe(WorkFailureMemory memory, JsonObject state) {
         memory.terminal("status", json("{\"details\":true}"), new ToolOutcome(true, "fresh", state));
     }
-
-    @Test void structuredArgumentsAndStableReasonIgnoreTimingAndKeyOrderWithoutChangingResults() {
-        var memory = new WorkFailureMemory();
-        exhaust(memory);
-        var blocked = memory.refusal("move_to", json("{\"z\":0.0,\"y\":70.0,\"x\":4.0}"));
-        assertTrue(blocked.feedback().startsWith("REPEATED_FAILURE:"));
-        var evidence = blocked.data().getAsJsonObject("failure_memory");
-        assertEquals("NO_PATH", evidence.get("reason").getAsString());
-        assertEquals(5, evidence.get("failures").getAsInt());
-        assertFalse(evidence.get("dispatched").getAsBoolean());
-        assertNull(memory.refusal("move_to", json("{\"x\":5,\"y\":70,\"z\":0}")));
-        assertNull(memory.refusal("break_block", POINT));
+    private static void record(WorkFailureMemory memory, String tool, int count) {
+        for (int i = 0; i < count; i++)
+            memory.terminal(tool, POINT, new ToolOutcome(false, "NO_PATH:elapsed=" + i));
     }
 
-    @Test void bodyObservationHistoryNeverReplenishesAttemptsEvenWithRepeatedInventoryOrDamageFacts() {
+    @ParameterizedTest @ValueSource(strings = {"move_to", "follow", "break_block"})
+    void failuresBeyondFiveRemainDiagnosticAndSurviveRecovery(String tool) {
         var memory = new WorkFailureMemory();
-        exhaust(memory);
-        var data = json("{\"body_delta\":{\"body_id\":\"body\",\"from_seq\":0,\"through_seq\":8,"
-                + "\"net\":{\"carried_items\":[{\"item\":\"minecraft:stone\",\"count_delta\":3}],"
-                + "\"selected_slot\":[0,1],\"health\":[20,18]}}}");
-        for (int i = 0; i < 8; i++) {
-            memory.terminal("move_to", POINT, new ToolOutcome(true, "same observed interval", data));
-            memory.terminal("status", json("{\"details\":true}"), new ToolOutcome(true, "incomplete", data));
-        }
-        assertNotNull(memory.refusal("move_to", POINT));
+        record(memory, tool, 27);
+        assertEquals(27, memory.failures(tool, POINT));
+        var copy = WorkFailureMemory.restore(memory.snapshot());
+        record(copy, tool, 1);
+        assertEquals(28, copy.failures(tool, POINT));
+        assertEquals(27, memory.failures(tool, POINT));
     }
 
-    @Test void repeatedOriginPickupAndMergeReportsDoNotReplenishTheOriginalFailureBudget() {
-        var memory = new WorkFailureMemory();
-        var fresh = state();
-        observe(memory, fresh);
-        exhaust(memory);
-        for (int i = 1; i < 8; i++) {
-            var report = json("{\"drop_accounting_known\":true,\"drop_accounting\":{"
-                    + "\"origin_id\":1,\"spawned_count\":64,\"live_count\":0,\"picked_up_self_count\":64,"
-                    + "\"accounting_complete\":true}}");
-            memory.terminal("move_to", POINT, new ToolOutcome(true, "same native origin", report));
-            fresh.add("drop_changes", report);
-            fresh.addProperty("game_tick", i);
-            observe(memory, fresh);
-        }
-        assertNotNull(memory.refusal("move_to", POINT));
-    }
-
-    @Test void argumentsAreFrozenAndOnlyKnownLocalFailuresCount() {
+    @Test void structuredArgumentsAreFrozenAndNumericKeyOrderDoesNotChangeIdentity() {
         var memory = new WorkFailureMemory();
         var args = POINT.deepCopy();
         memory.terminal("move_to", args, new ToolOutcome(false, "NO_PATH:first"));
         args.addProperty("x", 999);
-        for (int i = 0; i < 8; i++) {
-            for (String reason : new String[]{"DENIED", "NEED_CONFIRM", "WRONG_TOOL", "TIMEOUT",
-                    "CANCELLED", "SCOPE_LIMIT", "UNSUPPORTED", "UNKNOWN"})
-                memory.terminal("move_to", POINT, new ToolOutcome(false, reason + ":unchanged"));
-            memory.terminal("move_to", POINT, ToolOutcome.accepted("job", "NO_PATH:not terminal"));
-        }
-        for (int i = 0; i < 3; i++)
-            memory.terminal("move_to", POINT, new ToolOutcome(false, "NO_PATH:again"));
-        assertNull(memory.refusal("move_to", POINT));
-        memory.terminal("move_to", POINT, new ToolOutcome(false, "NO_PATH:fifth"));
-        assertNotNull(memory.refusal("move_to", POINT));
-        assertNull(memory.refusal("move_to", args));
+        assertEquals(1, memory.failures("move_to", json("{\"z\":0.0,\"y\":70.0,\"x\":4.0}")));
+        assertEquals(0, memory.failures("move_to", args));
+        assertEquals(0, memory.failures("break_block", POINT));
     }
 
-    @Test void onlyCompleteChangedFactsInvalidateFailuresNotFirstOrIncompleteObservation() {
+    @Test void acceptedProgressPermissionsAndUnknownResultsAreNotLocalFailures() {
         var memory = new WorkFailureMemory();
-        exhaust(memory);
-        var state = state();
-        observe(memory, state);
-        assertNotNull(memory.refusal("move_to", POINT), "first observation cannot prove a change");
-        var incomplete = state.deepCopy();
+        for (String reason : new String[]{"DENIED", "NEED_CONFIRM", "WRONG_TOOL", "TIMEOUT",
+                "CANCELLED", "SCOPE_LIMIT", "UNSUPPORTED", "UNKNOWN"})
+            memory.terminal("move_to", POINT, new ToolOutcome(false, reason + ":unchanged"));
+        memory.terminal("move_to", POINT, ToolOutcome.accepted("job", "NO_PATH:not terminal"));
+        assertEquals(0, memory.failures("move_to", POINT));
+        assertTrue(WorkFailureMemory.localFailure("follow", "NO_PATH:dry gap"));
+    }
+
+    @Test void firstIncompleteAndCosmeticObservationsCannotInventChangedFacts() {
+        var memory = new WorkFailureMemory();
+        record(memory, "move_to", 9);
+        var fresh = state();
+        observe(memory, fresh);
+        var incomplete = fresh.deepCopy();
         incomplete.addProperty("x", 2);
         incomplete.getAsJsonObject("inventory").getAsJsonArray("slots").remove(0);
         observe(memory, incomplete);
-        assertNotNull(memory.refusal("move_to", POINT));
-        state.addProperty("game_tick", 999);
-        state.addProperty("hp", 18);
-        state.addProperty("selected_slot", 2);
-        var slots = state.getAsJsonObject("inventory").getAsJsonArray("slots");
-        slots.get(0).getAsJsonObject().addProperty("damage", 100);
-        var first = slots.get(0); var second = slots.get(1);
-        slots.set(0, second); slots.set(1, first);
-        observe(memory, state);
-        assertNotNull(memory.refusal("move_to", POINT));
-        state.addProperty("x", 0.9);
-        observe(memory, state);
-        assertNotNull(memory.refusal("move_to", POINT), "same foot cell is not a new approach");
-        state.addProperty("x", 1);
-        observe(memory, state);
-        assertNull(memory.refusal("move_to", POINT));
+        fresh.addProperty("game_tick", 999); fresh.addProperty("hp", 18);
+        fresh.addProperty("selected_slot", 2);
+        fresh.getAsJsonObject("inventory").getAsJsonArray("slots").get(0).getAsJsonObject().addProperty("damage", 100);
+        observe(memory, fresh);
+        assertEquals(9, memory.failures("move_to", POINT));
+        fresh.addProperty("x", 1);
+        observe(memory, fresh);
+        assertEquals(0, memory.failures("move_to", POINT));
     }
 
-    @Test void inventoryAndDimensionChangesAlsoAllowReevaluation() {
+    @ParameterizedTest @ValueSource(strings = {"inventory", "dimension", "terrain"})
+    void changedFactsInvalidateOutdatedDiagnostics(String kind) {
         var memory = new WorkFailureMemory();
-        var state = state();
-        observe(memory, state);
-        exhaust(memory);
-        state.getAsJsonObject("inventory").getAsJsonArray("slots").get(0).getAsJsonObject()
-                .addProperty("count", 2);
-        observe(memory, state);
-        assertNull(memory.refusal("move_to", POINT));
-        exhaust(memory);
-        state.addProperty("dimension", "minecraft:the_nether");
-        observe(memory, state);
-        assertNull(memory.refusal("move_to", POINT));
+        var fresh = state();
+        fresh.add("spatial_facts", json("{\"dimension\":\"minecraft:overworld\",\"chunks\":{\"0,0\":\"c:1\"}}"));
+        observe(memory, fresh);
+        record(memory, "move_to", 7);
+        switch (kind) {
+            case "inventory" -> fresh.getAsJsonObject("inventory").getAsJsonArray("slots").get(0)
+                    .getAsJsonObject().addProperty("count", 2);
+            case "dimension" -> fresh.addProperty("dimension", "minecraft:the_nether");
+            default -> fresh.getAsJsonObject("spatial_facts").getAsJsonObject("chunks").addProperty("0,0", "c:2");
+        }
+        observe(memory, fresh);
+        assertEquals(0, memory.failures("move_to", POINT));
     }
 
-    @Test void freshTerrainChangeAllowsTheSameWorkWithoutInventingBodyProgress() {
+    @Test void queryNoopsAggregateAndHistoricalEffectsDoNotEraseFailures() {
         var memory = new WorkFailureMemory();
-        var state = state();
-        state.add("spatial_facts", json("{\"dimension\":\"minecraft:overworld\","
-                + "\"chunks\":{\"0,0\":\"chunk:1\"}}"));
-        observe(memory, state);
-        exhaust(memory);
-        observe(memory, state);
-        assertNotNull(memory.refusal("move_to", POINT));
-        state.add("spatial_facts", json("{\"dimension\":\"minecraft:overworld\","
-                + "\"chunks\":{\"0,0\":\"chunk:2\"}}"));
-        observe(memory, state);
-        assertNull(memory.refusal("move_to", POINT), "same body, actual terrain version changed");
-    }
-
-    @Test void successNoopQueriesAndAggregateCountersCannotReplenishAttempts() {
-        var memory = new WorkFailureMemory();
-        exhaust(memory);
+        record(memory, "move_to", 7);
         memory.terminal("move_to", POINT, new ToolOutcome(true, "already there"));
-        memory.terminal("craft", json("{\"query\":true}"),
-                new ToolOutcome(true, "query", json("{\"crafted_count\":2}")));
-        memory.terminal("status", json("{\"details\":true}"),
-                new ToolOutcome(true, "not a body", json("{\"removed_blocks\":1}")));
-        memory.terminal("gather", new JsonObject(),
-                new ToolOutcome(true, "aggregate", json("{\"actual_progress\":10,\"collected_count\":10}")));
-        memory.terminal("break_block", POINT,
-                new ToolOutcome(false, "PARTIAL:unproved", json("{\"cleared_blocks\":0.5}")));
-        assertNotNull(memory.refusal("move_to", POINT));
+        memory.terminal("craft", json("{\"query\":true}"), new ToolOutcome(true, "query", json("{\"crafted_count\":2}")));
+        memory.terminal("gather", new JsonObject(), new ToolOutcome(true, "aggregate", json("{\"collected_count\":10}")));
+        memory.terminal("break_block", POINT, new ToolOutcome(false, "PARTIAL:unproved", json("{\"cleared_blocks\":0.5}")));
+        memory.terminal("move_to", POINT, new ToolOutcome(true, "historical",
+                json("{\"body_delta\":{\"net\":{\"health\":[20,18]}},\"drop_accounting\":{\"picked_up_self_count\":64}}")));
+        assertEquals(7, memory.failures("move_to", POINT));
     }
 
-    @Test void realPrimitiveEffectsIncludingPartialTerrainChangesInvalidateOldEvidence() {
+    @Test void actualPrimitiveEffectsInvalidateOldEvidenceIncludingPartialActions() {
         for (String[] effect : new String[][]{
                 {"move_to", "{\"removed_blocks\":1}"}, {"move_to", "{\"placed_blocks\":1}"},
                 {"break_block", "{\"removed\":true}"}, {"break_block", "{\"cleared_blocks\":1}"},
@@ -194,25 +114,22 @@ class WorkFailureMemoryTest {
                 {"smelt", "{\"loaded_fuel_count\":1}"}, {"smelt", "{\"taken_count\":1}"},
                 {"transfer", "{\"moved_items\":1}"}}) {
             var memory = new WorkFailureMemory();
-            exhaust(memory);
+            record(memory, "move_to", 7);
             var args = POINT.deepCopy();
             if (effect[0].equals("smelt"))
                 args.addProperty("action", effect[1].contains("taken_count") ? "take" : "load");
-            memory.terminal(effect[0], args, new ToolOutcome(false, "PARTIAL:actual effect", json(effect[1])));
-            assertNull(memory.refusal("move_to", POINT), effect[0] + effect[1]);
+            memory.terminal(effect[0], args, new ToolOutcome(false, "PARTIAL:actual", json(effect[1])));
+            assertEquals(0, memory.failures("move_to", POINT), effect[0] + effect[1]);
         }
     }
 
-    @Test void boundedStorageDoesNotEvictOldFailuresOrRestrictObservationsAndOtherCapabilities() {
+    @Test void historyCapacityRollsWithoutBlockingNewWork() {
         var memory = new WorkFailureMemory();
-        exhaust(memory);
-        for (int x = 5; x < 132; x++)
+        for (int x = 0; x < 200; x++)
             memory.terminal("move_to", json("{\"x\":" + x + "}"), new ToolOutcome(false, "NO_PATH:other"));
-        assertTrue(memory.refusal("move_to", POINT).feedback().startsWith("REPEATED_FAILURE:"));
-        assertTrue(memory.refusal("move_to", json("{\"x\":1000}")).feedback().startsWith("FAILURE_MEMORY_LIMIT:"));
-        assertNull(memory.refusal("status", new JsonObject()));
-        assertNull(memory.refusal("place_block", POINT));
-        memory.terminal("break_block", POINT, new ToolOutcome(true, "actual", json("{\"removed\":true}")));
-        assertNull(memory.refusal("move_to", POINT));
+        assertEquals(128, memory.snapshot().getAsJsonArray("entries").size());
+        assertEquals(1, memory.failures("move_to", json("{\"x\":199}")));
+        assertEquals(0, memory.failures("move_to", json("{\"x\":0}")));
+        assertEquals(memory.snapshot(), WorkFailureMemory.restore(memory.snapshot()).snapshot());
     }
 }

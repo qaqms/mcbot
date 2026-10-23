@@ -38,8 +38,8 @@ end
 
 function mc.build(target, options)
     local o=options or {}
-    local rounds, actions=o.max_rounds or 16,o.max_actions or 4
-    assert(type(rounds)=="number" and rounds>=1 and rounds<=16 and rounds%1==0)
+    local rounds, actions=o.max_rounds or 0,o.max_actions or 4
+    assert(type(rounds)=="number" and rounds>=0 and rounds<=2147483647 and rounds%1==0)
     assert(type(actions)=="number" and actions>=1 and actions<=12 and actions%1==0)
     assert(type(o.access_route)=="table")
     for key in pairs(o) do
@@ -74,7 +74,9 @@ function mc.build(target, options)
             site=call("build_site",{operation="query"}).data
         end
     end
-    for round=1,rounds do
+    local round=0
+    while rounds==0 or round<rounds do
+        round=round+1
         call("status",{details=true})
         local pages,reason=checked(target,revision)
         if not pages then return blocked(reason,revision) end

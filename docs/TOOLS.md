@@ -3,7 +3,21 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## P1 首阶段诊断（2026-10-23）
+## 当前执行限制（2026-10-23）
+
+以[NAVIGATION-AND-EXECUTION-POLICY](NAVIGATION-AND-EXECUTION-POLICY-2026-10-23.md)覆盖下方历史额度。
+仍31工具：run_program默认timeout_seconds/max_calls=0不限；长期max_runs默认0不限，
+默认模型轮数、重复五次/空搜三次/拒绝假完成三次门取消。正数可主动限制单次程序/阶段。
+gather默认不限时间/挖掘/探索次数，explore_steps=0仍关闭换区；explore省略max_steps不限。
+workflow省略时间不限，无128件总额度；仍为1–12个明确步骤载荷。
+mc.build的max_rounds默认0不限；工地轮数/编辑数、地下累计挖掘仅诊断。
+每次导航仍8000节点/32768记录/400ms，无默认累计两次重规划门；
+move_to终态/观察有search_mode，后台结果有worker_search_ms，与主线程path_timing分列。
+显式approach范围64格，原目标UUID/实际出手距离/批准绑定保留，被动自保仍近场。
+权限、取消、身体控制、未知状态、来源/返程存储和单次动作保护保留。
+局部失败交回模型/程序判断，不阻止后续新调用；真实最终目标仍须现场验收。
+
+## P1 首阶段诊断（2026-10-23，历史检查点）
 
 工具数与参数Schema不变。move_to普通/中断终态data增加path_timing，报告本路线单调时间、
 互斥阶段及输入/节点计数；不是进度百分比或预算，空输入也可能是必要工作。

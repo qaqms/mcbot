@@ -14,7 +14,8 @@ import java.util.*;
 
 /** One task-selected worksite. Registration protects work; it grants no world-edit permission. */
 public final class BuildSite {
-    public static final int ROUTE_LIMIT = 64, TEMP_LIMIT = 16, ROUND_LIMIT = 16, EDIT_LIMIT = 128;
+    public static final int ROUTE_LIMIT = 64, TEMP_LIMIT = 16;
+    private static final int HISTORY_LIMIT = 128;
     public interface Access {
         BlockState state(BlockPos pos);
         boolean corridor(BlockPos feet);
@@ -32,7 +33,7 @@ public final class BuildSite {
     private BuildTarget target;
     private List<BlockPos> route = List.of();
     private final Map<BlockPos, Temporary> temporary = new LinkedHashMap<>();
-    private final Set<String> rounds = new HashSet<>();
+    private final Set<String> rounds = new LinkedHashSet<>();
     private final Set<BlockPos> protectedCells = new HashSet<>();
     private final Set<BlockPos> accessCells = new HashSet<>();
     private com.neko.mcbot.path.PathSpec scope = com.neko.mcbot.path.PathSpec.DEFAULT;
@@ -283,8 +284,8 @@ public final class BuildSite {
     }
     public ServerTool.Result charge() {
         if (!active()) return null;
-        if (stopped || edits >= EDIT_LIMIT) { stopped = true; return failed("ACTION_LIMIT:工地累计128次原生改动尝试已到。"); }
-        edits++;
+        if (stopped) return failed("DENIED:原工地已停止。");
+        if (edits < Integer.MAX_VALUE) edits++;
         return null;
     }
     public ServerTool.Result checkpoint(String revision, BlockPos feet, Access access) {
@@ -292,7 +293,6 @@ public final class BuildSite {
         if (!inScope(feet)) return failed("SCOPE_CHANGED:身体已离开冻结工地范围。");
         var failure = live(access);
         if (failure != null) return failure;
-        if (checkpoints >= ROUND_LIMIT) { stopped = true; return failed("ACTION_LIMIT:工地累计16轮已到。"); }
         var signature = new StringBuilder(feet.toShortString());
         for (var c : target.cells()) {
             var actual = access.state(c.pos());
@@ -306,11 +306,9 @@ public final class BuildSite {
         }
         for (var record : temporary.values()) signature.append('|').append(record.pos).append(':')
                 .append(access.state(record.pos)).append(':').append(record.witness != null && record.witness.intact());
-        checkpoints++;
-        if (!rounds.add(fingerprint(signature.toString()))) {
-            stopped = true;
-            return failed("NO_PROGRESS:相同真实目标缺口与站位已出现，停止往返施工；计时、查询和扣料不算进展。");
-        }
+        if (checkpoints < Integer.MAX_VALUE) checkpoints++;
+        rounds.add(fingerprint(signature.toString()));
+        if (rounds.size() > HISTORY_LIMIT) rounds.remove(rounds.iterator().next());
         return null;
     }
 
@@ -360,14 +358,14 @@ public final class BuildSite {
         }
         var failure = begin(target, restoredRoute, restoredRoute.getFirst(), scope, access);
         if (failure != null) throw new IllegalArgumentException("Worksite changed");
-        checkpoints = BuildTarget.integer(data.get("checkpoints"), 0, ROUND_LIMIT);
-        edits = BuildTarget.integer(data.get("edits"), 0, EDIT_LIMIT);
+        checkpoints = BuildTarget.integer(data.get("checkpoints"), 0, Integer.MAX_VALUE);
+        edits = BuildTarget.integer(data.get("edits"), 0, Integer.MAX_VALUE);
         if (!data.getAsJsonPrimitive("stopped").isBoolean()) throw new IllegalArgumentException();
         stopped = data.get("stopped").getAsBoolean();
         navigation = com.neko.mcbot.path.NavigationBudget.restore(data.getAsJsonObject("navigation"));
         var seen = data.getAsJsonArray("rounds");
         var items = data.getAsJsonArray("temporary");
-        if (seen.size() > ROUND_LIMIT || items.size() > TEMP_LIMIT) throw new IllegalArgumentException();
+        if (seen.size() > HISTORY_LIMIT || items.size() > TEMP_LIMIT) throw new IllegalArgumentException();
         for (var value : seen) {
             String hash = value.getAsString();
             if (!hash.matches("[0-9a-f]{64}") || !rounds.add(hash)) throw new IllegalArgumentException();
@@ -386,7 +384,7 @@ public final class BuildSite {
                     purpose, null, null)) != null) throw new IllegalArgumentException();
         }
         // Old witnesses are never reconstructed from a saved block state.
-        if (stopped || checkpoints >= ROUND_LIMIT || edits >= EDIT_LIMIT || navigation.exhausted()
+        if (stopped || navigation.exhausted()
                 || live(access) != null) throw new IllegalArgumentException("Worksite exhausted or unavailable");
     }
     public JsonObject report(Access access) {
@@ -403,7 +401,7 @@ public final class BuildSite {
         data.addProperty("protected_target_cells", target.cells().size());
         data.addProperty("access_route_cells", route.size());
         data.addProperty("checkpoints", checkpoints); data.addProperty("edit_attempts", edits);
-        data.addProperty("round_limit", ROUND_LIMIT); data.addProperty("edit_limit", EDIT_LIMIT);
+        data.addProperty("round_limit", 0); data.addProperty("edit_limit", 0);
         data.addProperty("stopped", stopped);
         var bounds = new JsonObject();
         bounds.addProperty("x", scope.anchor().getX()); bounds.addProperty("y", scope.anchor().getY());

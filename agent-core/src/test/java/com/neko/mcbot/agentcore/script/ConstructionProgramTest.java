@@ -34,8 +34,7 @@ class ConstructionProgramTest {
                         {"x":0,"y":90,"z":0,"dimension":"fixture:world","inventory":{"slots":[]}}
                         """);
                 case "build_site" -> {
-                    if(args.get("operation").getAsString().equals("checkpoint") && ++checkpoints>1 && repeat)
-                        yield new ToolOutcome(false,"NO_PROGRESS:repeated real gap and stance");
+                    if(args.get("operation").getAsString().equals("checkpoint")) checkpoints++;
                     yield actual("{\"active\":true,\"target_revision\":\""+REV+"\","
                             +"\"bounds\":{\"x\":0,\"y\":90,\"z\":0,\"radius\":32},\"temporary\":[]}");
                 }
@@ -118,14 +117,28 @@ class ConstructionProgramTest {
         assertEquals("minecraft:dirt",args.get("expected_block").getAsString());
         assertFalse(args.has("clear_obstructions"));
     }
-    @Test void localMoveFailureRequiresFreshBodyCheckAndServerRoundMemoryStopsOscillation() throws Exception {
+    @Test void localMoveFailureRequiresFreshBodyCheckAndHonorsExplicitRoundLimit() throws Exception {
         var w=new World(); w.moveFailure="NO_PATH:local geometry"; w.repeat=true;
         var result=run(w,CODE,128);
-        assertFalse(result.ok()); assertEquals(0,w.placed);
+        assertTrue(result.ok()); assertEquals(0,w.placed);
+        assertEquals("round_limit",result.data().getAsJsonObject("returned").get("blocked").getAsString());
         int index=0; while(!w.calls.get(index).name().equals("move_to")) index++;
         assertEquals("status",w.calls.get(index+1).name());
         assertTrue(w.calls.get(index+1).args().get("details").getAsBoolean());
-        assertEquals(2,w.checkpoints); assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        assertEquals(3,w.checkpoints); assertEquals(3,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+    }
+    @Test void defaultConstructionContinuesBeyondSixteenRoundsAndOldCallLimit() throws Exception {
+        var w=new World(); w.remaining=40; w.moved=1;
+        w.override=(name,args)->{
+            if(!name.equals("build_nearby")) return null;
+            w.remaining--; w.placed++;
+            return actual("{\"placed_blocks\":1,\"goal_satisfied\":false}");
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),0);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(40,w.checkpoints); assertEquals(40,w.placed);
+        assertTrue(w.calls.size()>128);
     }
     @Test void permissionSafetyUnknownAndActionBudgetFailuresNeverBecomeLocalRetries() throws Exception {
         for(String reason:List.of("DENIED:permission","ENVIRONMENT_UNSAFE:water","TARGET_LOST:unknown","ACTION_LIMIT:nodes")) {

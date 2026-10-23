@@ -199,13 +199,26 @@ class AgentRunnerWorkflowTest {
         assertFalse(result().ok());
     }
 
-    @Test void countsAndStepsAndDeadlineHaveHardBoundaries() {
+    @Test void requestTotalsHaveNoExtraQuotaWhilePayloadAndExplicitDeadlineRemainBounded() {
         String craft = "{\"tool\":\"craft\",\"args\":{\"item\":\"stick\",\"count\":64}}";
         assertEquals(128, BoundedWorkflow.parse(plan(craft, craft)).itemRequests());
-        assertThrows(RuntimeException.class, () -> BoundedWorkflow.parse(plan(craft, craft, craft)));
+        assertEquals(192, BoundedWorkflow.parse(plan(craft, craft, craft)).itemRequests());
+        assertEquals(0, BoundedWorkflow.parse(plan(craft)).seconds());
         assertEquals(12, BoundedWorkflow.parse(plan(java.util.Collections.nCopies(12, INVENTORY).toArray(String[]::new))).steps().size());
         assertThrows(RuntimeException.class, () -> BoundedWorkflow.parse(plan(java.util.Collections.nCopies(13, INVENTORY).toArray(String[]::new))));
         assertThrows(RuntimeException.class, () -> BoundedWorkflow.parse("{\"steps\":[" + INVENTORY + "],\"timeout_seconds\":301}"));
+    }
+    @Test void omittedWorkflowDeadlineContinuesAfterOldThreeMinuteLimit() {
+        String wait = "{\"tool\":\"wait\",\"args\":{\"seconds\":60}}";
+        start("inspect", plan(wait, wait, wait, wait, INVENTORY));
+        for (int i = 0; i < 4; i++) {
+            client.now += 60000;
+            runner.tick(); client.drain();
+            receipt(true, "wait completed", "{}");
+        }
+        assertEquals(5, client.toolCount());
+        receipt(true, "inventory", "{}");
+        assertTrue(result().ok());
     }
 
     @Test void exactDeadlineCancelsInflightAndDoesNotAcceptLateResult() {

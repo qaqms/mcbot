@@ -16,6 +16,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class BoundedProgramTest {
+    @Test void defaultProgramHasNoCallOrWallClockQuotaAndCanPassTheOldCallCap() throws Exception {
+        var plan = BoundedProgram.Plan.parse("{\"code\":\"return 1\"}");
+        assertEquals(0, plan.maxCalls());
+        assertEquals(0, plan.seconds());
+        try (var f = new Fixture("""
+                local total=0
+                for i=1,320 do total=total+mc.call("inventory",{page=i}).data.amount end
+                return total
+                """, 0)) {
+            f.host = (name, args) -> CompletableFuture.completedFuture(actual("{\"amount\":1}"));
+            var result = f.outcome();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(320, f.calls.size());
+            assertEquals(320, result.data().get("returned").getAsInt());
+        }
+    }
     @Test void tryCallCannotSwallowDeathAndContinueWithAnotherAction() throws Exception {
         try (var f = new Fixture("mc.try_call('move_to',{x=1,y=60,z=2}); return mc.call('inventory',{})")) {
             f.host = (name, args) -> CompletableFuture.completedFuture(new ToolOutcome(false, "BODY_DIED:retired"));
@@ -53,11 +69,11 @@ class BoundedProgramTest {
             result = program.start();
         }
         void until(BooleanSupplier condition) {
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
             while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
                 Runnable action;
                 while ((action = queue.poll()) != null) action.run();
-                java.util.concurrent.locks.LockSupport.parkNanos(100000);
+                Thread.yield();
             }
             assertTrue(condition.getAsBoolean(), "program/client queue did not settle");
         }
@@ -274,7 +290,7 @@ class BoundedProgramTest {
         }
     }
 
-    @Test void changingTimingTextArgumentOrderOrNoOpSuccessCannotReplenishLocalRecovery() throws Exception {
+    @Test void repeatedLocalFailuresRemainAvailableToTheScriptAfterFreshObservation() throws Exception {
         try (var f = new Fixture("""
                 mc.call("status",{details=true})
                 for i=1,20 do
@@ -295,12 +311,12 @@ class BoundedProgramTest {
                         "NO_PROGRESS:8001 nodes in " + failures.incrementAndGet() + "ms"));
             };
             var result = f.outcome();
-            assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
-            assertEquals(5, failures.get());
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(20, failures.get());
         }
     }
 
-    @Test void actualBodyProgressAllowsNewAttemptsButClockSlotAndWearDoNot() throws Exception {
+    @Test void bodyChangesAreNotRequiredToAuthorizeAnotherObservedAttempt() throws Exception {
         try (var f = new Fixture("""
                 mc.call("status",{details=true})
                 for i=1,12 do
@@ -326,8 +342,8 @@ class BoundedProgramTest {
                 return CompletableFuture.completedFuture(new ToolOutcome(true, "actual state", data));
             };
             var result = f.outcome();
-            assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
-            assertEquals(9, result.data().get("local_failures").getAsInt());
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(12, result.data().get("local_failures").getAsInt());
         }
     }
 
@@ -457,7 +473,7 @@ class BoundedProgramTest {
         }
     }
 
-    @Test void unchangedFailureCannotBeRetriedIndefinitelyByInterleavingFreshStatus() throws Exception {
+    @Test void unchangedFailureDoesNotImposeAnAutomaticRetryQuota() throws Exception {
         try (var f = new Fixture("""
                 for i=1,20 do
                     mc.try_call("move_to",{x=2})
@@ -468,10 +484,10 @@ class BoundedProgramTest {
                     ? new ToolOutcome(false, "NO_PATH:same local obstacle")
                     : actual("{\"x\":0,\"y\":64,\"z\":0,\"dimension\":\"fixture:world\",\"inventory\":{\"slots\":[]}}"));
             var result = f.outcome();
-            assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
-            assertEquals(9, f.calls.size());
-            assertEquals(5, result.data().get("local_failures").getAsInt());
-            assertTrue(result.data().get("body_recheck_required").getAsBoolean());
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(40, f.calls.size());
+            assertEquals(20, result.data().get("local_failures").getAsInt());
+            assertFalse(result.data().get("body_recheck_required").getAsBoolean());
         }
     }
 
@@ -611,7 +627,7 @@ class BoundedProgramTest {
         }
     }
 
-    @Test void totalInstructionBudgetDoesNotResetAtApiCalls() throws Exception {
+    @Test void independentComputationSlicesDoNotConsumeATotalInstructionQuota() throws Exception {
         try (var f = new Fixture("""
                 local n=0
                 for i=1,200 do
@@ -620,8 +636,8 @@ class BoundedProgramTest {
                 end
                 return n
                 """, 256)) {
-            assertTrue(f.outcome().feedback().startsWith("INSTRUCTION_LIMIT:"));
-            assertTrue(f.calls.size() > 1 && f.calls.size() < 200);
+            assertTrue(f.outcome().ok());
+            assertEquals(200, f.calls.size());
         }
     }
 
@@ -773,12 +789,12 @@ class BoundedProgramTest {
         }
     }
 
-    @Test void repeatedNoTargetsCannotBeHiddenByStatusQueries() throws Exception {
+    @Test void repeatedEmptySearchesRemainScriptResults() throws Exception {
         try (var f = new Fixture("for i=1,4 do mc.call('find_resource',{r=i}) mc.call('status',{}) end")) {
             f.host = (name, args) -> CompletableFuture.completedFuture(actual(
                     name.equals("find_resource") ? "{\"no_targets\":true}" : "{}"));
-            assertTrue(f.outcome().feedback().startsWith("NO_TARGETS:"));
-            assertEquals(5, f.calls.size());
+            assertTrue(f.outcome().ok());
+            assertEquals(8, f.calls.size());
         }
     }
 
@@ -820,18 +836,18 @@ class BoundedProgramTest {
         }
     }
 
-    @Test void identicalPollingResultsHaveANoProgressBound() throws Exception {
+    @Test void identicalPollingResultsDoNotTerminateTheScript() throws Exception {
         try (var f = new Fixture("for i=1,8 do mc.call('status',{}) end")) {
-            assertTrue(f.outcome().feedback().startsWith("NO_PROGRESS:"));
-            assertEquals(5, f.calls.size());
+            assertTrue(f.outcome().ok());
+            assertEquals(8, f.calls.size());
         }
     }
 
     @Test void sourceAndLimitsAreStrictlyValidated() {
-        for (String json : List.of("{}", "{\"code\":1}", "{\"code\":\"return 1\",\"max_calls\":0}",
+        for (String json : List.of("{}", "{\"code\":1}", "{\"code\":\"return 1\",\"max_calls\":-1}",
                 "{\"code\":\"return 1\",\"timeout_seconds\":901}", "{\"code\":\"return 1\",\"unknown\":true}",
                 "{\"code\":\"" + " ".repeat(17000) + "\"}"))
             assertThrows(RuntimeException.class, () -> BoundedProgram.Plan.parse(json));
-        assertEquals(128, BoundedProgram.Plan.parse("{\"code\":\"return 1\"}").maxCalls());
+        assertEquals(0, BoundedProgram.Plan.parse("{\"code\":\"return 1\"}").maxCalls());
     }
 }

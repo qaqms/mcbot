@@ -27,15 +27,17 @@ class BuildSiteTest {
         // This particular round is not retried; changing provenance cannot reopen its budget.
         assertEquals(1, restored.report(world).get("checkpoints").getAsInt());
     }
-    @Test void restoredSiteStillDetectsRepeatedRoundsAndRejectsChangedCorridorsAndSpentEdits() {
+    @Test void restoredSiteAllowsRepeatedRoundsAndSpentEditsButRejectsChangedCorridors() {
         var world = new World(); var original = site(world);
         assertNull(original.checkpoint(target().revision(), FEET, world));
         var restored = new BuildSite(); restored.bind("new-session", world);
         restored.restore(original.snapshot(), FEET, world);
-        assertTrue(restored.checkpoint(target().revision(), FEET, world).feedback().startsWith("NO_PROGRESS:"));
-        var saved = original.snapshot(); saved.addProperty("edits", BuildSite.EDIT_LIMIT);
+        assertNull(restored.checkpoint(target().revision(), FEET, world));
+        var saved = original.snapshot(); saved.addProperty("edits", 1024);
         var spent = new BuildSite(); spent.bind("spent", world);
-        assertThrows(IllegalArgumentException.class, () -> spent.restore(saved, FEET, world));
+        spent.restore(saved, FEET, world);
+        assertNull(spent.charge());
+        assertEquals(1025, spent.report(world).get("edit_attempts").getAsInt());
         world.unknown.add(FEET.below());
         var unknown = new BuildSite(); unknown.bind("unknown", world);
         assertThrows(IllegalArgumentException.class, () -> unknown.restore(original.snapshot(), FEET, world));
@@ -129,15 +131,15 @@ class BuildSiteTest {
         assertNotNull(site.begin(target(),List.of(FEET,FEET.north()),FEET,w));
         var other=new BuildTarget(target().anchor(),target().rotation(),target().cells(),"different");
         assertNotNull(site.begin(other,ROUTE,FEET,w));
-        assertNotNull(site.checkpoint(target().revision(),FEET,w));
-        assertTrue(site.report(w).get("stopped").getAsBoolean());
+        assertNull(site.checkpoint(target().revision(),FEET,w));
+        assertFalse(site.report(w).get("stopped").getAsBoolean());
     }
     @Test void movementAndTargetFactsDetectRoundTripsEvenWhenCountersChange() {
         var w=new World(); var site=site(w);
         assertNull(site.checkpoint(target().revision(),FEET,w));
         assertNull(site.checkpoint(target().revision(),FEET.east(),w));
         assertNull(site.charge());
-        assertTrue(site.checkpoint(target().revision(),FEET,w).feedback().startsWith("NO_PROGRESS:"));
+        assertNull(site.checkpoint(target().revision(),FEET,w));
     }
     @Test void newActualTargetStateAndTemporaryWorkAreEvidenceButQueriesAreNot() {
         var w=new World(); var site=site(w);
@@ -147,7 +149,7 @@ class BuildSiteTest {
         w.states.put(TARGET,Blocks.STONE.defaultBlockState());
         assertNull(site.checkpoint(target().revision(),FEET,w));
         site.report(w);
-        assertNotNull(site.checkpoint(target().revision(),FEET,w));
+        assertNull(site.checkpoint(target().revision(),FEET,w));
     }
     @Test void declaredRouteIsRecheckedBeforeEveryEditAndItsGuaranteeIsLimited() {
         var w=new World(); var site=site(w);
@@ -230,14 +232,20 @@ class BuildSiteTest {
         assertNotNull(site.temporaryGuard(TEMP.north(),"support",w));
         assertEquals(16,site.report(w).getAsJsonArray("temporary").size());
     }
-    @Test void nativeEditAndRoundCapsRemainFiniteAcrossRegistrationAndPauses() {
+    @Test void nativeEditsAndRepeatedRoundsContinuePastOldCapsAcrossRegistrationAndRestore() {
         var w=new World(); var site=site(w);
-        for(int i=0;i<128;i++) assertNull(site.charge());
-        assertNotNull(site.charge());
-        assertNotNull(site.begin(target(),ROUTE,FEET,w));
-        var second=site(new World()); var secondWorld=new World();
-        for(int i=0;i<16;i++) assertNull(second.checkpoint(target().revision(),FEET.east(i),secondWorld));
-        assertNotNull(second.checkpoint(target().revision(),FEET.east(16),secondWorld));
+        for(int i=0;i<160;i++) {
+            assertNull(site.charge());
+            assertNull(site.checkpoint(target().revision(),FEET,w));
+        }
+        assertNull(site.begin(target(),ROUTE,FEET,w));
+        var restored=new BuildSite(); restored.bind("restore",w);
+        restored.restore(site.snapshot(),FEET,w);
+        assertNull(restored.charge());
+        assertNull(restored.checkpoint(target().revision(),FEET,w));
+        assertEquals(161,restored.report(w).get("edit_attempts").getAsInt());
+        w.unknown.add(FEET.below());
+        assertNotNull(restored.live(w));
     }
     @Test void taskWorldAndBodyBindingDiscardAuthorityWithoutCleanupOrAutomaticResume() {
         var w=new World(); var site=site(w); temporary(site,w);
@@ -290,7 +298,7 @@ class BuildSiteTest {
         assertSame(account,site.navigation());
         assertEquals(4,site.report(w).get("checkpoints").getAsInt());
         w.states.remove(TARGET.east());
-        assertNotNull(site.checkpoint(target().revision(),FEET,w),"returning to an earlier actual condition remains a cycle");
+        assertNull(site.checkpoint(target().revision(),FEET,w),"repeat facts are diagnostic, not a dispatch ban");
     }
     @Test void equalTaskNumbersInANewServerTaskEpochCannotInheritTheOldWorksiteOrProvenance() {
         var w=new World(); var site=new BuildSite();

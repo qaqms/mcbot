@@ -51,7 +51,7 @@ class AgentLoopTest {
     }
 
     @Test
-    void nudgesThenAbortsRepeatedIdenticalCalls() {
+    void nudgesRepeatedCallsWithoutEnforcingTheLegacyAbortCount() {
         var engine = new ScriptedEngine().queue(toolTurn("dig", "{\"x\":0}"));
         int[] invocations = {0};
         var notices = new ArrayList<String>();
@@ -76,9 +76,9 @@ class AgentLoopTest {
                 () -> "sys", 1_000_000);
 
         loop.submit("一直挖");
-        assertEquals(5, invocations[0], "第 5 次后必须中止");
+        assertEquals(40, invocations[0], "only the explicitly configured model-step cap stops this fixture");
         assertTrue(notices.contains("nudge@3"));
-        assertTrue(notices.contains("abort@5"));
+        assertTrue(notices.stream().noneMatch(n -> n.startsWith("abort@")));
         assertTrue(replies.get(0).contains("停"));
         // nudge 消息确实进了对话
         boolean hasNudge = loop.conversation().history().stream().anyMatch(m -> m instanceof Msg.Nudge);
@@ -156,7 +156,7 @@ class AgentLoopTest {
         var loop = new AgentLoop(engine, List.of(),
                 (name, args) -> CompletableFuture.completedFuture(
                         new ToolExecutor.ToolOutcome(false, "TIMEOUT:第 " + (++n[0]) + " 次没等到结果")),
-                AgentLoop.Config.defaults(),
+                new AgentLoop.Config(40, 3, 5),
                 new AgentLoop.Listener() {
                     @Override
                     public void onNotice(String t) {

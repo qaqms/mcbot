@@ -116,12 +116,12 @@ final class ExplorationRoute {
     }
 
     static ExplorationRoute restore(JsonObject data) {
-        int steps = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "max_steps", 0, 64);
+        int steps = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "max_steps", 0, Integer.MAX_VALUE);
         int radius = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "radius", 1, 256);
         var route = new ExplorationRoute(steps, radius);
         route.attempts = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "attempts", 0, steps);
         route.regions = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "regions", 0, route.attempts);
-        route.undergroundDigs = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "digs", 0, 128);
+        route.undergroundDigs = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "digs", 0, Integer.MAX_VALUE);
         if (!data.get("spatial").isJsonPrimitive() || !data.getAsJsonPrimitive("spatial").isBoolean())
             throw new IllegalArgumentException();
         route.spatial = data.get("spatial").getAsBoolean();
@@ -131,7 +131,7 @@ final class ExplorationRoute {
         var visited = data.getAsJsonArray("visited");
         var tried = data.getAsJsonArray("tried");
         var trail = data.getAsJsonArray("trail");
-        if (visited.size() > steps + 2 || tried.size() > steps || trail.size() > steps + 1) throw new IllegalArgumentException();
+        if (visited.size() > 128 || tried.size() > 128 || trail.size() > 4096) throw new IllegalArgumentException();
         for (var value : visited) route.visited.add(point(value.getAsJsonObject()));
         for (var value : tried) {
             String key = value.getAsString();
@@ -155,15 +155,17 @@ final class ExplorationRoute {
     }
     int attempts() { return attempts; }
     int regions() { return regions; }
-    boolean exhausted() { return attempts >= maxSteps; }
+    boolean exhausted() { return maxSteps != Integer.MAX_VALUE && attempts >= maxSteps; }
     void abandon() { pending = false; }
-    int remainingSteps() { return Math.max(0, maxSteps - attempts); }
-    int remainingDigs() { return Math.max(0, 128 - undergroundDigs); }
+    int remainingSteps() { return maxSteps == Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(0, maxSteps - attempts); }
+    String stepLimitText() { return maxSteps == Integer.MAX_VALUE ? "不限" : Integer.toString(maxSteps); }
+    int remainingDigs() { return 128; } // Per-route edit envelope, not a task quota.
+    int undergroundDigs() { return undergroundDigs; }
     void recordDigs(JsonObject movement) {
         if (!movement.has("removed_blocks")) throw new IllegalArgumentException();
         int count = integer(movement, "removed_blocks");
         if (count < 0 || count > remainingDigs()) throw new IllegalArgumentException();
-        undergroundDigs += count;
+        undergroundDigs = (int) Math.min(Integer.MAX_VALUE, (long) undergroundDigs + count);
         if (count > 0) invalidateCoverage();
     }
     JsonObject bounds() {
@@ -191,7 +193,7 @@ final class ExplorationRoute {
             if (undergroundTrail.size() > 1 && point.equals(undergroundTrail.get(undergroundTrail.size() - 2)))
                 undergroundTrail.removeLast();
         } else if (!point.equals(undergroundTrail.getLast())) {
-            if (undergroundTrail.size() >= maxSteps + 1)
+            if (undergroundTrail.size() >= Math.min(4096L, (long) maxSteps + 1))
                 throw new IllegalArgumentException("RETURN_TRAIL_LIMIT");
             undergroundTrail.add(point);
         }
@@ -208,7 +210,8 @@ final class ExplorationRoute {
     }
     void attemptReturn(JsonObject point) {
         if (exhausted()) throw new IllegalArgumentException();
-        attempts++; departure = current.deepCopy(); pending = true;
+        if (attempts < Integer.MAX_VALUE) attempts++;
+        departure = current.deepCopy(); pending = true;
     }
 
     ToolOutcome configurationMismatch() {
@@ -237,7 +240,7 @@ final class ExplorationRoute {
         boolean moved = pending && separation(current, departure) >= 16
                 && visited.stream().noneMatch(p -> separation(p, current) < 16);
         if (moved) {
-            regions++;
+            if (regions < Integer.MAX_VALUE) regions++;
             headingX = number(current, "x") - number(departure, "x");
             headingZ = number(current, "z") - number(departure, "z");
         }
@@ -248,8 +251,10 @@ final class ExplorationRoute {
 
     void searchedHere() {
         if (current == null) throw new IllegalArgumentException();
-        if (visited.stream().noneMatch(p -> separation(p, current) < 1))
+        if (visited.stream().noneMatch(p -> separation(p, current) < 1)) {
+            if (visited.size() >= 128) visited.removeFirst();
             visited.add(current.deepCopy());
+        }
     }
 
     JsonObject choose(JsonArray points, int inset) {
@@ -283,7 +288,8 @@ final class ExplorationRoute {
 
     void attempt(JsonObject point) {
         if (exhausted() || !tried.add(key(point))) throw new IllegalArgumentException();
-        attempts++;
+        if (tried.size() > 128) tried.remove(tried.iterator().next());
+        if (attempts < Integer.MAX_VALUE) attempts++;
         departure = current.deepCopy();
         pending = true;
     }

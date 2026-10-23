@@ -48,9 +48,10 @@ class AgentLoopSearchGuardTest {
         call("find_resource", "{\"r\":8,\"targets\":[\"oak_log\"]}");
         call("inventory", "{}");
         call("scan_area", "{\"r\":32}");
-        assertEquals(5, responses.size());
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
-        assertEquals(0, loop.currentTaskId());
+        assertEquals(6, responses.size());
+        assertTrue(statuses.isEmpty());
+        assertEquals(1, loop.currentTaskId());
+        loop.cancelTask(1);
         loop.submit(2, "new search");
         call("scan_area", "{}");
         assertEquals(2, loop.currentTaskId());
@@ -62,9 +63,10 @@ class AgentLoopSearchGuardTest {
         var calls = List.of(new ToolCall("a", "scan_area", "{}"), new ToolCall("b", "find_resource", "{}"),
                 new ToolCall("c", "scan_area", "{\"r\":3}"), new ToolCall("d", "break_block", "{}"));
         responses.getFirst().complete(new AssistantTurn("", calls, 0, 0, -1, "tool_calls"));
-        assertEquals(List.of("scan_area", "find_resource", "scan_area"), executed);
+        assertEquals(List.of("scan_area", "find_resource", "scan_area", "break_block"), executed);
         assertEquals(4, loop.conversation().history().stream().filter(Msg.Tool.class::isInstance).count());
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+        assertTrue(statuses.isEmpty());
+        loop.close();
     }
 
     @Test void genuineItemsOrFoundTargetsResetBudgetButProseDoesNotControlIt() {
@@ -129,7 +131,8 @@ class AgentLoopSearchGuardTest {
         call("explore", "{}");
         next = new ToolOutcome(true, "empty again", empty);
         call("find_resource", "{}");
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+        assertTrue(statuses.isEmpty());
+        loop.close();
     }
 
     @Test void outcomeDataIsCopiedAtBothBoundaries() {
@@ -150,8 +153,9 @@ class AgentLoopSearchGuardTest {
         var calls = List.of(new ToolCall("last-search", "search_resource", "{\"targets\":[\"spruce_log\"]}"),
                 new ToolCall("later", "break_block", "{}"));
         responses.getLast().complete(new AssistantTurn("", calls, 0, 0, -1, "tool_calls"));
-        assertEquals(List.of("search_resource", "status", "search_resource", "search_resource"), executed);
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+        assertEquals(List.of("search_resource", "status", "search_resource", "search_resource", "break_block"), executed);
+        assertTrue(statuses.isEmpty());
+        loop.close();
     }
 
     @Test void allFivePagesCanFinishButRepeatingTheSearchStillReachesTheEmptyLimit() {
@@ -166,7 +170,8 @@ class AgentLoopSearchGuardTest {
         next = new ToolOutcome(true, "page", SearchPagesTest.page(0));
         call("find_resource", SearchPagesTest.args(0));
         call("find_resource", SearchPagesTest.args(0));
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), statuses);
+        assertTrue(statuses.isEmpty());
         assertEquals(7, executed.size());
+        loop.close();
     }
 }

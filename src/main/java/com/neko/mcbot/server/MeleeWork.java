@@ -25,8 +25,19 @@ public final class MeleeWork {
     public static NavigationGoal goal(CompanionPlayer body, LivingEntity entity) {
         var world = BlockAim.forPlayer(body);
         var geometry = StandingGeometry.forPlayer(body);
-        return goal(world, geometry, entity.getBoundingBox(), entity.getEyePosition(),
-                body.entityAttackRange(), body.getEyeHeight());
+        var target = entity.getBoundingBox();
+        var eye = entity.getEyePosition();
+        var range = body.entityAttackRange();
+        double eyeHeight = body.getEyeHeight();
+        var live = goal(world, geometry, target, eye, range, eyeHeight);
+        return new NavigationGoal() {
+            @Override public boolean reached(int x, int y, int z) { return live.reached(x, y, z); }
+            @Override public double remaining(int x, int y, int z) { return live.remaining(x, y, z); }
+            @Override public NavigationGoal snapshot(com.neko.mcbot.path.DigSampler terrain) {
+                return terrain instanceof com.neko.mcbot.path.NavigationSnapshot snapshot
+                        ? goal(snapshot.sight(eye), snapshot.standing(), target, eye, range, eyeHeight) : null;
+            }
+        };
     }
 
     static NavigationGoal goal(BlockAim.Access world, StandingGeometry geometry, AABB target,

@@ -57,8 +57,8 @@ final class BoundedGather {
             names.add(value.getAsString());
         }
         return new Plan(target, List.copyOf(names), integer(args, "r", 16, 1, 16),
-                integer(args, "timeout_seconds", 600, 1, 900), integer(args, "max_blocks", 128, 1, 256),
-                ItemGoal.Scope.parse(args), integer(args, "explore_steps", 8, 0, 16),
+                integer(args, "timeout_seconds", 0, 0, 900), integer(args, "max_blocks", Integer.MAX_VALUE, 1, Integer.MAX_VALUE),
+                ItemGoal.Scope.parse(args), integer(args, "explore_steps", Integer.MAX_VALUE, 0, Integer.MAX_VALUE),
                 integer(args, "explore_radius", 64, 16, 64), materialFor == null ? null : materialFor.deepCopy());
     }
 
@@ -106,7 +106,6 @@ final class BoundedGather {
     private int calls;
     private int dug;
     private int cleared;
-    private int stalls;
     private int lastProgress;
     private int workPositionAttempts;
     private String currentFeet;
@@ -192,7 +191,7 @@ final class BoundedGather {
     boolean done() { return result.isDone(); }
     String activity() { return activity; }
     ItemGoal.Progress goalProgress() { return goal == null ? null : goal.snapshot(); }
-    void tick() { if (!done() && clock.getAsLong() - started >= plan.seconds() * 1000L) stop("TIMEOUT:连续采集时限已到。"); }
+    void tick() { if (!done() && plan.seconds() > 0 && clock.getAsLong() - started >= plan.seconds() * 1000L) stop("TIMEOUT:连续采集时限已到。"); }
     void stop(String reason) {
         if (done()) return;
         finish(false, reason + " 已完成的动作保留，在途效果可能未知。");
@@ -207,7 +206,7 @@ final class BoundedGather {
         if (done()) return;
         tick();
         if (done()) return;
-        if (++calls > 1024) { stop("ACTION_LIMIT:连续采集子调用预算已到。"); return; }
+        if (calls < Integer.MAX_VALUE) calls++;
         activity = switch (name) {
             case "status" -> "核对实际背包";
             case "scan_area" -> "查看可拾取掉落";
@@ -333,7 +332,6 @@ final class BoundedGather {
                 return;
             }
             if (goal.progress() > lastProgress) {
-                stalls = 0;
                 lastProgress = goal.progress();
                 dropSettlePending = false;
             }
@@ -382,7 +380,6 @@ final class BoundedGather {
                 });
                 return;
             }
-            if (stalls >= 3) { finish(false, "NO_PROGRESS:三次采集/拾取未增加实际背包数量。" + lastProblem); return; }
             if (dug + cleared >= plan.maxBlocks()) { finish(false, "BLOCK_LIMIT:本段挖掘预算已到，实际物品目标未满足。"); return; }
             findBlocks();
         });
@@ -513,7 +510,7 @@ final class BoundedGather {
     }
 
     private boolean continueBatch() {
-        if (workBatch.isEmpty() || batchDigs == 0 || batchDigs >= batchLimit || stalls >= 3
+        if (workBatch.isEmpty() || batchDigs == 0 || batchDigs >= batchLimit
                 || dug + cleared >= plan.maxBlocks() || !observedFeet.equals(batchFeet)) return false;
         var next = workBatch.removeFirst();
         var tried = new HashSet<String>();
@@ -548,7 +545,7 @@ final class BoundedGather {
         exploration.attempt(chosen);
         move.addProperty("exact", true);
         move.addProperty("walk_only", true);
-        progress.accept("本区域未找到可工作资源，正进行第" + exploration.attempts() + "/" + exploration.maxSteps
+        progress.accept("本区域未找到可工作资源，正进行第" + exploration.attempts() + "/" + exploration.stepLimitText()
                 + "段只行走探索；搜索半径=" + plan.radius() + "，完整已知查询区域=" + exploration.coverageRegions()
                 + "，预计新增覆盖比例=" + exploration.selectedCoverage()
                 + "；到达后重新查询，物品目标保持不变。");
@@ -621,7 +618,6 @@ final class BoundedGather {
     private void blocked(JsonObject block) {
         workBatch.clear();
         skippedBlocks.add(blockKey(block));
-        stalls++;
         observe();
     }
 
@@ -643,7 +639,6 @@ final class BoundedGather {
             if (receipt.data().has("removed") && receipt.data().get("removed").getAsBoolean()) {
                 dug++;
                 batchDigs++;
-                stalls++;
                 sampleOffset = 0; targetGroup = 0;
                 // A real removal can expose a previously blocked target. Query it afresh, with the same caps.
                 skippedBlocks.clear();
@@ -803,7 +798,7 @@ final class BoundedGather {
                 + (plan.scope() == ItemGoal.Scope.SUBTASK ? "\n此回执只结算材料子任务，不代表主人的整项目标完成。" : "")
                 + (plan.exploreSteps() == 0 ? "\n本段仅在开始工区附近采集，不换区；原任务探索账继续保留。" : "")
                 + "\n本段实际目标挖掘=" + dug + "，另清遮挡=" + cleared + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
-                + "，未拾取候选=" + skippedItems.size() + "；任务探索移动=" + exploration.attempts() + "/" + exploration.maxSteps
+                + "，未拾取候选=" + skippedItems.size() + "；任务探索移动=" + exploration.attempts() + "/" + exploration.stepLimitText()
                 + "，共享范围半径=" + exploration.radius + "，新增观察区域=" + exploration.regions()
                 + "，搜索半径=" + plan.radius() + "，本段查询页=" + searchPages
                 + "，完整已知查询区域=" + exploration.coverageRegions()

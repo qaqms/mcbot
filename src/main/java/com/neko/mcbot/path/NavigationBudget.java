@@ -1,8 +1,8 @@
 package com.neko.mcbot.path;
 
-/** One finite search account across dynamic goals, discarded routes and terrain replans. */
+/** Per-search resource bounds with cumulative diagnostics; explicit accounts can still impose a total. */
 public final class NavigationBudget {
-    public static final int NODES = 8000, RECORDS = 32768, REPLANS = 2;
+    public static final int NODES = 8000, RECORDS = 32768, REPLANS = Integer.MAX_VALUE;
     public static final long NANOS = 400_000_000L;
     private final int nodeCap, recordCap, replanCap;
     private final long timeCap;
@@ -11,8 +11,9 @@ public final class NavigationBudget {
     private DigAStar current;
     private int lastNodes, lastRecords;
     private long lastNanos;
+    private boolean perSearch;
 
-    public NavigationBudget() { this(NODES, RECORDS, NANOS, REPLANS); }
+    public NavigationBudget() { this(NODES, RECORDS, NANOS, REPLANS); perSearch = true; }
 
     NavigationBudget(int nodes, int records, long nanos, int replans) {
         if (nodes < 1 || nodes > NODES || records < 1 || records > RECORDS
@@ -25,9 +26,10 @@ public final class NavigationBudget {
         if (search == null) return;
         if (current != search) throw new IllegalArgumentException("retired or foreign search");
         int used = search.expanded() + search.estimateExpanded();
-        nodes += Math.max(0, used - lastNodes);
-        records += Math.max(0, search.storedNodes() - lastRecords);
-        nanos += Math.max(0, search.elapsedNanos() - lastNanos);
+        nodes = (int) Math.min(Integer.MAX_VALUE, (long) nodes + Math.max(0, used - lastNodes));
+        records = (int) Math.min(Integer.MAX_VALUE, (long) records + Math.max(0, search.storedNodes() - lastRecords));
+        long delta = Math.max(0, search.elapsedNanos() - lastNanos);
+        nanos = Math.min(Long.MAX_VALUE - delta, nanos) + delta;
         lastNodes = used; lastRecords = search.storedNodes(); lastNanos = search.elapsedNanos();
     }
 
@@ -35,9 +37,9 @@ public final class NavigationBudget {
                            NavigationGoal goal) {
         observe(current);
         if (exhausted()) return null;
-        var search = new DigAStar(sampler, x, y, z, tx, ty, tz, nodeCap - nodes, 0, goal);
-        search.totalBudget(timeCap - nanos);
-        search.storageBudget(recordCap - records);
+        var search = new DigAStar(sampler, x, y, z, tx, ty, tz, perSearch ? nodeCap : nodeCap - nodes, 0, goal);
+        search.totalBudget(perSearch ? timeCap : timeCap - nanos);
+        search.storageBudget(perSearch ? recordCap : recordCap - records);
         current = search;
         lastNodes = lastRecords = 0;
         lastNanos = 0;
@@ -47,22 +49,32 @@ public final class NavigationBudget {
 
     public boolean takeReplan() {
         observe(current);
-        if (replans >= replanCap || exhausted()) return false;
-        replans++;
+        if (!perSearch && (replans >= replanCap || exhausted())) return false;
+        if (replans < Integer.MAX_VALUE) replans++;
         return true;
     }
-    public boolean exhausted() { return nodes >= nodeCap || records >= recordCap || nanos >= timeCap; }
+    public boolean exhausted() { return !perSearch && (nodes >= nodeCap || records >= recordCap || nanos >= timeCap); }
     public int nodes() { return nodes; }
     public int records() { return records; }
     public long nanos() { return nanos; }
     public int replans() { return replans; }
+    public boolean perSearch() { return perSearch; }
+
+    public void recordCompleted(DigAStar search) {
+        if (!perSearch) throw new IllegalStateException("detached search requires per-search bounds");
+        nodes = (int) Math.min(Integer.MAX_VALUE, (long) nodes + search.expanded() + search.estimateExpanded());
+        records = (int) Math.min(Integer.MAX_VALUE, (long) records + search.storedNodes());
+        long delta = search.elapsedNanos();
+        nanos = Math.min(Long.MAX_VALUE - delta, nanos) + delta;
+    }
 
     public com.google.gson.JsonObject snapshot() {
         observe(current);
         var data = new com.google.gson.JsonObject();
-        data.addProperty("nodes", Math.min(nodes, nodeCap)); data.addProperty("node_cap", nodeCap);
-        data.addProperty("records", Math.min(records, recordCap)); data.addProperty("record_cap", recordCap);
-        data.addProperty("nanos", Math.min(nanos, timeCap)); data.addProperty("time_cap", timeCap);
+        data.addProperty("per_search", perSearch);
+        data.addProperty("nodes", nodes); data.addProperty("node_cap", nodeCap);
+        data.addProperty("records", records); data.addProperty("record_cap", recordCap);
+        data.addProperty("nanos", nanos); data.addProperty("time_cap", timeCap);
         data.addProperty("replans", replans); data.addProperty("replan_cap", replanCap);
         return data;
     }
@@ -70,10 +82,15 @@ public final class NavigationBudget {
     public static NavigationBudget restore(com.google.gson.JsonObject data) {
         var value = new NavigationBudget(count(data, "node_cap", NODES), count(data, "record_cap", RECORDS),
                 number(data, "time_cap", NANOS), count(data, "replan_cap", REPLANS));
-        value.nodes = count(data, "nodes", value.nodeCap);
-        value.records = count(data, "records", value.recordCap);
-        value.nanos = number(data, "nanos", value.timeCap);
-        value.replans = count(data, "replans", value.replanCap);
+        if (data.has("per_search")) {
+            if (!data.get("per_search").isJsonPrimitive() || !data.getAsJsonPrimitive("per_search").isBoolean())
+                throw new IllegalArgumentException();
+            value.perSearch = data.get("per_search").getAsBoolean();
+        } else value.perSearch = true; // Old default accounts used a cumulative two-replan policy.
+        value.nodes = count(data, "nodes", value.perSearch ? Integer.MAX_VALUE : value.nodeCap);
+        value.records = count(data, "records", value.perSearch ? Integer.MAX_VALUE : value.recordCap);
+        value.nanos = number(data, "nanos", value.perSearch ? Long.MAX_VALUE : value.timeCap);
+        value.replans = count(data, "replans", value.perSearch ? Integer.MAX_VALUE : value.replanCap);
         return value;
     }
 

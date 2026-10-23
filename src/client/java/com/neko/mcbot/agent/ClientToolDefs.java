@@ -171,14 +171,14 @@ public final class ClientToolDefs {
                     + "observed_health_loss/observed_absorption_loss为实际前后观测，不作独占归因。"
                     + "target_dead仅目标存活事实，达到挥击上限不代表击杀；observation_known=false可能已有未知副作用，不重投。"
                     + "approach仅显式接近时存在，moving/search_nodes/search_records/search_nanos/replans是原累计导航账，"
-                    + "walk_only=true，anchor为固定脚格{x,y,z}、radius为原6.5格范围；路线到达或停步不代表出手/击杀。";
+                    + "walk_only=true，anchor为固定脚格{x,y,z}、radius为本次接近范围；路线到达或停步不代表出手/击杀。";
             case "gather" -> "data.goal_satisfied、actual_progress、scope、mined_blocks、cleared_blocks、"
                     + "primitive_calls、skipped_blocks/skipped_items及last_observation。"
                     + "成果是实际背包增量/总量，mined_blocks或source_observations不是入包数。"
                     + "失败回执保留实际效果与原因，材料subtask不改变最终目标。";
             case "explore" -> "data.state为新鲜身体/背包，discovery?为搜索结果，movement?为本段移动；"
                     + "exploration_advanced只表示已换观察区；exploration_attempts/exploration_max_steps/"
-                    + "exploration_radius/return_steps/underground_remaining_digs是原任务累计账。";
+                    + "exploration_radius/return_steps是原任务范围和返程证据，underground_digs为累计诊断，underground_remaining_digs为单路线挖掘上限。";
             case "smelt" -> "data.input/fuel/output是{item,count,...}；state、cook_progress_ticks/cook_total_ticks、"
                     + "burn_remaining_ticks、fuel_sufficient_for_input、suggested_wait_seconds描述机器。"
                     + "实际装取看loaded_input_count/loaded_fuel_count/taken_count；装料不表示产物已完成。";
@@ -206,9 +206,9 @@ public final class ClientToolDefs {
                     + "失败/需确认立即停止并保留回执，交回外层ask_owner；不在程序内重试或自动批准。"
                     + BoundedProgram.LANGUAGE_GUIDE
                     + "不能嵌套run_program或调用set_goal/report_blocked/ask_owner；这些只能外层调用。"
-                    + "code最多16384字节；timeout_seconds默认300最多900，max_calls默认128最多256；"
-                    + "max_calls同时约束mc.call次数和嵌套内部的原子调用总数，gather一次会消耗多次扫描/移动/挖掘/背包调用；"
-                    + "不要按Lua里的mc.call行数给嵌套采集设置很小的预算，通常省略沿用默认值。查询大表留在局部变量，只返回所需事实。"
+                    + "code最多16384字节；默认不限总时长和调用次数，不必设置timeout_seconds/max_calls。"
+                    + "仅需要主动缩短本次程序时才指定正数；0或省略均不限。正数max_calls同时约束API与嵌套原子调用。"
+                    + "查询大表留在局部变量，只返回所需事实。"
                     + "计算/表/字符串/输出都有独立预算，动作仍走任务权限、身体互斥与真实终态。"
                     + "成功查询只记录调用编号，全文供程序读取；需要模型判断的事实须显式return/print。"
                     + "tool_help说明始终展示给模型；负预检保留有界原因。运行错误带program_error.kind/line，"
@@ -216,11 +216,11 @@ public final class ClientToolDefs {
                     + "动作与失败反馈完整记录；显式输出的查询反馈展开一次，完全相同的文字引用回执编号，data与脚本读值不变。"
                     + "mc.try_call(name,args)仅可读取NO_PATH/NO_PROGRESS/PARTIAL/TARGET_BLOCKED/OUT_OF_REACH/TARGET_LOST局部失败，"
                     + "失败后须status details=true核对位置/维度/完整背包，再按新事实选择同一任务内的有限替代动作。"
-                    + "权限/缺工具/缺材料/安全/取消/超时/未知失败仍立即停止，不能捕获；不自动重试，所有调用仍共享原预算与无进展帽。"
+                    + "权限/缺工具/缺材料/安全/取消/超时/未知失败仍立即停止，不能捕获；不自动重试。重复和空搜索不按次数拦截，由程序据真实结果选择。"
                     + "return/print只报告阶段结果，不代表主人整项任务完成；用新鲜状态验证",
                     "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16384},"
-                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
-                            + "\"max_calls\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":900},"
+                            + "\"max_calls\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647}},"
                             + "\"required\":[\"code\"],\"additionalProperties\":false}"),
             new ToolSpec("tool_help", "只读查询已注册工具的完整说明、参数Schema和返回字段。names一次1-3项；省略返回能力目录。"
                     + "也可单独传技能目录name按需读一页正文，续页照next_name；技能仅作知识，不授予权限。"
@@ -229,17 +229,17 @@ public final class ClientToolDefs {
                             + "\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":32}}},\"additionalProperties\":false}"),
             new ToolSpec("explore", "独立、通用的换区观察能力，用新鲜status核验实际位移。"
                     + "默认mode=surface只行走；mode=underground按模型选择的direction和target_y分段开阶梯，并每段完整查询targets，r默认8。"
-                    + "发现即停供后续工作；mode=return按实际地下路标只行走返回。两者共享任务移动帽，外出预留返程次数，地下累计开路最多128格。"
+                    + "发现即停供后续工作；mode=return按实际地下路标只行走返回。显式有限移动额度时外出预留返程次数；地下无任务累计挖掘次数帽，单路线仍有改动上限。"
                     + "地下检查min_health默认10、min_food默认6、reserve_durability默认16及背包容量；不自动合成补给或决定矿种层高。"
                     + "需要具体许可时等待主人及服务端批准后原参数只续发一次；取消停止且不自行返程。"
                     + "调用后按任务需要scan_area/find_resource/inspect等核对；run_program可用自己的条件/有界循环决定继续探索或结束。"
-                    + "首次探索默认8步/半径64，可选max_steps=1-16、radius=16-64；与gather共用本任务起点/已查点/累计预算。"
+                    + "首次探索默认不限移动次数、半径64，可选正整数max_steps主动限制，radius=16-64；与gather共用本任务起点/已查点。"
                     + "后续省略参数继承首次值，显式修改拒绝；耗尽后重复调用不会补充，按回执汇报范围与障碍。"
-                    + "timeout_seconds为本次一段的时限，默认180、1-180；失败/权限/未知状态/耗尽即停止，取消迟到不续跑。"
+                    + "timeout_seconds默认0不限总时长，可选0-180；失败/权限/未知状态交回模型，取消迟到不续跑。"
                     + "data.state是本段终态新鲜身体/背包，exploration_advanced仅表示实际换区，不证明找到任务目标",
-                    "{\"type\":\"object\",\"properties\":{\"max_steps\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
+                    "{\"type\":\"object\",\"properties\":{\"max_steps\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647},"
                             + "\"radius\":{\"type\":\"integer\",\"minimum\":16,\"maximum\":64},"
-                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":180},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":180},"
                             + "\"mode\":{\"type\":\"string\",\"enum\":[\"surface\",\"underground\",\"return\"]},"
                             + "\"direction\":{\"type\":\"string\",\"enum\":[\"north\",\"south\",\"east\",\"west\"]},"
                             + "\"target_y\":{\"type\":\"integer\",\"minimum\":-2048,\"maximum\":2047},"
@@ -259,13 +259,13 @@ public final class ClientToolDefs {
                     + "count按来源物品的实际件数合计，不是转换产量；来源转换和后续合成须另行查询执行。recipe可固定配方。"
                     + "应先据最新背包装备合适工具；r默认16、最大16，为每个采集区域半径，不挖勘探洞。"
                     + "未找到可工作资源会分页查完，再从已加载落脚样本只行走换区寻找，实际到达后重查继续采集。"
-                    + "首次探索默认8步/半径64，可选explore_steps=0-16、explore_radius=16-64。"
+                    + "首次探索默认不限移动次数、半径64，可选正整数explore_steps主动限制、explore_radius=16-64。"
                     + "explore_steps=0仅在本次起点附近采集r内目标，不换区且保留原探索账；主动到达新工区后可用此模式复用采集。"
                     + "与explore及后续gather共用任务探索起点/访问记录/累计移动预算，省略参数继承首次值，不能重开采集刷新范围或步数。"
                     + "原地空查询或移动回执本身不算发现资源/入包成果，有限探索耗尽才说明范围与障碍。"
                     + "本地复用真实终态/权限，路线或局部清理需确认时直接展示服务端清单等待主人，批准回执后原参数续发一次。"
                     + "拒绝/超时即停止本段；续发清单再次变化、缺工具/空间、无进展或未知状态交回模型决策，不自行批准。"
-                    + "timeout_seconds默认600、最大900，max_blocks默认128、最大256，子调用最多1024。"
+                    + "默认不限采集总时长、挖掘总数及子调用次数；可显式timeout_seconds=0-900或正整数max_blocks主动限制。"
                     + "掉落必须走近拾取；矿格数不是成果。返回实际物品进度及阻塞，不保证自然世界已找到钻石",
                     "{\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"maxLength\":128},"
                             + "\"targets\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"string\",\"maxLength\":128}},"
@@ -276,10 +276,10 @@ public final class ClientToolDefs {
                             + "\"ingredient\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":8},\"sources\":{\"type\":\"boolean\"},"
                             + "\"recipe\":{\"type\":\"string\",\"maxLength\":128}},\"required\":[\"item\"],\"additionalProperties\":false},"
                             + "\"r\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16},"
-                            + "\"explore_steps\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":16},"
+                            + "\"explore_steps\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647},"
                             + "\"explore_radius\":{\"type\":\"integer\",\"minimum\":16,\"maximum\":64},"
-                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":900},"
-                            + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":900},"
+                            + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647}},"
                             + "\"required\":[\"count\"],\"additionalProperties\":false}"),
             new ToolSpec("set_goal", "登记本任务不可降低的最终条件，type省略或item保持物品接口。"
                     + "item是物品ID，count是目标件数；mode=additional指相对任务开始背包净新增，total指背包总量。"
@@ -287,8 +287,9 @@ public final class ClientToolDefs {
                     + "type=delivery须container={x,y,z}及item/count/mode，先靠近登记完整容器基线；"
                     + "additional仅登记后本任务已核实净存入且容器净新增，双向transfer须明确item过滤；total为容器当前总量。"
                     + "首次登记后不能换目标或降低数量。完成回复会重新查询实际背包核对，挖掘格数/地上掉落不算入包。"
-                    + "多阶段物品目标可首次设lifecycle=long_term，max_runs默认8、最多16；本段回复只触发新鲜事实检查，"
-                    + "未完成则继续同一任务，重复事实两段/阶段或原总步数耗尽/受阻/取消即终止。阶段不重置背包基线、权限或探索预算。"
+                    + "多阶段目标可首次设lifecycle=long_term，默认不限模型轮数和阶段次数。"
+                    + "max_runs仅在希望主动限制时指定正数，0或省略不限；本段回复触发新鲜事实检查，未完成则继续同一任务。"
+                    + "重复事实不按次数终止；阶段不重置背包基线、权限或探索记录。"
                     + "生命周期和阶段上限首次固定，省略沿用；仅当前任务会话内，不跨退出恢复。"
                     + "建筑局部批次/持续跟随结束不等于整项完成；无法继续用report_blocked",
                     "{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"item\",\"building\",\"delivery\"]},"
@@ -298,7 +299,7 @@ public final class ClientToolDefs {
                             + "\"target\":" + BUILD_TARGET + ",\"expected_revision\":{\"type\":\"string\",\"minLength\":64,\"maxLength\":64},"
                             + "\"container\":" + BUILD_ANCHOR + ","
                             + "\"lifecycle\":{\"type\":\"string\",\"enum\":[\"task\",\"long_term\"]},"
-                            + "\"max_runs\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":16}},"
+                            + "\"max_runs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647}},"
                             + "\"additionalProperties\":false}"),
             new ToolSpec("report_blocked", "确实无法继续时停止当前任务并报告实际障碍，保留已完成动作与物品。"
                     + "不用于临时思考或让主人逐步操作；取消后不会续跑。目标未满足按失败/受阻结束，不能写成完成",
@@ -307,15 +308,15 @@ public final class ClientToolDefs {
             new ToolSpec("workflow", "将已确认的近身采集/放置/制作/烧制组合成1-12个明确步骤，一轮执行，逐步等待真实终态。"
                     + "steps每项为tool与args，支持status/inventory/equip/consume/scan_area/find_resource/inspect_block/"
                     + "break_block/place_block/craft/smelt/wait；不支持移动/攻击/存取/拾取/反问/嵌套。"
-                    + "timeout_seconds默认180、最多300；制作count、装料input_count/fuel_count、取出count必须明确填写，"
-                    + "请求数合计≤128（放置算1件），明确挖放≤12格。这是请求预算，不限制原版配方取整产量/消耗或真实掉落。"
+                    + "timeout_seconds默认0不限、显式正数最多300；制作count、装料input_count/fuel_count、取出count必须明确填写，"
+                    + "没有额外累计请求件数额度；每步保留原工具参数范围和真实物品检查。"
                     + "全部参数先校验；失败/放置预检未过/缺制作条件/搜索无目标/需确认立即停止，保留已完成回执，不重试。"
                     + "只读任务须所有步骤只读；装料/等待成功不是成品完成，须查询和取出真实产物；取消不熄炉。"
                     + "根据新状态确定真实槽与坐标，不在清单里猜搜索结果或合成后的槽号",
                     "{\"type\":\"object\",\"properties\":{\"steps\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":12,"
                             + "\"items\":{\"type\":\"object\",\"properties\":{\"tool\":{\"type\":\"string\"},"
                             + "\"args\":{\"type\":\"object\"}},\"required\":[\"tool\",\"args\"],\"additionalProperties\":false}},"
-                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":300}},"
+                            + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":300}},"
                             + "\"required\":[\"steps\"],\"additionalProperties\":false}"),
             new ToolSpec("status", "查看最新位置/生命/饥饿/主手/任务实际进度，以及接地、入水、眼睛没水、岩浆、水中避险与body_defense自保事实；details=true含背包与装备逐槽明细。耗时不等于完成率",
                     "{\"type\":\"object\",\"properties\":{\"details\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
@@ -392,10 +393,10 @@ public final class ClientToolDefs {
                     + "operation=query只读；begin提供target和2-64格无重复水平相邻世界脚格access_route，必须包含当前脚格，"
                     + "每格空气净空及完整整格地板，非空气目标不得封路，至少一个通道端点须伸出全目标水平包围范围。"
                     + "实际经过格及地板也保护，原路线256条帽/观察缺口时停工。bounds可显式限原范围，默认首次脚格64半径，任务内冻结。"
-                    + "同任务只选一份目标与通道，begin重复不重开16轮/128次原生修改尝试和8000节点/32768记录/400ms/2重算导航账。"
-                    + "checkpoint带expected_revision按整目标真实状态与站位检重复往返；失败不重开原模型/探索/许可。"
+                    + "同任务只选一份目标与通道，施工轮数和原生修改尝试只作累计诊断，不按次数或重复事实禁用；每次寻路8000节点/32768记录/400ms，无默认累计重算次数帽。"
+                    + "checkpoint带expected_revision复核整目标真实状态与站位；重复只作诊断，不停止后续派发，失败不重开许可。"
                     + "run_program内mc.build(target,{access_route=...,bounds?,max_rounds?,max_actions?,temporary?})"
-                    + "有限组合原查询/只行走工作导航/清障/近身施工；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
+                    + "组合原查询/只行走工作导航/清障/近身施工，max_rounds默认0不限，可显式指定正数；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
                     + "purpose为support/workstation。mc.cleanup_temporary(revision)另行有界回收，依赖未解除保留。"
                     + "不自动找料、合成、生成支撑或解依赖；外层建筑目标验收仍另行执行。任务结束不自动清理或跨任务认领。",
                     """
@@ -514,7 +515,7 @@ public final class ClientToolDefs {
             new ToolSpec("follow", "有界持续步行跟随，省略target_uuid跟主人；指定时用scan_area的标准小写UUID，不跟自身或自动换目标。"
                     + "distance=2-6默认3，seconds=1-60默认30；到位休眠不结束、不惊动模型，距离超过distance+2才唤醒。"
                     + "只用原PathTask走路，不挖放/传送/攻击/自动换工具；起始脚格32格固定球，工地内收为原范围的保守内接球。"
-                    + "换路/醒来/避险共原8000节点/32768记录/400ms协作搜索及2次重规划账；已有工地沿用其导航账。"
+                    + "每次搜索8000节点/32768记录/400ms；换路/醒来/避险没有默认累计重规划次数帽，已有工地沿用其导航账户。"
                     + "主人暂离休眠等至原期限，指定实体死亡/卸载/离维度立即TARGET_LOST；无路/未知/范围/许可失败立即交回。"
                     + "原期限包含休眠/避险，期限结束仅持续行为结束，goal_satisfied=false，当前距离另查in_band。"
                     + "同参数局部失败计原任务失败账，第六次不派发；程序中mc.try_call读取局部失败后仍须新鲜完整status才可再动作。"
@@ -522,10 +523,10 @@ public final class ClientToolDefs {
                     "{\"type\":\"object\",\"properties\":{\"target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
                             + "\"distance\":{\"type\":\"integer\",\"minimum\":2,\"maximum\":6},"
                             + "\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60}},\"additionalProperties\":false}"),
-            new ToolSpec("attack", "普通近战锁定一个目标；默认原地不追击。approach=true允许在初始脚格锚点6.5格范围内只行走接近，"
+            new ToolSpec("attack", "普通近战锁定一个目标；默认原地不追击。approach=true允许在初始脚格锚点64格范围内只行走接近，"
                     + "不挖放、不换目标、不自动换工具；不主动拾取掉落，身体原版触碰拾取仍运行。"
                     + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby一次选择原范围内未命名敌对生物。"
-                    + "目标移动/暂停沿用原8000节点/32768记录/400ms协作搜索帽及共2次重规划，不每刻重搜。"
+                    + "目标移动时保留仍有效的路线，每次搜索8000节点/32768记录/400ms，无默认累计重规划次数帽。"
                     + "max_hits为挥击上限1-10，默认1，最多20秒；等满冷却与目标受伤恢复后出手。"
                     + "玩家/同伴/宠物/同队目标拒绝；最新服务端观测为自主执行时可直接调用，"
                     + "确认模式的中立或命名目标收到NEED_CONFIRM后才用ask_owner携带服务端authorization_id确认，"

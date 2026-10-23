@@ -93,7 +93,7 @@ class BoundedGatherTest {
         Fixture(int requested, int baseline, String scope, int exploreSteps, ExplorationRoute route) {
             count = baseline;
             gather = new BoundedGather(BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":"
-                    + requested + ",\"scope\":\"" + scope + "\",\"explore_steps\":" + exploreSteps + "}"),
+                    + requested + ",\"timeout_seconds\":600,\"max_blocks\":128,\"scope\":\"" + scope + "\",\"explore_steps\":" + exploreSteps + "}"),
                     state(baseline), () -> now, this::remote,
                     queue::addLast, () -> cancelled++, text -> { }, null, route);
         }
@@ -375,8 +375,8 @@ class BoundedGatherTest {
         var noYield = new Fixture(64, 0);
         noYield.blockTargets = nearbyBatch(8);
         noYield.noYield = true;
-        assertTrue(noYield.run().feedback().startsWith("NO_PROGRESS:"));
-        assertEquals(3, noYield.dug);
+        assertTrue(noYield.run().feedback().startsWith("BLOCK_LIMIT:"));
+        assertEquals(128, noYield.dug);
 
         var changedTool = new Fixture(8, 0);
         changedTool.blockTargets = nearbyBatch(8);
@@ -561,7 +561,8 @@ class BoundedGatherTest {
         assertEquals(1, result.data().get("exploration_max_steps").getAsInt());
         assertEquals(trail, route.trail());
         assertEquals(bounds, route.bounds());
-        assertEquals(116, route.remainingDigs());
+        assertEquals(128, route.remainingDigs());
+        assertEquals(12, route.undergroundDigs());
         assertTrue(route.exhausted());
         assertEquals(1, f.dug);
         assertEquals(0, f.moved);
@@ -718,9 +719,9 @@ class BoundedGatherTest {
         f.reportDrops = true;
         f.noYield = true;
         var result = f.run();
-        assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
-        assertEquals(3, f.dug);
-        assertEquals(3, result.data().get("drop_settle_waits").getAsInt());
+        assertTrue(result.feedback().startsWith("BLOCK_LIMIT:"), result.feedback());
+        assertEquals(128, f.dug);
+        assertEquals(128, result.data().get("drop_settle_waits").getAsInt());
         assertEquals(0, f.count);
     }
 
@@ -741,13 +742,13 @@ class BoundedGatherTest {
         f.clearPerMining = 1;
         var result = f.run();
         assertFalse(result.ok());
-        assertTrue(result.feedback().startsWith("NO_PROGRESS:"));
-        assertEquals(3, f.dug, "observed yield samples do not replace the existing no-progress bound");
+        assertTrue(result.feedback().startsWith("BLOCK_LIMIT:"));
+        assertEquals(64, f.dug, "only the explicitly requested block cap limits the task");
         assertEquals(0, result.data().get("actual_progress").getAsInt());
         assertEquals(0, result.data().get("drop_settle_waits").getAsInt(),
                 "unrelated drops are not expected goal items awaiting pickup");
         var sources = result.data().getAsJsonArray("source_observations");
-        assertEquals(3, sources.size());
+        assertEquals(8, sources.size());
         for (var source : sources) {
             var evidence = source.getAsJsonObject();
             assertFalse(evidence.get("observed_goal_item").getAsBoolean());
@@ -761,7 +762,7 @@ class BoundedGatherTest {
         var f = new Fixture(4, 0);
         f.noYield = true;
         var result = f.run();
-        assertTrue(result.feedback().startsWith("NO_PROGRESS:"));
+        assertTrue(result.feedback().startsWith("BLOCK_LIMIT:"));
         assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
         assertFalse(result.feedback().contains("observed_goal_item=false"));
     }
@@ -775,7 +776,7 @@ class BoundedGatherTest {
                 + "\"picked_up_other_count\":0,\"accounting_complete\":true}").getAsJsonObject();
         var result = f.run();
         assertFalse(result.ok());
-        assertEquals(3, f.dug);
+        assertEquals(128, f.dug);
         assertEquals(0, result.data().get("actual_progress").getAsInt());
         for (var value : result.data().getAsJsonArray("source_observations")) {
             var source = value.getAsJsonObject();
@@ -793,7 +794,7 @@ class BoundedGatherTest {
         assertFalse(result.ok());
         assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
         assertEquals(0, result.data().get("actual_progress").getAsInt());
-        assertEquals(3, f.dug);
+        assertEquals(128, f.dug);
     }
 
     @Test void truncatedNativeSourceSamplesCannotInventAMismatchOrRelaxTheNoProgressBudget() {
@@ -804,7 +805,7 @@ class BoundedGatherTest {
         f.nativeSpawnsComplete = false;
         var result = f.run();
         assertFalse(result.ok());
-        assertEquals(3, f.dug);
+        assertEquals(128, f.dug);
         assertTrue(result.data().getAsJsonArray("source_observations").isEmpty());
         assertFalse(result.feedback().contains("observed_goal_item=false"));
     }
@@ -1040,14 +1041,21 @@ class BoundedGatherTest {
         assertEquals(12, result.data().getAsJsonObject("last_observation").get("unknown").getAsInt());
     }
 
-    @Test void noInventoryProgressStopsAfterThreeRealOperations() {
+    @Test void noInventoryProgressContinuesUntilTheExplicitBlockLimit() {
         var f = new Fixture(64, 0);
         f.noYield = true;
         var result = f.run();
         assertFalse(result.ok());
-        assertTrue(result.feedback().startsWith("NO_PROGRESS:"));
-        assertEquals(3, f.dug);
+        assertTrue(result.feedback().startsWith("BLOCK_LIMIT:"));
+        assertEquals(128, f.dug);
         assertEquals(0, f.count);
+    }
+    @Test void laterActualYieldCanCompleteAfterMoreThanThreeEmptyOperations() {
+        var f = new Fixture(1, 0);
+        f.yieldAfter = 6;
+        assertTrue(f.run().ok());
+        assertEquals(7, f.dug);
+        assertEquals(1, f.count);
     }
 
     @Test void thirdMiningDropIsPickedUpBeforeApplyingTheNoProgressGuard() {
@@ -1137,9 +1145,9 @@ class BoundedGatherTest {
         f.stolen = true;
         var result = f.run();
         assertFalse(result.ok());
-        assertTrue(result.feedback().startsWith("NO_PROGRESS:"), result.feedback());
+        assertTrue(result.feedback().startsWith("BLOCK_LIMIT:"), result.feedback());
         assertEquals(0, result.data().get("actual_progress").getAsInt());
-        assertEquals(3, f.dug);
+        assertEquals(128, f.dug);
     }
 
     @Test void materialSubtaskCountsOnlyWhatIsAddedAfterItsOwnFreshStart() {

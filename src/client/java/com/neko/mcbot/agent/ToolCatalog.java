@@ -24,8 +24,8 @@ public final class ToolCatalog {
                     + "结果字段不清楚先tool_help。成功查询留本地，所需事实return/print；帮助始终展示，负预检保留原因。"
                     + "mc.try_call只允许读取局部移动/工作失败；继续动作前必须mc.call('status',{details=true})核对新鲜身体和背包。"
                     + "不能捕获权限/材料/工具/安全/未知失败，不自动重试。最终目标先set_goal，材料gather用scope=subtask；"
-                    + "set_goal/report_blocked/ask_owner只能外层调用；不能嵌套程序。默认共享128原子调用预算，"
-                    + "不按脚本行数缩小嵌套采集预算。错误按program_error.kind/line核对，已完成动作勿重放。";
+                    + "set_goal/report_blocked/ask_owner只能外层调用；不能嵌套程序。默认不限总时长/API和嵌套原子调用次数，"
+                    + "无需填写max_calls/timeout_seconds，重复或空搜索交由程序判断。错误按program_error.kind/line核对，已完成动作勿重放。";
         if (spec.name().equals("tool_help")) return spec.description();
         String text = switch (spec.name()) {
             case "consume" -> "按inventory的实际slot原生食用一次，最多100用物刻/120总刻。"
@@ -43,7 +43,7 @@ public final class ToolCatalog {
                     + "material_for查询真实替代材料，不自动转换；explore_steps=0只在当前工区采集，原探索账不重置。";
             case "set_goal" -> "固定最终条件：type省略/item验背包数量，building验target/expected_revision全目标，"
                     + "delivery验container/item/count，additional须登记后本任务净存入及同容器净增量，transfer须item过滤。"
-                    + "多阶段首次lifecycle=long_term；不重开原预算，结束前新鲜核验，持续跟随结束不替代目标完成。";
+                    + "多阶段首次lifecycle=long_term，默认不限模型轮数和阶段数；结束前新鲜核验，持续跟随结束不替代目标完成。";
             case "workflow" -> "串行执行已知参数的1-12步，整份先验证；失败或放置负预检即停，保留已完成效果。"
                     + "不支持移动/反问/嵌套，制作及装取数量须明确；依赖结果用run_program。";
             case "search_resource" -> "只读完整资源搜索，targets须1-8个方块ID/#标签，r默认/最多16（1-16）；"
@@ -75,7 +75,7 @@ public final class ToolCatalog {
             case "follow" -> "持续只行走跟随主人或扫描所得target_uuid；distance默认3、seconds默认30最多60。"
                     + "到位休眠不结束，拉开2格才唤醒；固定32格范围交原工地、原搜索账及期限含休眠/避险不重开。"
                     + "ACCEPTED等真终态，期限结束仅行为结束，goal_satisfied=false，取消不恢复。";
-            case "attack" -> "默认原地不追击；approach=true在初始6.5格范围只走路接近同一目标，原搜索/重规划/20秒帽不重开。"
+            case "attack" -> "默认原地不追击；approach=true在初始64格范围只走路接近同一目标，逐次搜索有资源预算，无累计重规划次数帽。"
                     + "数字entity_id必须同时带同一扫描条目的target_uuid；"
                     + "entity_id=\"hostile_nearby\"才不带UUID，且只选择附近未命名敌对生物。"
                     + "确认模式NEED_CONFIRM后ask_owner取得具体授权，保持approach。"

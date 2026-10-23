@@ -3,7 +3,46 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 新环境实测反馈：任务工具声明与桥端口（2026-10-23 20:38，Asia/Shanghai）
+## 导航快照与取消默认任务次数门（2026-10-23 21:44，Asia/Shanghai）
+
+- 从已同步远端main `23db4e79997be296a81299a370f8a3de0e9e5010`继续。
+  维护者新要求优先于历史额度策略，完整机制/参考/限制见
+  [NAVIGATION-AND-EXECUTION-POLICY](docs/NAVIGATION-AND-EXECUTION-POLICY-2026-10-23.md)。
+  默认模型40步、长期8阶段、Lua128调用/总指令与时间帽、重复五次/空搜三次/
+  拒绝假完成三次、工地16轮/128改动、gather三次未入包和地下累计挖掘门已去掉。
+  默认探索/采集不设总次数；保留显式正额度、真实失败、资源/来源存储、权限与取消。
+  WorkFailureMemory仅诊断，记满滚动淘汰，不再拒发工具。
+- 最新玩家日志末写20:50:14，273800 bytes，SHA256
+  `7afe97e13f949c19d2cb53bc27f799a1e4db3d5444d80ba409fc47cd768f512a`；
+  400未在本场重现，攻击1/5与3/5受原范围/累计两次重规划中断，
+  单节点自边MOVEMENT_GEOMETRY、分页嵌套额度及约400ms主线程/约3秒等待已定位。
+  新包实机效果待维护者测试，不把编译通过写成攻击/寻路已流畅。
+- 普通位置和近战接近先走世界线程复制已加载区段、后台纯搜索；
+  活世界采用前核起点及整路、执行逐边复核，取消隔离迟到结果。
+  工作到达/编辑/工地/自定义约束保留主线程分帧回退，暂无段间预搜或坡地连续步态。
+  每次搜索8000节点/32768记录/400ms，无默认累计两次重规划门；
+  这与参考自适应累计节点账户不同，不宣称导航完全对齐参考。
+  修复分数脚高到站单节点，允许新鲜可行的平地中间转弯连续通过。
+  显式追击起点范围64格、保留有效/在途路线，原版出手距离和目标/批准绑定保留；
+  被动自保仍近场。search_mode与worker_search_ms区分后台和主线程计时。
+- 最终日志 `build/navigation-unlimited-final-20261023.log` 第61–62行：
+  **62秒，20任务全部执行**。三根XML **1707项/187 suites**：
+  核心414/46、根144/21、客户端1149/120，failures/errors/skipped均0。
+  前轮6项旧累计预期夹具失败已修正；关键继续执行、恢复、快照隔离、取消、
+  活世界失效与原权限回归见机制文档。原生物理、真实模型和多人仍待验。
+- JAR `build/libs/mcbot-0.1.0.jar` **1,703,361 bytes**，末写21:40:46，SHA256
+  `17c2057d24b4b367c0b3f4ede0b3853b0bf2ee83948a96b9af2e078144e8506f`；
+  内嵌core `075195bdf7d5f6abf7e946d340aaf8dfc50d92988f00cc5a9dba3edfad0faf81`与本次独立产物一致。
+  新测试目录/ZIP为 `build/test-kit-20261023-navigation-unlimited` /
+  `build/mcbot-0.1.0-test-kit-20261023-navigation-unlimited.zip`，旧包不覆盖。
+  仅改本体，不安装/启动游戏/服务器/模型，不改宿主/连接器/参考/实例/无敌。
+  二十完整卡、B5/P1部分完成，下一按新日志分搜索模式定位；Git提交/推送收尾另核。
+- 1.21.11 API本轮javap/编译确认：
+  LevelChunkSection.getStates/hasOnlyAir、PalettedContainer.copy/get/set、
+  Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY)、BlockGetter.getHeight/getMinY、
+  ClipContext的CollisionContext构造均可用；快照仅复制已加载getChunkNow区段。
+
+## 新环境实测反馈：任务工具声明与桥端口（2026-10-23 20:38，Asia/Shanghai，历史检查点）
 
 - 以远端main `d4ec8f69844aa2af9710978071cbe7c2f549e6d8`为基线恢复本地构建。
   首包本地20任务强制全量1685项全过，日志`build/environment-baseline-20261023.log`，

@@ -2,14 +2,15 @@ package com.neko.mcbot.agentcore.loop;
 
 import com.google.gson.JsonObject;
 
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
-/** Bounded stage checkpoints inside one task; neither task budgets nor inventory baselines restart. */
+/** Stage checkpoints retain task identity and inventory baselines; a positive run cap is optional. */
 final class GoalContinuation {
-    enum Verdict { CONTINUE, NO_PROGRESS, LIMIT }
+    enum Verdict { CONTINUE, LIMIT }
     private final int maxRuns;
-    private final Set<String> observed = new HashSet<>();
+    private static final int HISTORY_LIMIT = 128;
+    private final Set<String> observed = new LinkedHashSet<>();
     private int completedRuns, stalled;
 
     GoalContinuation(int maxRuns, JsonObject initial) {
@@ -23,10 +24,10 @@ final class GoalContinuation {
 
     static int limit(JsonObject args) {
         var value = args.get("max_runs");
-        if (value == null) return 8;
+        if (value == null) return 0;
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) throw new IllegalArgumentException();
         int count = value.getAsBigDecimal().intValueExact();
-        if (count < 1 || count > 16) throw new IllegalArgumentException();
+        if (count < 0) throw new IllegalArgumentException();
         return count;
     }
 
@@ -46,12 +47,13 @@ final class GoalContinuation {
     }
 
     static GoalContinuation restore(JsonObject data, JsonObject initial) {
-        int limit = GoalCheckpoint.bounded(data, "max_runs", 1, 16);
+        int limit = GoalCheckpoint.bounded(data, "max_runs", 0, Integer.MAX_VALUE);
         var value = new GoalContinuation(limit, initial);
-        value.completedRuns = GoalCheckpoint.bounded(data, "completed_runs", 0, limit);
+        value.completedRuns = GoalCheckpoint.bounded(data, "completed_runs", 0,
+                limit == 0 ? Integer.MAX_VALUE : limit);
         value.stalled = GoalCheckpoint.bounded(data, "stalled", 0, 2);
         var facts = data.getAsJsonArray("observed");
-        if (facts == null || facts.isEmpty() || facts.size() > limit + 1) throw new IllegalArgumentException();
+        if (facts == null || facts.isEmpty() || facts.size() > HISTORY_LIMIT) throw new IllegalArgumentException();
         value.observed.clear();
         for (var fact : facts) {
             if (!fact.isJsonPrimitive() || !fact.getAsJsonPrimitive().isString()
@@ -61,7 +63,7 @@ final class GoalContinuation {
         return value;
     }
 
-    boolean exhausted() { return completedRuns >= maxRuns || stalled >= 2; }
+    boolean exhausted() { return maxRuns > 0 && completedRuns >= maxRuns; }
 
     Verdict checkpoint(JsonObject state) {
         return checkpoint(state, "");
@@ -69,14 +71,14 @@ final class GoalContinuation {
 
     Verdict checkpoint(JsonObject state, String goalFacts) {
         String facts = BodyFacts.fingerprint(state) + "|" + goalFacts;
-        completedRuns++;
-        stalled = observed.add(facts) ? 0 : stalled + 1;
-        if (stalled >= 2) return Verdict.NO_PROGRESS;
-        return completedRuns >= maxRuns ? Verdict.LIMIT : Verdict.CONTINUE;
+        if (completedRuns < Integer.MAX_VALUE) completedRuns++;
+        stalled = observed.add(facts) ? 0 : Math.min(2, stalled + 1);
+        if (observed.size() > HISTORY_LIMIT) observed.remove(observed.iterator().next());
+        return maxRuns > 0 && completedRuns >= maxRuns ? Verdict.LIMIT : Verdict.CONTINUE;
     }
 
     String facts() {
-        return "长期目标生命周期：阶段已核对=" + completedRuns + "/" + maxRuns
+        return "长期目标生命周期：阶段已核对=" + completedRuns + "/" + (maxRuns == 0 ? "不限" : maxRuns)
                 + "，连续重复事实=" + stalled
                 + "；阶段结束须新鲜身体及目标现场核验，材料与位移仅作阶段进展；总步数、权限、探索预算和原始目标继续沿用。";
     }

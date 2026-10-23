@@ -312,9 +312,13 @@ public final class AttackTool implements ServerTool {
 
     public static boolean withinApproachScope(BlockPos anchor, net.minecraft.world.phys.Vec3 body,
                                               net.minecraft.world.phys.Vec3 target) {
+        return withinApproachScope(anchor, body, target, LOCAL_RADIUS);
+    }
+
+    private static boolean withinApproachScope(BlockPos anchor, net.minecraft.world.phys.Vec3 body,
+                                               net.minecraft.world.phys.Vec3 target, double radius) {
         var origin = new net.minecraft.world.phys.Vec3(anchor.getX() + .5, anchor.getY(), anchor.getZ() + .5);
-        return body.distanceToSqr(origin) <= LOCAL_RADIUS * LOCAL_RADIUS
-                && target.distanceToSqr(origin) <= LOCAL_RADIUS * LOCAL_RADIUS;
+        return body.distanceToSqr(origin) <= radius * radius && target.distanceToSqr(origin) <= radius * radius;
     }
 
     private static boolean loadedArea(ServerLevel level, AABB box) {
@@ -365,8 +369,12 @@ public final class AttackTool implements ServerTool {
                 @Override public boolean canStrike() { return AttackTool.guard(player, level, entity) == null; }
                 @Override public TickTask route(com.neko.mcbot.path.NavigationBudget budget) {
                     return com.neko.mcbot.path.PathTask.approach(level, entity.blockPosition(), permissions, context,
-                            scheduler, new com.neko.mcbot.path.PathSpec(false, false, outerScope.underground(), 0, anchor, 6),
+                            scheduler, approachScope(),
                             com.neko.mcbot.server.MeleeWork.goal(player, entity), budget).limitTo(outerScope);
+                }
+                @Override public boolean routeUseful(TickTask route) {
+                    return route instanceof com.neko.mcbot.path.PathTask path
+                            && path.usefulFor(com.neko.mcbot.server.MeleeWork.goal(player, entity));
                 }
                 @Override public TickTask.Progress advance(TickTask route) { return route.tickSafe(player); }
                 @Override public void stopInput() { player.releaseMovement(); }
@@ -390,8 +398,8 @@ public final class AttackTool implements ServerTool {
             if (current != null && !EntityAttack.geometricFailure(current)) return current;
             if (!entity.isAlive()) return current;
             if (approach) {
-                if (!withinApproachScope(anchor, player.position(), entity.position()))
-                    return failed("SCOPE_LIMIT:身体或原目标已离开初始6.5格范围，未追出原范围。");
+                if (!withinApproachScope(anchor, player.position(), entity.position(), bodyPermit == null ? 64 : LOCAL_RADIUS))
+                    return failed("SCOPE_LIMIT:身体或原目标已离开本次接近范围。");
                 var environment = com.neko.mcbot.server.MiningEnvironment.bodyFailure(player);
                 if (environment != null) return environment;
             }
@@ -401,8 +409,10 @@ public final class AttackTool implements ServerTool {
             return AttackTool.permission(permissions, context, execution, target, maxHits, approach, anchor.asLong());
         }
         @Override public com.neko.mcbot.path.PathSpec movementScope() {
-            return approach ? new com.neko.mcbot.path.PathSpec(false, false, outerScope.underground(), 0, anchor, 6)
-                    : outerScope;
+            return approach ? approachScope() : outerScope;
+        }
+        private com.neko.mcbot.path.PathSpec approachScope() {
+            return new com.neko.mcbot.path.PathSpec(false, false, outerScope.underground(), 0, anchor, bodyPermit == null ? 64 : 6);
         }
         @Override public boolean canApproach() { return approach; }
         @Override public Result approach() { return movement == null ? null : movement.tick(); }
@@ -415,7 +425,7 @@ public final class AttackTool implements ServerTool {
             point.addProperty("y", anchor.getY());
             point.addProperty("z", anchor.getZ());
             data.add("anchor", point);
-            data.addProperty("radius", LOCAL_RADIUS);
+            data.addProperty("radius", bodyPermit == null ? 64 : LOCAL_RADIUS);
             return data;
         }
         @Override public int selectedSlot() { return player.getInventory().getSelectedSlot(); }
@@ -454,7 +464,7 @@ public final class AttackTool implements ServerTool {
         if (permissions != null && permissions.allowsChange(context, execution, change)) return null;
         String summary = "确认对实体 " + target.type() + "（entity_id=" + target.id() + "，target_uuid="
                 + target.uuid() + "）" + (approach ? "以" + BlockPos.of(anchor).toShortString()
-                + "为固定脚格锚点，在初始6.5格范围内只行走接近并执行" : "在当前位置执行")
+                + "为固定脚格锚点，在64格范围内只行走接近并执行" : "在当前位置执行")
                 + "原版近战，最多挥击 " + maxHits
                 + " 次、最多20秒；可能伤害或杀死该目标，已完成攻击不能撤销。";
         if (com.neko.mcbot.common.WireSize.utf8Bytes(summary) > 12000) {

@@ -49,7 +49,7 @@ class EntityApproachTest {
         assertNull(move.tick());
         assertEquals(1, access.plans);
         assertEquals(1, access.advances);
-        assertEquals(1, access.aborts);
+        assertEquals(0, access.aborts);
         assertFalse(move.observation().get("moving").getAsBoolean());
         for (int i = 0; i < 20; i++) assertNull(move.tick());
         assertEquals(1, access.plans);
@@ -73,22 +73,20 @@ class EntityApproachTest {
         assertEquals(1, access.original.replans());
     }
 
-    @Test void repeatedTargetChangesShareTwoReplansAndThenStopPermanently() {
+    @Test void repeatedTargetChangesDoNotHitACumulativeReplanQuota() {
         var access = new Access();
         var move = new EntityApproach(access);
         for (int i = 0; i < 3; i++) assertNull(move.tick());
-        for (int replacement = 0; replacement < 2; replacement++) {
+        for (int replacement = 0; replacement < 8; replacement++) {
             access.position = access.position.add(3, 0, 0);
             for (int i = 0; i < 10; i++) assertNull(move.tick());
         }
-        assertEquals(3, access.plans);
+        assertEquals(9, access.plans);
         access.position = access.position.add(3, 0, 0);
         for (int i = 0; i < 9; i++) assertNull(move.tick());
-        var result = move.tick();
-        assertTrue(result.feedback().startsWith("ACTION_LIMIT:"));
-        assertSame(result, move.tick());
-        assertEquals(3, access.plans);
-        assertEquals(3, access.aborts);
+        assertNull(move.tick());
+        assertEquals(10, access.plans);
+        assertEquals(9, access.aborts);
     }
 
     @Test void suspensionDiscardsOldRouteButRetainsOriginalReplacementAccount() {
@@ -100,9 +98,9 @@ class EntityApproachTest {
             assertNull(move.tick());
         }
         move.stop();
-        assertTrue(move.tick().feedback().startsWith("ACTION_LIMIT:"));
-        assertEquals(2, access.original.replans());
-        assertEquals(3, access.plans);
+        assertNull(move.tick());
+        assertEquals(3, access.original.replans());
+        assertEquals(4, access.plans);
     }
 
     @Test void rangeReentryIsDistinguishedFromRetargetingWithoutBuyingMoreReplans() {
@@ -114,20 +112,18 @@ class EntityApproachTest {
             for (int tick = 0; tick < 3; tick++) assertNull(move.tick());
         }
         var observed = move.observation();
-        assertEquals(3, observed.get("plans").getAsInt());
+        assertEquals(1, observed.get("plans").getAsInt());
         assertEquals(3, observed.get("in_range_stops").getAsInt());
         assertEquals(0, observed.get("retargets").getAsInt());
-        assertEquals(2, observed.get("replans").getAsInt());
+        assertEquals(0, observed.get("replans").getAsInt());
         assertEquals(0, observed.get("budget_stops").getAsInt());
         access.strike = false;
         access.enterRange = false;
         assertNull(move.tick());
         assertNull(move.tick());
-        var result = move.tick();
-        assertTrue(result.feedback().startsWith("ACTION_LIMIT:"));
-        assertSame(result, move.tick());
-        assertEquals(1, move.observation().get("budget_stops").getAsInt());
-        assertEquals(3, access.plans);
+        assertNull(move.tick());
+        assertEquals(0, move.observation().get("budget_stops").getAsInt());
+        assertEquals(1, access.plans);
     }
 
     @Test void trueRouteFailureAndObsoleteArrivalHaveDifferentResults() {
@@ -144,7 +140,7 @@ class EntityApproachTest {
         access.progress = new TickTask.Progress.Done(new ServerTool.Result(true, "old stance", null));
         move = new EntityApproach(access);
         for (int i = 0; i < 5; i++) assertNull(move.tick());
-        assertTrue(move.tick().feedback().startsWith("ACTION_LIMIT:"));
-        assertEquals(3, access.plans, "old snapshot arrival never counts as a strike or resets the account");
+        assertNull(move.tick());
+        assertEquals(4, access.plans, "old snapshot arrival never counts as a strike");
     }
 }

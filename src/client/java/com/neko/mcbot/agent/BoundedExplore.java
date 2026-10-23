@@ -33,12 +33,12 @@ final class BoundedExplore {
         started = clock.getAsLong(); dispatch.accept(this::observe); return result;
     }
     boolean done() { return result.isDone(); }
-    void tick() { if (!done() && clock.getAsLong() - started >= seconds * 1000L) stop("TIMEOUT:探索本段时限已到。"); }
+    void tick() { if (!done() && seconds > 0 && clock.getAsLong() - started >= seconds * 1000L) stop("TIMEOUT:探索本段时限已到。"); }
     void stop(String reason) { if (done()) return; finish(false, reason); cancel.run(); }
     private void call(String name, JsonObject args, Consumer<ToolOutcome> next) {
         tick();
         if (done()) return;
-        if (++calls > 52) { stop("ACTION_LIMIT:探索本段调用预算已到。"); return; }
+        if (calls < Integer.MAX_VALUE) calls++;
         try {
             remote.apply(name, args.toString()).whenComplete((receipt, failure) -> dispatch.accept(() -> {
                 tick();
@@ -103,7 +103,7 @@ final class BoundedExplore {
         data.add("movement", movement);
         for (String key : java.util.List.of("authorization_id", "authorization_summary"))
             if (latest.has(key)) data.add(key, latest.get(key).deepCopy());
-        result.complete(new ToolOutcome(ok, reason + " 探索移动=" + route.attempts() + "/" + route.maxSteps
+        result.complete(new ToolOutcome(ok, reason + " 探索移动=" + route.attempts() + "/" + route.stepLimitText()
                 + "，共享范围半径=" + route.radius + "，新增观察区域=" + route.regions()
                 + "。已完成移动保留；取消或未知结果不证明目标达成。", data));
     }

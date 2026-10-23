@@ -42,7 +42,7 @@ final class BoundedSurvey {
         this.remote = remote; this.dispatch = dispatch; this.cancel = cancel;
         this.confirm = confirm;
         returning = options.get("mode").getAsString().equals("return");
-        seconds = options.has("timeout_seconds") ? ExplorationRoute.integer(options, "timeout_seconds") : 180;
+        seconds = options.has("timeout_seconds") ? ExplorationRoute.integer(options, "timeout_seconds") : 0;
         if (!returning && (!options.has("target_y") || !options.has("direction")
                 || !options.has("targets"))) throw new IllegalArgumentException();
     }
@@ -54,7 +54,7 @@ final class BoundedSurvey {
     boolean returning() { return returning; }
     void tick() {
         if (search != null) search.tick();
-        if (!done() && clock.getAsLong() - started >= seconds * 1000L) stop("TIMEOUT:地下本段时限已到。");
+        if (!done() && seconds > 0 && clock.getAsLong() - started >= seconds * 1000L) stop("TIMEOUT:地下本段时限已到。");
     }
     void stop(String reason) {
         if (done()) return;
@@ -63,8 +63,8 @@ final class BoundedSurvey {
         cancel.run();
     }
     private CompletableFuture<ToolOutcome> primitive(String name, String json) {
-        if (done() || ++calls > 160) return CompletableFuture.completedFuture(
-                new ToolOutcome(false, "ACTION_LIMIT:地下本段调用预算已到。"));
+        if (done()) return CompletableFuture.completedFuture(new ToolOutcome(false, "CANCELLED:地下本段已结束。"));
+        if (calls < Integer.MAX_VALUE) calls++;
         return remote.apply(name, json);
     }
     private void call(String name, JsonObject args, Consumer<ToolOutcome> next) {
@@ -160,7 +160,6 @@ final class BoundedSurvey {
             finish(false, "EXPLORATION_LIMIT:已预留返程移动次数，停止向外推进；可用explore mode=return返回。"); return;
         }
         int budget = Math.min(24, route.remainingDigs());
-        if (budget == 0) { finish(false, "ACTION_LIMIT:任务地下挖掘总预算已到。"); return; }
         var slots = state.getAsJsonObject("inventory");
         var selected = slots.getAsJsonArray("slots").get(ExplorationRoute.integer(slots, "selected_slot")).getAsJsonObject();
         int reserve = option("reserve_durability", 16);
@@ -270,6 +269,7 @@ final class BoundedSurvey {
         data.addProperty("exploration_max_steps", route.maxSteps);
         data.addProperty("exploration_radius", route.radius);
         data.addProperty("underground_remaining_digs", route.remainingDigs());
+        data.addProperty("underground_digs", route.undergroundDigs());
         data.addProperty("return_steps", route.returnSteps());
         data.addProperty("primitive_calls", calls);
         data.addProperty("survey_hops", hops);
@@ -279,7 +279,7 @@ final class BoundedSurvey {
         data.add("movement", movement.deepCopy());
         for (String key : List.of("authorization_id", "authorization_summary"))
             if (movement.has(key)) data.add(key, movement.get(key).deepCopy());
-        String text = reason + " 累计移动=" + route.attempts() + "/" + route.maxSteps
+        String text = reason + " 累计移动=" + route.attempts() + "/" + route.stepLimitText()
                 + "，尚需返程路段=" + route.returnSteps() + "；实际路标=" + route.trail()
                 + "。发现不等于采收到背包，原路仍须活世界复核。";
         var targets = discovery.getAsJsonArray("targets");

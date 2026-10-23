@@ -5,6 +5,16 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationBudgetTest {
+    @Test void oldDefaultSnapshotMigratesToPerSearchPolicyWithoutLosingDiagnostics() {
+        var old = new NavigationBudget(8000, 32768, NavigationBudget.NANOS, 2).snapshot();
+        old.remove("per_search");
+        old.addProperty("replans", 2);
+        var restored = NavigationBudget.restore(old);
+        assertTrue(restored.perSearch());
+        assertTrue(restored.takeReplan());
+        assertEquals(3, restored.replans());
+        assertNotNull(search(restored));
+    }
     @Test void snapshotPreservesCustomCapsAndAlreadySpentSearchAndReplanBudget() {
         var original = new NavigationBudget(5, 1000, NavigationBudget.NANOS, 1);
         var search = search(original); search.advance(2); original.observe(search);
@@ -87,7 +97,10 @@ class NavigationBudgetTest {
         assertNotNull(search(budget));
         assertTrue(budget.takeReplan());
         assertNotNull(search(budget));
-        assertFalse(budget.takeReplan());
-        assertEquals(2, budget.replans());
+        assertTrue(budget.takeReplan());
+        assertEquals(3, budget.replans());
+        var restored = NavigationBudget.restore(budget.snapshot());
+        for (int i = 0; i < 30; i++) assertTrue(restored.takeReplan());
+        assertFalse(restored.exhausted());
     }
 }

@@ -27,8 +27,9 @@ import java.util.List;
  * 执行期复核（DESIGN §8）：每提交 20 个节点，重验接下来 5 个节点的状态
  * （该清的还清着、支撑还在、放过的没被拆）；变了就切 REPLAN_SEARCH 相位从当前
  * 位置**分帧**重搜（R1-S3：旧版单拍同步 while 的单帧冻结点已杀），旧路格 ×0.7 降权
- * 抑抖动，重规划上限 2 次，再变就 NO_PATH 交还给模型决策。搜索双帽：节点 8000 +
- * 累计 CPU 400ms，先到先停；撞帽且推进≥4 格提交 PARTIAL 半程段，不足则 NO_PROGRESS。
+ * 抑抖动，不以累计重规划次数停工。普通只行走候选使用世界快照和后台搜索；
+ * 工作到达与编辑路线保留主线程分帧搜索。每次搜索节点 8000 / 400ms，
+ * 撞帽且推进≥4 格提交 PARTIAL 半程段，不足则 NO_PROGRESS。
  *
  * 取消/超时：onAbort 清掉进行中的裂纹动画；future 由调度器统一完成。
  */
@@ -39,7 +40,6 @@ public final class PathTask extends TickTask {
     private static final int MAX_DIGS = 128;
     private static final int RECHECK_EVERY = 20;
     private static final int RECHECK_AHEAD = 5;
-    private static final int MAX_REPLAN = 2;
     /** 单帧搜索时间切片（R1-S3 双帽之一）：节点帽 300 防无界，时间帽 6ms 防重节点撑爆单帧。 */
     private static final long SEARCH_SLICE_NS = 6_000_000L;
     /** 单次搜索累计 CPU 预算（另一帽）：越界即撞帽走 PARTIAL/NO_PROGRESS 定性，TPS 无关。 */
@@ -83,6 +83,8 @@ public final class PathTask extends TickTask {
 
     private Phase phase = Phase.SEARCH;
     private DigAStar search;
+    private NavigationSearch pendingSearch;
+    private boolean backgroundTried, detachedSearch, constrained;
     private LevelDigSampler sampler;
     /** 搜索期 memo 装饰（R1-S2）；执行/复核/确认清单永远走裸 sampler live 读——快照只当启发式。 */
     private MemoDigSampler memo;
@@ -139,6 +141,7 @@ public final class PathTask extends TickTask {
 
     public PathTask constrainSteps(java.util.function.BiPredicate<BlockPos, BlockPos> constraint) {
         stepConstraint = java.util.Objects.requireNonNull(constraint);
+        constrained = true;
         return this;
     }
 
@@ -210,6 +213,7 @@ public final class PathTask extends TickTask {
         data.addProperty("action", "move_to");
         data.addProperty("walk_only", walkOnly);
         data.addProperty("phase", phase.name());
+        data.addProperty("search_mode", searchMode());
         data.addProperty("committed_nodes", executed);
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
@@ -259,8 +263,6 @@ public final class PathTask extends TickTask {
             return running();
         }
         if (grounded == PathGrounding.Decision.REPLAN && sampler != null) {
-            if (replans >= MAX_REPLAN) return terminal(new Result(false,
-                    "NO_PATH:身体下落后原路线失效，重规划上限已到；已停止移动。", null));
             dropPlan();
             beginReplan(c);
             executed = 0;
@@ -277,6 +279,7 @@ public final class PathTask extends TickTask {
 
     private Progress terminal(Result result) {
         timing.phase(PathTiming.Phase.FINALIZE);
+        cancelSearch();
         stopMovement();
         if (mining != null) {
             var partial = mining.refreshDrops(new Result(false, "", null));
@@ -356,24 +359,40 @@ public final class PathTask extends TickTask {
         logTiming(outcome);
         var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         data.add("path_timing", timing.snapshot());
+        data.addProperty("search_mode", searchMode());
+        if (detachedSearch && search != null) data.addProperty("worker_search_ms", search.elapsedMillis());
         return new Result(result.ok(), result.feedback(), data);
     }
 
     private void logTiming(String outcome) {
         if (timingLogged) return;
         timingLogged = true;
-        McbotMod.LOG.info("[path-perf] task={} body={} outcome={} metrics={}",
+        McbotMod.LOG.info("[path-perf] task={} body={} outcome={} search_mode={} worker_ms={} metrics={}",
                 context == null ? 0 : context.taskId(),
-                drivenBody == null ? "unknown" : drivenBody.observationBodyId(), outcome, timing.snapshot());
+                drivenBody == null ? "unknown" : drivenBody.observationBodyId(), outcome, searchMode(),
+                detachedSearch && search != null ? search.elapsedMillis() : 0, timing.snapshot());
     }
 
     // ---- SEARCH ----
 
     private Progress searchTick(CompanionPlayer c) {
         timing.phase(PathTiming.Phase.SEARCH);
+        if (pendingSearch != null) {
+            if (!pendingSearch.done()) return running();
+            try {
+                search = pendingSearch.take();
+                detachedSearch = true;
+                if (sharedBudget != null) sharedBudget.recordCompleted(search);
+            } catch (RuntimeException failed) {
+                return terminal(new Result(false, "INTERNAL:后台寻路未产生有效结果，已停止。", null));
+            } finally { pendingSearch = null; }
+            // Dry routes can finish without preparing live edit costs. A failed dry search falls
+            // back to the existing world-thread edit planner when terrain changes are permitted.
+            if (!walkOnly && search.failure() != null) search = null;
+        }
         // 先看有没有"确认前刚算好的那条路"可用（R2-S4 lastPlan）：省掉一整次重搜。
         // 只在首搜阶段尝试；重规划（REPLAN_SEARCH）是"世界变了"的产物，必须重新搜。
-        if (search == null && phase == Phase.SEARCH && !wasReplan && !walkOnly && spec.equals(PathSpec.DEFAULT)) {
+        if (search == null && !backgroundTried && phase == Phase.SEARCH && !wasReplan && !walkOnly && spec.equals(PathSpec.DEFAULT)) {
             if (tryReusePlan(c)) {
                 return afterPlanReady(c, path); // tryReusePlan 已把 path/planDigs/planPlaces 装好
             }
@@ -385,12 +404,13 @@ public final class PathTask extends TickTask {
             BlockPos from = StandingGeometry.feetCell(c);
             sampler = samplerFor(c, from);
             search = newSearch(from);
+            if (pendingSearch != null) return running();
             if (search == null) return new Progress.Done(new Result(false,
                     "ACTION_LIMIT:动态接近的原累计搜索预算已耗尽，未重开。", null));
         }
         boolean finished;
         try { finished = search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS); }
-        finally { if (sharedBudget != null) sharedBudget.observe(search); }
+        finally { if (sharedBudget != null && !detachedSearch) sharedBudget.observe(search); }
         if (!finished) {
             // 分帧搜索跨多拍，中途世界会被别人改：验尸超限则丢旧图，从当前位置重开
             if (memo != null && memo.worldChanged()) {
@@ -442,6 +462,11 @@ public final class PathTask extends TickTask {
      */
     private Progress afterPlanReady(CompanionPlayer c, List<DigAStar.Step> plan) {
         timing.phase(PathTiming.Phase.VALIDATE);
+        if (!startsAt(plan, StandingGeometry.feetCell(c))) {
+            McbotMod.LOG.info("[path] 搜索期间身体已离开起点，从新鲜脚格重新规划 route={}", timing.id());
+            beginReplan(c);
+            return running();
+        }
         path = plan;
         cursor = path.size() > 1 && path.getFirst().action() == DigAStar.ACT_START ? 1 : 0;
         int digs = planDigs;
@@ -658,13 +683,37 @@ public final class PathTask extends TickTask {
 
     /** 搜索构造统一入口：裸 sampler 必在之前建好；memo 套在搜索侧，执行侧永不见缓存。 */
     private DigAStar newSearch(BlockPos from) {
+        boolean previousDetached = detachedSearch;
+        detachedSearch = false;
+        if (!backgroundTried && !spec.workArrival() && !constrained && !drivenBody.buildSite().active()
+                && (sharedBudget == null || sharedBudget.perSearch())) {
+            backgroundTried = true;
+            var snapshot = NavigationSnapshot.capture(level, from, drivenBody.getBbWidth(),
+                    drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope);
+            var liveGoal = suppliedGoal != null ? suppliedGoal
+                    : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
+            var frozenGoal = liveGoal.snapshot(snapshot);
+            if (frozenGoal != null) {
+                var dry = new DigAStar(snapshot, from.getX(), from.getY(), from.getZ(),
+                        target.getX(), target.getY(), target.getZ(), MAX_NODES, 0, frozenGoal);
+                dry.totalBudget(SEARCH_TOTAL_NS);
+                if (reusePending != null) dry.reuseBias(reusePending);
+                try {
+                    pendingSearch = NavigationSearch.submit(dry);
+                    memo = null;
+                    return null;
+                } catch (java.util.concurrent.RejectedExecutionException busy) {
+                    // A full worker queue falls back to the existing bounded world-thread slices.
+                }
+            }
+        }
         if (memoRestarts < 2) {
             memo = new MemoDigSampler(sampler);
         } else {
             memo = null; // 验尸两度超限：这趟世界改得太快，直接 live 读（宁慢不抽）
         }
         if (sharedBudget != null) {
-            sharedBudget.observe(search);
+            if (!previousDetached) sharedBudget.observe(search);
             if (sharedBudget.exhausted()) return null;
         }
         NavigationGoal goal = suppliedGoal != null ? suppliedGoal : spec.workArrival() && placement != null
@@ -847,11 +896,24 @@ public final class PathTask extends TickTask {
         if (search == null) {
             return "memo=reuse(未搜索)";
         }
+        if (detachedSearch) return "search_mode=BACKGROUND_SNAPSHOT expanded=" + search.expanded()
+                + " worker_ms=" + search.elapsedMillis() + " stored=" + search.storedNodes();
         String preparation = " prep=" + search.estimateExpanded() + "/" + search.estimateSeedProbes()
                 + " stored=" + search.storedNodes();
         return memo == null ? "memo=off(验尸超限)" + preparation : "[memo] expanded=" + search.expanded()
                 + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()
                 + " 验尸不符=" + memo.staleCount() + " 耗时=" + search.elapsedMillis() + "ms" + preparation;
+    }
+
+    private String searchMode() {
+        return pendingSearch != null || detachedSearch ? "BACKGROUND_SNAPSHOT"
+                : search == null ? "NONE_OR_REUSED" : "WORLD_THREAD";
+    }
+
+    static boolean startsAt(List<DigAStar.Step> plan, BlockPos feet) {
+        if (plan == null || plan.isEmpty()) return false;
+        var start = plan.getFirst();
+        return start.x() == feet.getX() && start.y() == feet.getY() && start.z() == feet.getZ();
     }
 
     private static String unpackShort(long cell) {
@@ -906,12 +968,6 @@ public final class PathTask extends TickTask {
         }
         // 执行期复核节拍
         if (executed > 0 && executed % RECHECK_EVERY == 0 && !validateAhead(c)) {
-            if (replans >= MAX_REPLAN) {
-                return new Progress.Done(new Result(false,
-                        "NO_PATH:路被改变得太多（重规划 " + replans + " 次仍失败）。"
-                                + "到了 (" + c.blockPosition().toShortString()
-                                + ")，重新扫一下再定目的地吧。", null));
-            }
             beginReplan(c);
             executed = 0;
             return running();
@@ -964,17 +1020,18 @@ public final class PathTask extends TickTask {
         boolean shapeChanged = false;
         if (sampler.geometry() != null) {
             var before = path.get(Math.max(0, cursor - 1));
-            var check = PathTransition.check(sampler, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),
-                    next.x(), next.y(), next.z(), 0, 0);
-            shapeChanged = check.plan() == null || Math.abs(check.plan().feetY() - next.feetY()) > 1e-5;
+            if (next.action() == DigAStar.ACT_START) shapeChanged = !standingStart(next, sampler);
+            else {
+                var check = PathTransition.check(sampler, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),
+                        next.x(), next.y(), next.z(), 0, 0);
+                shapeChanged = check.plan() == null || Math.abs(check.plan().feetY() - next.feetY()) > 1e-5;
+            }
         }
         if (shapeChanged || blocked != null || sampler.geometry() == null && !sampler.support(next.x(), next.y() - 1, next.z())) {
             long cell = blocked != null ? blocked : DigAStar.pack(next.x(), next.y() - 1, next.z());
             recordFailure(cursor, !sampler.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell),
                     DigAStar.unpackZ(cell)) ? "UNKNOWN_TERRAIN" : shapeChanged ? "MOVEMENT_GEOMETRY"
                     : blocked != null ? "NEXT_CLEARANCE" : "NO_SUPPORT", cell);
-            if (replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
-                    "NO_PATH:下一落脚格已变化，重规划上限已到；已停止移动。", null));
             replanBadKey = cell;
             replanBadSet = true;
             beginReplan(c);
@@ -989,7 +1046,7 @@ public final class PathTask extends TickTask {
             c.facePoint(new net.minecraft.world.phys.Vec3(next.x() + .5, c.getEyeY(), next.z() + .5));
         }
         if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
-        boolean through = canPassStraight();
+        boolean through = canPassThrough();
         var body = bodyState(c);
         if (!through && body.grounded()
                 && Math.hypot(next.x() + .5 - body.x(), next.z() + .5 - body.z()) <= .3
@@ -1015,19 +1072,35 @@ public final class PathTask extends TickTask {
         return running();
     }
 
-    private boolean canPassStraight() {
+    private boolean canPassThrough() {
         if (cursor <= 0 || cursor + 1 >= path.size()) return false;
         var before = path.get(cursor - 1);
         var here = path.get(cursor);
         var after = path.get(cursor + 1);
+        if (!continuous(before, here, after)) return false;
+        var edge = PathTransition.check(sampler, TerrainEdits.EMPTY, here.x(), here.y(), here.z(),
+                after.x(), after.y(), after.z(), 0, 0);
+        return edge.plan() != null && Math.abs(edge.plan().feetY() - after.feetY()) < 1e-5;
+    }
+
+    static boolean continuous(DigAStar.Step before, DigAStar.Step here, DigAStar.Step after) {
         return here.action() == DigAStar.ACT_WALK && after.action() == DigAStar.ACT_WALK
                 && here.dig().isEmpty() && here.place().isEmpty()
                 && after.dig().isEmpty() && after.place().isEmpty()
                 && before.y() == here.y() && here.y() == after.y()
                 && Math.abs(before.feetY() - here.feetY()) < 1e-5
                 && Math.abs(here.feetY() - after.feetY()) < 1e-5 && !here.jump() && !after.jump()
-                && here.x() - before.x() == after.x() - here.x()
-                && here.z() - before.z() == after.z() - here.z();
+                && (here.x() - before.x()) * (after.x() - here.x())
+                + (here.z() - before.z()) * (after.z() - here.z()) >= 0;
+    }
+
+    static boolean standingStart(DigAStar.Step step, DigSampler terrain) {
+        var geometry = terrain.geometry();
+        var foot = geometry.foot(step.x(), step.y(), step.z(), TerrainEdits.EMPTY);
+        if (foot == null || Math.abs(foot.height() - step.feetY()) > 1e-5) return false;
+        var clear = geometry.clearance(step.x(), foot.height(), step.z(),
+                step.x(), foot.height(), step.z(), TerrainEdits.EMPTY);
+        return clear.known() && clear.blockers().isEmpty();
     }
 
     private static PathSteering.Body bodyState(CompanionPlayer c) {
@@ -1038,7 +1111,7 @@ public final class PathTask extends TickTask {
     private Progress stuck(CompanionPlayer c, DigAStar.Step next) {
         stopMovement();
         recordFailure(cursor, "MOVEMENT_STALLED", null);
-        if (!c.onGround() || replans >= MAX_REPLAN) return new Progress.Done(new Result(false,
+        if (!c.onGround()) return new Progress.Done(new Result(false,
                 "NO_PATH:身体未能实际走到下一落脚点，已释放输入；重新观察地形再选路。", null));
         replanBadKey = DigAStar.pack(next.x(), next.y(), next.z());
         replanBadSet = true;
@@ -1115,6 +1188,8 @@ public final class PathTask extends TickTask {
      * 复核认定变了的格周围不入集（§D）——那恰好是不能再信的部分。
      */
     private void beginReplan(CompanionPlayer c) {
+        cancelSearch();
+        backgroundTried = false;
         stopMovement();
         clearCrack();
         if (sharedBudget != null && !sharedBudget.takeReplan()) {
@@ -1123,7 +1198,7 @@ public final class PathTask extends TickTask {
         }
         BlockPos from = StandingGeometry.feetCell(c);
         sampler = samplerFor(c, from);
-        replans++;
+        if (replans < Integer.MAX_VALUE) replans++;
         wasReplan = true;
         planFailure = null;
         partialTail = false;
@@ -1278,6 +1353,7 @@ public final class PathTask extends TickTask {
 
     @Override
     public void onAbort() {
+        cancelSearch();
         stopMovement();
         clearCrack();
         dropPlan(); // 任务作废了，别把一条已废的路留在缓存里给下一趟复用
@@ -1286,6 +1362,7 @@ public final class PathTask extends TickTask {
     }
 
     @Override public void onSuspend() {
+        cancelSearch();
         timing.suspend();
         stopMovement();
         clearCrack();
@@ -1295,8 +1372,6 @@ public final class PathTask extends TickTask {
     @Override public Result onResume(CompanionPlayer c) {
         drivenBody = c;
         if (c.level() != level) return new Result(false, "TARGET_LOST:身体已换维度。", null);
-        if (replans >= MAX_REPLAN) return new Result(false,
-                "INTERRUPTED:避险后路线须重验，原重规划次数已用完；先查看现场。", null);
         // A reflex can move the body or change the world. Reuse the existing bounded recovery,
         // never continue an old memo/search or restore consumed dig/place/approval counters.
         beginReplan(c);
@@ -1305,8 +1380,20 @@ public final class PathTask extends TickTask {
     }
 
     @Override public void onFinish() {
+        cancelSearch();
         stopMovement();
         clearCrack();
+    }
+
+    private void cancelSearch() {
+        if (pendingSearch != null) pendingSearch.cancel();
+        pendingSearch = null;
+    }
+
+    public boolean usefulFor(NavigationGoal goal) {
+        if (path == null || path.isEmpty()) return true;
+        var end = path.getLast();
+        return goal.reached(end.x(), end.y(), end.z());
     }
 
     /** 供 MoveToTool 在提交前做的距离帽判断。 */

@@ -157,7 +157,7 @@ class FollowSchedulerTest {
         assertEquals(1, access.aborts);
     }
 
-    @Test void wakesAndReflexResumptionSpendTheSameFiniteReplanAccount() {
+    @Test void wakesAndReflexResumptionKeepDiagnosticsWithoutATwoReplanQuota() {
         access.position = access.body.add(8, 0, 0);
         var future = start(true, 100);
         tick(3);
@@ -173,8 +173,11 @@ class FollowSchedulerTest {
         tick(1);
         control.reflex(false);
         tick(1);
-        assertTrue(future.join().feedback().startsWith("ACTION_LIMIT:"));
-        assertEquals(3, access.plans);
+        assertFalse(future.isDone());
+        assertEquals(4, access.plans);
+        assertEquals(3, access.original.replans());
+        scheduler.cancel(id, "CANCELLED:owner");
+        assertTrue(future.join().feedback().startsWith("CANCELLED:"));
         assertFalse(scheduler.busy(id));
     }
 

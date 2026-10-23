@@ -2,9 +2,7 @@ package com.neko.mcbot.agentcore.script;
 
 import com.google.gson.*;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
-import com.neko.mcbot.agentcore.loop.SearchPages;
 import com.neko.mcbot.agentcore.loop.TaskPolicy;
-import com.neko.mcbot.agentcore.loop.BodyFacts;
 import com.neko.mcbot.agentcore.loop.WorkFailureMemory;
 import org.luaj.vm2.*;
 import org.luaj.vm2.compiler.LuaC;
@@ -40,8 +38,8 @@ public final class BoundedProgram {
             if (code == null || !code.isJsonPrimitive() || !code.getAsJsonPrimitive().isString()
                     || code.getAsString().isBlank() || bytes(code.getAsString()) > 16384)
                 throw new IllegalArgumentException();
-            return new Plan(code.getAsString(), integer(args, "timeout_seconds", 300, 1, 900),
-                    integer(args, "max_calls", 128, 1, 256));
+            return new Plan(code.getAsString(), integer(args, "timeout_seconds", 0, 0, 900),
+                    integer(args, "max_calls", 0, 0, Integer.MAX_VALUE));
         }
         private static int integer(JsonObject args, String key, int fallback, int min, int max) {
             if (!args.has(key)) return fallback;
@@ -54,7 +52,6 @@ public final class BoundedProgram {
         }
     }
 
-    private static final int INSTRUCTIONS = 250000;
     private static final int SLICE = 25000;
     private static final int CELLS = 65536;
     private static final int STRING_BYTES = 8 * 1024 * 1024;
@@ -73,8 +70,6 @@ public final class BoundedProgram {
     private final Map<String, Integer> feedbackRefs = new LinkedHashMap<>();
     private record QueryReceipt(int number, String name) { }
     private final Map<String, QueryReceipt> queryRefs = new LinkedHashMap<>();
-    private record FailureKey(String tool, JsonObject args, String kind) { }
-    private final Map<FailureKey, Integer> localFailureRepeats = new LinkedHashMap<>();
     private final Map<String, Integer> queryNoteRefs = new LinkedHashMap<>();
     private final Map<String, Long> counts = new LinkedHashMap<>();
     private volatile boolean halted;
@@ -85,16 +80,12 @@ public final class BoundedProgram {
     private volatile ToolOutcome last;
     private volatile String lastTool = "";
     private volatile long started;
-    private int instructions, slice, cells, strings, outputBytes, emptySearches, repeats;
+    private int slice, cells, strings, outputBytes;
     private int queryCalls, expandedQueries, recoveredFailures;
     private boolean needsBodyCheck;
-    private String signature = "";
-    private String bodyFacts;
-    private JsonObject spatialFacts;
     private volatile int sourceLine, opcode = -1;
     private volatile boolean compiled;
     private JsonObject programError;
-    private final SearchPages searchPages = new SearchPages();
 
     public BoundedProgram(Plan plan, LongSupplier clock,
                           BiFunction<String, String, CompletableFuture<ToolOutcome>> execute,
@@ -128,7 +119,7 @@ public final class BoundedProgram {
         abort.run();
         finish(false, reason + " 已完成动作保留，在途效果可能未知。", JsonNull.INSTANCE);
     }
-    private boolean expired() { return clock.getAsLong() - started >= plan.seconds() * 1000L; }
+    private boolean expired() { return plan.seconds() > 0 && clock.getAsLong() - started >= plan.seconds() * 1000L; }
     private void check() {
         if (halted || Thread.currentThread().isInterrupted()) throw new Halt("CANCELLED:组合执行已停止。");
         if (expired()) throw new Halt("TIMEOUT:组合执行时限已到。");
@@ -246,7 +237,9 @@ public final class BoundedProgram {
         var arguments = JsonParser.parseString(args).getAsJsonObject();
         if (needsBodyCheck && !TaskPolicy.observation(name, arguments))
             throw new Halt("STATE_RECHECK_REQUIRED:局部失败后须先status details=true核对位置、维度和完整背包，未派发后续动作。");
-        if (++calls > plan.maxCalls()) throw new Halt("ACTION_LIMIT:组合执行子调用预算已到。");
+        if (plan.maxCalls() > 0 && calls >= plan.maxCalls())
+            throw new Halt("ACTION_LIMIT:已达到本次显式指定的调用上限。");
+        if (calls < Integer.MAX_VALUE) calls++;
         var response = new CompletableFuture<ToolOutcome>();
         waiting = response;
         dispatch.accept(() -> {
@@ -297,48 +290,6 @@ public final class BoundedProgram {
                 && arguments.get("details").getAsBoolean() && completeBody(data)) {
             needsBodyCheck = false;
         }
-        if (receipt.ok() && name.equals("status") && completeBody(data)) {
-            try {
-                String fresh = BodyFacts.fingerprint(data);
-                if (bodyFacts != null && !bodyFacts.equals(fresh)) localFailureRepeats.clear();
-                bodyFacts = fresh;
-                var observed = com.neko.mcbot.agentcore.loop.SpatialFacts.read(data);
-                if (com.neko.mcbot.agentcore.loop.SpatialFacts.changed(spatialFacts, observed))
-                    localFailureRepeats.clear();
-                if (observed != null) spatialFacts = observed;
-            } catch (RuntimeException incomplete) {
-                // An incomplete inventory cannot prove work progress or replenish recovery attempts.
-            }
-        }
-        boolean progress = false;
-        for (String key : COUNTS) {
-            var amount = data.get(key);
-            if (amount != null && amount.isJsonPrimitive() && amount.getAsJsonPrimitive().isNumber()
-                    && amount.getAsDouble() > 0) progress = true;
-        }
-        var gathered = data.get("actual_progress");
-        if (name.equals("gather") && gathered != null && gathered.isJsonPrimitive()
-                && gathered.getAsJsonPrimitive().isNumber() && gathered.getAsDouble() > 0) progress = true;
-        if (progress) emptySearches = 0;
-        var explored = data.get("exploration_advanced");
-        if (name.equals("explore") && explored != null && explored.isJsonPrimitive()
-                && explored.getAsJsonPrimitive().isBoolean() && explored.getAsBoolean()) emptySearches = 0;
-        if (Set.of("scan_area", "find_resource", "search_resource").contains(name) && data.has("no_targets")) {
-            boolean continuation = searchPages.continues(name, args, receipt);
-            if (!data.get("no_targets").getAsBoolean()) emptySearches = 0;
-            else if (!continuation) emptySearches++;
-            if (emptySearches >= 3) throw new Halt("NO_TARGETS:三次搜索未取得目标，停止组合执行。");
-        }
-        String kind = receipt.feedback().split(":", 2)[0];
-        String now = name + "|" + args + "|" + receipt.feedback();
-        // Fresh observations must not let the same failed action evade the no-progress guard.
-        if (progress) localFailureRepeats.clear();
-        else if (!receipt.ok() && localFailureRepeats.merge(
-                new FailureKey(name, arguments.deepCopy(), kind), 1, Integer::sum) >= WorkFailureMemory.FAILURE_LIMIT)
-            throw new Halt("NO_PROGRESS:五次相同局部失败，刷新状态不补充恢复次数。");
-        repeats = progress ? 0 : now.equals(signature) ? repeats + 1 : 1;
-        signature = now;
-        if (repeats >= 5) throw new Halt("NO_PROGRESS:连续五次相同调用及回执，停止组合执行。");
         return receipt;
     }
 
@@ -552,7 +503,7 @@ public final class BoundedProgram {
         @Override public String traceback(int level) { return ""; }
         @Override public void onInstruction(int pc, Varargs args, int top) {
             check();
-            if (++instructions > INSTRUCTIONS || ++slice > SLICE)
+            if (++slice > SLICE)
                 throw new Halt("INSTRUCTION_LIMIT:脚本计算预算已到。");
             Frame frame = frames.peek();
             if (frame == null) return;

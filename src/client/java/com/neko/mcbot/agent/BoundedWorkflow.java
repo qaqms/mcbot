@@ -29,7 +29,7 @@ final class BoundedWorkflow {
             throw new IllegalArgumentException("参数须在16384字节内");
         JsonObject root = JsonParser.parseString(json).getAsJsonObject();
         keys(root, Set.of("steps", "timeout_seconds"));
-        int seconds = root.has("timeout_seconds") ? integer(root.get("timeout_seconds"), 1, 300) : 180;
+        int seconds = root.has("timeout_seconds") ? integer(root.get("timeout_seconds"), 0, 300) : 0;
         var array = root.getAsJsonArray("steps");
         if (array == null || array.isEmpty() || array.size() > 12)
             throw new IllegalArgumentException("步骤数须为1-12");
@@ -75,7 +75,6 @@ final class BoundedWorkflow {
                 }
                 keys(args, permitted);
             }
-            if (items > 128) throw new IllegalArgumentException("请求数量合计须不超过128件");
             steps.add(new Step(tool, args.deepCopy()));
         }
         return new Plan(List.copyOf(steps), seconds, items, blocks);
@@ -226,7 +225,7 @@ final class BoundedWorkflow {
         finish(false, reason);
     }
 
-    private boolean expired() { return clock.getAsLong() - started >= plan.seconds() * 1000L; }
+    private boolean expired() { return plan.seconds() > 0 && clock.getAsLong() - started >= plan.seconds() * 1000L; }
 
     private void next() {
         if (stopped) return;

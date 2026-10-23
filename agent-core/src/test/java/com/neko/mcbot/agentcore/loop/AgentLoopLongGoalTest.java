@@ -12,6 +12,19 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentLoopLongGoalTest {
+    @Test void defaultLoopAndLongGoalContinueBeyondOldRoundAndStageCaps() {
+        assertEquals(0, AgentLoop.Config.defaults().maxStepsPerDirective());
+        var f = new Fixture(0);
+        f.goal("");
+        for (int i = 1; i <= 48; i++) {
+            f.material(i);
+            f.reply();
+            assertTrue(f.finishes.isEmpty(), f.endings.toString());
+        }
+        f.state.getAsJsonObject("inventory").getAsJsonArray("slots").get(0).getAsJsonObject().addProperty("count", 8);
+        f.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.COMPLETED), f.finishes);
+    }
     private static final String GOAL = "{\"item\":\"diamond\",\"count\":3,\"lifecycle\":\"long_term\"";
     private static final class Fixture implements ChatEngine, ToolExecutor, AgentLoop.Listener {
         final List<CompletableFuture<AssistantTurn>> requests = new ArrayList<>();
@@ -77,14 +90,14 @@ class AgentLoopLongGoalTest {
         assertEquals(List.of(51L), f.starts);
         assertEquals(3, f.checkpoints.size());
         assertTrue(f.histories.getLast().stream().anyMatch(m -> m instanceof Msg.Nudge n
-                && n.text().contains("任务开始基线=5") && n.text().contains("阶段已核对=3/8")));
+                && n.text().contains("任务开始基线=5") && n.text().contains("阶段已核对=3/不限")));
         f.state.getAsJsonObject("inventory").getAsJsonArray("slots").get(0).getAsJsonObject().addProperty("count", 8);
         f.reply();
         assertEquals(List.of(AgentLoop.TaskStatus.COMPLETED), f.finishes);
         assertEquals(List.of(51L), f.starts);
     }
 
-    @Test void clocksSlotRearrangementAndToolWearDoNotBuyMoreStages() {
+    @Test void unchangedFactsDoNotAutomaticallyEndTheGoal() {
         var f = new Fixture(); f.goal("");
         f.state.addProperty("game_tick", 999);
         f.reply();
@@ -95,8 +108,9 @@ class AgentLoopLongGoalTest {
         slots.get(1).getAsJsonObject().addProperty("damage", 12);
         f.state.addProperty("hp", 18);
         f.reply();
-        assertEquals(List.of(AgentLoop.TaskStatus.FAILED), f.finishes);
-        assertTrue(f.endings.getLast().startsWith("GOAL_NO_PROGRESS:"));
+        assertTrue(f.finishes.isEmpty());
+        assertEquals(51, f.loop.currentTaskId());
+        f.loop.close();
     }
 
     @Test void revisitingOldFactsDoesNotCountAsFreshProgress() {
@@ -104,7 +118,8 @@ class AgentLoopLongGoalTest {
         f.state.addProperty("x", 4); f.reply();
         f.state.addProperty("x", 0); f.reply();
         f.state.addProperty("x", 4); f.reply();
-        assertTrue(f.endings.getLast().startsWith("GOAL_NO_PROGRESS:"));
+        assertTrue(f.finishes.isEmpty());
+        f.loop.close();
     }
 
     @Test void stageLimitIsImmutableAndGatherCanInheritWithoutChangingIt() {
@@ -166,12 +181,12 @@ class AgentLoopLongGoalTest {
         f.loop.conversation().clear();
         f.material(2); f.reply();
         assertTrue(f.histories.getLast().stream().anyMatch(m -> m instanceof Msg.Nudge n
-                && n.text().contains("物品目标=minecraft:diamond") && n.text().contains("阶段已核对=1/8")));
+                && n.text().contains("物品目标=minecraft:diamond") && n.text().contains("阶段已核对=1/不限")));
         f.loop.close();
     }
 
     @Test void malformedLifecycleOptionsCannotRegisterOrWidenTheGoal() {
-        for (String suffix : List.of(",\"max_runs\":0", ",\"max_runs\":17", ",\"max_runs\":1.5",
+        for (String suffix : List.of(",\"max_runs\":-1", ",\"max_runs\":2147483648", ",\"max_runs\":1.5",
                 ",\"max_runs\":\"8\"", ",\"max_runs\":null")) {
             var f = new Fixture(); f.goal(suffix);
             assertFalse(f.receipt().ok(), suffix);

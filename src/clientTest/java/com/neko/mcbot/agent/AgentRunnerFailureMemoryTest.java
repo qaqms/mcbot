@@ -25,7 +25,9 @@ class AgentRunnerFailureMemoryTest {
         runner.handleS2c(receipt(client.lastTool().num("seq", -1), true, "fresh", state));
         exhaust();
         var denied = runner.execute("move_to", POINT); client.drain();
-        assertTrue(denied.join().feedback().startsWith("REPEATED_FAILURE:"));
+        assertFalse(denied.isDone());
+        fail(6);
+        assertTrue(denied.join().feedback().startsWith("NO_PATH:"));
         state.getAsJsonObject("spatial_facts").getAsJsonObject("chunks").addProperty("0,0", "chunk:2");
         runner.execute("status", "{\"details\":true}"); client.drain();
         runner.handleS2c(receipt(client.lastTool().num("seq", -1), true, "fresh terrain", state));
@@ -85,7 +87,7 @@ class AgentRunnerFailureMemoryTest {
         }
     }
 
-    @Test void changingProgramsOrUsingDirectCallsCannotRepeatTheSameFailedWorkForever() {
+    @Test void directAndProgramAttemptsContinueBeyondFiveRealFailures() {
         start();
         for (int i = 0; i < 6; i++) {
             if (i % 2 == 0) {
@@ -96,19 +98,17 @@ class AgentRunnerFailureMemoryTest {
                 client.engine().tools(i, new ToolCall("attempt" + i, "run_program", program.toString()));
             }
             client.drain();
-            if (i < 5) {
-                long expected = i + 1;
-                until(() -> client.toolCount() == expected);
-                fail(i);
-            }
+            long expected = i + 1;
+            until(() -> client.toolCount() == expected);
+            fail(i);
             int nextTurn = i + 2;
             until(() -> client.engine().responses.size() == nextTurn);
         }
-        assertEquals(5, client.toolCount(), "the sixth attempt must never reach the server");
+        assertEquals(6, client.toolCount(), "the sixth attempt must receive a real server result");
         var result = client.engine().histories.getLast().stream().filter(Msg.Tool.class::isInstance)
                 .map(Msg.Tool.class::cast).filter(t -> t.callId().equals("attempt5")).findFirst().orElseThrow();
-        assertFalse(result.ok());
-        assertTrue(result.content().contains("REPEATED_FAILURE:"), result.content());
+        assertTrue(result.ok());
+        assertTrue(result.content().contains("NO_PATH:"), result.content());
     }
 
     @Test void jobAcknowledgmentsProgressAndDuplicateTerminalsDoNotSpendExtraAttempts() {
@@ -134,10 +134,10 @@ class AgentRunnerFailureMemoryTest {
         }
         var blocked = runner.execute("move_to", POINT);
         client.drain();
-        assertEquals(5, client.toolCount());
-        assertTrue(blocked.isDone());
-        assertTrue(blocked.join().feedback().startsWith("REPEATED_FAILURE:"));
-        assertFalse(blocked.join().data().getAsJsonObject("failure_memory").get("dispatched").getAsBoolean());
+        assertEquals(6, client.toolCount());
+        assertFalse(blocked.isDone());
+        fail(6);
+        assertTrue(blocked.join().feedback().startsWith("NO_PATH:"));
     }
 
     @Test void freshBodyFactsPermitReevaluationButClockAndNoopDoNot() {
@@ -160,8 +160,9 @@ class AgentRunnerFailureMemoryTest {
         noop.join();
         var blocked = runner.execute("move_to", POINT);
         client.drain();
-        assertTrue(blocked.isDone(), "clock and no-op must not replenish attempts");
-        assertTrue(blocked.join().feedback().startsWith("REPEATED_FAILURE:"));
+        assertFalse(blocked.isDone(), "failure evidence must not prohibit dispatch");
+        fail(6);
+        assertTrue(blocked.join().feedback().startsWith("NO_PATH:"));
         state.addProperty("x", state.get("x").getAsInt() + 1);
         runner.execute("status", "{\"details\":true}");
         client.drain();
@@ -189,9 +190,10 @@ class AgentRunnerFailureMemoryTest {
         runner.handleS2c(receipt(seq, false, "PARTIAL:old terrain effect", changed));
         var blocked = runner.execute("move_to", POINT);
         client.drain();
-        assertTrue(blocked.isDone());
-        assertTrue(blocked.join().feedback().startsWith("REPEATED_FAILURE:"));
-        assertEquals(11, client.toolCount());
+        assertFalse(blocked.isDone());
+        fail(6);
+        assertTrue(blocked.join().feedback().startsWith("NO_PATH:"));
+        assertEquals(12, client.toolCount());
     }
 
     @Test void nestedWorkflowUsesTheSamePrimitiveLedgerAndCannotContinueAfterRefusal() {
@@ -210,9 +212,13 @@ class AgentRunnerFailureMemoryTest {
         }
         var blocked = runner.execute("workflow", plan);
         client.drain();
+        assertFalse(blocked.isDone());
+        runner.handleS2c(receipt(client.lastTool().num("seq", -1), false,
+                "TARGET_BLOCKED:actual sixth failure", new JsonObject()));
+        client.drain();
         assertTrue(blocked.isDone());
-        assertTrue(blocked.join().feedback().contains("REPEATED_FAILURE:"));
-        assertEquals(5, client.toolCount());
+        assertTrue(blocked.join().feedback().contains("TARGET_BLOCKED:actual sixth failure"));
+        assertEquals(6, client.toolCount());
         assertTrue(client.sent.stream().noneMatch(e -> e.kind().equals("tool_call") && e.str("tool").equals("inventory")));
     }
 
@@ -258,9 +264,10 @@ class AgentRunnerFailureMemoryTest {
         assertTrue(old.isDone());
         var blocked = runner.execute("move_to", POINT);
         client.drain();
-        assertTrue(blocked.isDone());
-        assertTrue(blocked.join().feedback().startsWith("REPEATED_FAILURE:"));
-        assertEquals(6, client.toolCount());
+        assertFalse(blocked.isDone());
+        fail(6);
+        assertTrue(blocked.join().feedback().startsWith("NO_PATH:"));
+        assertEquals(7, client.toolCount());
     }
 
     @Test void aLongGoalCheckpointRetainsFailureEvidenceWhenBodyFactsAreUnchanged() {
@@ -286,8 +293,9 @@ class AgentRunnerFailureMemoryTest {
         assertEquals(3, client.engine().responses.size());
         var blocked = runner.execute("move_to", POINT);
         client.drain();
-        assertTrue(blocked.isDone());
-        assertTrue(blocked.join().feedback().startsWith("REPEATED_FAILURE:"));
+        assertFalse(blocked.isDone());
+        fail(6);
+        assertTrue(blocked.join().feedback().startsWith("NO_PATH:"));
         assertEquals(1, client.sent.stream().filter(e -> e.kind().equals("task_begin")).count());
     }
 
@@ -307,7 +315,7 @@ class AgentRunnerFailureMemoryTest {
         client.drain();
     }
 
-    @Test void restartingGatherCannotRefreshThePrimitiveFailureAllowance() {
+    @Test void gatherContinuesToUseRealPrimitiveResultsBeyondFiveFailures() {
         start();
         String args = "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1,"
                 + "\"scope\":\"subtask\",\"explore_steps\":0}";
@@ -329,8 +337,10 @@ class AgentRunnerFailureMemoryTest {
         var next = runner.execute("gather", args);
         client.drain();
         gatherToMining();
+        assertFalse(next.isDone());
+        fail(6);
         assertTrue(next.isDone());
-        assertTrue(next.join().feedback().contains("REPEATED_FAILURE:"), next.join().feedback());
-        assertEquals(before + 3, client.toolCount(), "fresh queries run, but the repeated dig does not");
+        assertTrue(next.join().feedback().contains("NO_PATH:"), next.join().feedback());
+        assertEquals(before + 4, client.toolCount(), "fresh queries and the actual dig all run");
     }
 }

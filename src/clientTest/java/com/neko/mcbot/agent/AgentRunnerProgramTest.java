@@ -15,6 +15,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class AgentRunnerProgramTest {
+    @Test void omittedProgramLimitsAllowMoreThan128PrimitivesAndFiveMinutes() {
+        runner.start();
+        runner.submitTask("observe repeatedly");
+        client.engine().tools(0, new ToolCall("program", "run_program",
+                "{\"code\":\"for i=1,140 do mc.call('inventory',{}) end return 140\"}"));
+        client.drain();
+        for (int i = 1; i <= 140; i++) {
+            tool("inventory", i);
+            client.now += 10000;
+            receipt(true, "fresh inventory", "{}");
+        }
+        assertTrue(outcome().ok(), outcome().content());
+        assertEquals(140, client.toolCount());
+        assertTrue(outcome().content().contains("实际原子调用=140"));
+    }
     private final OfflineAgentClient client = new OfflineAgentClient();
     private final AgentRunner runner = client.create();
     @AfterEach void close() { runner.close(); client.drain(); }
@@ -141,10 +156,12 @@ class AgentRunnerProgramTest {
         until(() -> client.engine().responses.size() >= 3);
         assertFalse(outcome().ok());
         program(2, "return mc.call('follow',{seconds=1})", 1);
+        tool("follow", 10);
+        receipt(false, "NO_PATH:sixth real terminal", "{\"goal_satisfied\":false}");
         until(() -> client.engine().responses.size() >= 4);
         assertFalse(outcome().ok());
-        assertTrue(outcome().content().contains("REPEATED_FAILURE:"));
-        assertEquals(9, client.toolCount());
+        assertTrue(outcome().content().contains("NO_PATH:sixth real terminal"));
+        assertEquals(10, client.toolCount());
     }
 
     @Test void followDurationDoesNotCompleteOrReplaceAnOriginalLongTermItemGoal() {
@@ -952,7 +969,11 @@ class AgentRunnerProgramTest {
     }
 
     @Test void timeoutCancelsAcceptedChildAndNeverSendsADependentAction() {
-        start("wait then craft", "mc.call('wait',{seconds=1}) mc.call('craft',{item='stick',count=4})");
+        runner.start();
+        runner.submitTask("wait then craft");
+        client.engine().tools(0, new ToolCall("program", "run_program",
+                "{\"code\":\"mc.call('wait',{seconds=1}) mc.call('craft',{item='stick',count=4})\",\"timeout_seconds\":300}"));
+        client.drain();
         tool("wait", 1);
         long seq = client.lastTool().num("seq", -1);
         ack("waiting");
