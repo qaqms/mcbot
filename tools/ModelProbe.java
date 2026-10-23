@@ -6,7 +6,7 @@ import com.neko.mcbot.agentcore.llm.LlmFailure;
 import com.neko.mcbot.agentcore.llm.ModelConnectionTest;
 import com.neko.mcbot.agentcore.llm.Msg;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
-import com.neko.mcbot.agentcore.prompt.SkillLoader;
+import com.neko.mcbot.agentcore.prompt.SkillCatalog;
 import com.neko.mcbot.agentcore.provider.OpenAiCompatProvider;
 
 import java.nio.file.Files;
@@ -36,8 +36,8 @@ class ModelProbe {
                 System.out.println("tool_round_trip=" + compatible);
             } else {
                 String persona = config.has("persona") ? config.get("persona").getAsString() : "";
-                String prompt = PromptBuilder.build(persona,
-                        SkillLoader.load(configPath.getParent().resolve("skills")));
+                String prompt = PromptBuilder.build(persona, List.of())
+                        + SkillCatalog.load(configPath.getParent().resolve("skills")).promptIndex();
                 var turn = engine.chat(prompt,
                         List.of(new Msg.User("查看自己的状态，然后扫描附近并简报。")),
                         ToolCatalog.MODEL_SPECS).get(50, TimeUnit.SECONDS);

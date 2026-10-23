@@ -67,6 +67,12 @@ final class OfflineAgentClient implements AgentRunner.ClientServices {
     boolean liveObservation;
     boolean failSave;
     com.neko.mcbot.agentcore.loop.GoalJournal journal;
+    java.nio.file.Path skillsDirectory;
+    int skillLoads;
+    @Override public com.neko.mcbot.agentcore.prompt.SkillCatalog skills() {
+        skillLoads++;
+        return com.neko.mcbot.agentcore.prompt.SkillCatalog.load(skillsDirectory);
+    }
     @Override public com.neko.mcbot.agentcore.loop.GoalJournal goalJournal() { return journal; }
 
     AgentRunner create() {

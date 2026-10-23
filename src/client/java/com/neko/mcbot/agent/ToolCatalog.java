@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.neko.mcbot.agentcore.llm.ToolSpec;
 import com.neko.mcbot.agentcore.loop.ToolExecutor.ToolOutcome;
+import com.neko.mcbot.agentcore.prompt.SkillCatalog;
 import com.neko.mcbot.agentcore.script.BoundedProgram;
 
 import java.util.List;
@@ -99,12 +100,22 @@ public final class ToolCatalog {
     }
 
     static ToolOutcome read(String json) {
+        return read(json, SkillCatalog.empty());
+    }
+
+    static ToolOutcome read(String json, SkillCatalog skills) {
         try {
             if (json == null || json.length() > 1024) throw new IllegalArgumentException();
             var args = JsonParser.parseString(json).getAsJsonObject();
             var schema = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("tool_help"))
                     .findFirst().orElseThrow();
             BoundedWorkflow.validate(args, JsonParser.parseString(schema.paramsJsonSchema()).getAsJsonObject());
+            if (args.has("names") && args.getAsJsonArray("names").asList().stream()
+                    .anyMatch(value -> value.getAsString().startsWith("skill:"))) {
+                if (args.getAsJsonArray("names").size() != 1) return new ToolOutcome(false,
+                        "SKILL_SINGLE_READ:技能正文每次只读一页，请单独使用目录name或返回的next_name。");
+                return skills.read(args.getAsJsonArray("names").get(0).getAsString());
+            }
             var data = new JsonObject();
             if (!args.has("names")) {
                 var index = new JsonArray();
@@ -115,6 +126,9 @@ public final class ToolCatalog {
                     index.add(entry);
                 }
                 data.add("tools", index);
+                var knowledge = skills.index();
+                data.add("skills", knowledge.get("skills"));
+                data.add("skill_diagnostics", knowledge.get("skill_diagnostics"));
             } else {
                 var definitions = new JsonArray();
                 for (var name : args.getAsJsonArray("names")) {

@@ -183,7 +183,9 @@ public final class ClientToolDefs {
                     + "burn_remaining_ticks、fuel_sufficient_for_input、suggested_wait_seconds描述机器。"
                     + "实际装取看loaded_input_count/loaded_fuel_count/taken_count；装料不表示产物已完成。";
             case "tool_help" -> "有names时data.definitions是[{name,description,parameters,returns}]；"
-                    + "省略names时data.tools是[{name,summary}]。说明自动展示，无须tostring表；同任务直接复用。";
+                    + "省略names时data.tools是[{name,summary}]，data.skills为技能索引。"
+                    + "单独传技能目录name可读data.body/page/pages/revision，续页照next_name。"
+                    + "说明自动展示，无须tostring表；同revision且上下文仍有正文时复用。";
             case "run_program" -> "data.returned保留Lua返回原值；api_calls/terminal_calls/query_calls/"
                     + "primitive_calls记录原预算；last_tool/last_receipt是最后子调用。"
                     + "错误时program_error?={kind,line}；line为本段源码行，0表示无法定位。"
@@ -221,6 +223,7 @@ public final class ClientToolDefs {
                             + "\"max_calls\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":256}},"
                             + "\"required\":[\"code\"],\"additionalProperties\":false}"),
             new ToolSpec("tool_help", "只读查询已注册工具的完整说明、参数Schema和返回字段。names一次1-3项；省略返回能力目录。"
+                    + "也可单独传技能目录name按需读一页正文，续页照next_name；技能仅作知识，不授予权限。"
                     + "参数或结果字段不清楚时先读说明并在同一任务复用；Lua内调用的帮助也会展示给模型。",
                     "{\"type\":\"object\",\"properties\":{\"names\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":3,"
                             + "\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":32}}},\"additionalProperties\":false}"),

@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
- * 组装 system prompt：基础准则 + 人设 + 技能笔记（Markdown 原文拼接）。
+ * 组装 system prompt：基础准则 + 人设 + 技能目录；正文由本地帮助按需读取。
  *
  * 静态 build() 是无状态拼串（兼容旧调用方：宿主自己决定何时读盘）。
  * 实例形态是 R2-B 的前缀缓存：源（persona/skills 读盘等）只在构造与"换发"时读，

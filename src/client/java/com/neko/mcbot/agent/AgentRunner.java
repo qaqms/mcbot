@@ -14,7 +14,7 @@ import com.neko.mcbot.agentcore.loop.WorkFailureMemory;
 import com.neko.mcbot.agentcore.loop.GoalCheckpoint;
 import com.neko.mcbot.agentcore.loop.GoalJournal;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
-import com.neko.mcbot.agentcore.prompt.SkillLoader;
+import com.neko.mcbot.agentcore.prompt.SkillCatalog;
 import com.neko.mcbot.agentcore.script.BoundedProgram;
 import com.neko.mcbot.bridge.BridgeEvents;
 import com.neko.mcbot.cfg.ClientConfig;
@@ -135,6 +135,7 @@ public final class AgentRunner implements ToolExecutor {
     private long bodyObservedAt;
     private long companionGeneration;
     private PromptBuilder sessionPrompt;
+    private SkillCatalog sessionSkills = SkillCatalog.empty();
     private volatile long currentTask;
     private volatile String companionName = "";
     private volatile java.util.UUID companionUuid;
@@ -169,6 +170,7 @@ public final class AgentRunner implements ToolExecutor {
         boolean isCurrentRunner(AgentRunner owner);
         CompletableFuture<ToolOutcome> observe(AgentRunner owner, long taskId);
         default GoalJournal goalJournal() { return null; }
+        default SkillCatalog skills() { return SkillCatalog.empty(); }
     }
 
     private static final class MinecraftServices implements ClientServices {
@@ -185,10 +187,12 @@ public final class AgentRunner implements ToolExecutor {
 
         @Override
         public PromptBuilder prompt(ClientConfig cfg) {
-            return new PromptBuilder(() -> PromptBuilder.build(cfg.persona, SkillLoader.load(
-                    FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"))));
+            return new PromptBuilder(() -> PromptBuilder.build(cfg.persona, List.of()));
         }
 
+        @Override public SkillCatalog skills() {
+            return SkillCatalog.load(FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"));
+        }
         @Override
         public void showChat(String text) {
             Minecraft mc = Minecraft.getInstance();
@@ -243,11 +247,17 @@ public final class AgentRunner implements ToolExecutor {
             return;
         }
         // R2-B：prefix 缓存也接上了——启动读一次盘，指令边界才允许换发（链中不换=不裂前缀）。
-        sessionPrompt = new PromptBuilder(() -> client.prompt(this.cfg).get());
+        sessionPrompt = new PromptBuilder(() -> {
+            sessionSkills = client.skills();
+            return client.prompt(this.cfg).get() + sessionSkills.promptIndex();
+        });
         loop = new AgentLoop(engine, ToolCatalog.MODEL_SPECS, this, AgentLoop.Config.defaults(),
                 new AgentLoop.Listener() {
                     @Override
                     public void onTaskStarted(long taskId) {
+                        // Refresh at the actual start, including queued tasks and explicit recovery.
+                        sessionPrompt.reloadSkills();
+                        sessionPrompt.onDirectiveBoundary();
                         currentTask = taskId;
                         taskBubble.begin(taskId, panelHistory.tasks().stream()
                                 .filter(t -> t.id() == taskId).map(PanelHistory.Task::title).findFirst().orElse(""));
@@ -414,14 +424,12 @@ public final class AgentRunner implements ToolExecutor {
             say("§7[mcbot] 执行模式已切换，旧任务已停止；下一条指令按新模式执行。§r");
         }
         if (!cfg.connectionChanged(newCfg)) {
-            boolean personaChanged = !cfg.persona.equals(newCfg.persona);
             cfg = newCfg;
             if (loop != null) {
                 loop.configureContext(cfg.preferences.compactThreshold(),
                         cfg.preferences.recentBudget(), cfg.preferences.autoCompact());
                 loop.configureWindow(cfg.preferences.contextWindow());
             }
-            if (personaChanged && sessionPrompt != null) sessionPrompt.reloadSkills();
             return;
         }
         shutdownBrain();
@@ -1312,7 +1320,7 @@ public final class AgentRunner implements ToolExecutor {
         if (bodyUnavailable) return CompletableFuture.completedFuture(ToolOutcome.synthetic("BODY_DIED:原身体已终止。"));
         if (!blockSavedGoal()) return CompletableFuture.completedFuture(new ToolOutcome(false,
                 "CHECKPOINT_UNAVAILABLE:无法保存派发前的在途标记，未执行。"));
-        if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(argsJson));
+        if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(argsJson, sessionSkills));
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
         }
@@ -1550,7 +1558,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private CompletableFuture<ToolOutcome> executeProgramChild(String name, String json) {
-        if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(json));
+        if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(json, sessionSkills));
         if ("search_resource".equals(name)) return executeSearch(json, true);
         if ("explore".equals(name)) return executeExplore(json, true);
         if ("workflow".equals(name)) return executeWorkflow(json, true);

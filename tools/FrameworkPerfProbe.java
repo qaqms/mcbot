@@ -10,6 +10,7 @@ import com.neko.mcbot.agentcore.loop.GoalCheckpoint;
 import com.neko.mcbot.agentcore.loop.GoalJournal;
 import com.neko.mcbot.agentcore.loop.ToolExecutor;
 import com.neko.mcbot.agentcore.prompt.PromptBuilder;
+import com.neko.mcbot.agentcore.prompt.SkillCatalog;
 import com.neko.mcbot.agentcore.provider.OpenAiCompatProvider;
 import com.neko.mcbot.path.PathSteering;
 
@@ -33,6 +34,7 @@ class FrameworkPerfProbe {
         Locale.setDefault(Locale.ROOT);
         System.out.println("scope=offline synthetic_inputs=true native_game=false model_network=false");
         payload();
+        knowledge();
         parkedLoop();
         steering();
         journal();
@@ -73,7 +75,7 @@ class FrameworkPerfProbe {
         sizes.stream().limit(10).forEach(s -> System.out.println("largest_tool " + s));
         for (int size : new int[]{0, 4096, 16384}) {
             String prompt = PromptBuilder.build("", size == 0 ? List.of() : List.of("x".repeat(size)));
-            System.out.printf("synthetic_skills ascii_body_bytes=%d request_bytes=%d%n",
+            System.out.printf("synthetic_full_text ascii_body_bytes=%d request_bytes=%d%n",
                     size, bytes(provider.buildBody(prompt, history, specs).toString()));
         }
         for (int i = 0; i < 30; i++)
@@ -85,6 +87,84 @@ class FrameworkPerfProbe {
             times[i] = System.nanoTime() - before;
         }
         timing("serialize_base_and_tools_warm_jvm", times);
+    }
+
+    private static void knowledge() throws Exception {
+        Path output = Path.of("build").toAbsolutePath().normalize();
+        Files.createDirectories(output);
+        Path directory = Files.createTempDirectory(output, "framework-perf-skills-");
+        try {
+            var provider = new OpenAiCompatProvider("offline", "http://127.0.0.1", "unused", "fixture");
+            String base = PromptBuilder.build("", List.of());
+            StringBuilder full = new StringBuilder(base);
+            for (int i = 0; i < 4; i++) {
+                String file = "note" + i + ".md", body = "x".repeat(16384);
+                Files.writeString(directory.resolve(file), body, StandardCharsets.UTF_8);
+                full.append("\n# \u6280\u80fd\u7b14\u8bb0\n## ").append(file).append('\n').append(body).append('\n');
+            }
+            var catalog = SkillCatalog.load(directory);
+            String indexed = base + catalog.promptIndex();
+            var history = new ArrayList<Msg>();
+            history.add(new Msg.User("offline measurement"));
+            int fullFirst = bytes(provider.buildBody(full.toString(), history, ToolCatalog.MODEL_SPECS).toString());
+            int indexedFirst = bytes(provider.buildBody(indexed, history, ToolCatalog.MODEL_SPECS).toString());
+            long cumulative = indexedFirst, onePage = 0;
+            int reads = 0;
+            for (var value : catalog.index().getAsJsonArray("skills")) {
+                String selector = value.getAsJsonObject().get("name").getAsString();
+                do {
+                    String args = "{\"names\":[\"" + selector + "\"]}", id = "knowledge-" + reads;
+                    var receipt = catalog.read(selector);
+                    if (!receipt.ok()) throw new AssertionError(receipt.feedback());
+                    history.add(new Msg.Assistant("", List.of(new ToolCall(id, "tool_help", args))));
+                    history.add(new Msg.Tool(id, "tool_help", receipt.feedback(), true));
+                    cumulative += bytes(provider.buildBody(indexed, history, ToolCatalog.MODEL_SPECS).toString());
+                    if (++reads == 1) onePage = cumulative;
+                    var data = receipt.data();
+                    selector = data.has("next_name") ? data.get("next_name").getAsString() : null;
+                } while (selector != null);
+            }
+            System.out.printf("knowledge synthetic_notes=4 body_bytes=65536 index_utf8=%d full_first_request=%d"
+                            + " indexed_first_request=%d no_read_extra_turns=0 one_page_extra_turns=1"
+                            + " one_page_cumulative_request_bytes=%d serial_all_pages_extra_turns=%d"
+                            + " serial_all_pages_cumulative_request_bytes=%d actual_model_calls=0%n",
+                    bytes(catalog.promptIndex()), fullFirst, indexedFirst, onePage, reads, cumulative);
+            var batchedHistory = new ArrayList<Msg>();
+            batchedHistory.add(new Msg.User("offline measurement"));
+            var pending = new ArrayList<String>();
+            for (var value : catalog.index().getAsJsonArray("skills"))
+                pending.add(value.getAsJsonObject().get("name").getAsString());
+            long batchedBytes = indexedFirst;
+            int rounds = 0, batchedCalls = 0;
+            while (!pending.isEmpty()) {
+                var calls = new ArrayList<ToolCall>();
+                var results = new ArrayList<Msg>();
+                var next = new ArrayList<String>();
+                for (String selector : pending) {
+                    String id = "batch-knowledge-" + batchedCalls++;
+                    calls.add(new ToolCall(id, "tool_help", "{\"names\":[\"" + selector + "\"]}"));
+                    var receipt = catalog.read(selector);
+                    results.add(new Msg.Tool(id, "tool_help", receipt.feedback(), true));
+                    var data = receipt.data();
+                    if (data.has("next_name")) next.add(data.get("next_name").getAsString());
+                }
+                batchedHistory.add(new Msg.Assistant("", calls));
+                batchedHistory.addAll(results);
+                batchedBytes += bytes(provider.buildBody(indexed, batchedHistory, ToolCatalog.MODEL_SPECS).toString());
+                pending = next;
+                rounds++;
+            }
+            System.out.printf("knowledge_batched max_independent_notes_per_turn=4 all_pages_extra_turns=%d"
+                    + " help_calls=%d cumulative_request_bytes=%d actual_model_calls=0%n",
+                    rounds, batchedCalls, batchedBytes);
+            timing("catalog_load_four_16k_notes", sample(20,
+                    () -> sink = SkillCatalog.load(directory).promptIndex().length()));
+        } finally {
+            try (var files = Files.list(directory)) {
+                for (Path file : files.toList()) Files.delete(file);
+            }
+            Files.delete(directory);
+        }
     }
 
     private static void parkedLoop() {

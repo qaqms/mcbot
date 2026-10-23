@@ -3,6 +3,16 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## K1 知识目录与任务快照（2026-10-23）
+
+SkillCatalog在客户端从旧顶层Markdown/可选defaults和index.json生成有界不可变知识快照。
+AgentRunner在启动与原onTaskStarted实际开始事件刷新，同PromptBuilder生成常驻目录，
+直接或Lua的tool_help从同一快照按name/next_name读取正文；链中/摘要不重新读盘换内容。
+本地覆盖、禁用和坏设置保守处理，旧上下文正文不靠“已加载”标志保留，整理后从索引重读。
+仍31工具/原参数Schema，无任意文件访问或服务端知识权限；原动作核/任务账不变。
+这是模型上下文按需披露，本地仍有边界预读成本；机制、错误和发现轮次代价见
+K1-SKILL-KNOWLEDGE-2026-10-23。下方技能全量描述为历史检查点。
+
 ## L2 目标数据恢复（2026-10-17）
 
 GoalJournal在客户端按世界/主人/同伴范围保存原AgentLoop长期目标和host累计账；
