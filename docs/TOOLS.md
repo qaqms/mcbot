@@ -3,6 +3,18 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 地下导航更新（2026-10-24）
+
+机制、日志及限制见[地下导航修正](UNDERGROUND-SEGMENTS-2026-10-24.md)，最终证据见STATUS。
+explore.radius/gather.explore_radius省略或0不限任务总半径，显式正数选择有限范围；
+gather.r仍是单次感知半径。既有有限任务配置/恢复记录不静默扩大。
+move_to支持已加载远目标，内部局部窗口随实际落点分段继续，模型无需每段重发。
+已有可行路线不因改善阶段节点耗尽而丢弃；中间段不能报原目标已到达。
+观察及终态增加segments（已交接中间段数）、search_nodes_used/search_nodes_limit。
+仍保留每段4000节点/32768记录及按初始距离分配的整趟资源，真实耗尽会返回NO_PROGRESS；
+权限、取消、地形保护和显式有限范围不放宽，无按失败次数禁发旧终点的规则。
+编辑后台化及行进中提前接续未完成，不保证全程不停顿。
+
 ## 当前执行限制（2026-10-23）
 
 攻击/挖掘后续覆盖见[ACTION-LIMITS-AND-GATHER](ACTION-LIMITS-AND-GATHER-2026-10-23.md)。

@@ -5,6 +5,17 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationBudgetTest {
+    @Test void tripRemainderAlsoBoundsTheSharedPerSearchAccount() {
+        var budget = new NavigationBudget();
+        var route = budget.search(FLOOR, 0, 0, 0, 30, 0, 0,
+                NavigationGoal.position(30, 0, 0, 0), 7);
+        while (!route.advance(100)) { }
+        budget.observe(route);
+        assertEquals("NODES", route.budgetKind());
+        assertEquals(7, route.expanded() + route.estimateExpanded());
+        assertNull(budget.search(FLOOR, 0, 0, 0, 30, 0, 0,
+                NavigationGoal.position(30, 0, 0, 0), 0));
+    }
     @Test void oldDefaultSnapshotMigratesToPerSearchPolicyWithoutLosingDiagnostics() {
         var old = new NavigationBudget(8000, 32768, 400_000_000L, 2).snapshot();
         old.remove("per_search");

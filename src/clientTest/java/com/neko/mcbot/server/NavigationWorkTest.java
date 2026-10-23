@@ -191,4 +191,63 @@ class NavigationWorkTest {
         assertNull(up.failure());
         assertTrue(up.path().stream().allMatch(s -> s.dig().isEmpty() && s.place().isEmpty()));
     }
+
+    @Test void segmentedShortUndergroundRoutesUseNativeCollisionAndEveryOrderedMiningRay() {
+        for (int targetY : new int[]{1, 5}) {
+            var world = new BlockAimTest.Grid();
+            world.blocks.clear();
+            for (int x = -4; x <= 8; x++) for (int y = -4; y <= 10; y++)
+                for (int z = -4; z <= 4; z++)
+                    world.blocks.put(new BlockPos(x, y, z), Blocks.STONE.defaultBlockState());
+            world.blocks.remove(new BlockPos(0, 5, 0));
+            world.blocks.remove(new BlockPos(0, 6, 0));
+            var geometry = new StandingGeometry(new StandingGeometry.Access() {
+                @Override public boolean known(BlockPos pos) { return world.loaded(pos); }
+                @Override public List<net.minecraft.world.phys.AABB> boxes(BlockPos pos) {
+                    return StandingGeometry.collision(world.getBlockState(pos), world, pos);
+                }
+            }, .6, 1.8, .6);
+            var spec = new PathSpec(false, false, true, Integer.MAX_VALUE, null, 0);
+            DigSampler terrain = new DigSampler() {
+                @Override public com.neko.mcbot.path.NavigationGeometry geometry() { return geometry; }
+                @Override public boolean passable(int x, int y, int z) {
+                    return !world.blocks.containsKey(new BlockPos(x, y, z));
+                }
+                @Override public boolean support(int x, int y, int z) { return !passable(x, y, z); }
+                @Override public double digSeconds(int x, int y, int z) { return 1; }
+                @Override public boolean placeable(int x, int y, int z) { return false; }
+                @Override public double placeCost(int x, int y, int z) { return INFEASIBLE; }
+                @Override public int maxPlaces() { return 0; }
+                @Override public boolean inBounds(int x, int y, int z) {
+                    return Math.abs(x) <= 6 && y >= -3 && y <= 9 && Math.abs(z) <= 3;
+                }
+                @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
+                    return spec.allowsStep(fx, fy, fz, x, y, z);
+                }
+                @Override public boolean canClear(int x, int y, int z, List<Long> cells, TerrainEdits edits) {
+                    return NavigationWork.canClear(world, new BlockPos(x, y, z), 1.62, 4.5, cells, edits, geometry);
+                }
+            };
+            int original = world.blocks.size();
+            var route = new DigAStar(terrain, 0, 5, 0, 4, targetY, 0, 4000, Integer.MAX_VALUE,
+                    NavigationGoal.position(4, targetY, 0, 0)).segments();
+            while (!route.advance(300)) { }
+            assertNull(route.failure(), route.failure());
+            assertFalse(route.segmentEnd());
+            assertEquals(original, world.blocks.size(), "planning must not edit the native block map");
+            var from = route.path().getFirst();
+            for (var step : route.path().subList(1, route.path().size())) {
+                assertTrue(NavigationWork.canClear(world, new BlockPos(from.x(), from.y(), from.z()),
+                        1.62, 4.5, step.dig(), TerrainEdits.EMPTY, geometry));
+                for (long cell : step.dig())
+                    assertNotNull(world.blocks.remove(new BlockPos(DigAStar.unpackX(cell),
+                            DigAStar.unpackY(cell), DigAStar.unpackZ(cell))));
+                assertNotNull(geometry.standing(step.x(), step.y(), step.z(), TerrainEdits.EMPTY));
+                assertNotEquals(com.neko.mcbot.path.NavigationGeometry.Motion.BLOCKED,
+                        geometry.motion(from.x(), from.feetY(), from.z(), step.x(), step.feetY(), step.z(), TerrainEdits.EMPTY));
+                from = step;
+            }
+            assertEquals(4, from.x()); assertEquals(targetY, from.y());
+        }
+    }
 }

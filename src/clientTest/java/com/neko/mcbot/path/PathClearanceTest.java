@@ -9,6 +9,32 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PathClearanceTest {
+    @Test void productionSearchContinuesPastTheOldWholeTripBoxUsingRecenteredWindows() {
+        var from = net.minecraft.core.BlockPos.ZERO;
+        var target = new net.minecraft.core.BlockPos(100, 0, 0);
+        int segments = 0;
+        while (!from.equals(target)) {
+            int anchor = from.getX();
+            DigSampler floor = new Cells() {
+                @Override public boolean inBounds(int x, int y, int z) {
+                    return Math.abs(x - anchor) <= 64 && y >= -1 && y <= 3 && Math.abs(z) <= 4;
+                }
+                @Override public boolean passable(int x, int y, int z) { return y >= 0; }
+                @Override public boolean support(int x, int y, int z) { return y == -1; }
+                @Override public double digSeconds(int x, int y, int z) { return INFEASIBLE; }
+            };
+            var route = PathTask.searchFor(floor, from, target, true, true);
+            while (!route.advance(300)) { }
+            assertNull(route.failure(), route.failure());
+            assertTrue(PathTask.editsFeasible(PathTask.liveSteps(route.path(), 0, floor), floor));
+            var end = route.path().getLast();
+            assertTrue(end.x() > from.getX());
+            assertEquals(end.x() != 100, route.segmentEnd());
+            from = new net.minecraft.core.BlockPos(end.x(), end.y(), end.z());
+            assertTrue(++segments <= 4);
+        }
+        assertEquals(4, segments);
+    }
     @Test void productionSearchAndLiveValidationAgreeOnDescendingWorkAndWalkingBack() {
         var blocks = new HashSet<Long>();
         for (int x = 0; x < 4; x++) for (int y = 0; y < 4; y++) blocks.add(DigAStar.pack(x, y, 0));
@@ -67,7 +93,7 @@ class PathClearanceTest {
         assertNull(working.failure());
         assertTrue(working.path().stream().anyMatch(step -> !step.dig().isEmpty()));
     }
-    private static final class Cells implements DigSampler {
+    private static class Cells implements DigSampler {
         final Set<Long> blocked = new HashSet<>();
         @Override public boolean passable(int x, int y, int z) {
             return !blocked.contains(DigAStar.pack(x, y, z));

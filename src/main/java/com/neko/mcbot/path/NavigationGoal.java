@@ -30,8 +30,8 @@ public interface NavigationGoal {
             }
             @Override public boolean reached(int x, int y, int z) { return remaining(x, y, z) == 0; }
             @Override public double remaining(int x, int y, int z) {
-                return Math.max(0, Math.abs(x - tx) - radius)
-                        + Math.max(0, Math.abs(y - ty) - radius) + Math.max(0, Math.abs(z - tz) - radius);
+                return Math.max(0, Math.abs((double) x - tx) - radius)
+                        + Math.max(0, Math.abs((double) y - ty) - radius) + Math.max(0, Math.abs((double) z - tz) - radius);
             }
         };
     }

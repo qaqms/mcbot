@@ -20,7 +20,7 @@ import java.util.Set;
  */
 public final class LevelDigSampler implements DigSampler {
 
-    /** 搜索盒：以起点计的水平/垂直半径（超出判不可达，逼模型分段）。 */
+    /** Per-segment observation window, recentered at each actual landing. */
     public static final int RADIUS_XZ = 64;
     public static final int RADIUS_Y = 32;
     public static final double MAX_DIG_SECONDS = 20.0; // 单格超过这个秒数视为"不值得挖"

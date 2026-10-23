@@ -3,6 +3,18 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 地下范围与分段（2026-10-24）
+
+当前见[地下导航修正](UNDERGROUND-SEGMENTS-2026-10-24.md)与STATUS顶部。
+ExplorationRoute新任务默认总半径0不限，显式有限范围与历史证据保持；
+BoundedSurvey不按曾经尝试同终点禁发，无总半径时不向move_to附加bounds。
+DigAStar生产入口启用贪心可行解/加权改善并共享资源，保留已有可行答案，
+几何剩余量下降32单位可交出中间段，可逆部分段也可执行后继续。
+PathTask从实际站稳脚格重建下一段；NavigationAllowance按初始距离分配整趟节点账，
+和NavigationBudget的显式有限共享账户同时约束，累计效果/许可不重开。
+MoveToTool去掉整趟64/32距离门，局部采样窗仍移动且有界，远目标仍须已加载。
+未实现完整成本估价/LSS-LRTA学习、编辑后台快照或行进中预搜接续；段末仍可能停顿。
+
 ## 动作与采集验收修正（2026-10-23）
 
 当前动作契约见[ACTION-LIMITS-AND-GATHER](ACTION-LIMITS-AND-GATHER-2026-10-23.md)。

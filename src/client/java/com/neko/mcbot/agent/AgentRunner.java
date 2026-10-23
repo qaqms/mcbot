@@ -1362,7 +1362,7 @@ public final class AgentRunner implements ToolExecutor {
             int steps = args.has("max_steps") ? ExplorationRoute.integer(args, "max_steps")
                     : explorationRoute == null ? Integer.MAX_VALUE : explorationRoute.maxSteps;
             int radius = args.has("radius") ? ExplorationRoute.integer(args, "radius")
-                    : explorationRoute == null ? 64 : explorationRoute.radius;
+                    : explorationRoute == null ? 0 : explorationRoute.radius;
             int seconds = args.has("timeout_seconds") ? ExplorationRoute.integer(args, "timeout_seconds") : 0;
             if (explorationRoute == null) explorationRoute = new ExplorationRoute(steps, radius);
             else if (explorationRoute.maxSteps != steps || explorationRoute.radius != radius)
@@ -1462,7 +1462,7 @@ public final class AgentRunner implements ToolExecutor {
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
                     "DENIED:连续采集须有效物品/方块targets、明确count/口径、r=1-16、可选时限0-900秒、"
-                            + "可选正整数挖掘/探索上限、explore_steps=0关闭换区、explore_radius=16-64，且有完整任务开始背包事实。"));
+                            + "可选正整数挖掘/探索上限、explore_steps=0关闭换区、explore_radius省略/0不限总范围，且有完整任务开始背包事实。"));
         }
     }
 

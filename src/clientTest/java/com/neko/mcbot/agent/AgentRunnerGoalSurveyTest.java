@@ -35,6 +35,7 @@ class AgentRunnerGoalSurveyTest {
         search(false);
         assertEquals("move_to", client.lastTool().str("tool"));
         assertTrue(client.lastTool().obj("args").get("underground").getAsBoolean());
+        assertFalse(client.lastTool().obj("args").has("bounds"), "omitted radius must not freeze a surface sphere");
         return future;
     }
 

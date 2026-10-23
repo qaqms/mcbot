@@ -178,7 +178,6 @@ final class BoundedSurvey {
         point.addProperty("y", y + Math.max(-4, Math.min(4, ty - y)));
         point.addProperty("z", z + 4 * dz);
         if (!route.within(point)) { finish(false, "SCOPE_CHANGED:下一地下路段超出任务范围，未发出。"); return; }
-        if (route.tried(point)) { finish(false, "NO_PROGRESS:本任务已尝试该地下终点，请按实际障碍选择其他方向。"); return; }
         route.attempt(point);
         move(point, budget, false);
     }
@@ -195,7 +194,7 @@ final class BoundedSurvey {
         args.addProperty("underground", true);
         args.addProperty("max_digs", digs);
         args.addProperty("walk_only", back);
-        args.add("bounds", route.bounds());
+        if (route.radius > 0) args.add("bounds", route.bounds());
         call("move_to", args, receipt -> {
             movement = receipt.data();
             // Reconcile any known effects even when the terminal failure forbids continuation.

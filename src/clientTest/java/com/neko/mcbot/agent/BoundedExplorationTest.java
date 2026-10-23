@@ -233,7 +233,14 @@ class BoundedExplorationTest {
     }
     @Test void malformedExplorationOptionsAreRejected() {
         for (String options : List.of(",\"explore_steps\":2147483648", ",\"explore_steps\":-1",
-                ",\"explore_radius\":65", ",\"explore_radius\":8", ",\"explore_steps\":\"8\""))
+                ",\"explore_radius\":-1", ",\"explore_radius\":2147483648",
+                ",\"explore_radius\":1.5", ",\"explore_radius\":\"8\"", ",\"explore_steps\":\"8\""))
             assertThrows(RuntimeException.class, () -> new World().gather(options));
+    }
+    @Test void explorationRadiusIsAnExplicitNonnegativeScopeRatherThanAFixed64BlockQuota() {
+        var base = "{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1";
+        assertEquals(0, BoundedGather.parse(base + "}").exploreRadius());
+        for (int radius : new int[]{0, 8, 65, 256, Integer.MAX_VALUE})
+            assertEquals(radius, BoundedGather.parse(base + ",\"explore_radius\":" + radius + "}").exploreRadius());
     }
 }

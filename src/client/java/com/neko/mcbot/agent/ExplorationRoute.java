@@ -117,7 +117,7 @@ final class ExplorationRoute {
 
     static ExplorationRoute restore(JsonObject data) {
         int steps = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "max_steps", 0, Integer.MAX_VALUE);
-        int radius = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "radius", 1, 256);
+        int radius = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "radius", 0, Integer.MAX_VALUE);
         var route = new ExplorationRoute(steps, radius);
         route.attempts = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "attempts", 0, steps);
         route.regions = com.neko.mcbot.agentcore.loop.GoalCheckpoint.bounded(data, "regions", 0, route.attempts);
@@ -159,6 +159,7 @@ final class ExplorationRoute {
     void abandon() { pending = false; }
     int remainingSteps() { return maxSteps == Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(0, maxSteps - attempts); }
     String stepLimitText() { return maxSteps == Integer.MAX_VALUE ? "不限" : Integer.toString(maxSteps); }
+    String radiusText() { return radius == 0 ? "不限" : Integer.toString(radius); }
     int remainingDigs() { return Integer.MAX_VALUE; }
     int undergroundDigs() { return undergroundDigs; }
     void recordDigs(JsonObject movement) {
@@ -222,8 +223,8 @@ final class ExplorationRoute {
         data.addProperty("exploration_radius", radius);
         data.addProperty("explored_regions", regions);
         return new ToolOutcome(false, "DENIED:同任务gather/explore须保持首次探索步数/半径。"
-                + "当前累计移动=" + attempts + "/" + maxSteps + "，剩余="
-                + Math.max(0, maxSteps - attempts) + "，范围半径=" + radius
+                + "当前累计移动=" + attempts + "/" + stepLimitText() + "，剩余="
+                + (maxSteps == Integer.MAX_VALUE ? "不限" : Math.max(0, maxSteps - attempts)) + "，范围半径=" + radiusText()
                 + "；省略探索参数可沿用原配置，不能重置范围或预算。"
                 + "若只需当前工区附近采集，可用gather explore_steps=0，不换区且不改原探索账。", data);
     }
@@ -234,7 +235,7 @@ final class ExplorationRoute {
         for (String key : List.of("x", "y", "z")) point.addProperty(key, number(state, key));
         String world = state.get("dimension").getAsString();
         if (anchor == null) { anchor = point.deepCopy(); dimension = world; }
-        if (!dimension.equals(world) || scopeDistance(point, anchor) > radius * (double) radius)
+        if (!dimension.equals(world) || radius > 0 && scopeDistance(point, anchor) > radius * (double) radius)
             throw new IllegalArgumentException("SCOPE_CHANGED");
         current = point;
         boolean moved = pending && separation(current, departure) >= 16
@@ -264,7 +265,7 @@ final class ExplorationRoute {
         for (var entry : points) {
             var point = entry.getAsJsonObject();
             for (String key : List.of("x", "y", "z")) integer(point, key);
-            if (tried.contains(key(point)) || scopeDistance(point, anchor) > Math.pow(Math.max(0, radius - inset), 2)
+            if (tried.contains(key(point)) || radius > 0 && scopeDistance(point, anchor) > Math.pow(Math.max(0, radius - inset), 2)
                     || horizontal(point, current) > Math.pow(inset > 0 ? Math.min(17, Math.max(4, inset + 1)) : 17, 2)
                     || inset > 0 && distance(point, current) > Math.pow(2d * inset, 2)
                     || Math.abs(number(point, "y") - number(current, "y")) > 12) continue;
@@ -287,14 +288,17 @@ final class ExplorationRoute {
     }
 
     void attempt(JsonObject point) {
-        if (exhausted() || !tried.add(key(point))) throw new IllegalArgumentException();
+        if (exhausted()) throw new IllegalArgumentException();
+        tried.add(key(point));
         if (tried.size() > 128) tried.remove(tried.iterator().next());
         if (attempts < Integer.MAX_VALUE) attempts++;
         departure = current.deepCopy();
         pending = true;
     }
 
-    boolean within(JsonObject point) { return anchor != null && scopeDistance(point, anchor) <= radius * (double) radius; }
+    boolean within(JsonObject point) {
+        return anchor != null && (radius == 0 || scopeDistance(point, anchor) <= radius * (double) radius);
+    }
     private double scopeDistance(JsonObject a, JsonObject b) {
         return spatial ? distance(feet(a), feet(b)) : distance(a, b);
     }

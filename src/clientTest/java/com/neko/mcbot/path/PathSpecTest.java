@@ -26,4 +26,14 @@ class PathSpecTest {
             assertEquals(count, PathSpec.restore(spec.snapshot()).maxDigs());
         }
     }
+
+    @Test void explicitLargeScopeSurvivesRestoreAndOmittedScopeDoesNotCreateATaskSphere() {
+        var unlimited = PathSpec.parse(new com.google.gson.JsonObject());
+        assertTrue(unlimited.contains(1000, -58, 1000));
+        var finite = PathSpec.parse(JsonParser.parseString(
+                "{\"bounds\":{\"x\":0,\"y\":64,\"z\":0,\"radius\":256}}").getAsJsonObject());
+        var restored = PathSpec.restore(finite.snapshot());
+        assertTrue(restored.contains(120, -58, 0));
+        assertFalse(restored.contains(257, 64, 0));
+    }
 }

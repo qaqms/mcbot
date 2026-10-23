@@ -17,8 +17,11 @@ class BoundedSurveyTest {
         final ArrayDeque<Runnable> queue = new ArrayDeque<>();
         final List<String> calls = new ArrayList<>();
         final List<JsonObject> moves = new ArrayList<>();
-        final ExplorationRoute route = new ExplorationRoute(8, 64);
+        final ExplorationRoute route;
+        World() { this(8, 64); }
+        World(int steps, int radius) { route = new ExplorationRoute(steps, radius); }
         int x, y = 90, z, damage, food = 20, foundAfter = 2;
+        int maxDamage = 131, targetY = 70;
         long now;
         boolean failMove, unknownPosition, environmentSafe = true;
         String moveFailure = "PARTIAL:short route";
@@ -32,7 +35,7 @@ class BoundedSurveyTest {
             inv.addProperty("selected_slot", 0); inv.addProperty("slots_used", 1);
             var slot = inv.getAsJsonArray("slots").get(0).getAsJsonObject();
             slot.addProperty("item", "minecraft:stone_pickaxe"); slot.addProperty("count", 1);
-            slot.addProperty("damage", damage); slot.addProperty("max_damage", 131);
+            slot.addProperty("damage", damage); slot.addProperty("max_damage", maxDamage);
             return data;
         }
         CompletableFuture<ToolOutcome> remote(String name, String text) {
@@ -53,7 +56,7 @@ class BoundedSurveyTest {
             } else if (name.equals("move_to")) {
                 assertTrue(args.get("underground").getAsBoolean());
                 assertTrue(args.get("exact").getAsBoolean());
-                assertTrue(args.has("bounds"));
+                assertEquals(route.radius > 0, args.has("bounds"));
                 moves.add(args);
                 if (pending != null) return pending;
                 boolean back = args.get("walk_only").getAsBoolean();
@@ -71,7 +74,7 @@ class BoundedSurveyTest {
         }
         BoundedSurvey survey(boolean back) {
             var args = back ? json("{\"mode\":\"return\"}")
-                    : json("{\"mode\":\"underground\",\"target_y\":70,\"direction\":\"east\",\"targets\":[\"copper_ore\"],\"r\":16}");
+                    : json("{\"mode\":\"underground\",\"target_y\":" + targetY + ",\"direction\":\"east\",\"targets\":[\"copper_ore\"],\"r\":16}");
             args.addProperty("timeout_seconds", 180);
             return new BoundedSurvey(route, args, () -> now, this::remote, queue::addLast, () -> {});
         }
@@ -222,5 +225,37 @@ class BoundedSurveyTest {
         assertDoesNotThrow(() -> route.observe(state), "feet 16 is also on the sphere");
         state.addProperty("x", 17);
         assertThrows(IllegalArgumentException.class, () -> route.observe(state));
+    }
+
+    @Test void unlimitedSurveyDescendsPastTheOldSurfaceSphereAndRetainsItsActualReturnTrail() {
+        var w = new World(Integer.MAX_VALUE, 0);
+        w.maxDamage = 2048; w.foundAfter = 22; w.targetY = -58;
+        var outbound = w.survey(false).start(); w.drain();
+        assertTrue(outbound.join().ok(), outbound.join().feedback());
+        assertEquals(22, w.moves.size());
+        assertEquals(2, w.y, "vertical scope passes the old 64 block limit");
+        assertEquals(88, w.x, "horizontal scope also passes the old 64 block limit");
+        assertTrue(w.moves.stream().noneMatch(args -> args.has("bounds")));
+        assertEquals(22, w.route.returnSteps());
+        var back = w.survey(true).start(); w.drain();
+        assertTrue(back.join().ok(), back.join().feedback());
+        assertEquals(90, w.y); assertEquals(0, w.x);
+        assertEquals(44, w.route.attempts());
+    }
+
+    @Test void aNewExplicitSurveyMayRetryAnOldEndpointAfterFreshObservation() {
+        var w = new World();
+        w.failMove = true; w.unknownPosition = true;
+        var blocked = w.survey(false).start(); w.drain();
+        assertFalse(blocked.join().ok());
+        assertEquals(1, w.moves.size());
+        w.failMove = w.unknownPosition = false;
+        w.foundAfter = 2;
+        var continued = w.survey(false).start(); w.drain();
+        assertTrue(continued.join().ok(), continued.join().feedback());
+        assertEquals(2, w.moves.size());
+        for (String axis : List.of("x", "y", "z"))
+            assertEquals(w.moves.getFirst().get(axis), w.moves.getLast().get(axis));
+        assertEquals(24, w.route.undergroundDigs(), "known effects remain cumulative");
     }
 }

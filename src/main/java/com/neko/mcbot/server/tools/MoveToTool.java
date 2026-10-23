@@ -131,11 +131,6 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false,
                     "ACTION_LIMIT:当前任务工作目标保护集合已满，未淘汰旧保护或继续开路。", null));
         BlockPos from = com.neko.mcbot.server.StandingGeometry.feetCell(c);
-        if (!PathTask.withinCap(from, to)) {
-            return CompletableFuture.completedFuture(new Result(false,
-                    "PATH_BLOCKED:目标超出我一次能规划的盒子（水平 64 格/垂直 32 格）。"
-                            + "分几段走过来。", null));
-        }
         if (!spec.contains(to.getX(), to.getY(), to.getZ())
                 || !spec.contains(from.getX(), from.getY(), from.getZ()))
             return CompletableFuture.completedFuture(new Result(false, "SCOPE_CHANGED:起点或目的地超出路线范围。", null));

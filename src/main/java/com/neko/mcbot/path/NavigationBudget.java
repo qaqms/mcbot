@@ -36,9 +36,15 @@ public final class NavigationBudget {
 
     public DigAStar search(DigSampler sampler, int x, int y, int z, int tx, int ty, int tz,
                            NavigationGoal goal) {
+        return search(sampler, x, y, z, tx, ty, tz, goal, Integer.MAX_VALUE);
+    }
+
+    DigAStar search(DigSampler sampler, int x, int y, int z, int tx, int ty, int tz,
+                    NavigationGoal goal, int available) {
         observe(current);
-        if (exhausted()) return null;
-        var search = new DigAStar(sampler, x, y, z, tx, ty, tz, perSearch ? nodeCap : nodeCap - nodes, 0, goal);
+        if (available <= 0 || exhausted()) return null;
+        var search = new DigAStar(sampler, x, y, z, tx, ty, tz,
+                Math.min(available, perSearch ? nodeCap : nodeCap - nodes), 0, goal);
         search.totalBudget(perSearch ? timeCap : timeCap - nanos);
         search.storageBudget(perSearch ? recordCap : recordCap - records);
         current = search;

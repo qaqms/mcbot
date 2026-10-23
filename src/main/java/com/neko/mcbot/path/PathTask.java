@@ -28,8 +28,8 @@ import java.util.List;
  * （该清的还清着、支撑还在、放过的没被拆）；变了就切 REPLAN_SEARCH 相位从当前
  * 位置**分帧**重搜（R1-S3：旧版单拍同步 while 的单帧冻结点已杀），旧路格 ×0.7 降权
  * 抑抖动，不以累计重规划次数停工。普通只行走候选使用世界快照和后台搜索；
- * 工作到达与编辑路线保留主线程分帧搜索。每次搜索最多 4000 节点，无默认累计时间门，
- * 撞帽且推进≥4 格提交 PARTIAL 半程段，不足则 NO_PROGRESS。
+ * 工作到达与编辑路线保留主线程分帧搜索。每段搜索最多 4000 节点，无默认累计时间门，
+ * 保留可行答案；分段及可返程的部分路线落地后自动接续，共用按路程分配的整趟节点账。
  *
  * 取消/超时：onAbort 清掉进行中的裂纹动画；future 由调度器统一完成。
  */
@@ -95,8 +95,11 @@ public final class PathTask extends TickTask {
     private int planPlaces;
     /** 本轮搜索是重规划（失败文案加"路被改变后"前缀；旧路降权集只在重搜时装）。 */
     private boolean wasReplan;
-    /** PARTIAL 半程段：走完后的到达文案换成"缩短射程"话术（设计卡 §C）。 */
+    /** Resource-limited, reversible prefix; continue from its actual landing. */
     private boolean partialTail;
+    private boolean segmentTail;
+    private int segments;
+    private NavigationAllowance allowance;
     private int partialRemain = -1;
     /** 复核认定"变了"的格（§D：这点周围不入旧路降权集，防把坏格当旧路便宜复用）。 */
     private long replanBadKey;
@@ -114,6 +117,7 @@ public final class PathTask extends TickTask {
     private final PathSpec spec;
     private final com.neko.mcbot.server.PlacementWork placement;
     private NavigationGoal suppliedGoal;
+    private NavigationGoal activeGoal;
     private NavigationBudget sharedBudget;
     private PathSpec outerScope = PathSpec.DEFAULT;
     private java.util.function.BiPredicate<BlockPos, BlockPos> stepConstraint = (from, to) -> true;
@@ -219,7 +223,16 @@ public final class PathTask extends TickTask {
         data.addProperty("placed_blocks", actualPlaces);
         drops.snapshot(level).entrySet().forEach(entry -> data.add(entry.getKey(), entry.getValue()));
         data.addProperty("replans", replans);
+        addTripData(data);
         return data;
+    }
+
+    private void addTripData(JsonObject data) {
+        data.addProperty("segments", segments);
+        if (allowance == null) return;
+        allowance.observe(search);
+        data.addProperty("search_nodes_used", allowance.used());
+        data.addProperty("search_nodes_limit", allowance.limit());
     }
 
     @Override
@@ -290,6 +303,7 @@ public final class PathTask extends TickTask {
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
+        addTripData(data);
         if (drivenBody != null) {
             data.add("navigation_trail", drivenBody.navigationTrail().report());
             data.add("spatial_facts", com.neko.mcbot.server.TerrainSnapshots.around(
@@ -388,7 +402,10 @@ public final class PathTask extends TickTask {
             } finally { pendingSearch = null; }
             // Dry routes can finish without preparing live edit costs. A failed dry search falls
             // back to the existing world-thread edit planner when terrain changes are permitted.
-            if (!walkOnly && search.failure() != null) search = null;
+            if (!walkOnly && search.failure() != null) {
+                allowance.observe(search);
+                search = null;
+            }
         }
         // 先看有没有"确认前刚算好的那条路"可用（R2-S4 lastPlan）：省掉一整次重搜。
         // 只在首搜阶段尝试；重规划（REPLAN_SEARCH）是"世界变了"的产物，必须重新搜。
@@ -406,11 +423,12 @@ public final class PathTask extends TickTask {
             search = newSearch(from);
             if (pendingSearch != null) return running();
             if (search == null) return new Progress.Done(new Result(false,
-                    "ACTION_LIMIT:动态接近的原累计搜索预算已耗尽，未重开。", null));
+                    "NO_PROGRESS:本趟搜索资源已用完，尚未证实目标不可达；请结合实际障碍重新选择目标或路线。", null));
         }
         boolean finished;
         try { finished = search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS); }
         finally { if (sharedBudget != null && !detachedSearch) sharedBudget.observe(search); }
+        if (allowance != null) allowance.observe(search);
         if (!finished) {
             // 分帧搜索跨多拍，中途世界会被别人改：验尸超限则丢旧图，从当前位置重开
             if (memo != null && memo.worldChanged()) {
@@ -425,7 +443,7 @@ public final class PathTask extends TickTask {
         }
         if (search.failure() != null) {
             if (search.budgetReached() && search.partialAvailable()) {
-                // 撞帽≠失败：提交"距目标最近的已扩展节点"半程段，走完由 arrived 出 PARTIAL 话术
+                // A reversible prefix can advance the same trip without another model request.
                 partialTail = true;
                 partialRemain = search.remainingL1();
                 List<DigAStar.Step> plan = liveify(search.partialPath());
@@ -443,13 +461,14 @@ public final class PathTask extends TickTask {
             String why = search.budgetReached()
                     ? "NO_PROGRESS:" + lead
                             + (search.storedNodes() >= DigAStar.MAX_STORED_NODES ? "路径状态存储到上限；" : "")
-                            + "搜索预算用尽（展开 " + search.expanded()
+                            + "本段搜索资源已用完（展开 " + search.expanded()
                             + " 节点/" + search.elapsedMillis() + "ms）而没能向目标实质推进。"
                             + "换条路绕开或分更短的段，别硬撞同一方向。"
                     : "NO_PATH:" + lead + search.failure();
             return new Progress.Done(new Result(false, why, null));
         }
         // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
+        segmentTail = search.segmentEnd();
         return afterPlanReady(c, liveify(search.path()));
     }
 
@@ -570,7 +589,7 @@ public final class PathTask extends TickTask {
 
     /** 记下刚算好的路（连同**起点**，见 {@link PlanCache} 里"起点必须相同"的理由）。只在主线程调用。 */
     private void rememberPlan(CompanionPlayer c, List<DigAStar.Step> plan) {
-        if (c == null || !spec.equals(PathSpec.DEFAULT)) {
+        if (c == null || !spec.equals(PathSpec.DEFAULT) || partialTail || segmentTail) {
             return;
         }
         cacheKey = c.getUUID();
@@ -595,7 +614,10 @@ public final class PathTask extends TickTask {
         if (p == null) {
             return false;
         }
-        if (exact && (p.path.isEmpty() || !atTarget(p.path.getLast()))) return false;
+        if (p.path.isEmpty()) return false;
+        var end = p.path.getLast();
+        if (!NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1)
+                .reached(end.x(), end.y(), end.z())) return false;
         // 采样器仍要建（执行期 mineOne/placeOne/复核都用它 live 读世界），但**不必重搜**
         sampler = samplerFor(c, StandingGeometry.feetCell(c));
         path = liveify(p.path);
@@ -683,6 +705,15 @@ public final class PathTask extends TickTask {
 
     /** 搜索构造统一入口：裸 sampler 必在之前建好；memo 套在搜索侧，执行侧永不见缓存。 */
     private DigAStar newSearch(BlockPos from) {
+        if (allowance == null) {
+            double distance = suppliedGoal != null ? suppliedGoal.remaining(from.getX(), from.getY(), from.getZ())
+                    : Math.abs((double) from.getX() - target.getX()) + Math.abs((double) from.getY() - target.getY())
+                    + Math.abs((double) from.getZ() - target.getZ());
+            allowance = new NavigationAllowance(distance);
+        }
+        allowance.observe(search);
+        int nodes = allowance.next();
+        if (nodes == 0) return null;
         boolean previousDetached = detachedSearch;
         detachedSearch = false;
         if (!backgroundTried && !spec.workArrival() && !constrained && !drivenBody.buildSite().active()
@@ -692,10 +723,11 @@ public final class PathTask extends TickTask {
                     drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope);
             var liveGoal = suppliedGoal != null ? suppliedGoal
                     : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
+            activeGoal = liveGoal;
             var frozenGoal = liveGoal.snapshot(snapshot);
             if (frozenGoal != null) {
                 var dry = new DigAStar(snapshot, from.getX(), from.getY(), from.getZ(),
-                        target.getX(), target.getY(), target.getZ(), MAX_NODES, 0, frozenGoal);
+                        target.getX(), target.getY(), target.getZ(), nodes, 0, frozenGoal).segments();
                 dry.totalBudget(SEARCH_TOTAL_NS);
                 if (reusePending != null) dry.reuseBias(reusePending);
                 try {
@@ -723,11 +755,14 @@ public final class PathTask extends TickTask {
                 Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),
                 pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, sampler, from, pos), sampler.geometry())
                 : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
+        activeGoal = goal;
         DigAStar d = sharedBudget != null ? sharedBudget.search(memo != null ? memo : sampler,
-                from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(), goal)
+                from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(), goal, nodes)
                 : new DigAStar(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(),
-                MAX_NODES, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs), goal);
+                nodes, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs), goal);
+        if (d != null && (sharedBudget == null || sharedBudget.perSearch())) d.segments();
+        if (d == null) return null;
         if (sharedBudget == null) d.totalBudget(SEARCH_TOTAL_NS);
         if (reusePending != null) {
             d.reuseBias(reusePending);
@@ -739,7 +774,7 @@ public final class PathTask extends TickTask {
         DigAStar d = new DigAStar(sampler,
                 from.getX(), from.getY(), from.getZ(),
                 target.getX(), target.getY(), target.getZ(), MAX_NODES, walkOnly ? 0 : MAX_DIGS,
-                DigAStar.H_WEIGHT, exact ? 0 : 1);
+                DigAStar.H_WEIGHT, exact ? 0 : 1).segments();
         d.totalBudget(SEARCH_TOTAL_NS);
         return d;
     }
@@ -1120,10 +1155,6 @@ public final class PathTask extends TickTask {
         return running();
     }
 
-    private boolean atTarget(DigAStar.Step step) {
-        return step.x() == target.getX() && step.y() == target.getY() && step.z() == target.getZ();
-    }
-
     private void recordFailure(int index, String reason, Long cell) {
         var before = path.get(Math.max(0, index - 1));
         var step = path.get(index);
@@ -1154,25 +1185,25 @@ public final class PathTask extends TickTask {
                     "NO_PATH:路线结束但身体没有在末节点站稳，重新观察当前位置。", null));
         }
         int radius = exact ? 0 : 1;
-        boolean reached = suppliedGoal != null ? suppliedGoal.reached(at.getX(), at.getY(), at.getZ())
+        boolean reached = activeGoal != null ? Double.isFinite(activeGoal.arrivalCost(
+                sampler, at.getX(), at.getY(), at.getZ(), TerrainEdits.EMPTY))
+                : suppliedGoal != null ? suppliedGoal.reached(at.getX(), at.getY(), at.getZ())
                 : spec.workArrival() || !(Math.abs(at.getX() - target.getX()) > radius
                 || Math.abs(at.getY() - target.getY()) > radius
                 || Math.abs(at.getZ() - target.getZ()) > radius);
-        if (!c.onGround() || !reached) {
-            if (!partialTail) return new Progress.Done(new Result(false,
+        if (!c.onGround() || !reached && !partialTail && !segmentTail)
+            return new Progress.Done(new Result(false,
                     "NO_PATH:路线结束但身体未实际到达目标范围，重新观察当前位置。", null));
-        }
         int need = actualDigs + actualPlaces;
         JsonObject data = new JsonObject();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
-        if (partialTail) {
-            // §C 回执模板：撞帽从"失败"变"缩短射程"，行动指令写给模型（从本段落点重发）
-            return new Progress.Done(new Result(false,
-                    "PARTIAL:未能到 " + target.toShortString() + "。已走到能到的最近点 "
-                            + at.toShortString() + "，离目标还差约 " + partialRemain + " 格。"
-                            + "这一段已走完，请从该点重发 move_to（可分多段）"
-                            + (need > 0 ? "；本段动了 " + need + " 个方块。" : "。"), data));
+        if ((partialTail || segmentTail) && !reached) {
+            segments++;
+            McbotMod.LOG.info("[path] 路段完成，按实际落点接续 target={} at={} segments={} nodes={}/{}",
+                    target.toShortString(), at.toShortString(), segments, allowance.used(), allowance.limit());
+            beginReplan(c);
+            return running();
         }
         data.addProperty("arrival", spec.workArrival() ? "work" : "position");
         data.addProperty("feet_y", c.getY());
@@ -1202,6 +1233,7 @@ public final class PathTask extends TickTask {
         wasReplan = true;
         planFailure = null;
         partialTail = false;
+        segmentTail = false;
         reusePending = reuseCells();
         path = null;
         cursor = 0;
@@ -1396,10 +1428,4 @@ public final class PathTask extends TickTask {
         return goal.reached(end.x(), end.y(), end.z());
     }
 
-    /** 供 MoveToTool 在提交前做的距离帽判断。 */
-    public static boolean withinCap(BlockPos from, BlockPos to) {
-        return Math.abs((long) to.getX() - from.getX()) <= LevelDigSampler.RADIUS_XZ
-                && Math.abs((long) to.getZ() - from.getZ()) <= LevelDigSampler.RADIUS_XZ
-                && Math.abs((long) to.getY() - from.getY()) <= LevelDigSampler.RADIUS_Y;
-    }
 }

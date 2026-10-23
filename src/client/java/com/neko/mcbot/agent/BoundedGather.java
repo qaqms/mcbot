@@ -61,7 +61,7 @@ final class BoundedGather {
         return new Plan(target, List.copyOf(names), integer(args, "r", 16, 1, 16),
                 integer(args, "timeout_seconds", 0, 0, 900), integer(args, "max_blocks", Integer.MAX_VALUE, 1, Integer.MAX_VALUE),
                 scope, integer(args, "explore_steps", Integer.MAX_VALUE, 0, Integer.MAX_VALUE),
-                integer(args, "explore_radius", 64, 16, 64), materialFor == null ? null : materialFor.deepCopy());
+                integer(args, "explore_radius", 0, 0, Integer.MAX_VALUE), materialFor == null ? null : materialFor.deepCopy());
     }
 
     private static int integer(JsonObject args, String key, int fallback, int min, int max) {
@@ -819,7 +819,7 @@ final class BoundedGather {
                 + (plan.exploreSteps() == 0 ? "\n本段仅在开始工区附近采集，不换区；原任务探索账继续保留。" : "")
                 + "\n本段实际目标挖掘=" + dug + "，另清遮挡=" + cleared + "，子调用=" + calls + "，受阻候选=" + skippedBlocks.size()
                 + "，未拾取候选=" + skippedItems.size() + "；任务探索移动=" + exploration.attempts() + "/" + exploration.stepLimitText()
-                + "，共享范围半径=" + exploration.radius + "，新增观察区域=" + exploration.regions()
+                + "，共享范围半径=" + exploration.radiusText() + "，新增观察区域=" + exploration.regions()
                 + "，搜索半径=" + plan.radius() + "，本段查询页=" + searchPages
                 + "，完整已知查询区域=" + exploration.coverageRegions()
                 + (excluded.isEmpty() ? "" : "\n观测到但范围排除的候选样本（方块/掉落各最多16）=" + excluded

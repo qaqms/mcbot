@@ -7,6 +7,25 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ExplorationRouteTest {
+    @Test void omittedRadiusCanReachNegativeMiningHeightsAndDistantObservationsWithoutResettingEvidence() {
+        var plan = BoundedGather.parse("{\"item\":\"diamond\",\"targets\":[\"diamond_ore\"],\"count\":3}");
+        assertEquals(0, plan.exploreRadius());
+        var route = new ExplorationRoute(plan.exploreSteps(), plan.exploreRadius());
+        route.beginUnderground(point(0, 70, 0));
+        route.attempt(point(120, -58, 0));
+        route.observe(point(120, -58, 0));
+        route.reachedUnderground(point(120, -58, 0), false);
+        var restored = ExplorationRoute.restore(route.snapshot());
+        assertEquals(1, restored.attempts());
+        assertEquals(route.trail(), restored.trail());
+        assertTrue(restored.within(point(1000, -58, 0)));
+        assertDoesNotThrow(() -> restored.observe(point(1000, -58, 0)));
+        assertThrows(IllegalArgumentException.class, () -> {
+            var changed = point(1000, -58, 0);
+            changed.addProperty("dimension", "minecraft:the_nether");
+            restored.observe(changed);
+        });
+    }
     @Test void defaultGatherAndExplorationHaveNoImplicitTaskQuota() {
         var plan = BoundedGather.parse("{\"item\":\"dirt\",\"targets\":[\"dirt\"],\"count\":1}");
         assertEquals(0, plan.seconds());

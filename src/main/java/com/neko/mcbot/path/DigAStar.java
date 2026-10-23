@@ -12,12 +12,13 @@ import java.util.PriorityQueue;
  * 动作边统一建模为"清除经过的目标柱空间（挖）+ 补支撑（放）+ 移动"，
  * 由此派生 走/跳/落/下挖/向前挖/垫脚/搭桥 全套动作。
  *
- * 三条工程保险丝（搜索跑在服务器主线程，必须预算化）：
+ * 三条工程保险丝（搜索可分帧或在独占快照上交后台线程）：
  * ① 展开节点 ≤ maxNodes；② 计划挖掘 ≤ maxDigs（按节点累计并剪枝）；
  * ③ 分帧：每次 advance(budget) 限量展开，绝不一口气算崩主线程。
  *
  * 纯算法，零 Minecraft 依赖：地形判断全部经 {@link DigSampler} 接口（可单测）。
- * 线程约定：单线程使用（服务器主线程），无内部锁。
+ * 分段模式先找可行答案再改善；两遍共享资源账，耗尽资源不丢弃已找到的答案。
+ * 线程约定：单线程独占使用，无内部锁；后台发布后由世界线程采用。
  */
 public final class DigAStar {
 
@@ -58,6 +59,8 @@ public final class DigAStar {
 
     /** Search memory is bounded independently of the number of settled nodes. */
     public static final int MAX_STORED_NODES = 32_768;
+    public static final int SEGMENT_DISTANCE = 32;
+    private static final int GREEDY_NODES = 1000;
 
     private record State(long position, int digs, int places, TerrainEdits terrain) { }
 
@@ -79,9 +82,12 @@ public final class DigAStar {
     private final Map<String, Integer> rejected = new java.util.LinkedHashMap<>();
     private final List<PathFailure> rejectionSamples = new ArrayList<>();
     private String budgetKind;
+    private boolean segmented, greedy, segmentEnd;
+    private double segmentRemaining;
 
     private final PriorityQueue<Node> open =
-            new PriorityQueue<>((a, b) -> Double.compare(a.f, b.f));
+            new PriorityQueue<>(java.util.Comparator.comparingDouble(Node::f)
+                    .thenComparingDouble(Node::g).thenComparingLong(n -> n.key.position()));
     private final Map<State, Node> best = new HashMap<>();
     private int storedNodes = 1;
     private int maxStoredNodes = MAX_STORED_NODES;
@@ -145,6 +151,21 @@ public final class DigAStar {
                 new Step(sx, sy, sz, List.of(), List.of(), ACT_START, foot == null ? sy : foot.height(), false));
     }
 
+    /** Both passes share the node, storage and time account and the same transition checks. */
+    public DigAStar segments() {
+        if (prepared || estimate != null || expanded != 0) throw new IllegalStateException("search already started");
+        segmented = greedy = true;
+        segmentRemaining = Math.max(0, goal.remaining(sx, sy, sz) - SEGMENT_DISTANCE);
+        open.clear();
+        best.clear();
+        Node initial = start();
+        best.put(initial.key, initial);
+        open.add(initial);
+        return this;
+    }
+
+    public boolean segmentEnd() { return segmentEnd; }
+
     /** 分帧推进（不限时，单测/兼容用）。 */
     public boolean advance(int budget) {
         return advance(budget, Long.MAX_VALUE / 8);
@@ -187,7 +208,9 @@ public final class DigAStar {
                 best.put(initial.key, initial);
                 open.add(initial);
             }
-            if (stoppingNode != null && (open.isEmpty() || stoppingCost <= open.peek().f))
+            if (greedy && expanded >= Math.min(GREEDY_NODES, maxNodes / 4))
+                weightedPass();
+            if (!greedy && stoppingNode != null && (open.isEmpty() || stoppingCost <= open.peek().f))
                 return arrive(stoppingNode, stoppingCost);
             Node cur = open.poll();
             if (cur == null) {
@@ -198,9 +221,16 @@ public final class DigAStar {
                 continue; // 陈旧堆项
             }
             double arrival = goal.arrivalCost(s, cur.x, cur.y, cur.z, cur.key.terrain());
+            if (!Double.isFinite(arrival) && segmented && segmentRemaining > 0
+                    && goal.remaining(cur.x, cur.y, cur.z) > 0
+                    && goal.remaining(cur.x, cur.y, cur.z) <= segmentRemaining) arrival = 0;
             if (Double.isFinite(arrival) && arrival >= 0 && cur.g + arrival < stoppingCost) {
                 stoppingNode = cur;
                 stoppingCost = cur.g + arrival;
+                if (greedy) {
+                    weightedPass();
+                    continue;
+                }
                 if (stoppingCost <= cur.f && (open.isEmpty() || stoppingCost <= open.peek().f))
                     return arrive(cur, stoppingCost);
             }
@@ -240,12 +270,25 @@ public final class DigAStar {
     private boolean arrive(Node node, double cost) {
         goalNode = node;
         goalCost = cost;
+        segmentEnd = segmented && goal.remaining(node.x, node.y, node.z) > 0;
         path = reconstruct(node);
         finished = true;
         return true;
     }
 
+    private void weightedPass() {
+        greedy = false;
+        open.clear();
+        best.clear();
+        Node initial = start();
+        storedNodes++;
+        best.put(initial.key, initial);
+        open.add(initial);
+    }
+
     private boolean budgetFailure(String kind, String why) {
+        // A resource boundary limits improvement; it cannot invalidate an already feasible answer.
+        if (stoppingNode != null) return arrive(stoppingNode, stoppingCost);
         budgetReached = true;
         budgetKind = kind;
         return fail("BUDGET_EXCEEDED:" + why);
@@ -309,15 +352,22 @@ public final class DigAStar {
     }
 
     /**
-     * 撞帽且推进量足够（≥PARTIAL_MIN_GAIN）时，存在可用的"半程路"：调用方可用
-     * {@link #partialPath()} 先走完这段、到点重发（设计卡 §C：撞帽从"失败"变"缩短射程"）。
+     * Legacy searches require PARTIAL_MIN_GAIN; segmented searches accept any strict progress
+     * after checking that the whole prefix can be walked back without further edits.
      * 非撞帽结束（成功/真封闭/推进不足）返回 false。
      */
     public boolean partialAvailable() {
         if (!budgetReached || bestPartial == null) {
             return false;
         }
-        return goal.remaining(sx, sy, sz) - l1(bestPartial.x, bestPartial.y, bestPartial.z) >= PARTIAL_MIN_GAIN;
+        if (goal.remaining(sx, sy, sz) - l1(bestPartial.x, bestPartial.y, bestPartial.z)
+                < (segmented ? 1 : PARTIAL_MIN_GAIN)) return false;
+        if (segmented) {
+            for (Node node = bestPartial; node.prev != null; node = node.prev)
+                if (PathTransition.check(s, bestPartial.key.terrain(), node.x, node.y, node.z,
+                        node.prev.x, node.prev.y, node.prev.z, 0, 0).plan() == null) return false;
+        }
+        return true;
     }
 
     /** 半程路径（含 ACT_START 起点）；仅 {@link #partialAvailable()} 为真时非 null。 */
@@ -416,7 +466,8 @@ public final class DigAStar {
         }
         var step = new Step(bx, by, bz, plan.dig(), plan.place(),
                 classify(cur, bx, by, bz, plan.dig(), plan.place()), plan.feetY(), plan.jump());
-        Node n = new Node(key, bx, by, bz, digs, places, g, g + h(bx, by, bz, plan.terrain()), cur, step);
+        Node n = new Node(key, bx, by, bz, digs, places, g,
+                (greedy ? 0 : g) + h(bx, by, bz, plan.terrain()), cur, step);
         storedNodes++;
         best.put(key, n);
         open.add(n);
@@ -425,9 +476,13 @@ public final class DigAStar {
     private double h(int x, int y, int z, TerrainEdits edits) {
         // 距目标**体积**（3×3×3，与 isGoal 同口径）而非距中心：旧 h 到中心在体积边缘最多多算 3，
         // 与体积终点判据不自洽也是噪声源。详见 H_WEIGHT 注释：加权是**故意**的，不可采纳。
-        double l = l1(x, y, z);
-        return l == 0 ? 0 : hWeight * (H_UNIT * l + (estimate == null ? 0
-                : estimate.cost(x, y, z, edits) * (reuse == null ? 1 : BIAS_REUSE)));
+        double l = Math.max(0, l1(x, y, z) - (segmented ? segmentRemaining : 0));
+        // The first answer follows the goal gradient. Optional edit guidance is reserved for
+        // improvement: its truncated field can otherwise pull a short tunnel back to the surface.
+        if (greedy) return H_UNIT * l;
+        double guidance = l == 0 ? 0 : H_UNIT * l + (estimate == null ? 0
+                : estimate.cost(x, y, z, edits) * (reuse == null ? 1 : BIAS_REUSE));
+        return (segmented ? 1.5 : hWeight) * guidance;
     }
 
     /** 到目标体积的 L1（体积内=0）。部分提交用它做"推进量"口径，与 h 同一把尺。 */

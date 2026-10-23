@@ -29,7 +29,7 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
                 throw new IllegalArgumentException();
             anchor = new BlockPos(integer(box, "x"), integer(box, "y"), integer(box, "z"));
             radius = integer(box, "radius");
-            if (radius < 1 || radius > 64) throw new IllegalArgumentException();
+            if (radius < 1) throw new IllegalArgumentException();
         }
         return new PathSpec(work, clear, underground, digs, anchor, radius);
     }
