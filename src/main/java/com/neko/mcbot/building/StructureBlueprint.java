@@ -15,7 +15,7 @@ import java.util.zip.GZIPInputStream;
 /** A single bounded interchange format. It produces ordinary B1 data and never edits the world. */
 public final class StructureBlueprint {
     public static final int COMPRESSED_LIMIT=65536, EXPANDED_LIMIT=131072, HEAP_LIMIT=262144, DEPTH_LIMIT=16;
-    public static final int PALETTE_LIMIT=64, DIRECTORY_LIMIT=128, VOLUME_LIMIT=4096;
+    public static final int PALETTE_LIMIT=64, DIRECTORY_LIMIT=128, VOLUME_LIMIT=4096, CELL_LIMIT=128;
     public static final long MAX_NANOS=200_000_000L;
     private final Path directory;
     private final LongSupplier clock;
@@ -101,8 +101,8 @@ public final class StructureBlueprint {
                 || (long)size.getX()*size.getY()*size.getZ()>VOLUME_LIMIT) throw new IllegalArgumentException("dimensions");
         var palette=list(root.get("palette")); var blocks=list(root.get("blocks"));
         var entities=root.contains("entities") ? list(root.get("entities")) : new ListTag();
-        if (palette.isEmpty() || palette.size()>PALETTE_LIMIT || blocks.isEmpty() || blocks.size()>BuildTarget.LIMIT
-                || entities.size()>BuildTarget.LIMIT) throw new IllegalArgumentException("collection_limit");
+        if (palette.isEmpty() || palette.size()>PALETTE_LIMIT || blocks.isEmpty() || blocks.size()>CELL_LIMIT
+                || entities.size()>CELL_LIMIT) throw new IllegalArgumentException("collection_limit");
         var entries=new ArrayList<JsonObject>();
         var unknownPalette=new HashSet<Integer>();
         for (int index=0;index<palette.size();index++) {

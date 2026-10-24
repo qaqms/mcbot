@@ -26,8 +26,10 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Bounded target data only: unspecified cells and unspecified state properties impose no requirement. */
-public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, String revision) {
-    public static final int LIMIT = 128;
+public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, String revision,
+                          JsonObject representation, java.util.Map<BlockPos, Cell> index) {
+    public static final int LIMIT = com.neko.mcbot.agentcore.loop.WorldGoal.BUILD_CELL_LIMIT;
+    public static final int REGION_LIMIT = 128;
 
     public record Material(Item item, int units, boolean supported, String reason) { }
 
@@ -69,14 +71,27 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
             return data;
         }
 
+        public void appendObservation(StringBuilder output, BlockState actual) {
+            output.append('|');
+            if (actual==null) { output.append("unknown"); return; }
+            output.append(BuiltInRegistries.BLOCK.getKey(actual.getBlock()));
+            if (properties.isEmpty()) return;
+            var local=unrotate(actual);
+            for (String name:new java.util.TreeSet<>(properties)) {
+                var property=local.getBlock().getStateDefinition().getProperty(name);
+                if (property!=null) output.append('|').append(name).append('=').append(value(local,property));
+            }
+        }
+
         /** The native footprint owns material cost; a door's upper requirement never issues another placement. */
         public Material material() {
             if (authored.isAir()) return new Material(null, 0, true, "");
             Item item = authored.getBlock().asItem();
-            if (BuildObjects.door(authored)) {
-                if (!properties.containsAll(Set.of("half", "facing", "hinge")))
-                    return new Material(item, 0, false, "door_requires_explicit_half_facing_hinge");
-                return new Material(item, BuildObjects.upper(authored) ? 0 : 1, true, "");
+            if (BuildObjects.paired(authored)) {
+                if (!properties.containsAll(BuildObjects.requiredProperties(authored)))
+                    return new Material(item, 0, false, BuildObjects.bed(authored)
+                            ? "bed_requires_explicit_part_facing" : "door_requires_explicit_half_facing_hinge");
+                return new Material(item, BuildObjects.secondary(authored) ? 0 : 1, true, "");
             }
             if (!(item instanceof BlockItem blockItem) || blockItem.getBlock() != authored.getBlock()
                     || !BlockPlacement.supported(blockItem)
@@ -87,6 +102,10 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
                 return new Material(item, 2, false, "multiple_native_placements_required");
             if (properties.contains("waterlogged") && authored.getValue(BlockStateProperties.WATERLOGGED))
                 return new Material(null, 0, false, "fluid_requirement_not_supported");
+            if (authored.getBlock() instanceof net.minecraft.world.level.block.ChestBlock
+                    && authored.getValue(net.minecraft.world.level.block.ChestBlock.TYPE)
+                    !=net.minecraft.world.level.block.state.properties.ChestType.SINGLE)
+                return new Material(item,0,false,"connected_container_not_supported");
             return new Material(item, 1, true, "");
         }
 
@@ -108,7 +127,16 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
     public BuildTarget {
         anchor = anchor.immutable();
         cells = List.copyOf(cells);
+        representation = representation == null ? null : representation.deepCopy();
+        var lookup = new java.util.HashMap<BlockPos, Cell>();
+        cells.forEach(cell -> lookup.put(cell.pos(), cell));
+        index = java.util.Map.copyOf(lookup);
     }
+
+    public BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, String revision) {
+        this(anchor, rotation, cells, revision, null, null);
+    }
+    @Override public JsonObject representation() { return representation == null ? null : representation.deepCopy(); }
 
     public Material material(Cell cell) {
         var material = cell.material();
@@ -117,31 +145,38 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
     }
 
     public JsonObject input() {
+        return representation == null ? expandedInput() : representation.deepCopy();
+    }
+
+    /** Local data editing only. Transport and checkpoints retain the compact source. */
+    public JsonObject expandedInput() {
         var result = new JsonObject();
         result.add("anchor", coordinates(anchor));
         result.addProperty("rotation", rotation);
         var entries = new com.google.gson.JsonArray();
+        cells.forEach(cell -> entries.add(relativeCell(cell)));
+        result.add("cells", entries);
+        return result;
+    }
+
+    public JsonObject relativeCell(Cell cell) {
         Rotation inverse = switch (rotation) {
             case 90 -> Rotation.COUNTERCLOCKWISE_90;
             case 180 -> Rotation.CLOCKWISE_180;
             case 270 -> Rotation.CLOCKWISE_90;
             default -> Rotation.NONE;
         };
-        for (var cell : cells) {
-            var entry = coordinates(cell.pos().subtract(anchor).rotate(inverse));
-            entry.addProperty("block", BuiltInRegistries.BLOCK.getKey(cell.authored().getBlock()).toString());
-            var properties = new com.google.gson.JsonArray();
-            for (String name : new java.util.TreeSet<>(cell.properties())) {
-                var pair = new JsonObject();
-                pair.addProperty("name", name);
-                pair.addProperty("value", value(cell.authored(), cell.authored().getBlock().getStateDefinition().getProperty(name)));
-                properties.add(pair);
-            }
-            entry.add("properties", properties);
-            entries.add(entry);
+        var entry = coordinates(cell.pos().subtract(anchor).rotate(inverse));
+        entry.addProperty("block", BuiltInRegistries.BLOCK.getKey(cell.authored().getBlock()).toString());
+        var properties = new com.google.gson.JsonArray();
+        for (String name : new java.util.TreeSet<>(cell.properties())) {
+            var pair = new JsonObject();
+            pair.addProperty("name", name);
+            pair.addProperty("value", value(cell.authored(), cell.authored().getBlock().getStateDefinition().getProperty(name)));
+            properties.add(pair);
         }
-        result.add("cells", entries);
-        return result;
+        entry.add("properties", properties);
+        return entry;
     }
 
     public static JsonObject coordinates(BlockPos pos) {
@@ -165,7 +200,7 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
     }
 
     public static BuildTarget parse(JsonObject input) {
-        keys(input, Set.of("anchor", "rotation", "cells", "fill"));
+        keys(input, Set.of("anchor", "rotation", "cells", "fill", "regions"));
         BlockPos anchor = position(input.getAsJsonObject("anchor"), 29_999_984, false);
         int rotation = input.has("rotation") ? integer(input.get("rotation"), 0, 270) : 0;
         Rotation turn = switch (rotation) {
@@ -175,7 +210,8 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
             case 270 -> Rotation.COUNTERCLOCKWISE_90;
             default -> throw new IllegalArgumentException("rotation");
         };
-        if (input.has("cells") == input.has("fill")) throw new IllegalArgumentException("cells_or_fill");
+        if ((input.has("cells") ? 1 : 0) + (input.has("fill") ? 1 : 0) + (input.has("regions") ? 1 : 0) != 1)
+            throw new IllegalArgumentException("cells_fill_or_regions");
         var cells = new ArrayList<Cell>();
         if (input.has("cells")) {
             var entries = input.getAsJsonArray("cells");
@@ -185,19 +221,22 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
                 keys(cell, Set.of("x", "y", "z", "block", "properties"));
                 add(cells, anchor, turn, positionAxes(cell, 32), cell);
             }
+        } else if (input.has("fill")) {
+            fill(cells, anchor, turn, input.getAsJsonObject("fill"));
         } else {
-            var fill = input.getAsJsonObject("fill");
-            keys(fill, Set.of("from", "to", "block", "properties"));
-            var from = position(fill.getAsJsonObject("from"), 32, true);
-            var to = position(fill.getAsJsonObject("to"), 32, true);
-            long volume = (to.getX() - (long) from.getX() + 1) * (to.getY() - (long) from.getY() + 1)
-                    * (to.getZ() - (long) from.getZ() + 1);
-            if (to.getX() < from.getX() || to.getY() < from.getY() || to.getZ() < from.getZ()
-                    || volume <= 0 || volume > LIMIT) throw new IllegalArgumentException("fill_limit");
-            for (int x = from.getX(); x <= to.getX(); x++)
-                for (int y = from.getY(); y <= to.getY(); y++)
-                    for (int z = from.getZ(); z <= to.getZ(); z++)
-                        add(cells, anchor, turn, new BlockPos(x, y, z), fill);
+            var regions = input.getAsJsonArray("regions");
+            if (regions.isEmpty() || regions.size() > REGION_LIMIT) throw new IllegalArgumentException("region_limit");
+            var layered = new java.util.LinkedHashMap<BlockPos, Cell>();
+            int writes = 0;
+            for (var entry : regions) {
+                var layer = new ArrayList<Cell>();
+                fill(layer, anchor, turn, entry.getAsJsonObject());
+                writes += layer.size();
+                if (writes > LIMIT * 4) throw new IllegalArgumentException("region_work_limit");
+                layer.forEach(cell -> layered.put(cell.pos(), cell));
+                if (layered.size() > LIMIT) throw new IllegalArgumentException("cell_limit");
+            }
+            cells.addAll(layered.values());
         }
         cells.sort(Comparator.comparingInt((Cell c) -> c.pos().getY())
                 .thenComparingInt(c -> c.pos().getX()).thenComparingInt(c -> c.pos().getZ()));
@@ -212,10 +251,33 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
         try {
             String revision = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(canonical.toString().getBytes(StandardCharsets.UTF_8)));
-            return new BuildTarget(anchor, rotation, cells, revision);
+            return new BuildTarget(anchor, rotation, cells, revision,
+                    input.has("cells") ? null : input, null);
         } catch (java.security.NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
+    }
+
+    private static void fill(List<Cell> cells, BlockPos anchor, Rotation turn, JsonObject fill) {
+        keys(fill, Set.of("from", "to", "block", "properties"));
+        var from = position(fill.getAsJsonObject("from"), 32, true);
+        var to = position(fill.getAsJsonObject("to"), 32, true);
+        long volume = (to.getX() - (long) from.getX() + 1) * (to.getY() - (long) from.getY() + 1)
+                * (to.getZ() - (long) from.getZ() + 1);
+        if (to.getX() < from.getX() || to.getY() < from.getY() || to.getZ() < from.getZ()
+                || volume <= 0 || volume > LIMIT) throw new IllegalArgumentException("fill_limit");
+        // State parsing is shared across the region; expanded cells carry only their coordinates.
+        var one = new ArrayList<Cell>(1);
+        add(one, anchor, turn, from, fill);
+        var prototype = one.getFirst();
+        for (int x = from.getX(); x <= to.getX(); x++)
+            for (int y = from.getY(); y <= to.getY(); y++)
+                for (int z = from.getZ(); z <= to.getZ(); z++) {
+                    BlockPos pos = anchor.offset(new BlockPos(x, y, z).rotate(turn));
+                    if (Math.abs((long) pos.getX()) > 29_999_984 || Math.abs((long) pos.getZ()) > 29_999_984
+                            || pos.getY() < -2048 || pos.getY() > 2047) throw new IllegalArgumentException("world_coordinate");
+                    cells.add(new Cell(pos, prototype.authored(), prototype.properties(), turn));
+                }
     }
 
     private static void add(List<Cell> cells, BlockPos anchor, Rotation turn, BlockPos relative, JsonObject input) {

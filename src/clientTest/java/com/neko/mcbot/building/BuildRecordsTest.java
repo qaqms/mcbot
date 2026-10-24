@@ -37,6 +37,32 @@ class BuildRecordsTest {
     BuildRecords.Instance instance(BuildRecords records) {
         return records.createInstance(owner,builder,"world","wall",1,BuildSiteTest.TARGET,0);
     }
+    @Test void maximumCompactDesignPersistsAndLargeInstanceRecordsContinuePastTheOld256Events() throws Exception {
+        var records=new BuildRecords(root); records.load();
+        var definition=BuildTargetTest.largeInput(); definition.remove("anchor");
+        records.createDesign(owner,"large",definition);
+        var instance=records.createInstance(owner,builder,"world","large",1,BlockPos.ZERO,90);
+        String revision=instance.target().revision();
+        assertEquals(16384,instance.target().cells().size());
+        assertTrue(Files.size(root.resolve("mcbot/buildings.json"))<2048,"compact source is preserved on disk");
+        for (var cell:instance.target().cells().subList(0,300)) {
+            assertTrue(records.hasCapacity(instance,cell.pos()));
+            world.edit(cell.pos(),cell.desired());
+            records.placed(instance,cell.pos(),Blocks.AIR.defaultBlockState(),cell.desired(),1,world);
+        }
+        assertEquals(300,actions(records,instance));
+        var reloaded=new BuildRecords(root); reloaded.load();
+        assertTrue(reloaded.healthy());
+        var restored=reloaded.instance(owner,builder,"world",instance.id(),1);
+        assertEquals(revision,restored.target().revision());
+        assertEquals(300,actions(reloaded,restored));
+        assertTrue(reloaded.queryInstance(restored,world,288).get("conflicts").getAsInt()>0,
+                "reloading data never fabricates live provenance");
+        var last=reloaded.queryDesign(owner,"large",1,16368,null);
+        assertEquals(16,last.getAsJsonArray("cells").size());
+        assertEquals(-1,last.get("next_offset").getAsInt());
+        assertTrue(restored.target().input().has("fill"));
+    }
     BuildSite site(BuildRecords records, BuildRecords.Instance instance) {
         var site=new BuildSite(); site.bind(new Object(),world);
         assertNull(site.begin(instance.target(),BuildSiteTest.ROUTE,BuildSiteTest.FEET,world));

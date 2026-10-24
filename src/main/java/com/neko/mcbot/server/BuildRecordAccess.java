@@ -19,7 +19,9 @@ public final class BuildRecordAccess {
                 BuildTarget.string(target.get("instance_id"),36),BuildTarget.integer(target.get("instance_revision"),1,1024));
     }
     public static BuildTarget resolve(CompanionPlayer body, JsonObject target) {
-        return target!=null && target.has("instance_id") ? instance(body,target).target() : BuildTarget.parse(target);
+        if (target!=null && target.has("instance_id")) return instance(body,target).target();
+        var site=body.buildSite();
+        return site.active() && site.target().input().equals(target) ? site.target() : BuildTarget.parse(target);
     }
     public static boolean protects(CompanionPlayer body, BlockPos pos) {
         var records=store(body);
@@ -35,10 +37,5 @@ public final class BuildRecordAccess {
                 && records.mayChange(instance,pos,new BuildSiteAccess(body)) && records.hasCapacity(instance,pos)) return null;
         return protects(body,pos) || own ? new ServerTool.Result(false,
                 "DENIED:持久实例或支撑受保护；须原实例工地、有效逐格来源及原许可，不认领替换物。",null) : null;
-    }
-    public static JsonObject expanded(CompanionPlayer body, JsonObject args) {
-        var copy=args.deepCopy();
-        if (copy.has("target")) copy.add("target",resolve(body,copy.getAsJsonObject("target")).input());
-        return copy;
     }
 }

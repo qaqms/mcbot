@@ -30,7 +30,8 @@ public final class BuildWork extends TickTask {
     private final JsonArray results = new JsonArray();
     private final java.util.Set<net.minecraft.core.BlockPos> attempted = new java.util.HashSet<>();
     private int attempts, placed, consumed, checks, surveys, settle;
-    private int pageOffset, emptyPages;
+    private int pageOffset;
+    private int workCursor;
     private long nanos;
     private boolean changed, stopped, finishing;
     private ServerTool.Result failure, terminal;
@@ -69,7 +70,8 @@ public final class BuildWork extends TickTask {
         long start = clock.getAsLong();
         try {
             surveys++;
-            var survey = BuildSurvey.queryForWork(target, access.survey(), pageOffset, clock);
+            var survey = offset<0 ? BuildSurvey.nearby(target,access.survey(),workCursor,clock)
+                    : BuildSurvey.queryForWork(target, access.survey(), pageOffset, clock);
             observed = survey.data();
             checks += observed.get("work_preflights").getAsInt();
             if (observed.get("budget_exhausted").getAsBoolean()
@@ -85,9 +87,8 @@ public final class BuildWork extends TickTask {
                         cell.get("y").getAsInt(), cell.get("z").getAsInt());
                 if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)) { ready = cell; break; }
             }
-            if (ready == null && offset < 0 && ++emptyPages < pages && attempts < limit) {
-                pageOffset = pageOffset + BuildSurvey.PAGE < target.cells().size()
-                        ? pageOffset + BuildSurvey.PAGE : 0;
+            if (ready == null && offset < 0 && observed.get("work_next_cursor").getAsInt()>=0 && attempts < limit) {
+                workCursor=observed.get("work_next_cursor").getAsInt();
                 return running();
             }
             if (ready == null || attempts >= limit) {
@@ -96,7 +97,7 @@ public final class BuildWork extends TickTask {
             }
             var pos = new net.minecraft.core.BlockPos(ready.get("x").getAsInt(),
                     ready.get("y").getAsInt(), ready.get("z").getAsInt());
-            var cell = target.cells().stream().filter(c -> c.pos().equals(pos)).findFirst().orElseThrow();
+            var cell = target.index().get(pos);
             invalid = access.valid();
             if (invalid != null) return done(invalid, false);
             if (!access.reserve(cell)) {
@@ -129,7 +130,7 @@ public final class BuildWork extends TickTask {
                 changed |= result.data().has("changed") && result.data().get("changed").getAsBoolean();
             }
             results.add(row);
-            emptyPages = 0;
+            workCursor=0;
             access.recorded(cell, result);
             if (result.ok()) placed++;
             else { failure = result; finishing = true; }

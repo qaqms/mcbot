@@ -22,10 +22,11 @@ local function move(cell, item, bounds)
     return result.ok, result
 end
 
-local function checked(target, revision, all)
+local function checked(target, revision, all, cursor)
     local pages, offset, stamp = {}, 0, nil
     while true do
-        local d=call("build_diff",{target=target,expected_revision=revision,offset=offset}).data
+        local d=call("build_diff",{target=target,expected_revision=revision,offset=offset,
+            work_scan=not all,work_cursor=not all and (cursor or 0) or nil}).data
         revision=revision or d.target_revision
         if d.target_revision~=revision or not d.observation_complete or not d.spatial_stable
             or d.budget_exhausted then
@@ -33,6 +34,7 @@ local function checked(target, revision, all)
         end
         if stamp and stamp~=d.observation_key then return nil,"world_or_material_changed_between_pages" end
         stamp=d.observation_key
+        if d.work_scan or all and d.total and d.total>32 then return {d} end
         if d.goal_satisfied and not all then return {d} end
         pages[#pages+1]=d
         if d.next_offset==-1 then return pages end
@@ -41,11 +43,13 @@ local function checked(target, revision, all)
 end
 
 -- Pin the first revision for every continuation; incomplete material support is a gap, not a lost page.
-function mc.build_diff(target, revision)
+function mc.build_diff(target, revision, offset)
     target,revision=target_or_goal(target,revision)
+    if offset then return call("build_diff",{target=target,expected_revision=revision,offset=offset}).data end
     local pages,reason=checked(target,revision,true)
     if not pages then return {status="blocked",blocked=reason,goal_satisfied=false} end
     local d=pages[1]
+    if d.total and d.total>32 then return d end
     local cells,counts={},{}
     for _,page in ipairs(pages) do
         for _,cell in ipairs(page.cells) do
@@ -130,7 +134,7 @@ function mc.build(target, options)
                     end
                 end
             end
-            result.counts,result.unresolved=satisfied and first.counts or counts,unresolved
+            result.counts,result.unresolved=(satisfied or first.work_scan) and first.counts or counts,unresolved
             result.unresolved_omitted=first.remaining and first.remaining-#unresolved
             result.material_bill_complete=first.material_bill_complete
         end
@@ -163,11 +167,21 @@ function mc.build(target, options)
         end
     end
     local round, failed, last_reason, last_failure=0,{},nil,nil
+    local cursor,stamp=0,nil
     while rounds==0 or round<rounds do
         round=round+1
         call("status",{details=true})
-        local pages,reason=checked(target,revision)
+        local pages,reason=checked(target,revision,nil,cursor)
         if not pages then return report(reason,round) end
+        if stamp~=pages[1].observation_key then
+            failed={}
+            if cursor~=0 then
+                cursor=0
+                pages,reason=checked(target,revision)
+                if not pages then return report(reason,round) end
+            end
+        end
+        stamp=pages[1].observation_key
         last_pages=pages
         initial_remaining=initial_remaining or pages[1].remaining
         if pages[1].goal_satisfied then
@@ -179,11 +193,13 @@ function mc.build(target, options)
                 local kind=nil
                 if cell.state=="ready" then kind="ready"
                 elseif cell.state=="needs_clear" and cell.clear_allowed then kind="clear"
-                elseif (cell.state=="out_of_reach" or cell.state=="blocked") and cell.item
+                elseif (cell.state=="out_of_reach" or cell.state=="blocked"
+                    or cell.state=="state_conflict" and cell.actual_block and cell.block
+                    and cell.actual_block~=cell.block) and cell.item
                     and cell.material_available then kind="place" end
                 if kind then
                     local key=workkey(cell,kind,page.observation_key)
-                    local candidate={cell=cell,offset=page.offset,key=key}
+                    local candidate={cell=cell,offset=cell.source_offset or page.offset,key=key}
                     if not failed[key] then
                         if kind=="ready" and lower(candidate,ready) then ready=candidate end
                         if kind=="clear" then
@@ -230,7 +246,7 @@ function mc.build(target, options)
             local result=attempt("build_nearby",{target=target,expected_revision=revision,
                 max_actions=actions})
             for _,page in ipairs(pages) do
-                if page.offset==ready.offset then
+                if page.work_scan or page.offset==ready.offset then
                     for _,cell in ipairs(page.cells) do
                         if cell.state=="ready" then failed[workkey(cell,"ready",page.observation_key)]=true end
                     end
@@ -260,6 +276,8 @@ function mc.build(target, options)
                 -- If arrival leaves this candidate unchanged, try another rather than walk here again.
                 failed[far.key]=true
             end
+        elseif pages[1].work_next_cursor and pages[1].work_next_cursor>=0 then
+            cursor=pages[1].work_next_cursor
         else
             local result=report(last_reason or "no_feasible_work_material_support_state_or_protection",round,pages)
             result.last_failure=last_failure

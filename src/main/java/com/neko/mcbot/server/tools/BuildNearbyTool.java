@@ -18,11 +18,14 @@ public final class BuildNearbyTool implements ServerTool {
     record Arguments(BuildTarget target, int offset, int maxActions) { }
 
     static Arguments arguments(JsonObject args) {
+        return arguments(args,BuildTarget::parse);
+    }
+    private static Arguments arguments(JsonObject args,java.util.function.Function<JsonObject,BuildTarget> resolve) {
         BuildTarget.keys(args, Set.of("target", "expected_revision", "offset", "max_actions"));
-        var target = BuildTarget.parse(args.getAsJsonObject("target"));
+        var target = resolve.apply(args.getAsJsonObject("target"));
         String expected = BuildTarget.string(args.get("expected_revision"), 64);
         if (!expected.equals(target.revision())) throw new IllegalArgumentException("revision");
-        int offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, 112) : -1;
+        int offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, BuildTarget.LIMIT-BuildSurvey.PAGE) : -1;
         if (offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0)
             throw new IllegalArgumentException("page");
         int limit = args.has("max_actions") ? BuildTarget.integer(args.get("max_actions"), 1, BuildWork.MAX_ACTIONS) : 12;
@@ -42,7 +45,7 @@ public final class BuildNearbyTool implements ServerTool {
                     && !java.util.Objects.equals(body.buildSite().instanceId(),
                     args.getAsJsonObject("target").get("instance_id").getAsString()))
                 throw new IllegalArgumentException("instance_site_required");
-            input = arguments(com.neko.mcbot.server.BuildRecordAccess.expanded(body,args));
+            input = arguments(args,target->com.neko.mcbot.server.BuildRecordAccess.resolve(body,target));
         }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,

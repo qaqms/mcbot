@@ -5,6 +5,15 @@
 
 ## 连续施工与搜索更新（2026-10-24）
 
+最新[完整住宅与大图纸](COMPLETE-BUILDINGS-2026-10-25.md)覆盖本节旧128格及自动合并大表描述。
+cells/fill/regions三选一，最多16384唯一格；regions最多128区域、后写覆盖同格，源载荷仍有界。
+明细/料单按16续页至16368，须原修订。mc.build_diff(target,revision?,offset?)在大于32格时
+返回全目标统计与有限明细页；按next_offset续查，details_complete=false不可称完整明细。
+work_scan/work_cursor/work_next_cursor取有限工作候选，source_offset回原明细页重验。
+build_nearby自动筛全目标近身候选；显式页仍限定16格。门与床保留两格验收，仅主格一次动作/一件料。
+空单箱/木桶、灯笼/火把、活板门、栅栏/墙与地毯沿原版预检；不合并邻箱、不搬内容。
+空格desired_state_mismatch可换站位，不能覆盖已有同块错误状态或直接修改朝向；仍31工具。
+
 最新开工与目标复用见[原登记设计复用](GOAL-DESIGN-AND-STARTUP-2026-10-24.md)。
 建筑set_goal后run_program直接return mc.build()，mc.build_diff()核对原图；
 mc.goal()返回当前登记条件副本，含原target/expected_revision，不必重写格集。

@@ -29,7 +29,8 @@ public final class BoundedProgram {
             + "mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})或mc.build(target)"
             + "组合清障和多站位施工，导航按原权限挖放，无需手写进出通道；"
             + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,remaining,blocked}并自动输出结果，"
-            + "不包在data里；mc.build_diff(target)只读自动查完同修订所有明细和料单页。"
+            + "不包在data里；mc.build_diff(target)只读全目标统计，大于32格返回有限明细，"
+            + "mc.build_diff(target,revision,offset)按next_offset续页，不在Lua攒万格大表。"
             + "已登记建筑可直接mc.build()或mc.build_diff()，mc.goal()返回当前登记条件副本；"
             + "无需重新生成原图或把内容修订号当instance_id。"
             + "mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
@@ -242,7 +243,9 @@ public final class BoundedProgram {
         if (last != null && (lastQuerySuppressed || queryRefs.containsKey(last.feedback()))
                 && !feedbackRefs.containsKey(last.feedback()))
             queryNote(last.feedback(), Math.min(2048, OUTPUT_BYTES - outputBytes - 128));
-        String hint = "按tool_help的返回字段读取data，缺字段先检查nil；" + LANGUAGE_GUIDE;
+        String hint = "按tool_help返回字段读取，缺字段先检查nil；mc.call返回ok/feedback/data，"
+                + "mc.build直接返回施工结果。不提供string/table/math库，列表追加用t[#t+1]=v。"
+                + "表用print或return，不用tostring；完整语法与分页说明见tool_help run_program。";
         stop("PROGRAM_ERROR:" + kind + "，脚本行=" + line + "。" + hint + "未重试动作。");
     }
 
@@ -286,10 +289,8 @@ public final class BoundedProgram {
         var view = new JsonObject();
         for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
                 "observation_key", "goal_satisfied", "offset", "next_offset", "total", "remaining",
-                "material_bill_complete"))
+                "material_bill_complete", "work_scan", "work_next_cursor", "counts"))
             if (data.has(key)) view.add(key, data.get(key));
-        if (data.has("goal_satisfied") && data.get("goal_satisfied").getAsBoolean())
-            view.add("counts", data.get("counts"));
         var cells = new JsonArray();
         for (var value : data.getAsJsonArray("cells")) {
             var cell = value.getAsJsonObject();
@@ -299,11 +300,12 @@ public final class BoundedProgram {
                 cells.add(selected);
                 continue;
             }
-            for (String key : List.of("x", "y", "z", "block", "actual_block",
+            for (String key : List.of("x", "y", "z", "block", "actual_block", "source_offset",
                     "clear_allowed", "clear_reason", "unsupported_reason", "placement_failure"))
                 if (cell.has(key)) selected.add(key, cell.get(key));
             if ("out_of_reach".equals(cell.get("state").getAsString())
-                    || "blocked".equals(cell.get("state").getAsString())) {
+                    || "blocked".equals(cell.get("state").getAsString())
+                    || "state_conflict".equals(cell.get("state").getAsString())) {
                 for (String key : List.of("item", "material_available"))
                     if (cell.has(key)) selected.add(key, cell.get(key));
             }

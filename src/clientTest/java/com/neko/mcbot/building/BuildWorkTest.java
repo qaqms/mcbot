@@ -55,6 +55,47 @@ class BuildWorkTest {
         w.inventory.setItem(2, new ItemStack(Items.STONE, 32));
         return w;
     }
+    @Test void maximumPlanFindsASingleLastCellWithoutWaitingForAThousandSatisfiedPages() {
+        var target=BuildTarget.parse(BuildTargetTest.largeInput());
+        var world=world();
+        target.cells().forEach(c->world.blocks.put(c.pos(),c.desired()));
+        var last=target.cells().getLast();
+        world.blocks.remove(last.pos());
+        var before=BuildSurvey.workScan(target,world,0,()->0).data();
+        assertEquals(16384,before.get("total").getAsInt());
+        assertEquals(1,before.get("remaining").getAsInt());
+        assertEquals(1,before.getAsJsonArray("cells").size());
+        assertEquals(16368,before.getAsJsonArray("cells").get(0).getAsJsonObject().get("source_offset").getAsInt());
+        assertTrue(before.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length<20000);
+        var task=new BuildWork(target,world,-1,12,()->0);
+        task.tickSafe(null);
+        assertEquals(1,world.actions,"all satisfied pages are skipped in the first work tick");
+        var done=finish(task);
+        assertTrue(done.ok(),done.feedback());
+        assertTrue(done.data().get("goal_satisfied").getAsBoolean());
+        world.unknown.add(target.cells().getFirst().pos());
+        assertFalse(BuildSurvey.verify(target,world,0,()->0).data().get("goal_satisfied").getAsBoolean());
+    }
+    @Test void maximumEmptyPlanCountsEveryMaterialButDirectlySelectsTheSingleNearbyCell() {
+        var target=BuildTarget.parse(BuildTargetTest.largeInput()); var world=world();
+        target.cells().forEach(c->world.far.add(c.pos()));
+        var last=target.cells().getLast(); world.far.remove(last.pos());
+        var before=BuildSurvey.workScan(target,world,0,()->0).data();
+        assertEquals(16384,before.get("remaining").getAsInt());
+        var bill=before.getAsJsonArray("materials").get(0).getAsJsonObject();
+        assertEquals(16384,bill.get("design_required").getAsInt());
+        assertEquals(16384,bill.get("required").getAsInt());
+        assertEquals(16352,bill.get("shortfall").getAsInt());
+        var task=new BuildWork(target,world,-1,1,()->0);
+        task.tickSafe(null);
+        assertEquals(1,world.actions);
+        assertEquals(last.desired(),world.blocks.get(last.pos()));
+        var result=finish(task);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(16383,result.data().get("whole_remaining").getAsInt());
+        assertFalse(result.data().get("goal_satisfied").getAsBoolean());
+        assertEquals(31,world.inventory.getItem(2).getCount());
+    }
     private ServerTool.Result finish(BuildWork work) {
         for (int i = 0; i < 30; i++) {
             var p = work.tickSafe(null);

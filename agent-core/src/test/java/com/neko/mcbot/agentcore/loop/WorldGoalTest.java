@@ -9,6 +9,25 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldGoalTest {
+    @Test void fullSizeBuildingEvidenceRetainsWholeGoalCountsAndNeverAcceptsTheLastMissingCell() {
+        var state=buildState(20);
+        var evidence=state.getAsJsonObject("goal_evidence");
+        evidence.addProperty("total",16384);
+        evidence.getAsJsonObject("counts").addProperty("satisfied",16384);
+        var spec=building();
+        spec.getAsJsonObject("target").add("fill",json("""
+                {"from":{"x":-32,"y":0,"z":0},"to":{"x":31,"y":31,"z":7},"block":"stone"}
+                """));
+        var goal=new WorldGoal(spec,state);
+        assertTrue(goal.satisfied());
+        evidence.addProperty("remaining",1);
+        evidence.getAsJsonObject("counts").addProperty("satisfied",16383);
+        evidence.getAsJsonObject("counts").addProperty("not_assessed",1);
+        goal.observe(state);
+        assertFalse(goal.satisfied(),"an optimistic success flag cannot hide the final missing cell");
+        evidence.addProperty("total",16385);
+        assertThrows(RuntimeException.class,()->goal.observe(state));
+    }
     @Test void restoredWorldGoalUsesFreshBodyAndExactRevisionButKeepsDeliveryBaselines() {
         var original = new WorldGoal(building(), buildState(10));
         var fresh = buildState(20); fresh.addProperty("body_id", "body-after-rejoin");

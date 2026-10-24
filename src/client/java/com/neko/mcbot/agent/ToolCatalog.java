@@ -69,9 +69,9 @@ public final class ToolCatalog {
             case "build_site" -> "任务内登记完整目标，进出通道和范围可选，共用施工保护及累计账。"
                     + "多站位用run_program的mc.build(target)，无需手写通道；超出当前手距就换站位，草花和目标清障按原权限自动处理。"
                     + "先清低层障碍，局部站位失败可尝试其他工作格；query只读，登记不授予许可，不自动找料，不保证全局返程。";
-            case "build_diff" -> "只读建筑格集或fill线/面/体差异与材料；最多128格，锚点/旋转/作者属性固定，未指定格不动。"
-                    + "Lua优先mc.build_diff(target)自动续页；手动续页必须带首张target_revision作expected_revision。"
-                    + "明细及料单独立分页；双格门保留两半验收，仅下半动作/一件料。"
+            case "build_diff" -> "只读建筑格集或fill/regions差异与材料，最多16384格；大图用紧凑区域或实例引用，锚点/旋转/属性固定。"
+                    + "Lua的mc.build_diff(target)给全目标统计及有限明细；按next_offset与原修订续页，施工用mc.build。"
+                    + "门与床保留两格验收，仅主格动作/一件料；支持空单箱/木桶、工位与常用建筑装饰，细节tool_help。"
                     + "未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
             case "move_to" -> "规划行走/挖穿/搭路；默认搜索按切片续推，无整趟节点/记录停止额度；walk_only=true不挖放，exact=true指定脚格，"
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"

@@ -27,6 +27,26 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSurveyTest {
+    @Test void wrongNativeOrientationAtAnEmptyCellIsAWorkStanceProblemRatherThanAProtectedTarget() {
+        var target=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":4,"y":90,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"oak_stairs",
+                "properties":[{"name":"facing","value":"east"}]}]}
+                """).getAsJsonObject());
+        var evidence=new BuildSiteTest.World();
+        var site=new BuildSite(); site.bind(new Object(),evidence);
+        assertNull(site.begin(target,BuildSiteTest.ROUTE,BuildSiteTest.FEET,evidence));
+        var world=new World(); world.inventory.setItem(0,new ItemStack(Items.OAK_STAIRS,2));
+        world.prepare=(pos,face)->site.placementGuard(pos,world.proposed,evidence);
+        var wrong=world.query(target).getAsJsonArray("cells").get(0).getAsJsonObject();
+        assertEquals("state_conflict",wrong.get("state").getAsString());
+        assertEquals("desired_state_mismatch",wrong.get("placement_failure").getAsString());
+        assertEquals("minecraft:air",wrong.get("actual_block").getAsString());
+        assertTrue(wrong.get("material_available").getAsBoolean());
+        world.overrideProposed=target.cells().getFirst().desired();
+        assertEquals(1,count(world.query(target),"ready"),"a new native context can fulfill the unchanged authored orientation");
+        assertTrue(world.blocks.isEmpty());
+        assertEquals(2,world.inventory.getItem(0).getCount());
+    }
     @Test void aRejectedClearReportsTheActualConditionInsteadOfInventingAnAuthorizationRequest() {
         var world=new World() {
             @Override public String clearReason(BuildTarget.Cell cell) { return "body_support"; }

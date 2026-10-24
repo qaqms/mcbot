@@ -5,6 +5,13 @@
 
 ## 连续施工与普通搜索接续（2026-10-24）
 
+本节以[完整住宅与大图纸](COMPLETE-BUILDINGS-2026-10-25.md)及STATUS顶部覆盖旧128格描述。
+BuildTarget/WorldGoal共16384格，regions紧凑源与规范内容哈希分开，检查点保留原图。
+BuildSurvey全目标计数/料单、有限明细与work_scan候选分开；BuildWork直接全目标选近身格，
+mc.build消费有限候选并逐格重验，不在Lua攒全部页。公共mc.build_diff大于32格保留有限页。
+床与门共两格足迹、唯一主动作和两格验收；空单箱/木桶及常用装饰沿原生放置。
+空格预测朝向不符可走原工作导航，原图不改。没有直接世界写入或新增并行模型。
+
 最新以[原登记设计复用](GOAL-DESIGN-AND-STARTUP-2026-10-24.md)为准。
 WorldGoal保留完整条件，AgentLoop.registeredGoal以深副本提供当前任务真源；
 程序启动快照经mc.goal读取，mc.build()/mc.build_diff()省略target时携带原修订复用。

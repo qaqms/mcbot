@@ -3,6 +3,55 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 完整住宅、大图纸与家具（2026-10-25，Asia/Shanghai）
+
+- 接续dd5bf9e寻路修复，开工保留4份未完成补丁；fetch已完成，远端没有新的待合并提交。
+  用户要求学习参考的大型美观住宅、实际门/坡顶/屋檐及床/工作台/箱子。
+  只改本体，宿主/连接器/参考/实例只读，不安装包或启动游戏/服务器/真实模型。
+- 只读核对参考Canvas的MAX_CELLS=16384、Layout/BuildApi/BuildSurvey/BuildOrder/
+  BuildCellRules/BuildStates和建筑知识。学整图盘料、区域叠加、多站位持续推进及多格主动作；
+  未复制/翻译参考代码、注释、提示、技能或资产，不迁移直接设置世界状态路径。
+- BuildTarget与WorldGoal统一16384唯一格，新增regions紧凑叠加；cells仍拒绝重复坐标，
+  区域后写覆盖先写，规范内容哈希不因表达形式改变。紧凑原图深副本贯通检查点、设计保存和
+  实例落点；活动工地同原输入复用解析目标。偏移上界16368，原修订分页、相对±32保持。
+  来源支持16384格，事件按目标规模容纳，文件保护32MiB；重载不恢复活见证或额外额度。
+  原结构.nbt文件格式仍128显式格/4096体积及原字节保护，不冒充已扩成大型文件导入器。
+- BuildSurvey整图计数/料单与有限明细分开，只为候选生成JSON/原版预检；
+  work_scan最多16个未满足候选，work_cursor按规范索引续取，source_offset回原页重验。
+  build_nearby自动直筛全目标近身格，跳过满足页；显式页仍限定原页。
+  mc.build不在Lua攒万格分页，真实变化后重评；大于32格的公共mc.build_diff返回全局统计、
+  有限明细与真实next_offset/details_complete，显式第三参数offset续查，工具数仍31。
+- 床与门共两格足迹，分别只从foot/下半发一次原版动作、消耗一件，两格都核实际效果/记录；
+  四旋转、床头先排序/跨页、次格未知/占位/保护、部分回调/异常/取消均保留真实条件。
+  空单箱/木桶、灯笼/火把、活板门、栅栏/墙、地毯沿原放置支持；拒绝预测合并邻箱或家具载荷。
+  空格朝向不符改报desired_state_mismatch，可换工作站位，原设计和真实已有同块冲突不放宽。
+  原创建筑知识首页明确先布置室内净空与功能，再加墙/坡顶/檐，实际门/床/工作台/箱子/照明
+  纳入完整设计；不为旧128格缩成方盒，不加固定房型、新目标存储或并行模型。
+- javap核对1.21.11：BedBlock.PART/OCCUPIED/继承FACING及getStateForPlacement/setPlacedBy/
+  getConnectedDirection；ChestBlock.FACING/TYPE/WATERLOGGED，ChestType.SINGLE/LEFT/RIGHT；
+  BarrelBlock、LanternBlock、TorchBlock/WallTorchBlock、TrapDoorBlock/FenceBlock/WallBlock/
+  CarpetBlock的类型和原生放置接口已核，未凭参考1.21.1签名直接移植。
+- focused1通过编译后暴露3条旧“不支持家具”断言，新增正向消费/失败回归后同步能力边界；
+  focused2修复索引化重叠判断的括号错误。focused3的400格测试触及20秒门，测试泵由极短park
+  改为队列到达即唤醒，原20秒/30秒门和动作/库存断言保留，focused4于37秒通过。
+  这项只属Windows工装等待粒度，不记为游戏提速。final1错误帮助文字超过原输出断言，
+  final2补回语言边界，final3修正跨页床夹具误选石块为床foot；没有减少动作或安全断言。
+- 最终 `./gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/complete-buildings-final4-20261025.log第65至66行，
+  **1分11秒、20任务全执行；1908项/199 suites，failures/errors/skipped全0**。
+  核心435/46、根170/23、客户端1303/130，比寻路卡新增17项。
+  16384解析/料单/最后一格/未知、紧凑保存重载、300事件越过旧256门、
+  49/105/128/400格同Lua完整清理与放置、床/家具/朝向换位及原目标独立验收均离线覆盖；
+  世界/原版回调/身体/模型仍受控，不当作真实ServerLevel或美观已验。
+- 最终JAR build/libs/mcbot-0.1.0.jar为**1,791,376 bytes**，末写00:12:06，
+  SHA256 `c374a758119ad577743421351f4ba20ca7d59beafc13947be62364ad2880a18e`；
+  内嵌core与独立产物一致，SHA256
+  `840c4b370324601448052c9a7ed7f53eb6aec9b9775a23a5d6f2a826eb080eee`。
+  Lua15973 bytes、建筑知识9415 bytes与源码逐字节一致，版本/入口/LuaJ/建筑类已核；
+  导入包build/mcbot-import-20261025-complete-buildings.zip，保留历史包，提交/推送以Git为准。
+  构建结束未发现java进程，未终止任何玩家进程。真实流畅度/大型地形/模型设计外观仍待新包复测。
+  详见[完整住宅与大图纸](docs/COMPLETE-BUILDINGS-2026-10-25.md)。
+
 ## 近距离施工寻路停顿（2026-10-24，Asia/Shanghai）
 
 - 最新实测快照build/navigation-design-session-20261024.log，125430 bytes，

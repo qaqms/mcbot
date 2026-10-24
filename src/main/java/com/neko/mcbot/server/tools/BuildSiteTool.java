@@ -15,6 +15,9 @@ public final class BuildSiteTool implements ServerTool {
     record Arguments(String operation, BuildTarget target, String revision, List<BlockPos> route,
                      com.neko.mcbot.path.PathSpec scope) { }
     static Arguments arguments(JsonObject args) {
+        return arguments(args,BuildTarget::parse);
+    }
+    private static Arguments arguments(JsonObject args,java.util.function.Function<JsonObject,BuildTarget> resolve) {
         String operation = BuildTarget.string(args.get("operation"), 16);
         return switch (operation) {
             case "query" -> {
@@ -23,7 +26,7 @@ public final class BuildSiteTool implements ServerTool {
             }
             case "begin" -> {
                 BuildTarget.keys(args, Set.of("operation", "target", "access_route", "bounds", "expected_revision"));
-                var target = BuildTarget.parse(args.getAsJsonObject("target"));
+                var target = resolve.apply(args.getAsJsonObject("target"));
                 if (args.has("expected_revision")
                         && !target.revision().equals(BuildTarget.string(args.get("expected_revision"), 64)))
                     throw new IllegalArgumentException("revision");
@@ -57,7 +60,7 @@ public final class BuildSiteTool implements ServerTool {
         try {
             if (args.has("target") && args.getAsJsonObject("target").has("instance_id"))
                 instance=BuildRecordAccess.instance(body,args.getAsJsonObject("target"));
-            input = arguments(BuildRecordAccess.expanded(body,args));
+            input = arguments(args,target->BuildRecordAccess.resolve(body,target));
         }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,

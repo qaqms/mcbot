@@ -96,7 +96,7 @@ public final class BuildSite {
                                    com.neko.mcbot.path.PathSpec selectedScope, Access access) {
         if (task == null || stopped) return failed("DENIED:没有有效施工任务或工地已停止。");
         if (next.cells().stream().anyMatch(c -> !BuildObjects.problem(next,c).isEmpty()))
-            return failed("DENIED:双格门须明确完整且一致的两半目标，不登记缺半或冲突工地。");
+            return failed("DENIED:双格对象须明确完整且一致的两半目标，不登记缺半或冲突工地。");
         if (target != null) {
             if (accessRoute.isEmpty()) accessRoute = route;
             if (!same(next.revision()) || !route.equals(accessRoute) || !scope.equals(selectedScope))
@@ -221,8 +221,9 @@ public final class BuildSite {
         return boxes != null && boxes.isEmpty();
     }
     private boolean supportsFinished(BlockPos pos, Access access) {
-        return target.cells().stream().anyMatch(c -> !c.authored().isAir()
-                && c.pos().below().equals(pos) && c.matches(access.state(c.pos())) && !plainCube(c.desired()));
+        var above=cell(pos.above());
+        return above!=null && !above.authored().isAir() && above.matches(access.state(above.pos()))
+                && !plainCube(above.desired());
     }
     public static boolean plainCube(BlockState state) {
         return state != null && !state.hasBlockEntity() && state.getFluidState().isEmpty()
@@ -244,11 +245,14 @@ public final class BuildSite {
         if (selected != null) {
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
                 return failed("DENIED:实例格来源冲突、未知或累计记录额度耗尽，不覆盖外部改动。");
-            if (instance!=null && BuildObjects.door(proposed)
+            if (instance!=null && BuildObjects.paired(proposed)
                     && !records.hasCapacity(instance,BuildObjects.footprint(pos,proposed)))
                 return failed("ACTION_LIMIT:双格实际变化所需记录额度不足，未开始原版动作。");
-            if (selected.matches(access.state(pos)) || !selected.matches(proposed))
-                return failed("DENIED:不覆盖已满足格或放入偏离冻结目标的状态。");
+            if (selected.matches(access.state(pos))) return failed("DENIED:不覆盖已满足的冻结目标。");
+            if (!selected.matches(proposed)) {
+                var data=new JsonObject(); data.addProperty("placement_failure","desired_state_mismatch");
+                return new ServerTool.Result(false,"TARGET_BLOCKED:当前原版落位状态不满足冻结目标，换工作站位后重验；未改写状态。",data);
+            }
         } else if (protects(pos) && !temporaryPlacement) return failed("DENIED:不覆盖完整目标的直接支撑。");
         return null;
     }
@@ -266,7 +270,7 @@ public final class BuildSite {
         boolean soft = softClearance(access.state(pos));
         if (!same(revision) || accessCell(pos) && !soft || access.occupied(pos) && !soft)
             return failed("DENIED:施工修订不符，或目标承担通道/身体支撑。");
-        if (BuildObjects.door(access.state(pos))) return doorMiningGuard(pos, cleanup, access);
+        if (BuildObjects.paired(access.state(pos))) return objectMiningGuard(pos, cleanup, access);
         if (cleanup) {
             if (!access.passageComplete())
                 return failed("TARGET_LOST:实际路线记录有缺口，不能确认临时工程已无通行依赖，未回收。");
@@ -288,7 +292,7 @@ public final class BuildSite {
         }
         return null;
     }
-    private ServerTool.Result doorMiningGuard(BlockPos pos, boolean cleanup, Access access) {
+    private ServerTool.Result objectMiningGuard(BlockPos pos, boolean cleanup, Access access) {
         var actual = access.state(pos);
         var footprint = Set.copyOf(BuildObjects.footprint(pos,actual));
         if (cleanup || instance==null || !records.hasCapacity(instance,footprint))
@@ -303,10 +307,8 @@ public final class BuildSite {
                     || target.cells().stream().anyMatch(c -> !c.authored().isAir()
                     && !footprint.contains(c.pos()) && c.pos().below().equals(p)))
                 return failed("DENIED:双格拆改的占位、来源、材料、支撑或依赖不满足；未触碰任一半。");
-            if (!state.isAir() && (!BuildObjects.door(state) || !p.equals(pos)
-                    && state != actual.setValue(net.minecraft.world.level.block.DoorBlock.HALF,
-                    BuildObjects.upper(actual) ? net.minecraft.world.level.block.state.properties.DoubleBlockHalf.LOWER
-                            : net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER)))
+            if (!state.isAir() && (!BuildObjects.paired(state) || !p.equals(pos)
+                    && state != BuildObjects.partnerState(actual)))
                 return failed("DENIED:门的另一半已被替换或状态不一致，未连带拆除。");
             complete &= selected.matches(state);
         }

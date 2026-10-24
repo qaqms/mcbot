@@ -83,4 +83,22 @@ class BuildDiffToolTest {
         },()->0));
         assertTrue(reached.get(),"16.0 from Lua is a valid integral offset");
     }
+    @Test void lastLargePageAndUnalignedWorkCursorValidateBeforeWorldLookup() {
+        var input=JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":-32,"y":0,"z":0},
+                "to":{"x":31,"y":31,"z":7},"block":"stone"}}
+                """).getAsJsonObject();
+        var args=new com.google.gson.JsonObject(); args.add("target",input);
+        args.addProperty("expected_revision",BuildTarget.parse(input).revision());
+        args.addProperty("offset",16368);
+        assertThrows(IllegalStateException.class,()->BuildDiffTool.report(args,ignored->{
+            throw new IllegalStateException("validated final page");
+        },()->0));
+        args.addProperty("offset",0); args.addProperty("work_scan",true); args.addProperty("work_cursor",16383);
+        assertThrows(IllegalStateException.class,()->BuildDiffTool.report(args,ignored->{
+            throw new IllegalStateException("validated canonical cursor");
+        },()->0));
+        args.remove("expected_revision");
+        assertFalse(BuildDiffTool.report(args,ignored->{fail("cursor continuation requires revision"); return null;},()->0).ok());
+    }
 }

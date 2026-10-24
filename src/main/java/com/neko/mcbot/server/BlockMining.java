@@ -296,7 +296,7 @@ public final class BlockMining {
             if (recordFailure!=null) return recordFailure;
             var siteFailure = player.buildSite().miningGuard(pos, siteRevision, cleanup, new BuildSiteAccess(player));
             if (siteFailure != null) return siteFailure;
-            if (com.neko.mcbot.building.BuildObjects.door(state())) {
+            if (com.neko.mcbot.building.BuildObjects.paired(state())) {
                 var other=com.neko.mcbot.building.BuildObjects.other(pos,state());
                 if (!level.isLoaded(other) || !level.isInWorldBounds(other)
                         || !level.getWorldBorder().isWithinBounds(other) || !level.mayInteract(player,other))
@@ -310,10 +310,9 @@ public final class BlockMining {
                     otherFailure=player.buildSite().miningGuard(other,siteRevision,cleanup,new BuildSiteAccess(player));
                     if (otherFailure!=null) return otherFailure;
                 }
-                if (!otherState.isAir() && (!com.neko.mcbot.building.BuildObjects.door(otherState)
+                if (!otherState.isAir() && (!com.neko.mcbot.building.BuildObjects.paired(otherState)
                         || otherState.getBlock()!=state().getBlock()
-                        || com.neko.mcbot.building.BuildObjects.upper(otherState)
-                        ==com.neko.mcbot.building.BuildObjects.upper(state())
+                        || otherState!=com.neko.mcbot.building.BuildObjects.partnerState(state())
                         || otherState.getDestroySpeed(level,other)<0 || !player.hasCorrectToolForDrops(otherState)
                         || player.blockActionRestricted(level,other,player.gameMode.getGameModeForPlayer())
                         || !player.getMainHandItem().canDestroyBlock(otherState,level,other,player)))

@@ -39,14 +39,17 @@ public final class ClientToolDefs {
             """;
     private static final String BUILD_TARGET = """
             {"oneOf":[{"type":"object","properties":{"anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},
-            "cells":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
+            "cells":{"type":"array","minItems":1,"maxItems":16384,"items":%s}},
             "required":["anchor","cells"],"additionalProperties":false},
             {"type":"object","properties":{"anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},"fill":%s},
             "required":["anchor","fill"],"additionalProperties":false},
+            {"type":"object","properties":{"anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},
+            "regions":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
+            "required":["anchor","regions"],"additionalProperties":false},
             {"type":"object","properties":{"instance_id":{"type":"string","minLength":36,"maxLength":36},
             "instance_revision":{"type":"integer","minimum":1,"maximum":1024}},
             "required":["instance_id","instance_revision"],"additionalProperties":false}]}
-            """.formatted(BUILD_ANCHOR, BUILD_CELL, BUILD_ANCHOR, BUILD_FILL);
+            """.formatted(BUILD_ANCHOR, BUILD_CELL, BUILD_ANCHOR, BUILD_FILL, BUILD_ANCHOR, BUILD_FILL);
 
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
@@ -149,7 +152,10 @@ public final class ClientToolDefs {
                     + "verify_only=true仅重查全目标，略过当前页工作预检；goal_observation_key只含目标真实状态，用于阶段核对。"
                     + "cells是当前16格明细，next_offset=-1为末页；materials独立material_next_offset续页。"
                     + "手动非零偏移必须带同target的expected_revision=首张data.target_revision；16.0等整数值合法。"
-                    + "Lua可用mc.build_diff(target)自动续完明细和料单，直接返回data对象；"
+                    + "Lua的mc.build_diff(target)直接返回data对象；大于32格时返回全局统计与有限明细页，"
+                    + "按next_offset及同修订调用mc.build_diff(target,revision,offset)续页，不把万格明细全存入Lua或输出。"
+                    + "work_scan=true返回最多16个未满足候选，work_cursor/work_next_cursor沿规范格索引续取，"
+                    + "候选source_offset供普通16格页重新核查；counts/remaining始终覆盖全目标。"
                     + "page_counts/page_remaining/page_satisfied仅本页，counts/remaining是全目标，二者不是矛盾。"
                     + "料单required为全目标已知未满足格需求下界，available仅36储物槽的无额外组件材料，"
                     + "shortfall是差额；allocated仅当前明细页通过原版预检的份数，未预留，consumed始终0。"
@@ -354,7 +360,8 @@ public final class ClientToolDefs {
                     + "只支持size、palette、blocks与空entities的结构；调色板Name/Properties逐项进B1注册表/作者状态，不忽略属性。"
                     + "显式air是清空要求，缺省格不碰；非法/不支持格、方块实体载荷或任何实体使整份不可导入，不导入部分图假完成。"
                     + "不接容器内容、战利品、命令、点击文本、可执行载荷或物品组件。原版双格门须完整两半，"
-                    + "两半明确half/facing/hinge且其他属性要求一致；两格保留验收，仅下半动作/一件料；其他多格/装饰仍不支持。"
+                    + "两半明确half/facing/hinge且其他属性要求一致；床须完整part/facing两格，其他家具/装饰范围同build_diff。"
+                    + "两格对象均保留验收，仅主格动作/一件料。此文件格式仍有独立128显式格与字节限制，不等于内联regions容量。"
                     + "压缩64KiB/解压128KiB/NBT计费256KiB/深16/解析200ms协作帽，目录至多128项、调色板64项，"
                     + "各轴1-33/体积4096/显式格1-128；保留原施工/模型/探索/范围/许可与取消预算。",
                     """
@@ -366,7 +373,8 @@ public final class ClientToolDefs {
                     "required":["operation"],"additionalProperties":false}
                     """),
             new ToolSpec("build_record", "保存可复用设计与世界内建筑实例，只有数据、不含脚本；不执行世界动作或自动恢复目标。"
-                    + "design_create(design_id,definition)创建；definition为cells或fill之一，相对±32、最多128格。"
+                    + "design_create(design_id,definition)创建；definition为cells/fill/regions之一，相对±32、最多16384格。"
+                    + "regions为最多128个fill区域，后写覆盖前写同格；用区域表达墙面、开口、屋面和室内，避免展开列表超出传输载荷。"
                     + "design_patch(design_id,design_revision,edits)逐步修改最多16格，remove=true删除，其他项为完整cell；同坐标不能重复。"
                     + "design_query(design_id,design_revision,offset?,layer?)按16格/切层查询，design_list列设计。"
                     + "instance_create(design_id,design_revision,anchor,rotation?)冻结副本；同设计可多落点，世界/维度/主人/身体隔离，实例不能重叠。"
@@ -375,16 +383,18 @@ public final class ClientToolDefs {
                     + "返回target={instance_id,instance_revision}直接交原build_diff/build_site/build_nearby及mc.build，仍需原通道/范围/许可。"
                     + "设计修订不清失败账或补模型/探索/动作账。逐真实动作落盘，取消保留半成品；旧格拆除须有效逐格见证和真实依赖检查。"
                     + "同块替换、缺钩子、卸载和重进后来源不可证均保守冲突；已满足的他人方块不认领。"
-                    + "每世界最多32设计/32实例，每实例128来源格/256逐格真实变化事件；双格门一次动作预留两条记录，"
+                    + "每世界最多32设计/32实例、32MiB实际记录；每实例最多16384来源格，逐格事件容量为max(256,目标格数×4)。双格对象一次动作预留两条记录，"
                     + "主格记消费、次格记0，不重复计价；无淘汰换额，读写失败停修改。",
                     """
                     {"type":"object","properties":{"operation":{"type":"string","enum":["design_create","design_patch","design_query","design_list",
                     "instance_create","instance_query","instance_revise","instance_list"]},
                     "design_id":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-z0-9][a-z0-9_-]{0,47}$"},
                     "design_revision":{"type":"integer","minimum":1,"maximum":1024},
-                    "definition":{"oneOf":[{"type":"object","properties":{"cells":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
+                    "definition":{"oneOf":[{"type":"object","properties":{"cells":{"type":"array","minItems":1,"maxItems":16384,"items":%s}},
                     "required":["cells"],"additionalProperties":false},{"type":"object","properties":{"fill":%s},
-                    "required":["fill"],"additionalProperties":false}]},
+                    "required":["fill"],"additionalProperties":false},{"type":"object","properties":{
+                    "regions":{"type":"array","minItems":1,"maxItems":128,"items":%s}},
+                    "required":["regions"],"additionalProperties":false}]},
                     "edits":{"type":"array","minItems":1,"maxItems":16,"items":{"oneOf":[%s,
                     {"type":"object","properties":{"x":{"type":"integer","minimum":-32,"maximum":32},"y":{"type":"integer","minimum":-32,"maximum":32},
                     "z":{"type":"integer","minimum":-32,"maximum":32},"remove":{"type":"boolean","enum":[true]}},
@@ -392,27 +402,32 @@ public final class ClientToolDefs {
                     "instance_id":{"type":"string","minLength":36,"maxLength":36},
                     "instance_revision":{"type":"integer","minimum":1,"maximum":1024},
                     "anchor":%s,"rotation":{"type":"integer","enum":[0,90,180,270]},
-                    "offset":{"type":"integer","minimum":0,"maximum":112},"layer":{"type":"integer","minimum":-32,"maximum":32}},
+                    "offset":{"type":"integer","minimum":0,"maximum":16368},"layer":{"type":"integer","minimum":-32,"maximum":32}},
                     "required":["operation"],"additionalProperties":false}
-                    """.formatted(BUILD_CELL,BUILD_FILL,BUILD_CELL,BUILD_ANCHOR)),
+                    """.formatted(BUILD_CELL,BUILD_FILL,BUILD_FILL,BUILD_CELL,BUILD_ANCHOR)),
             new ToolSpec("build_diff", "只读核对有限建筑目标及材料；不施工、不挖掘、不移动或自动找料。"
-                    + "target.anchor为世界锚点，cells的x/y/z为相对坐标；或用fill.from/to闭区间生成线/面/体，二者仅选其一。"
-                    + "最多128格、相对各轴±32，无重复格；未指定格不动，air为明确清空要求，清空仍需后续原挖掘许可。"
+                    + "target.anchor为世界锚点，cells的x/y/z为相对坐标；或用fill闭区间、regions区域列表，三者仅选其一。"
+                    + "最多16384唯一格、相对各轴±32；cells不许重复，regions后写覆盖前写，最多128区域及65536次展开写入。"
+                    + "大设计用紧凑regions或实例引用；传输大小仍受原保护。未指定格不动，air为明确清空要求。"
                     + "rotation默认0，允许0/90/180/270顺时针，坐标和作者状态一起旋转。"
                     + "properties可选[{name,value}]，只匹配明确要求的属性；不忽略已写的朝向/含水等，也不自动替代方块。"
                     + "target_revision按完整规范目标生成，任一非零偏移续页必须带expected_revision。改变目标不补任何任务预算。"
-                    + "run_program可直接local d=mc.build_diff(target)，自动固定修订查完所有页，无需手算offset。"
+                    + "run_program可直接local d=mc.build_diff(target)取得全局统计；大于32格仅带一页明细，"
+                    + "细查用mc.build_diff(target,d.target_revision,d.next_offset)，施工直接mc.build，不逐页攒完整大表。"
+                    + "work_scan=true按work_cursor取最多16个未满足候选，work_next_cursor=-1为候选末尾；source_offset是原明细页。"
                     + "offset和material_offset独立16格/16种分页；counts及全目标剩余需求每次重新核对，不累加各页观察数。"
                     + "当前页最多96次原版放置预检，共用50ms协作时间帽；未查明/不支持/未知保留缺口，不能误报完成。"
-                    + "支持已有普通单格及原版双格门；门须完整两半、明确half/facing/hinge且其余属性要求一致。"
-                    + "门仅下半可施工/计一件料，上半paired_pending仍是验收目标；两格须空气，半成品不能覆盖另一半。"
+                    + "支持普通单格、玻璃、楼梯/半砖、工作台、空单箱/木桶、灯笼/火把、活板门、栅栏/墙及地毯；属性须原版可放出。"
+                    + "双格门明确half/facing/hinge；床明确part/facing且含完整foot/head，其他属性要求一致；"
+                    + "只从门下半或床foot动作/一件料，次格paired_pending仍验收。不能覆盖另一半或合并邻箱，不搬家具内容。"
                     + "其他多格、流体、双层半砖多次动作及复杂组件仍不支持，绝不直接写状态。"
                     + "需求/可用/本页分配/实际消费分开，已满足格不再要料，只有36槽无额外组件材料可分配。"
                     + "ready仍待真实放置，goal_satisfied仅本次同修订现场条件，不是外层目标已验收。",
                     """
                     {"type":"object","properties":{"target":%s,
-                    "offset":{"type":"integer","minimum":0,"maximum":112},
-                    "material_offset":{"type":"integer","minimum":0,"maximum":112},
+                    "offset":{"type":"integer","minimum":0,"maximum":16368},
+                    "material_offset":{"type":"integer","minimum":0,"maximum":16368},
+                    "work_scan":{"type":"boolean"},"work_cursor":{"type":"integer","minimum":0,"maximum":16383},
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64},"verify_only":{"type":"boolean"}},
                     "required":["target"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
@@ -441,14 +456,14 @@ public final class ClientToolDefs {
             new ToolSpec("build_nearby", "在原地对build_diff同一target/expected_revision施工；省略offset自动查全目标中的近身可做格，显式offset限定16格页。"
                     + "每刻最多一次原版放置，max_actions默认12/最多12；每格重新核材料、接触、目标状态、区域锁及任务控制权。"
                     + "不移动、不挖、不自动找料或补全依赖；支撑随实际放置重新评估，缺口单独报告。"
-                    + "400ms累计协作工作帽/每次查询50ms/200游戏刻；自动模式逐刻换页，扫描预算含全页，不中断单个原版回调。"
+                    + "400ms累计协作工作帽/每次查询50ms/200游戏刻；自动模式直接筛选全目标近身候选，不逐刻等待所有空页，不中断单个原版回调。"
                     + "失败不重放，取消后不再动作；实际扣料与半成品保留，两个游戏刻后重新核全目标。"
-                    + "已有满足格不消费；沿用36槽默认组件，同B1单格与完整双格门支持范围。门只发下半一次动作/消费一件，"
+                    + "已有满足格不消费；沿用36槽默认组件及build_diff支持范围。双格对象仅主格一次动作/消费一件，"
                     + "两半逐格记录；任一半未知/保护/占位不得动作。ACCEPTED等真终态；本批结束不是整栋完成。"
                     + "Lua按max_actions预扣原子预算，换页/换阶段不补原预算。",
                     """
                     {"type":"object","properties":{"target":%s,
-                    "offset":{"type":"integer","minimum":0,"maximum":112},
+                    "offset":{"type":"integer","minimum":0,"maximum":16368},
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64},
                     "max_actions":{"type":"integer","minimum":1,"maximum":12}},
                     "required":["target","expected_revision"],"additionalProperties":false}

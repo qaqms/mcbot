@@ -4,6 +4,11 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-25完整住宅与大图纸见COMPLETE-BUILDINGS-2026-10-25及STATUS顶部。
+16384格regions/完整料单/候选施工共原目标与存储，公共大图明细有限分页，不攒万格Lua表。
+床/门唯一主动作、空箱/木桶和常用装饰沿原版入口，朝向失败可换工作位，原权限/取消保持。
+400格完整Lua与16384边界均离线覆盖，最终全量与候选见STATUS；不安装或启动游戏/模型。
+
 2026-10-24开工与原目标复用见GOAL-DESIGN-AND-STARTUP-2026-10-24及STATUS顶部。
 旧码精确复现移动成功后FUNCTION_CALL行8；修复账务方法字符串被当来源对象读取。
 mc.goal和set_goal operation=query只读原独立条件，mc.build()/mc.build_diff()省略target复用原修订。

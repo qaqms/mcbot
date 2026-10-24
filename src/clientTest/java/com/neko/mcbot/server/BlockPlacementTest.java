@@ -63,9 +63,10 @@ class BlockPlacementTest {
 
     @Test void projectedFamiliesAreConservativeAndReuseOnlyTheExistingStorageSlots() {
         for (var item : java.util.List.of(Items.COBBLESTONE, Items.OAK_LOG, Items.OAK_SLAB,
-                Items.OAK_STAIRS, Items.CRAFTING_TABLE, Items.FURNACE, Items.OAK_DOOR))
+                Items.OAK_STAIRS, Items.CRAFTING_TABLE, Items.FURNACE, Items.OAK_DOOR,
+                Items.RED_BED, Items.TORCH, Items.CHEST, Items.BARREL, Items.LANTERN))
             assertTrue(BlockPlacement.projectable((BlockItem) item, new ItemStack(item)));
-        for (var item : java.util.List.of(Items.RED_BED, Items.TORCH, Items.SCAFFOLDING))
+        for (var item : java.util.List.of(Items.SCAFFOLDING,Items.OAK_SIGN,Items.PISTON))
             assertFalse(BlockPlacement.projectable((BlockItem) item, new ItemStack(item)));
         var slab = new ItemStack(Items.OAK_SLAB);
         slab.set(DataComponents.BLOCK_STATE, new net.minecraft.world.item.component.BlockItemStateProperties(

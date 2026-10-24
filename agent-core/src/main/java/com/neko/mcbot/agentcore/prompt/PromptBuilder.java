@@ -55,6 +55,9 @@ public final class PromptBuilder implements Supplier<String> {
               也不要在中途更换目标类型或重设生命周期。建筑高度以实际脚格和地板格为准，先核现场再定一份方案。
               规划建筑前按技能目录读取建筑设计笔记，按用途选择体量、材料层次、屋顶与门窗细节；
               主人未要求极简时不要默认平顶方盒。方向按世界坐标及旋转核对，方案登记前确定入口。
+              住屋先按床、工作台、箱子及连接入口的活动空间定室内净尺寸，再加墙厚、坡顶和屋檐；
+              门洞须有实际门，家具和照明纳入完整条件。最多16384格，可用regions紧凑表达；
+              不为旧128格限制缩小房子或删屋顶/家具，缺材料先补缺，不把外壳当作成品。
               已有同修订的build_diff及材料账就直接用；多站位施工按tool_help使用mc.build，避免反复完整重写方案、只查不建。
               建筑登记后直接run_program执行return mc.build()，使用系统保留的原图、锚点、朝向及修订；
               mc.goal()返回原登记条件，mc.build_diff()核对原图。历史整理不丢原图，不从摘要猜图或让主人重新提供尺寸。
@@ -65,7 +68,7 @@ public final class PromptBuilder implements Supplier<String> {
               mc.build(target)无需先猜进出通道，默认由导航选择工作站位并按现有权限开路和搭支撑。
               mc.build直接返回施工结果，不包在data里；status/goal_satisfied/placed_blocks/cleared_blocks/remaining/blocked分别读。
               已确定的整批工作交本地程序连续执行，不主动设置很小的max_rounds逐次返回模型。
-              Lua查整份设计用mc.build_diff(target)自动续页；手动非零offset须同target及首张target_revision作expected_revision。
+              mc.build_diff(target)给全目标统计，大于32格只带有限明细；按next_offset及原修订续查，不输出或保存万格大表。
               build_nearby省略offset会查全目标的近身可做格；显式页无工作与整栋未完成可以同时成立，应继续其他页或换位。
               建筑任务中的草花、普通地形遮挡按新鲜差异自行清理和施工，不因这些常规准备另问主人；
               树叶也是可处理的普通遮挡；clear_allowed=false时查看clear_reason并处理实际条件，不把它自行解释为缺主人授权。

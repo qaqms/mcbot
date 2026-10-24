@@ -16,7 +16,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -25,16 +25,17 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConstructionPipelineTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
-    @ParameterizedTest @ValueSource(ints = {49,105,128})
+    @ParameterizedTest @ValueSource(ints = {49,105,128,400})
     void aFullFloorClearsAndBuildsAcrossPagesInOneProgramWithoutExhaustingReceiptSpace(int count) throws Exception {
-        int depth=count==128?8:7, width=count/depth;
+        int depth=count==400?20:count==128?8:7, width=count/depth;
         var target=BuildTarget.parse(JsonParser.parseString("""
                 {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
                 "to":{"x":%d,"y":0,"z":%d},"block":"stone"}}
                 """.formatted(width-1,depth-1)).getAsJsonObject());
         var world=new BuildWorkTest.World();
-        world.inventory.setItem(0,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE,64));
-        world.inventory.setItem(1,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE,64));
+        int stock=Math.max(128,(count+63)/64*64);
+        for (int slot=0;slot<stock/64;slot++)
+            world.inventory.setItem(slot,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE,64));
         target.cells().forEach(c->world.blocks.put(c.pos(),Blocks.DIRT.defaultBlockState()));
         BuildSurvey.Access survey=new BuildSurvey.Access() {
             @Override public net.minecraft.world.level.block.state.BlockState state(BlockPos p) { return world.state(p); }
@@ -49,7 +50,7 @@ class ConstructionPipelineTest {
         };
         var names=new ArrayList<String>();
         var offsets=new ArrayList<Integer>();
-        var queue=new ConcurrentLinkedQueue<Runnable>();
+        var queue=new LinkedBlockingQueue<Runnable>();
         int[] cleared={0};
         var program=new BoundedProgram(new BoundedProgram.Plan("""
                 local t={anchor={x=0,y=90,z=0},fill={from={x=0,y=0,z=0},to={x=%d,y=0,z=%d},block="stone"}}
@@ -73,7 +74,9 @@ class ConstructionPipelineTest {
                     assertEquals(target.revision(),args.get("expected_revision").getAsString());
                     int offset=args.get("offset").getAsInt();
                     offsets.add(offset);
-                    result=BuildSurvey.query(target,survey,offset,0,()->0);
+                    result=args.has("work_scan") && args.get("work_scan").getAsBoolean()
+                            ? BuildSurvey.workScan(target,survey,args.get("work_cursor").getAsInt(),()->0)
+                            : BuildSurvey.query(target,survey,offset,0,()->0);
                 }
                 case "move_to" -> {
                     var data=JsonParser.parseString("""
@@ -111,10 +114,11 @@ class ConstructionPipelineTest {
         try {
             long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
             while(!future.isDone() && System.nanoTime()<deadline) {
-                Runnable next; while((next=queue.poll())!=null) next.run();
-                java.util.concurrent.locks.LockSupport.parkNanos(100_000);
+                var next=queue.poll(50,TimeUnit.MILLISECONDS);
+                if (next!=null) next.run();
             }
-            assertTrue(future.isDone(),"local construction must settle");
+            assertTrue(future.isDone(),"local construction must settle; cleared="+cleared[0]
+                    +", placed="+world.actions+", calls="+names.size());
             var result=future.join();
             assertTrue(result.ok(),result.feedback());
             var report=result.data().getAsJsonObject("returned");
@@ -124,7 +128,7 @@ class ConstructionPipelineTest {
             assertEquals(count,report.get("cleared_blocks").getAsInt());
             assertEquals(count,report.get("placed_blocks").getAsInt());
             assertEquals(0,report.get("remaining").getAsInt());
-            assertEquals(128-count,world.inventory.getItem(0).getCount()+world.inventory.getItem(1).getCount());
+            assertEquals(stock-count,BuildInventory.available(world.inventory,net.minecraft.world.item.Items.STONE));
             assertTrue(offsets.contains(48));
             assertTrue(offsets.size()<count*3,"full-page scans must be shared by a batch of clearing actions");
             int first=names.indexOf("break_block");

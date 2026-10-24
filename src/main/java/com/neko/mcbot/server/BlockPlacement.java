@@ -108,11 +108,11 @@ public final class BlockPlacement {
     }
 
     private static ServerTool.Result desiredObject(Access access, BuildTarget target, BuildTarget.Cell cell) {
-        if (!BuildObjects.door(cell.authored())) return null;
-        var other = BuildObjects.at(target, cell.pos().above());
-        if (!BuildObjects.problem(target, cell).isEmpty() || BuildObjects.upper(cell.authored())
-                || other == null || !other.matches(BuildObjects.upperState(access.proposedState())))
-            return failed("DENIED:双格门须明确两半的相同状态要求，且只从下半执行原版放置。", false, 0);
+        if (!BuildObjects.paired(cell.authored())) return null;
+        var other = BuildObjects.at(target, BuildObjects.other(cell.pos(),cell.desired()));
+        if (!BuildObjects.problem(target, cell).isEmpty() || BuildObjects.secondary(cell.authored())
+                || other == null || !other.matches(BuildObjects.partnerState(access.proposedState())))
+            return failed("DENIED:双格对象须明确两半的对应状态，且只从主格执行原版放置。", false, 0);
         return null;
     }
 
@@ -283,8 +283,8 @@ public final class BlockPlacement {
         if (contact != null) data.add("placement_contact", contact.deepCopy());
         boolean matched = after != null && (matches == null || matches.test(after));
         if (footprint.size() == 2) {
-            matched &= BuildObjects.door(after) && !BuildObjects.upper(after)
-                    && objectAfter.get(pos.above()) == BuildObjects.upperState(after);
+            matched &= BuildObjects.paired(after) && !BuildObjects.secondary(after)
+                    && objectAfter.get(BuildObjects.other(pos,after)) == BuildObjects.partnerState(after);
             if (target != null) matched &= BuildObjects.matches(target, selected, objectAfter::get);
             data.addProperty("object_cells", 2);
             data.addProperty("object_satisfied", matched);
@@ -329,10 +329,21 @@ public final class BlockPlacement {
         }
         failure = access.sight(pos, face);
         if (failure == null) failure = access.prepare(pos, stack, face);
-        if (failure == null && BuildObjects.door(access.proposedState())) {
+        if (failure==null && access.proposedState()!=null
+                && (BuildObjects.paired(access.proposedState())
+                || access.proposedState().getBlock() instanceof net.minecraft.world.level.block.ChestBlock
+                || access.proposedState().getBlock() instanceof net.minecraft.world.level.block.BarrelBlock)
+                && !ItemStack.isSameItemSameComponents(stack,new ItemStack(stack.getItem())))
+            return failed("DENIED:家具只支持默认组件材料，不搬入容器内容或其他载荷。",false,0);
+        if (failure==null && access.proposedState()!=null
+                && access.proposedState().getBlock() instanceof net.minecraft.world.level.block.ChestBlock
+                && access.proposedState().getValue(net.minecraft.world.level.block.ChestBlock.TYPE)
+                !=net.minecraft.world.level.block.state.properties.ChestType.SINGLE)
+            return failed("DENIED:原版预检将合并邻箱；当前只支持独立空箱，未改动邻箱。",false,0);
+        if (failure == null && BuildObjects.paired(access.proposedState())) {
             if (!ItemStack.isSameItemSameComponents(stack, new ItemStack(stack.getItem())))
-                return failed("DENIED:双格门只支持默认组件的真实材料。", false, 0);
-            failure = doorGuard(access, pos, access.proposedState());
+                return failed("DENIED:双格对象只支持默认组件的真实材料。", false, 0);
+            failure = objectGuard(access, pos, access.proposedState());
         }
         if (failure != null) {
             var data = failure.data() == null ? new JsonObject() : failure.data().deepCopy();
@@ -343,16 +354,16 @@ public final class BlockPlacement {
         return null;
     }
 
-    /** Both the native temporary upper write and the final upper callback must be authorized before either runs. */
-    private static ServerTool.Result doorGuard(Access access, BlockPos pos, BlockState proposed) {
-        if (BuildObjects.upper(proposed)) return failed("DENIED:不直接放置门上半格。", false, 0);
-        var other = pos.above();
+    /** The secondary native write is checked before the primary action can start. */
+    private static ServerTool.Result objectGuard(Access access, BlockPos pos, BlockState proposed) {
+        if (BuildObjects.secondary(proposed)) return failed("DENIED:不直接放置双格对象的次格。", false, 0);
+        var other = BuildObjects.other(pos,proposed);
         var failure = access.guard(other);
         if (failure != null) return failure;
         var actual = access.state(other);
-        if (actual == null) return failed("TARGET_LOST:门上半格未知，未放置。", false, 0);
-        if (!actual.isAir()) return failed("TARGET_BLOCKED:门上半格须为真实空气，不覆盖已有或可替换方块。", false, 0);
-        return access.secondaryCell(other, BuildObjects.upperState(proposed));
+        if (actual == null) return failed("TARGET_LOST:双格对象的次格未知，未放置。", false, 0);
+        if (!actual.isAir()) return failed("TARGET_BLOCKED:双格对象的次格须为真实空气，不覆盖已有或可替换方块。", false, 0);
+        return access.secondaryCell(other, BuildObjects.partnerState(proposed));
     }
 
     /** Bounded alternatives are observations, never an instruction to replace the requested cell. */
@@ -610,22 +621,22 @@ public final class BlockPlacement {
         @Override public JsonObject contact() { return contact; }
         @Override public ServerTool.Result secondaryCell(BlockPos pos, BlockState proposed) {
             if (!player.mayUseItemAt(pos,context.getClickedFace(),context.getItemInHand()))
-                return failed("DENIED:物品或玩家规则不允许门上半格的改动。",false,0);
+                return failed("DENIED:物品或玩家规则不允许双格对象的次格改动。",false,0);
             var failure = player.buildSite().placementGuard(pos, proposed, new BuildSiteAccess(player));
             if (failure != null) return failure;
             var shape = proposed.getCollisionShape(player.level(), pos, CollisionContext.of(player))
                     .move(pos.getX(), pos.getY(), pos.getZ());
             if (shape.toAabbs().stream().anyMatch(box -> box.intersects(bounds))
                     || !player.level().isUnobstructed(player, shape))
-                return failed("TARGET_BLOCKED:门上半格有身体或实体占位，未执行双格放置。", false, 0);
+                return failed("TARGET_BLOCKED:双格对象的次格有身体或实体占位，未执行放置。", false, 0);
             return null;
         }
         @Override public ServerTool.Result beforePlace() {
             var failure=BuildRecordAccess.guard(player,context.getClickedPos(),false,null);
             if (failure==null) failure=player.buildSite().placementGuard(context.getClickedPos(),proposedState,
                     new BuildSiteAccess(player),temporaryPurpose!=null);
-            if (failure==null && BuildObjects.door(proposedState))
-                failure=doorGuard(this,context.getClickedPos(),proposedState);
+            if (failure==null && BuildObjects.paired(proposedState))
+                failure=objectGuard(this,context.getClickedPos(),proposedState);
             return failure!=null ? failure : player.buildSite().charge();
         }
         @Override public void recordedObject(BlockPos primary, java.util.Map<BlockPos, BlockState> before,
@@ -697,7 +708,15 @@ public final class BlockPlacement {
                 || block instanceof net.minecraft.world.level.block.StairBlock
                 || block instanceof net.minecraft.world.level.block.CraftingTableBlock
                 || block instanceof net.minecraft.world.level.block.AbstractFurnaceBlock
-                || BuildObjects.door(block.defaultBlockState());
+                || block instanceof net.minecraft.world.level.block.ChestBlock
+                || block instanceof net.minecraft.world.level.block.BarrelBlock
+                || block instanceof net.minecraft.world.level.block.LanternBlock
+                || block instanceof net.minecraft.world.level.block.BaseTorchBlock
+                || block instanceof net.minecraft.world.level.block.TrapDoorBlock
+                || block instanceof net.minecraft.world.level.block.FenceBlock
+                || block instanceof net.minecraft.world.level.block.WallBlock
+                || block instanceof net.minecraft.world.level.block.CarpetBlock
+                || BuildObjects.paired(block.defaultBlockState());
     }
 
 }

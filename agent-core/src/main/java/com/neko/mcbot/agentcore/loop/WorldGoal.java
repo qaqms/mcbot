@@ -7,6 +7,7 @@ import java.util.Set;
 
 /** Fixed world conditions; only fresh, complete server evidence may satisfy them. */
 public final class WorldGoal {
+    public static final int BUILD_CELL_LIMIT = 16_384;
     private final JsonObject request;
     private final String type, dimension, containerId;
     private String bodyId;
@@ -112,7 +113,7 @@ public final class WorldGoal {
                 sum = Math.addExact(sum, count);
             }
             progress = integer(counts, "satisfied");
-            if (total < 1 || total > 128 || sum != total || progress < 0 || progress > total
+            if (total < 1 || total > BUILD_CELL_LIMIT || sum != total || progress < 0 || progress > total
                     || integer(data, "remaining") != total - progress || integer(counts, "unknown") != 0)
                 throw new IllegalArgumentException();
             satisfied = flag(data, "goal_satisfied") && progress == total && integer(counts, "unsupported") == 0;

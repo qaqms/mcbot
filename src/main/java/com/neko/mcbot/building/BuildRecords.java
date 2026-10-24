@@ -12,7 +12,7 @@ import java.util.*;
 
 /** World-local data, never executable work. Loaded provenance deliberately has no live witness. */
 public final class BuildRecords {
-    public static final int ENTRY_LIMIT = 32, ACTION_LIMIT = 256, FILE_LIMIT = 2 * 1024 * 1024;
+    public static final int ENTRY_LIMIT = 32, ACTION_LIMIT = 256, FILE_LIMIT = 32 * 1024 * 1024;
     private final Path file;
     private UUID worldId = UUID.randomUUID();
     private boolean healthy = true;
@@ -109,7 +109,7 @@ public final class BuildRecords {
         return id;
     }
     public static BuildTarget definition(JsonObject input) {
-        BuildTarget.keys(input, Set.of("cells","fill"));
+        BuildTarget.keys(input, Set.of("cells","fill","regions"));
         var target=input.deepCopy(); target.add("anchor", BuildTarget.coordinates(BlockPos.ZERO));
         return BuildTarget.parse(target);
     }
@@ -133,7 +133,7 @@ public final class BuildRecords {
         var original=design(owner,id,expected);
         if (expected>=1024 || edits.isEmpty() || edits.size()>16) throw new IllegalArgumentException("edit_limit");
         var values=new LinkedHashMap<BlockPos,JsonObject>();
-        for (var cell:original.target.input().getAsJsonArray("cells")) {
+        for (var cell:original.target.expandedInput().getAsJsonArray("cells")) {
             var item=cell.getAsJsonObject(); values.put(position(item),item);
         }
         var seen=new HashSet<BlockPos>();
@@ -168,7 +168,7 @@ public final class BuildRecords {
         var target=locate(design,anchor,rotation);
         if (instances.size()>=ENTRY_LIMIT) throw new IllegalArgumentException("instance_limit");
         if (instances.values().stream().anyMatch(i -> i.dimension.equals(dimension) && i.target.cells().stream()
-                .anyMatch(c -> target.cells().stream().anyMatch(n -> n.pos().equals(c.pos())))))
+                .anyMatch(c -> target.index().containsKey(c.pos()))))
             throw new IllegalArgumentException("overlapping_instance");
         var instance=new Instance(UUID.randomUUID().toString(),owner,builder,dimension,designId,1,designRevision,target);
         instances.put(instance.id,instance); save(); return instance;
@@ -187,7 +187,7 @@ public final class BuildRecords {
         if (instance.revision>=1024) throw new IllegalArgumentException("revision_limit");
         var next=locate(design,instance.target.anchor(),instance.target.rotation());
         // Old owned cells stay explicit air requirements; neither history nor conflicts disappear on revision.
-        var input=next.input(); var entries=input.getAsJsonArray("cells");
+        var input=next.expandedInput(); var entries=input.getAsJsonArray("cells");
         var cells=new HashSet<BlockPos>(); next.cells().forEach(c -> cells.add(c.pos()));
         var inverse=switch (next.rotation()) {
             case 90 -> net.minecraft.world.level.block.Rotation.COUNTERCLOCKWISE_90;
@@ -201,7 +201,7 @@ public final class BuildRecords {
         }
         var target=BuildTarget.parse(input);
         if (instances.values().stream().anyMatch(i -> i!=instance && i.dimension.equals(instance.dimension)
-                && i.target.cells().stream().anyMatch(c -> target.cells().stream().anyMatch(n -> n.pos().equals(c.pos())))))
+                && i.target.cells().stream().anyMatch(c -> target.index().containsKey(c.pos()))))
             throw new IllegalArgumentException("overlapping_instance");
         instance.designRevision=nextDesignRevision; instance.revision++; instance.target=target; save();
     }
@@ -212,7 +212,7 @@ public final class BuildRecords {
     }
     public boolean belongs(Instance instance, String dimension, BlockPos pos) {
         if (instance==null || !instance.dimension.equals(dimension)) return false;
-        return instance.target.cells().stream().anyMatch(c -> c.pos().equals(pos));
+        return instance.target.index().containsKey(pos);
     }
     public boolean mayChange(Instance instance, BlockPos pos, BuildSite.Access access) {
         if (!healthy || instance==null) return false;
@@ -223,15 +223,18 @@ public final class BuildRecords {
         return record!=null && record.intact(access);
     }
     public boolean hasCapacity(Instance instance, BlockPos pos) {
-        return healthy && instance.actions.size()<ACTION_LIMIT
+        return healthy && instance.actions.size()<actionLimit(instance)
                 && (instance.placed.containsKey(pos) || instance.placed.size()<BuildTarget.LIMIT)
                 && serializedBytes < FILE_LIMIT-8192;
     }
     public boolean hasCapacity(Instance instance, Collection<BlockPos> positions) {
         var combined = new HashSet<>(instance.placed.keySet());
         combined.addAll(positions);
-        return healthy && instance.actions.size() + positions.size() <= ACTION_LIMIT
+        return healthy && instance.actions.size() + positions.size() <= actionLimit(instance)
                 && combined.size() <= BuildTarget.LIMIT && serializedBytes < FILE_LIMIT - 8192;
+    }
+    private static int actionLimit(Instance instance) {
+        return Math.max(Math.max(ACTION_LIMIT, instance.target.cells().size() * 4),instance.actions.size());
     }
     public void placedObject(Instance instance, BlockPos primary, Map<BlockPos, BlockState> before,
                              Map<BlockPos, BlockState> after, int consumed, BuildSite.Access access) {
@@ -272,7 +275,7 @@ public final class BuildRecords {
     public void removed(Instance instance, BlockPos pos, BlockState before, BlockState after) {
         if (before==null || after==null || before==after) return;
         action(instance,pos,"break",before,after,0);
-        // Retain an invalid tombstone so placement cannot recycle the 128-cell provenance budget.
+        // Retain an invalid tombstone so placement cannot recycle provenance capacity.
         var record=instance.placed.get(pos);
         if (record!=null && record.witness!=null) record.witness.invalidate();
         persistEffect();
@@ -292,10 +295,9 @@ public final class BuildRecords {
         result.addProperty("content_revision",design.target.revision()); result.addProperty("cell_count",design.target.cells().size());
         var layers=new TreeSet<Integer>(); design.target.cells().forEach(c -> layers.add(c.pos().getY()));
         var ys=new JsonArray(); layers.forEach(ys::add); result.add("layers",ys);
-        var entries=design.target.input().getAsJsonArray("cells"); var filtered=new ArrayList<JsonElement>();
-        for (var entry:entries) if (layer==null || entry.getAsJsonObject().get("y").getAsInt()==layer) filtered.add(entry);
+        var filtered=design.target.cells().stream().filter(c->layer==null || c.pos().getY()==layer).toList();
         if (offset%16!=0 || offset<0 || offset>=filtered.size() && offset!=0) throw new IllegalArgumentException("page");
-        var page=new JsonArray(); filtered.stream().skip(offset).limit(16).forEach(page::add);
+        var page=new JsonArray(); filtered.stream().skip(offset).limit(16).map(design.target::relativeCell).forEach(page::add);
         result.add("cells",page); result.addProperty("next_offset",offset+page.size()<filtered.size()?offset+page.size():-1);
         return result;
     }
@@ -385,7 +387,7 @@ public final class BuildRecords {
                     BuildTarget.integer(row.get("design_revision"),1,1024),BuildTarget.parse(row.getAsJsonObject("target")));
             if (instances.put(id,instance)!=null) throw new IllegalArgumentException();
             var records=row.getAsJsonArray("placed"); var actions=row.getAsJsonArray("actions");
-            if (records.size()>BuildTarget.LIMIT || actions.size()>ACTION_LIMIT) throw new IllegalArgumentException();
+            if (records.size()>BuildTarget.LIMIT || actions.size()>BuildTarget.LIMIT*4) throw new IllegalArgumentException();
             for (var record:records) {
                 var entry=record.getAsJsonObject(); var pos=position(entry);
                 BuildTarget.keys(entry,Set.of("x","y","z","state"));
@@ -401,7 +403,7 @@ public final class BuildRecords {
                 var event=action.getAsJsonObject();
                 BuildTarget.keys(event,Set.of("x","y","z","sequence","operation","instance_revision","before","after","consumed"));
                 position(event);
-                if (BuildTarget.integer(event.get("sequence"),1,ACTION_LIMIT)!=++sequence
+                if (BuildTarget.integer(event.get("sequence"),1,BuildTarget.LIMIT*4)!=++sequence
                         || !Set.of("place","break").contains(BuildTarget.string(event.get("operation"),8)))
                     throw new IllegalArgumentException("action_history");
                 BuildTarget.integer(event.get("instance_revision"),1,instance.revision);

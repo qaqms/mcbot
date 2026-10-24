@@ -116,7 +116,7 @@ class StructureBlueprintTest {
         }
     }
     @Test void unsupportedMulticellFluidAndComponentBlocksNeverDisappearFromAccounting() throws Exception {
-        for (String name:List.of("red_bed","water","chest","oak_door")) {
+        for (String name:List.of("red_bed","water","oak_sign","oak_door")) {
             var root=fixture(); root.getListOrEmpty("palette").set(0,palette("minecraft:"+name));
             write("sample",root); var result=source().inspect("sample");
             assertFalse(result.importable()); assertEquals(1,result.report().get("unsupported_cells").getAsInt(),name);

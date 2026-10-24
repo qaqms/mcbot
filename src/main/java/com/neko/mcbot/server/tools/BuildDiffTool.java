@@ -20,7 +20,7 @@ public final class BuildDiffTool implements ServerTool {
     @Override public String name() { return "build_diff"; }
 
     @Override public Result run(CompanionPlayer body, JsonObject args) {
-        try { return report(com.neko.mcbot.server.BuildRecordAccess.expanded(body,args),
+        try { return report(args,input -> com.neko.mcbot.server.BuildRecordAccess.resolve(body,input),
                 target -> access(body, target), System::nanoTime); }
         catch (RuntimeException invalid) { return new Result(false,"DENIED:目标格式、实例身份或修订不符，未查询另一实例。"
                 + "expected_revision是内容哈希，不是instance_id；已登记建筑用run_program执行return mc.build()，"
@@ -105,22 +105,34 @@ public final class BuildDiffTool implements ServerTool {
     }
 
     static Result report(JsonObject args, Function<BuildTarget, BuildSurvey.Access> access, LongSupplier clock) {
+        return report(args,BuildTarget::parse,access,clock);
+    }
+    private static Result report(JsonObject args, Function<JsonObject,BuildTarget> resolve,
+                                 Function<BuildTarget, BuildSurvey.Access> access, LongSupplier clock) {
         BuildTarget target;
-        int offset, materialOffset;
-        boolean verify;
+        int offset, materialOffset, cursor;
+        boolean verify, work;
         try {
-            BuildTarget.keys(args, Set.of("target", "offset", "material_offset", "expected_revision", "verify_only"));
+            BuildTarget.keys(args, Set.of("target", "offset", "material_offset", "expected_revision", "verify_only",
+                    "work_scan", "work_cursor"));
             if (args.has("verify_only") && (!args.get("verify_only").isJsonPrimitive()
                     || !args.get("verify_only").getAsJsonPrimitive().isBoolean())) throw new IllegalArgumentException();
             verify = args.has("verify_only") && args.get("verify_only").getAsBoolean();
-            target = BuildTarget.parse(args.getAsJsonObject("target"));
-            offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, 112) : 0;
-            materialOffset = args.has("material_offset") ? BuildTarget.integer(args.get("material_offset"), 0, 112) : 0;
+            if (args.has("work_scan") && (!args.get("work_scan").isJsonPrimitive()
+                    || !args.get("work_scan").getAsJsonPrimitive().isBoolean())) throw new IllegalArgumentException();
+            work=args.has("work_scan") && args.get("work_scan").getAsBoolean();
+            cursor=args.has("work_cursor") ? BuildTarget.integer(args.get("work_cursor"),0,BuildTarget.LIMIT-1) : 0;
+            if (work && (verify || args.has("offset") && args.get("offset").getAsInt()!=0
+                    || args.has("material_offset")) || !work && args.has("work_cursor")) throw new IllegalArgumentException();
+            target = resolve.apply(args.getAsJsonObject("target"));
+            offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, BuildTarget.LIMIT-BuildSurvey.PAGE) : 0;
+            materialOffset = args.has("material_offset") ? BuildTarget.integer(args.get("material_offset"), 0, BuildTarget.LIMIT-BuildSurvey.PAGE) : 0;
             if (offset >= target.cells().size() || offset % BuildSurvey.PAGE != 0 || materialOffset % BuildSurvey.PAGE != 0)
                 throw new IllegalArgumentException("page");
-            if ((offset != 0 || materialOffset != 0) && !args.has("expected_revision"))
-                return new Result(false, "DENIED:非零offset/material_offset续页须携带首张回执的target_revision，"
-                        + "填入expected_revision，并保持同一target；Lua可用mc.build_diff(target)自动续页。", null);
+            if (cursor>=target.cells().size()) throw new IllegalArgumentException("cursor");
+            if ((offset != 0 || materialOffset != 0 || cursor!=0) && !args.has("expected_revision"))
+                return new Result(false, "DENIED:非零offset/material_offset/work_cursor续页须携带首张回执的target_revision，"
+                        + "填入expected_revision，并保持同一target；Lua明细续页用mc.build_diff(target,revision,offset)。", null);
             long types = target.cells().stream().map(BuildTarget.Cell::material).map(BuildTarget.Material::item)
                     .filter(java.util.Objects::nonNull).distinct().count();
             if (materialOffset >= types && materialOffset != 0) throw new IllegalArgumentException("material_page");
@@ -131,10 +143,12 @@ public final class BuildDiffTool implements ServerTool {
                     return new Result(false, "TARGET_REVISION_CHANGED:输入目标已变化，未沿用另一修订的差异或分配。", null);
             }
         } catch (RuntimeException invalid) {
-            return new Result(false, "DENIED:建筑目标须为anchor/rotation及cells或fill之一，最多128格；"
-                    + "相对坐标±32，无重复格，状态名/值须在真实注册表中；两种分页偏移须为16的倍数。", null);
+            return new Result(false, "DENIED:建筑目标须为anchor/rotation及cells、fill或regions之一，最多16384格；"
+                    + "相对坐标±32，cells无重复格、regions按次序覆盖；状态名/值须在真实注册表中，"
+                    + "offset/material_offset须为16的倍数，work_cursor须配work_scan且沿原修订。", null);
         }
-        return verify ? BuildSurvey.verify(target, access.apply(target), offset, clock)
+        return work ? BuildSurvey.workScan(target,access.apply(target),cursor,clock)
+                : verify ? BuildSurvey.verify(target, access.apply(target), offset, clock)
                 : BuildSurvey.query(target, access.apply(target), offset, materialOffset, clock);
     }
 }

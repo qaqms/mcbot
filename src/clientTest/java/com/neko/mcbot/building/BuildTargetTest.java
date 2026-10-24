@@ -111,9 +111,40 @@ class BuildTargetTest {
                 """).cells().getFirst().material();
         assertEquals(2, doubleSlab.units());
         assertFalse(doubleSlab.supported(), "two placements are not yet supported by the one-action core");
-        for (String id : List.of("oak_door", "red_bed", "water", "torch", "chest"))
+        for (String id : List.of("oak_door", "red_bed", "water"))
             assertFalse(target("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"" + id + "\"}]")
                     .cells().getFirst().material().supported(), id);
         assertEquals(0, target("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"air\"}]").cells().getFirst().material().units());
+    }
+
+    static com.google.gson.JsonObject largeInput() {
+        return JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":-32,"y":0,"z":0},
+                "to":{"x":31,"y":31,"z":7},"block":"stone"}}
+                """).getAsJsonObject();
+    }
+
+    @Test void compactMaximumTargetRoundTripsAndRegionsOverrideWithoutChangingCanonicalIdentity() {
+        var input=largeInput();
+        var maximum=BuildTarget.parse(input);
+        assertEquals(16384,maximum.cells().size());
+        assertTrue(maximum.input().toString().length()<300);
+        assertEquals(maximum.revision(),BuildTarget.parse(maximum.input()).revision());
+        maximum.input().getAsJsonObject("fill").addProperty("block","dirt");
+        assertEquals(maximum.revision(),BuildTarget.parse(input).revision(),"transport copies do not change the frozen plan");
+        var regions=new com.google.gson.JsonArray(); regions.add(input.get("fill").deepCopy());
+        regions.add(JsonParser.parseString("""
+                {"from":{"x":0,"y":0,"z":0},"to":{"x":0,"y":0,"z":0},"block":"glass"}
+                """));
+        input.remove("fill"); input.add("regions",regions); input.addProperty("rotation",90);
+        var layered=BuildTarget.parse(input);
+        assertEquals(16384,layered.cells().size());
+        assertEquals(Blocks.GLASS,layered.index().get(new BlockPos(0,90,0)).authored().getBlock());
+        assertEquals(layered.revision(),BuildTarget.parse(layered.expandedInput()).revision());
+        assertEquals(layered.revision(),BuildTarget.parse(layered.input()).revision());
+        regions.add(JsonParser.parseString("""
+                {"from":{"x":32,"y":0,"z":0},"to":{"x":32,"y":0,"z":0},"block":"stone"}
+                """));
+        assertThrows(RuntimeException.class,()->BuildTarget.parse(input));
     }
 }

@@ -24,7 +24,7 @@ public final class BuildRecordTool implements ServerTool {
                                  BuildSite site, BuildSite.Access access, JsonObject args) {
         try {
             String operation=BuildTarget.string(args.get("operation"),24);
-            int offset=args.has("offset") ? BuildTarget.integer(args.get("offset"),0,112) : 0;
+            int offset=args.has("offset") ? BuildTarget.integer(args.get("offset"),0,BuildTarget.LIMIT-16) : 0;
             String id=args.has("design_id") ? BuildRecords.name(args.get("design_id")) : null;
             int designRevision=args.has("design_revision") ? BuildTarget.integer(args.get("design_revision"),1,1024) : 0;
             JsonObject data;

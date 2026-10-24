@@ -11,6 +11,50 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void emptyCellOrientationConflictChangesWorkStanceButAnExistingWrongStateIsNotReplaced() throws Exception {
+        for (boolean empty:new boolean[]{true,false}) {
+            var world=new World();
+            world.override=(name,args)->!name.equals("build_diff") || world.moved>0 ? null : actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":1,"observation_complete":true,
+                    "spatial_stable":true,"budget_exhausted":false,"observation_key":"unchanged",
+                    "offset":0,"next_offset":-1,"material_bill_complete":true,"cells":[
+                    {"x":4,"y":90,"z":0,"block":"minecraft:stone","state":"state_conflict",
+                    "actual_block":"%s","item":"minecraft:stone","material_available":true}]}
+                    """.formatted(REV,empty?"minecraft:air":"minecraft:stone"));
+            var result=run(world,CODE,128);
+            assertTrue(result.ok(),result.feedback());
+            assertEquals(empty?1:0,world.moved);
+            assertEquals(empty?2:0,world.placed);
+            assertEquals(empty,result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        }
+    }
+    @Test void largePublicDiffReturnsGlobalCountsWithOneExplicitlyIncompletePageAndCanReadTheLastPage() throws Exception {
+        var world=new World();
+        world.override=(name,args)-> {
+            if (!name.equals("build_diff")) return null;
+            int offset=args.get("offset").getAsInt();
+            return actual("""
+                    {"target_revision":"%s","total":16384,"remaining":1,"goal_satisfied":false,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"same","counts":{"satisfied":16383,"out_of_reach":1},
+                    "offset":%d,"next_offset":%d,"details_complete":false,
+                    "cells":[{"x":31,"y":121,"z":7,"state":"out_of_reach"}],
+                    "materials":[],"material_next_offset":-1}
+                    """.formatted(REV,offset,offset==0?16:-1));
+        };
+        var first=run(world,"return mc.build_diff({})",128);
+        assertTrue(first.ok(),first.feedback());
+        var result=first.data().getAsJsonObject("returned");
+        assertEquals(16384,result.get("total").getAsInt());
+        assertEquals(16383,result.getAsJsonObject("counts").get("satisfied").getAsInt());
+        assertFalse(result.get("details_complete").getAsBoolean());
+        assertEquals(16,result.get("next_offset").getAsInt());
+        assertEquals(1,world.calls.size(),"global accounting must not transport 1024 detail pages");
+        var last=run(world,"return mc.build_diff({},'"+REV+"',16368)",128);
+        assertTrue(last.ok(),last.feedback());
+        assertEquals(16368,world.calls.getLast().args().get("offset").getAsInt());
+        assertEquals(REV,world.calls.getLast().args().get("expected_revision").getAsString());
+    }
     static final String REV = "a".repeat(64);
     static final String CODE = """
             local t={anchor={x=4,y=90,z=0},cells={{x=0,y=0,z=0,block="stone"}}}
