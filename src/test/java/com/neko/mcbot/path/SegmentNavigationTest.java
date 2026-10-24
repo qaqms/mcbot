@@ -84,6 +84,15 @@ class SegmentNavigationTest {
         assertTrue(route.estimateExpanded() <= 10);
     }
 
+    @Test void anExecutableShortTunnelDoesNotWaitForThousandsOfImprovementExpansions() {
+        var route = run(new Rock(), 4, 36, 4000, true);
+        assertNull(route.failure());
+        assertTrue(route.expanded() < 100, "a safe first answer needs only a small improvement window");
+        assertEquals(0, route.estimateExpanded(), "expensive relaxed guidance is deferred until feasibility fails");
+        assertEquals(0, route.estimateSeedProbes());
+        assertEquals(36, route.path().getLast().y());
+    }
+
     @Test void optionalPreparationDoesNotConsumeTheSegmentExpansionAllowance() {
         var position = NavigationGoal.position(4, 36, 0, 0);
         NavigationGoal notYetUsable = new NavigationGoal() {
@@ -247,5 +256,18 @@ class SegmentNavigationTest {
             assertFalse(search.continueSearch(4000));
             if (time) assertFalse(search.partialAvailable());
         }
+    }
+
+    @Test void nearbyUnreachableHeightDoesNotAuditEveryStoredStateAsAPartialEndpoint() {
+        var floor = new Corridors();
+        for (int x = -45; x <= 45; x++) for (int z = -45; z <= 45; z++) floor.add(x, z);
+        var search = new DigAStar(floor, 0, 0, 0, 0, 1, 0, 4000, 0,
+                NavigationGoal.position(0, 1, 0, 0)).segments();
+        while (!search.advance(300)) { }
+        assertTrue(search.budgetReached());
+        assertFalse(search.partialAvailable());
+        assertEquals(0, search.partialCandidateChecks(),
+                "no closer landing exists; thousands of equal or worse states need no return audit");
+        assertTrue(search.storedNodes() > 1000);
     }
 }

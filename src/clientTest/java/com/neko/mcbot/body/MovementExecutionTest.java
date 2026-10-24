@@ -12,6 +12,25 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MovementExecutionTest {
+    @Test void descentAndLandingCorrectionsBrakeWithoutTurningBackToTheNodeCenter() {
+        var route = new PathSteering(1, 0, 0, false);
+        var before = new PathSteering.Body(.5, 1, .5, .12, 0, false);
+        assertEquals(new PathSteering.Facing(1, 0), route.facing(before));
+        var overshot = new PathSteering.Body(1.57, .4, .5, .07, 0, false);
+        assertTrue(route.tick(overshot).x() < 0, "real braking still opposes forward velocity");
+        assertNull(route.facing(overshot), "tiny backwards correction must keep the previous heading");
+        assertNull(route.facing(new PathSteering.Body(1.5, 0, .5, 0, 0, true)));
+        assertEquals(new PathSteering.Facing(-1, 0),
+                route.facing(new PathSteering.Body(2.5, 0, .5, 0, 0, true)),
+                "a genuinely displaced body may still need to turn back");
+        var through = new PathSteering(1, 0, 0, false);
+        through.tick(before, true);
+        var fallingPastCenter = new PathSteering.Body(1.88, .4, .5, .08, 0, false);
+        assertTrue(through.tick(fallingPastCenter, true).x() > 0);
+        assertNull(through.facing(fallingPastCenter), "continuous descent must not turn toward the passed center");
+        assertFalse(through.tick(fallingPastCenter, true).arrived(), "passing in air is not landing");
+    }
+
     @Test void fractionalLandingRequiresItsActualHeightAndDoesNotJumpWhenTheGeometrySaysStep() {
         var route = new PathSteering(1, .5, 0, false);
         var first = route.tick(new PathSteering.Body(.5, 0, .5, 0, 0, true));
@@ -40,18 +59,26 @@ class MovementExecutionTest {
         boolean grounded = true;
         int jumps;
         Vec3 lastInput;
+        float yaw;
+        boolean sprinting;
 
         Body() { position = new Vec3(.5, 0, .5); velocity = new Vec3(0, -.08, 0); }
         @Override public MovementInput.Frame takeInput() { return input.take(); }
         @Override public boolean grounded() { return grounded; }
+        @Override public float yaw() { return yaw; }
+        @Override public boolean maySprint() { return true; }
+        @Override public void sprint(boolean enabled) { sprinting = enabled; }
         @Override public void jump() {
             velocity = new Vec3(velocity.x, .42, velocity.z);
             jumps++;
         }
         @Override public void travel(Vec3 direction) {
             lastInput = direction;
-            double acceleration = grounded ? .1 : .02;
-            velocity = velocity.add(direction.x * acceleration, 0, direction.z * acceleration);
+            double acceleration = (grounded ? .1 : .02) * (sprinting ? 1.3 : 1);
+            double angle = Math.toRadians(yaw);
+            double worldX = direction.x * Math.cos(angle) - direction.z * Math.sin(angle);
+            double worldZ = direction.x * Math.sin(angle) + direction.z * Math.cos(angle);
+            velocity = velocity.add(worldX * acceleration, 0, worldZ * acceleration);
             double dy = Shapes.collide(Direction.Axis.Y, bounds(), obstacles, velocity.y);
             var shifted = bounds().move(0, dy, 0);
             double dx = Shapes.collide(Direction.Axis.X, shifted, obstacles, velocity.x);
@@ -83,6 +110,42 @@ class MovementExecutionTest {
         assertEquals(1.5, body.position.x, .16);
         assertEquals(0, body.position.y, 1e-9);
         assertEquals(0, body.jumps);
+    }
+
+    @Test void edgeSupportedBodyWalksToAValidOriginWithoutFallingJumpingOrTeleporting() {
+        for (int direction : new int[]{-1, 1}) {
+            var body = new Body();
+            double x = direction > 0 ? .98 : .02;
+            int cell = direction > 0 ? 1 : -1;
+            body.position = new Vec3(x, 0, .5);
+            body.obstacles = List.of(Shapes.box(cell, -1, -2, cell + 1, 0, 2));
+            var geometry = new com.neko.mcbot.server.StandingGeometry(
+                    new com.neko.mcbot.server.StandingGeometry.Access() {
+                        @Override public boolean known(net.minecraft.core.BlockPos pos) { return true; }
+                        @Override public List<net.minecraft.world.phys.AABB> boxes(net.minecraft.core.BlockPos pos) {
+                            return pos.getX() == cell && pos.getY() == -1 && pos.getZ() >= -2 && pos.getZ() < 2
+                                    ? List.of(new net.minecraft.world.phys.AABB(0, 0, 0, 1, 1, 1)) : List.of();
+                        }
+                    }, .6, 1.8, .6);
+            var origin = geometry.departure(x, 0, .5, p -> true);
+            assertNotNull(origin);
+            var route = new PathSteering(origin.getX(), 0, origin.getZ(), false);
+            PathSteering.Command command = null;
+            int ticks = 0;
+            for (; ticks < 100; ticks++) {
+                assertTrue(geometry.canAlign(body.position.x, body.position.y, body.position.z, origin));
+                command = body.drive(route);
+                assertFalse(command.stuck());
+                assertEquals(0, body.position.y, 1e-9);
+                if (command.arrived()) break;
+            }
+            assertNotNull(command);
+            assertTrue(command.arrived());
+            assertTrue(ticks > 1);
+            assertEquals(cell + .5, body.position.x, .16);
+            assertEquals(cell, (int) Math.floor(body.position.x));
+            assertEquals(0, body.jumps);
+        }
     }
 
     @Test void aFullBlockAscentUsesAJumpArcAndMustLandBeforeSuccess() {
@@ -167,6 +230,57 @@ class MovementExecutionTest {
         assertThrows(IllegalArgumentException.class, () -> input.renew(Double.NaN, 0, false));
     }
 
+    @Test void sprintInputIsNormalizedAndExpiresWithTheRestOfTheFrame() {
+        var input = new MovementInput();
+        input.renew(3, 4, false, true);
+        var frame = input.take();
+        assertEquals(1, Math.hypot(frame.x(), frame.z()), 1e-9);
+        assertTrue(frame.sprint());
+        assertEquals(MovementInput.Frame.IDLE, input.take());
+        input.renew(0, 1, false, true);
+        input.clear();
+        assertFalse(input.take().sprint());
+        input.renew(0, 1, false);
+        assertFalse(input.take().sprint(), "old walk and water-reflex callers stay walking");
+    }
+
+    @Test void runningStraightIsFasterAndTheLastTwoWalkingStepsStillSettleAtTheEndpoint() {
+        int walkingTicks = flatTrip(false);
+        int runningTicks = flatTrip(true);
+        assertTrue(runningTicks < walkingTicks, "walking=" + walkingTicks + " running=" + runningTicks);
+    }
+
+    private int flatTrip(boolean allowSprint) {
+        var body = new Body();
+        body.yaw = -90;
+        body.obstacles = List.of(Shapes.box(-4, -1, -4, 20, 0, 4));
+        int node = 1, sprintTicks = 0;
+        var route = new PathSteering(node, 0, 0, false);
+        for (int tick = 0; tick < 240; tick++) {
+            boolean through = node < 12;
+            var command = route.tick(new PathSteering.Body(body.position.x, body.position.y, body.position.z,
+                    body.velocity.x, body.velocity.z, body.grounded), through);
+            assertFalse(command.stuck());
+            if (command.arrived()) {
+                if (!through) {
+                    assertEquals(12.5, body.position.x, .16);
+                    assertTrue(Math.abs(body.velocity.x) <= .04);
+                    assertEquals(0, body.position.y, 1e-9);
+                    assertEquals(0, body.jumps);
+                    assertFalse(body.sprinting);
+                    assertEquals(allowSprint, sprintTicks > 0);
+                    return tick;
+                }
+                route = new PathSteering(++node, 0, 0, false);
+                body.input.renew(1, 0, false, allowSprint && node <= 10);
+            } else body.input.renew(command.x(), command.z(), command.jump(), allowSprint && node <= 10);
+            CompanionPhysics.tick(body);
+            if (body.sprinting) sprintTicks++;
+        }
+        fail("flat trip did not arrive");
+        return -1;
+    }
+
     @Test void beingInTheTargetCellDoesNotReplaceStandingStillAtItsActualLanding() {
         var route = new PathSteering(0, 0, 0);
         assertFalse(route.settled(new PathSteering.Body(.1, 0, .1, 0, 0, true)));
@@ -211,5 +325,34 @@ class MovementExecutionTest {
         assertTrue(arrived);
         assertEquals(3.5, body.position.x, .16);
         assertTrue(Math.abs(body.velocity.x) <= .04);
+    }
+
+    @Test void descendingStairsRetainMotionAtIntermediateLandingsAndSettleAtTheFinalOne() {
+        var body = new Body();
+        body.position = new Vec3(.5, 2, .5);
+        body.obstacles = List.of(Shapes.box(-4, -1, -4, 1, 2, 4),
+                Shapes.box(1, -1, -4, 2, 1, 4), Shapes.box(2, -1, -4, 8, 0, 4));
+        int node = 1;
+        var route = new PathSteering(1, 1, 0, false);
+        boolean arrived = false, momentum = false;
+        var landings = new java.util.ArrayList<String>();
+        for (int tick = 0; tick < 180; tick++) {
+            var command = route.tick(new PathSteering.Body(body.position.x, body.position.y, body.position.z,
+                    body.velocity.x, body.velocity.z, body.grounded), node < 3);
+            assertFalse(command.stuck(), "node=" + node + " position=" + body.position + " velocity=" + body.velocity);
+            if (command.arrived()) {
+                if (node == 3) { arrived = true; break; }
+                landings.add("node=" + node + " position=" + body.position + " velocity=" + body.velocity);
+                momentum |= body.velocity.x > .04;
+                route = new PathSteering(++node, 0, 0, false);
+                body.input.renew(1, 0, false);
+            } else body.input.renew(command.x(), command.z(), command.jump());
+            CompanionPhysics.tick(body);
+        }
+        assertTrue(arrived);
+        assertTrue(momentum, landings.toString());
+        assertEquals(3.5, body.position.x, .16);
+        assertEquals(0, body.position.y, 1e-9);
+        assertEquals(0, body.jumps);
     }
 }

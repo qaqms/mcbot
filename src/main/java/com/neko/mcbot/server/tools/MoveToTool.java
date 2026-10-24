@@ -105,6 +105,12 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:return_waypoint须正整数ID，并使用exact=true、walk_only=true且不带工作目标。", null));
         }
+        java.util.UUID pickup;
+        try { pickup = pickupTarget(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:pickup_target_uuid须为标准UUID，不能与工作/放置/返程目标组合。", null));
+        }
         if (args.has("may_alter_terrain") && (!args.get("may_alter_terrain").isJsonPrimitive()
                 || !args.get("may_alter_terrain").getAsJsonPrimitive().isBoolean())) {
             return CompletableFuture.completedFuture(new Result(false, "DENIED:may_alter_terrain 须为布尔。", null));
@@ -147,6 +153,7 @@ public final class MoveToTool implements ServerTool {
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         var path = new PathTask(level, to, permissions, context, scope, sched,
                 args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement);
+        if (pickup != null) path.pickingUp(pickup);
         if (c.buildSite().active()) path.limitTo(c.buildSite().scope()).usingBudget(c.buildSite().navigation());
         if (!sched.submit(c, path, f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
@@ -181,6 +188,18 @@ public final class MoveToTool implements ServerTool {
         var value = args.get("walk_only");
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) throw new IllegalArgumentException();
         return value.getAsBoolean();
+    }
+
+    static java.util.UUID pickupTarget(JsonObject args) {
+        if (!args.has("pickup_target_uuid")) return null;
+        if (args.has("work_target") || args.has("arrival") || args.has("place_item")
+                || args.has("return_waypoint")) throw new IllegalArgumentException();
+        var value = args.get("pickup_target_uuid");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) throw new IllegalArgumentException();
+        String raw = value.getAsString();
+        var id = java.util.UUID.fromString(raw);
+        if (!id.toString().equals(raw)) throw new IllegalArgumentException();
+        return id;
     }
 
     static Long returnWaypoint(JsonObject args) {

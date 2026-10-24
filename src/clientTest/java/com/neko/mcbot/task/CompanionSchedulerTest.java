@@ -28,6 +28,8 @@ class CompanionSchedulerTest {
         int ticks, cleanups, suspends, resumes;
         boolean resumeAllowed = true;
         boolean done, throwsTick, throwsCleanup;
+        Activity activity;
+        @Override public Activity activity() { return activity; }
         @Override public Progress tick(CompanionPlayer companion) {
             ticks++;
             if (throwsTick) throw new IllegalStateException("offline");
@@ -52,6 +54,47 @@ class CompanionSchedulerTest {
         });
         assertFalse(receipt.isDone());
         return receipt;
+    }
+
+    @Test void activityTransitionsAreCoalescedAndOldSlotsCannotReportAfterCancellationOrReplacement() {
+        var task = new Task();
+        task.activity = TickTask.Activity.SEARCH;
+        var first = start(task, 100);
+        var progress = new java.util.ArrayList<TickTask.Activity>();
+        scheduler.watch(body, progress::add);
+        assertEquals(List.of(TickTask.Activity.SEARCH), progress);
+        task.activity = TickTask.Activity.DIG;
+        for (int i = 0; i < 4; i++) scheduler.tick(present);
+        assertEquals(1, progress.size());
+        scheduler.tick(present);
+        assertEquals(List.of(TickTask.Activity.SEARCH, TickTask.Activity.DIG), progress);
+        for (int i = 0; i < 10; i++) scheduler.tick(present);
+        assertEquals(2, progress.size(), "unchanged phases must not spam the wire or history");
+        task.activity = TickTask.Activity.MOVE;
+        scheduler.tick(present);
+        assertEquals(TickTask.Activity.MOVE, progress.getLast());
+        scheduler.cancel(body, "owner");
+        assertTrue(first.isDone());
+        var next = new Task();
+        next.activity = TickTask.Activity.SEARCH;
+        var second = start(next, 100);
+        for (int i = 0; i < 10; i++) scheduler.tick(present);
+        assertEquals(3, progress.size());
+        next.done = true;
+        scheduler.tick(present);
+        assertTrue(second.join().ok());
+    }
+
+    @Test void displayObserverFailureCannotStopThePhysicalTaskOrChangeItsResult() {
+        var task = new Task();
+        task.activity = TickTask.Activity.SEARCH;
+        var result = start(task, 100);
+        scheduler.watch(body, activity -> { throw new IllegalStateException("display offline"); });
+        scheduler.tick(present);
+        task.done = true;
+        scheduler.tick(present);
+        assertTrue(result.join().ok());
+        assertEquals(2, task.ticks);
     }
 
     private void freeAfter(CompletableFuture<ServerTool.Result> receipt, Task task, String prefix) {

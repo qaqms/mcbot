@@ -80,4 +80,16 @@ class WorkPositionsTest {
         assertTrue(points.stream().allMatch(p -> p.getX() >= 2),
                 "the nearest safe column can still be too far away to pick the item up");
     }
+
+    @Test void pickupCanNominateContactCellsThatNeedEditsWithoutClaimingTheyAreStandable() {
+        var access = new WorkPositions.Access() {
+            @Override public boolean standable(BlockPos pos) { return false; }
+            @Override public double distanceSquared(BlockPos pos) { return pos.distSqr(BlockPos.ZERO); }
+            @Override public boolean workable(BlockPos pos) { return pos.getY() == 2; }
+        };
+        assertTrue(WorkPositions.pickupCandidates(new BlockPos(0, 2, 0), access).isEmpty());
+        var approaches = WorkPositions.pickupApproaches(new BlockPos(0, 2, 0), access);
+        assertEquals(6, approaches.size());
+        assertTrue(approaches.stream().allMatch(p -> p.getY() == 2));
+    }
 }

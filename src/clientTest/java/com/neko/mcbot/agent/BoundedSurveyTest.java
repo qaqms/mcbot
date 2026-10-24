@@ -124,6 +124,27 @@ class BoundedSurveyTest {
         var back = w.survey(true).start(); w.drain();
         assertTrue(back.join().ok());
     }
+
+    @Test void lowToolFeedbackReportsRealDurabilityAndOtherInventoryToolsForModelRecovery() {
+        var w = new World();
+        w.damage = 120;
+        var future = w.survey(false).start(); w.drain();
+        var supply = future.join().data().getAsJsonObject("supply");
+        assertEquals(11, supply.get("selected_remaining").getAsInt());
+        assertEquals(16, supply.get("reserve_durability").getAsInt());
+        assertEquals(0, supply.get("selected_dig_capacity").getAsInt());
+        assertTrue(future.join().feedback().contains("本次地下执行结束不等于原目标无法完成"));
+        var state = w.state();
+        var tool = state.getAsJsonObject("inventory").getAsJsonArray("slots").get(9).getAsJsonObject();
+        tool.addProperty("item", "minecraft:iron_pickaxe"); tool.addProperty("count", 1);
+        tool.addProperty("max_damage", 250); tool.addProperty("damage", 42);
+        var options = BoundedSurvey.supplyFacts(state, 16).getAsJsonArray("durable_spares");
+        assertEquals(1, options.size());
+        assertEquals(9, options.get(0).getAsJsonObject().get("slot").getAsInt());
+        assertEquals(208, options.get(0).getAsJsonObject().get("remaining").getAsInt());
+        assertEquals(120, state.getAsJsonObject("inventory").getAsJsonArray("slots")
+                .get(0).getAsJsonObject().get("damage").getAsInt(), "observation must not equip or repair anything");
+    }
     @Test void sharedEnvironmentFactStopsBothDescentAndReturnWithoutRefreshingOriginalLedger() {
         var fresh = new World();
         fresh.environmentSafe = false;

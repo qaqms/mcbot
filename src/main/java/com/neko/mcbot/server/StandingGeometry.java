@@ -71,9 +71,86 @@ public final class StandingGeometry implements NavigationGeometry {
     }
 
     public AABB body(int x, double feet, int z) {
+        return bodyAt(x + .5, feet, z + .5);
+    }
+
+    private AABB bodyAt(double x, double feet, double z) {
         double half = width / 2;
-        return new AABB(x + .5 - half, feet, z + .5 - half,
-                x + .5 + half, feet + height, z + .5 + half);
+        return new AABB(x - half, feet, z - half, x + half, feet + height, z + half);
+    }
+
+    /** Recover only onto a column already under the real sole, through a supported, clear walk. */
+    public BlockPos departure(double x, double feet, double z, java.util.function.Predicate<BlockPos> allowed) {
+        if (!Double.isFinite(x) || !Double.isFinite(feet) || !Double.isFinite(z)) return null;
+        double half = width / 2;
+        int y = NavigationGeometry.cell(feet);
+        BlockPos nearest = null;
+        double distance = Double.POSITIVE_INFINITY;
+        for (int cx = (int) Math.floor(x - half + EPS); cx <= (int) Math.floor(x + half - EPS); cx++)
+            for (int cz = (int) Math.floor(z - half + EPS); cz <= (int) Math.floor(z + half - EPS); cz++) {
+                var pos = new BlockPos(cx, y, cz);
+                double d = Math.hypot(cx + .5 - x, cz + .5 - z);
+                if (d < distance && allowed.test(pos) && canAlign(x, feet, z, pos)) {
+                    nearest = pos;
+                    distance = d;
+                }
+            }
+        return nearest;
+    }
+
+    /** Actual pose to a centered stance; no edits, jump, height change or unobserved support. */
+    public boolean canAlign(double x, double feet, double z, BlockPos destination) {
+        int y = NavigationGeometry.cell(feet);
+        if (!Double.isFinite(x) || !Double.isFinite(feet) || !Double.isFinite(z)
+                || destination.getY() != y || Math.abs(destination.getX() + .5 - x) > 1
+                || Math.abs(destination.getZ() + .5 - z) > 1) return false;
+        var foot = standing(destination.getX(), y, destination.getZ(), TerrainEdits.EMPTY);
+        if (foot == null || !same(foot.height(), feet)) return false;
+        var start = bodyAt(x, feet, z);
+        var end = body(destination.getX(), foot.height(), destination.getZ());
+        var pieces = gather(start.minmax(end), TerrainEdits.EMPTY);
+        if (pieces == null) return false;
+        var across = start.minmax(end).deflate(EPS);
+        if (pieces.stream().anyMatch(piece -> piece.box().intersects(across))) return false;
+        double dx = (end.getCenter().x - x) / WALK_SLICES;
+        double dz = (end.getCenter().z - z) / WALK_SLICES;
+        for (int i = 0; i <= WALK_SLICES; i++) {
+            var sole = start.move(dx * i, 0, dz * i);
+            if (pieces.stream().noneMatch(piece -> same(piece.box().maxY, feet)
+                    && overlaps(sole, piece.box()))) return false;
+        }
+        return true;
+    }
+
+    /** A flat running corridor needs lateral clearance and support under the entire sole. */
+    public boolean runningLane(int fx, double feet, int fz, int tx, int tz) {
+        if (!Double.isFinite(feet) || Math.abs(tx - fx) > 1 || Math.abs(tz - fz) > 1) return false;
+        var start = body(fx, feet, fz).inflate(.1, 0, .1);
+        var end = body(tx, feet, tz).inflate(.1, 0, .1);
+        var pieces = gather(start.minmax(end), TerrainEdits.EMPTY);
+        if (pieces == null) return false;
+        var sweep = start.minmax(end).deflate(EPS);
+        if (pieces.stream().anyMatch(piece -> piece.box().intersects(sweep))) return false;
+        double half = width / 2 + .1 - EPS;
+        for (int i = 0; i <= WALK_SLICES; i++) {
+            double x = fx + .5 + (tx - fx) * (double) i / WALK_SLICES;
+            double z = fz + .5 + (tz - fz) * (double) i / WALK_SLICES;
+            for (int corner = 0; corner < 5; corner++) {
+                double sx = x + (corner == 4 ? 0 : (corner & 1) == 0 ? -half : half);
+                double sz = z + (corner == 4 ? 0 : (corner & 2) == 0 ? -half : half);
+                boolean supported = false;
+                for (var piece : pieces) {
+                    var box = piece.box();
+                    if (same(box.maxY, feet) && sx >= box.minX && sx <= box.maxX
+                            && sz >= box.minZ && sz <= box.maxZ) {
+                        supported = true;
+                        break;
+                    }
+                }
+                if (!supported) return false;
+            }
+        }
+        return true;
     }
 
     @Override public Foot foot(int x, int y, int z, TerrainEdits edits) {

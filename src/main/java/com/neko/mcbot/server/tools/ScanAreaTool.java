@@ -218,6 +218,7 @@ public final class ScanAreaTool implements ServerTool {
                             item.getItem().getCount() - provenance.get("recorded_own_count").getAsInt()));
                     observation.add("drop_origins", provenance);
                     observation.add("stand_positions", WorkPositions.describePickup(companion, item));
+                    observation.add("approach_positions", WorkPositions.describePickupApproaches(companion, item));
                     observation.addProperty("can_touch_here",
                             GroundItems.touches(companion.getBoundingBox(), item.getBoundingBox()));
                     var target = ((com.neko.mcbot.mixin.ItemTargetAccess) item).mcbot$getPickupTarget();

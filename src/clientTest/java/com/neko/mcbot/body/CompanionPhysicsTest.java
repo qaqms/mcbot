@@ -13,6 +13,97 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CompanionPhysicsTest {
+    @Test void renewedSprintStaysEnabledBetweenTicksUntilWalkingOrIdleReplacesIt() {
+        var input = new MovementInput();
+        var body = new Body() {
+            boolean sprint;
+            final List<Boolean> changes = new ArrayList<>();
+            @Override public MovementInput.Frame takeInput() { return input.take(); }
+            @Override public boolean maySprint() { return true; }
+            @Override public void sprint(boolean enabled) {
+                if (sprint != enabled) changes.add(enabled);
+                sprint = enabled;
+            }
+            @Override public void travel(Vec3 relative) { assertEquals(relative.z > 0, sprint); }
+        };
+        for (int i = 0; i < 4; i++) {
+            input.clear();
+            input.renew(0, 1, false, true);
+            CompanionPhysics.tick(body);
+            assertTrue(body.sprint);
+        }
+        assertEquals(List.of(true), body.changes);
+        CompanionPhysics.tick(body);
+        assertFalse(body.sprint);
+        assertEquals(List.of(true, false), body.changes);
+    }
+
+    @Test void sprintIsAppliedBeforeTravelOnlyWithForwardInputAndCurrentEligibility() {
+        var input = new MovementInput();
+        var body = new Body() {
+            boolean sprint;
+            @Override public MovementInput.Frame takeInput() { return input.take(); }
+            @Override public boolean maySprint() { return loaded; }
+            @Override public void sprint(boolean enabled) { sprint = enabled; }
+            @Override public void travel(Vec3 relative) {
+                calls.add(sprint ? "run" : "walk");
+            }
+        };
+        input.renew(0, 1, false, true);
+        CompanionPhysics.tick(body);
+        assertTrue(body.calls.contains("run"));
+        for (var frame : List.of(MovementInput.Frame.IDLE, new MovementInput.Frame(1, 0, false, true),
+                new MovementInput.Frame(0, -1, false, true), new MovementInput.Frame(0, 1, false))) {
+            body.calls.clear();
+            input.renew(frame.x(), frame.z(), frame.jump(), frame.sprint());
+            CompanionPhysics.tick(body);
+            assertTrue(body.calls.contains("walk"), frame.toString());
+        }
+        var hungry = new Body() {
+            @Override public MovementInput.Frame takeInput() { return new MovementInput.Frame(0, 1, false, true); }
+            @Override public boolean maySprint() { return false; }
+            @Override public void sprint(boolean enabled) { assertFalse(enabled); }
+            @Override public void travel(Vec3 relative) {}
+        };
+        CompanionPhysics.tick(hungry);
+    }
+
+    @Test void sprintExpiresOnAnUnloadedTickAndWaterRecoveryOverridesTheSprintRequest() {
+        var input = new MovementInput();
+        var body = new Body() {
+            boolean sprint;
+            boolean recovery;
+            @Override public MovementInput.Frame takeInput() { return input.take(); }
+            @Override public boolean maySprint() { return true; }
+            @Override public void sprint(boolean enabled) { sprint = enabled; }
+            @Override public MovementInput.Frame recoveryInput() {
+                return recovery ? new MovementInput.Frame(0, 1, false) : null;
+            }
+            @Override public void travel(Vec3 relative) {}
+        };
+        input.renew(0, 1, false, true);
+        CompanionPhysics.tick(body);
+        assertTrue(body.sprint);
+        body.loaded = false;
+        input.renew(0, 1, false, true);
+        CompanionPhysics.tick(body);
+        assertFalse(body.sprint);
+        body.loaded = true;
+        CompanionPhysics.tick(body);
+        assertFalse(body.sprint, "expired input must not resume after loading");
+        input.renew(0, 1, false, true);
+        body.recovery = true;
+        CompanionPhysics.tick(body);
+        assertFalse(body.sprint, "the active reflex replaces the complete movement frame");
+        body.recovery = false;
+        input.renew(0, 1, false, true);
+        CompanionPhysics.tick(body);
+        assertTrue(body.sprint);
+        body.active = false;
+        CompanionPhysics.tick(body);
+        assertFalse(body.sprint);
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"travel", "blocks", "fall"})
     void nativeDeathDuringMotionCannotRunLaterEffectsOrWorkRecovery(String phase) {

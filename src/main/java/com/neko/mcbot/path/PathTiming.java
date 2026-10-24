@@ -7,7 +7,7 @@ import java.util.function.LongSupplier;
 
 /** Per-route diagnostic time; never a search allowance or a motion decision. Server thread only. */
 final class PathTiming {
-    enum Phase { GUARD, GROUND_WAIT, WARMUP, SEARCH, VALIDATE, DIG, PLACE, STEER, HANDOFF, FINALIZE }
+    enum Phase { GUARD, GROUND_WAIT, WARMUP, SEARCH, VALIDATE, DIG, PLACE, STEER, HANDOFF, FINALIZE, PLAN_AHEAD }
     private static final AtomicLong IDS = new AtomicLong();
     private final long id = IDS.incrementAndGet();
     private final LongSupplier clock;
@@ -18,11 +18,14 @@ final class PathTiming {
     private boolean begun, open, closed, input;
     private Phase phase;
     private int ticks, inputTicks, noInputTicks, settlingTicks, throughNodes, stoppedNodes, suspensions;
+    private int sprintInputTicks;
+    private boolean sprintInput;
 
     PathTiming() { this(System::nanoTime); }
     PathTiming(LongSupplier clock) { this.clock = clock; }
 
     long id() { return id; }
+    Phase phase() { return phase; }
 
     void beginTick() {
         if (closed) return;
@@ -30,6 +33,7 @@ final class PathTiming {
         if (!begun) { begun = true; started = now; }
         java.util.Arrays.fill(visited, false);
         input = false;
+        sprintInput = false;
         open = true;
         phase = Phase.GUARD;
         phaseStart = now;
@@ -54,7 +58,11 @@ final class PathTiming {
     }
 
     void input(double x, double z, boolean jump) {
+        input(x, z, jump, false);
+    }
+    void input(double x, double z, boolean jump, boolean sprint) {
         if (open && !closed) input |= x != 0 || z != 0 || jump;
+        if (open && !closed) sprintInput |= sprint && (x != 0 || z != 0);
     }
     void settling() { if (open && !closed) settlingTicks++; }
     void node(boolean through) {
@@ -67,6 +75,7 @@ final class PathTiming {
         if (!open || closed) return;
         nanos[phase.ordinal()] += Math.max(0, clock.getAsLong() - phaseStart);
         if (input) inputTicks++; else noInputTicks++;
+        if (sprintInput) sprintInputTicks++;
         open = false;
     }
 
@@ -87,6 +96,7 @@ final class PathTiming {
         data.addProperty("wall_nanos", begun ? Math.max(0, now - started) : 0);
         data.addProperty("ticks", ticks);
         data.addProperty("input_ticks", inputTicks);
+        data.addProperty("sprint_input_ticks", sprintInputTicks);
         data.addProperty("no_input_ticks", noInputTicks);
         data.addProperty("settling_ticks", settlingTicks);
         data.addProperty("through_nodes", throughNodes);

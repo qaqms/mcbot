@@ -27,9 +27,6 @@ final class PathTransition {
         if (base.geometry() != null)
             return shaped(base, edits, fx, fy, fz, x, y, z, remainingDigs, remainingPlaces);
         DigSampler terrain = edits.view(base);
-        if (dy > 0 && (!terrain.known(fx, fy + 2, fz) || !terrain.passable(fx, fy + 2, fz)))
-            return Check.refused(terrain.known(fx, fy + 2, fz) ? "JUMP_CLEARANCE" : "UNKNOWN_TERRAIN",
-                    DigAStar.pack(fx, fy + 2, fz));
         if (dx != 0 && dz != 0) for (int cy = fy; cy <= fy + 1; cy++) {
             for (int side = 0; side < 2; side++) {
                 int cx = side == 0 ? fx + dx : fx, cz = side == 0 ? fz : fz + dz;
@@ -39,12 +36,16 @@ final class PathTransition {
             }
         }
         var dig = new ArrayList<Long>(3);
-        for (long cell : DigAStar.clearanceCells(fy, x, y, z)) {
+        var clearing = new ArrayList<>(DigAStar.clearanceCells(fy, x, y, z));
+        long ceiling = DigAStar.pack(fx, fy + 2, fz);
+        if (dy > 0 && !clearing.contains(ceiling)) clearing.addFirst(ceiling);
+        for (long cell : clearing) {
+            int cx = DigAStar.unpackX(cell), cz = DigAStar.unpackZ(cell);
             int cy = DigAStar.unpackY(cell);
-            if (!terrain.known(x, cy, z)) return Check.refused("UNKNOWN_TERRAIN", cell);
-            if (terrain.passable(x, cy, z)) continue;
+            if (!terrain.known(cx, cy, cz)) return Check.refused("UNKNOWN_TERRAIN", cell);
+            if (terrain.passable(cx, cy, cz)) continue;
             if (cell == DigAStar.pack(fx, fy - 1, fz)) return Check.refused("DEPARTURE_SUPPORT", cell);
-            if (!DigSampler.feasibleDig(terrain.digSeconds(x, cy, z)))
+            if (!DigSampler.feasibleDig(terrain.digSeconds(cx, cy, cz)))
                 return Check.refused("DIG_UNAVAILABLE", cell);
             dig.add(cell);
             if (dig.size() > remainingDigs) return Check.refused("DIG_LIMIT", cell);
@@ -60,8 +61,8 @@ final class PathTransition {
                 return Check.refused("PLACEMENT_PRECONDITION", floor);
             place = List.of(floor);
         }
-        List<Long> clearing = List.copyOf(dig);
-        return new Check(new Plan(clearing, place, edits.after(clearing, place), y, dy > 0), null, null);
+        List<Long> removed = List.copyOf(dig);
+        return new Check(new Plan(removed, place, edits.after(removed, place), y, dy > 0), null, null);
     }
 
     private static Check shaped(DigSampler base, TerrainEdits edits, int fx, int fy, int fz,
@@ -73,12 +74,21 @@ final class PathTransition {
         double feet = dest == null ? y : dest.height();
         var clear = geometry.clearance(fx, from.height(), fz, x, feet, z, edits);
         if (!clear.known()) return Check.refused(clear.failure(), clear.cell());
+        var blockers = new ArrayList<>(clear.blockers());
+        // A standing jump rises above its landing. Its ceiling is explicit work, never an implicit edit.
+        var landing = dest == null ? List.of(DigAStar.pack(x, y - 1, z)) : List.<Long>of();
+        if (feet > from.height() && geometry.motion(fx, from.height(), fz, x, feet, z,
+                edits.after(blockers, landing)) == NavigationGeometry.Motion.BLOCKED) {
+            var jump = geometry.clearance(fx, from.height(), fz, x, from.height() + 1.25, z, edits);
+            if (!jump.known()) return Check.refused(jump.failure(), jump.cell());
+            for (long cell : jump.blockers()) if (!blockers.contains(cell)) blockers.add(cell);
+            blockers.sort(java.util.Comparator.comparingInt((Long cell) -> DigAStar.unpackY(cell))
+                    .reversed().thenComparingLong(Long::longValue));
+        }
         var terrain = edits.view(base);
-        for (long cell : clear.blockers()) {
+        for (long cell : blockers) {
             if (cell == from.support()) return Check.refused("DEPARTURE_SUPPORT", cell);
             if (dest != null && cell == dest.support()) return Check.refused("DESTINATION_SUPPORT", cell);
-            if (feet > from.height() && DigAStar.unpackX(cell) == fx && DigAStar.unpackZ(cell) == fz)
-                return Check.refused("JUMP_CLEARANCE", cell);
             if (fx != x && fz != z && (DigAStar.unpackX(cell) != x || DigAStar.unpackZ(cell) != z))
                 return Check.refused("CORNER_BLOCKED", cell);
             if (!base.inBounds(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
@@ -87,7 +97,7 @@ final class PathTransition {
                     DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))))
                 return Check.refused("DIG_UNAVAILABLE", cell);
         }
-        var dig = clear.blockers();
+        var dig = List.copyOf(blockers);
         if (dig.size() > remainingDigs) return Check.refused("DIG_LIMIT", null);
         if (!dig.isEmpty() && !terrain.canClear(fx, fy, fz, dig)) return Check.refused("WORK_SIGHT", null);
         List<Long> place = List.of();

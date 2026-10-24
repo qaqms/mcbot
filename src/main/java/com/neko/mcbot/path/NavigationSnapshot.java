@@ -114,7 +114,20 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
                 return clip(new ClipContext(from, to, ClipContext.Block.OUTLINE,
                         ClipContext.Fluid.NONE, CollisionContext.empty()));
             }
+            @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, java.util.Set<BlockPos> ignored) {
+                return traceEdited(from, to, ignored, java.util.Set.of());
+            }
+            @Override public BlockHitResult traceEdited(Vec3 from, Vec3 to, java.util.Set<BlockPos> removed,
+                                                       java.util.Set<BlockPos> placed) {
+                return BlockAim.clipEdited(NavigationSnapshot.this, from, to,
+                        CollisionContext.empty(), removed, placed);
+            }
         };
+    }
+
+    public NavigationGoal workGoal(BlockPos target, double eyeHeight, double reach) {
+        return com.neko.mcbot.server.NavigationWork.goal(sight(Vec3.ZERO), target.immutable(),
+                eyeHeight, reach, false, pos -> false, geometry);
     }
 
     @Override public boolean known(int x, int y, int z) { return known(new BlockPos(x, y, z)); }

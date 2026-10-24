@@ -4,8 +4,7 @@ package com.neko.mcbot.path;
 final class NavigationAllowance {
     private final long limit;
     private long used;
-    private DigAStar charged;
-    private int observed;
+    private final java.util.Map<DigAStar, Integer> observed = new java.util.WeakHashMap<>();
 
     NavigationAllowance(double distance) {
         limit = (long) Math.min(Integer.MAX_VALUE, Math.max(10d,
@@ -14,13 +13,9 @@ final class NavigationAllowance {
 
     void observe(DigAStar search) {
         if (search == null) return;
-        if (charged != search) {
-            charged = search;
-            observed = 0;
-        }
         int count = Math.max(1, search.chargedNodes());
-        used += Math.max(0, count - observed);
-        observed = count;
+        used += Math.max(0, count - observed.getOrDefault(search, 0));
+        observed.put(search, count);
     }
 
     int next() { return (int) Math.max(0, Math.min(NavigationBudget.NODES, limit - used)); }

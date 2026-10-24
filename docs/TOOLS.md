@@ -3,6 +3,67 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 拾取寻路更新（2026-10-24）
+
+详见[木头采集拾取寻路](WOOD-PICKUP-NAVIGATION-2026-10-24.md)，覆盖下方旧拾取口径。
+move_to增加可选pickup_target_uuid（标准UUID），x/y/z填新鲜掉落物品的取整坐标；
+导航统一选择身体可实际触碰的落点，可按原条件挖通/补支撑，不要求已有站位样本。
+不与work_target/arrival/place_item/return_waypoint组合；walk_only=true仍不挖放。
+拾取目标不使用普通坐标的exact脚格到达条件，附近下降物品可先等落稳。
+实体离场/归属/范围变化会停止或重新评估，触碰不等于入包，必须核新鲜背包。
+gather自动使用实体目标，同观测失败不逐个重试六个样本，真实现场变化可再评。
+终态navigation_goal可为pickup/work/position；失败诊断增加partial_candidate_checks，
+后台完成记录末尾goal区分目标。工具数仍31，无新增模型次数门。
+原权限、具体清单批准、真实材料/耐久、总账及取消保持，实际效果待实机。
+
+## 平地疾跑更新（2026-10-24，前次检查点）
+
+详见[平地疾跑](SPRINT-MOVEMENT-2026-10-24.md)，工具及参数Schema保持。
+move_to、追击和跟随共用导航，可在已验证的同向平坦路段自动疾跑；
+walk_only仍表示不挖放，不禁止疾跑。食物/身体状态不允许则行走，模型不需另发跑步调用。
+坡地/施工/转弯及末段沿原行走；sprint_input_ticks只统计导航续发请求，不证明实际已跑。
+原权限/范围/账户/取消与真实终态保持，没有调整挖矿算法或迁移完整疾跑跳。
+
+## 格边起步与剑攻击更新（2026-10-24，前次检查点）
+
+详见[格边起步与剑攻击](EDGE-DEPARTURE-AND-SWORD-2026-10-24.md)，原参数Schema不变。
+move_to和追击在起点中心无效但实际脚底被邻格支撑时，可按原范围和几何验证真实挪到
+同高可站中心后开始寻路。departure_alignments为实际尝试对齐次数，不是模型步数。
+无安全短距离恢复时仍返回局部起步失败；不能据此断定缺垫脚材料或整体目标不可达。
+attack先核原距离/视线，持剑不阻止远目标接近；当刻原版会横扫且有实际旁及对象才拒绝，
+原版同队/marker/严格距离排除有效。UNSAFE_SWEEP表示本次站位风险，非剑禁用。
+可按新鲜inventory/equip选合适武器；attack不自动换手，不扩大单目标许可到其他活物。
+普通安全目标可正常持剑，权限、取消、旁及保护、主手变化停工及真实原版伤害保持。
+
+## 追击、拾取与补给更新（2026-10-24，前次检查点）
+
+详见[追击、挖矿与补给](PURSUIT-MINING-AND-SUPPLY-2026-10-24.md)，覆盖下方历史口径。
+原工具数/输入Schema保持。attack更新目标时尽量保留原路线/在途搜索及原账户，
+默认动态路线也支持执行中预搜；实际出手仍核同目标、距离、许可与旁及对象。
+分段搜索先找可行答案再至多64展开改善，不能解释为新增模型次数限制。
+move_to诊断remaining_digs/dig_limit_explicit区分剩余显式额度和默认不限；
+DIG_LIMIT可能来自地下按真实耐久减reserve_durability派生的单次额度。
+地下explore的data.supply给selected_tool、selected_remaining、reserve_durability、
+selected_dig_capacity及durable_spares[{slot,item,remaining}]，相关字段按实际背包可选。
+durable_spares不保证采收资格；缺工具/材料先按真实配方补给，子工具失败不证明整项目标受阻。
+scan_area.item_targets增加approach_positions，每条是{x,y,z}整数脚格；
+stand_positions为现成站位，两类各至多6条。approach_positions仅验证假想身体可触碰物品、
+已加载和世界边界，可需挖通/搭支撑，不证明可达。move_to exact=true按原权限/资源验证，
+gather合并去重，取消同UUID累计六次尝试门，不重复已试坐标，现场变化出现新候选可再评。
+触碰成功仍须新鲜背包；没有候选只说明这次有限采样，不证明无任何挖放路径。
+默认模型轮数此前已不限，G面板残留/40已删除；真实耐久、材料、取消与许可保持。
+
+## 挖矿接续与存储更新（2026-10-24，前次检查点）
+
+详见[挖矿接续与存储](MINING-CONTINUATION-AND-STORAGE-2026-10-24.md)。
+原工具参数不变；普通导航执行期间可预搜后段，预留材料/动作额度，共原整趟账户，
+采用前核真实落点、现场改动清单和许可；动态目标/工地/显式累计导航账户暂不启用。
+观察/终态增加presearches、presearches_adopted、presearches_discarded，计时增加PLAN_AHEAD。
+search_diagnostics增加created_nodes、storage_collections；stored_nodes在存储整理后可下降，
+历史累计分配不再直接当作当前内存使用。真实32768记录和搜索资源保护仍有效。
+步行采样无新站位不再笼统归为预算耗尽；可在原许可和范围内另选地下探索或工作导航。
+此更新不承诺所有段尾无停顿，也不新增默认模型调用次数限制。
+
 ## 探索搜索接续（2026-10-24）
 
 详见[探索接续修正](EXPLORATION-SEARCH-CONTINUATION-2026-10-24.md)，覆盖下方旧搜索口径。
@@ -484,7 +545,7 @@ data.failure_memory含reason/failures/limit/entry_limit/dispatched=false。
 - `scan_area.item_targets[].stand_positions`现在同时满足安全整格站立与实际物品触碰盒，
   最多6个；只是当前几何候选，不保证路线可达或原版延迟/容量/归属允许入包。
 - gather在成功移动但未入包时也刷新实体，局部路线失败后不沿用旧实体站位；
-  同UUID最多6个不同站位，用尽记skipped_items，再考虑其他资源。
+  同UUID已试坐标去重；当前有限样本用尽记skipped_items，新观测出现新候选仍可重评。
   追物move_to带exact=true及剩余max_digs，开路计入本段预算。
   只有已知移除产生匹配掉落而当前无可处理物品时补一次1秒观察，
   data.drop_settle_waits计次数；正向背包进展清该标志，不每格固定等待。

@@ -4,6 +4,6 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": ["FurnaceAccess", "ItemTargetAccess", "LivingEquipmentAccess", "EntityFluidAccess", "BlockItemPlacementAccess",
     "DropAdmissionMixin", "DropBreakMixin", "DropSourceMixin", "DropRemovalMixin", "DropMutationMixin",
-    "DropMobPickupMixin", "TerrainVersionMixin", "MobThreatAccess", "CreeperThreatAccess"],
+    "DropMobPickupMixin", "TerrainVersionMixin", "MobThreatAccess", "CreeperThreatAccess", "PlayerAttackAccess"],
   "injectors": {"defaultRequire": 1}
 }

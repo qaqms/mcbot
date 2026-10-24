@@ -13,6 +13,8 @@ public final class NavigationBudget {
     private int lastNodes, lastRecords;
     private long lastNanos;
     private boolean perSearch;
+    private record Observed(int nodes, int records, long nanos) { }
+    private final java.util.Map<DigAStar, Observed> observations = new java.util.WeakHashMap<>();
 
     public NavigationBudget() { this(NODES, RECORDS, NANOS, REPLANS); perSearch = true; }
 
@@ -25,13 +27,21 @@ public final class NavigationBudget {
 
     public void observe(DigAStar search) {
         if (search == null) return;
-        if (current != search) throw new IllegalArgumentException("retired or foreign search");
+        if (current != search && (!perSearch || !observations.containsKey(search)))
+            throw new IllegalArgumentException("retired or foreign search");
+        if (perSearch) {
+            var previous = observations.getOrDefault(search, new Observed(0, 0, 0));
+            lastNodes = previous.nodes();
+            lastRecords = previous.records();
+            lastNanos = previous.nanos();
+        }
         int used = search.chargedNodes();
         nodes = (int) Math.min(Integer.MAX_VALUE, (long) nodes + Math.max(0, used - lastNodes));
         records = (int) Math.min(Integer.MAX_VALUE, (long) records + Math.max(0, search.storedNodes() - lastRecords));
         long delta = Math.max(0, search.elapsedNanos() - lastNanos);
         nanos = Math.min(Long.MAX_VALUE - delta, nanos) + delta;
         lastNodes = used; lastRecords = search.storedNodes(); lastNanos = search.elapsedNanos();
+        if (perSearch) observations.put(search, new Observed(lastNodes, lastRecords, lastNanos));
     }
 
     public DigAStar search(DigSampler sampler, int x, int y, int z, int tx, int ty, int tz,
@@ -47,6 +57,7 @@ public final class NavigationBudget {
                 Math.min(available, perSearch ? nodeCap : nodeCap - nodes), 0, goal);
         search.totalBudget(perSearch ? timeCap : timeCap - nanos);
         search.storageBudget(perSearch ? recordCap : recordCap - records);
+        if (perSearch) observations.remove(current);
         current = search;
         lastNodes = lastRecords = 0;
         lastNanos = 0;
@@ -71,11 +82,23 @@ public final class NavigationBudget {
         if (!perSearch) throw new IllegalStateException("detached search requires per-search bounds");
         if (current != search) {
             observe(current);
+            observations.remove(current);
             current = search;
             lastNodes = lastRecords = 0;
             lastNanos = 0;
         }
         observe(search);
+    }
+
+    void trackConcurrent(DigAStar search) {
+        if (!perSearch) throw new IllegalStateException("concurrent search requires per-search bounds");
+        observations.putIfAbsent(search, new Observed(0, 0, 0));
+        observe(search);
+    }
+
+    void retireConcurrent(DigAStar search) {
+        observe(search);
+        if (search != current) observations.remove(search);
     }
 
     public com.google.gson.JsonObject snapshot() {

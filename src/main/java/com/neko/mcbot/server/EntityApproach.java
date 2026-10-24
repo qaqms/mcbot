@@ -14,6 +14,7 @@ public final class EntityApproach {
         TickTask.Progress advance(TickTask route);
         void stopInput();
         default boolean routeUseful(TickTask route) { return false; }
+        default boolean retarget(TickTask route) { return false; }
     }
     private final Access access;
     private final NavigationBudget budget;
@@ -44,7 +45,12 @@ public final class EntityApproach {
         Vec3 position = access.targetPosition();
         boolean retarget = route != null && position.distanceToSqr(heading) >= 4
                 && ticks - lastPlan >= 10 && !access.routeUseful(route);
-        if (retarget) { retargets++; stop(); }
+        if (retarget) {
+            retargets++;
+            if (!access.retarget(route)) stop();
+            heading = position;
+            lastPlan = ticks;
+        }
         if (route == null) {
             if (started && !budget.takeReplan() || budget.exhausted()) {
                 budgetStops++;

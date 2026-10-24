@@ -154,13 +154,45 @@ class FractionalNavigationTest {
         assertTrue(back.path().stream().allMatch(s -> s.dig().isEmpty() && s.place().isEmpty()));
     }
 
-    @Test void aJumpCannotAcquirePermissionToDigItsOwnLowCeilingAsASideEffect() {
+    @Test void aJumpListsItsMineableCeilingAndStillRequiresActualDigBudgetAndTool() {
         var terrain = new Terrain();
         terrain.digging = true;
         terrain.blocks.put(new BlockPos(1, 0, 0), Blocks.STONE.defaultBlockState());
         terrain.blocks.put(new BlockPos(0, 2, 0), Blocks.STONE.defaultBlockState());
         var check = PathTransition.check(terrain, TerrainEdits.EMPTY, 0, 0, 0, 1, 1, 0, 12, 0);
-        assertNull(check.plan());
-        assertEquals("JUMP_CLEARANCE", check.reason());
+        assertNotNull(check.plan(), check.reason());
+        assertTrue(check.plan().dig().contains(DigAStar.pack(0, 2, 0)));
+        assertFalse(check.plan().dig().contains(DigAStar.pack(1, 0, 0)), "retain the landing support");
+        assertTrue(check.plan().jump());
+        var noDigs = PathTransition.check(terrain, TerrainEdits.EMPTY, 0, 0, 0, 1, 1, 0, 0, 0);
+        assertNull(noDigs.plan());
+        assertEquals("DIG_LIMIT", noDigs.reason());
+        terrain.digging = false;
+        var noTool = PathTransition.check(terrain, TerrainEdits.EMPTY, 0, 0, 0, 1, 1, 0, 12, 0);
+        assertNull(noTool.plan());
+        assertEquals("DIG_UNAVAILABLE", noTool.reason());
+    }
+
+    @Test void clearDescendingStairsCanPassThroughButEditsAndReverseTurnsStillRequireAStop() {
+        var a = new DigAStar.Step(0, 2, 0, java.util.List.of(), java.util.List.of(), DigAStar.ACT_START);
+        var b = new DigAStar.Step(1, 1, 0, java.util.List.of(), java.util.List.of(), DigAStar.ACT_FALL);
+        var c = new DigAStar.Step(2, 0, 0, java.util.List.of(), java.util.List.of(), DigAStar.ACT_FALL);
+        assertTrue(PathTask.continuous(a, b, c));
+        assertFalse(PathTask.continuous(a, b, a));
+        var edited = new DigAStar.Step(2, 0, 0, java.util.List.of(DigAStar.pack(2, 0, 0)),
+                java.util.List.of(), DigAStar.ACT_DIG);
+        assertFalse(PathTask.continuous(a, b, edited));
+    }
+
+    @Test void walkingOntoAHalfSlabDoesNotPlanAnUnnecessaryJumpCeiling() {
+        var terrain = new Terrain();
+        terrain.blocks.put(new BlockPos(1, 0, 0), Blocks.OAK_SLAB.defaultBlockState());
+        terrain.blocks.put(new BlockPos(0, 2, 0), Blocks.OAK_SLAB.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.SlabBlock.TYPE,
+                        net.minecraft.world.level.block.state.properties.SlabType.TOP));
+        var check = PathTransition.check(terrain, TerrainEdits.EMPTY, 0, 0, 0, 1, 0, 0, 0, 0);
+        assertNotNull(check.plan(), check.reason());
+        assertFalse(check.plan().jump());
+        assertTrue(check.plan().dig().isEmpty());
     }
 }

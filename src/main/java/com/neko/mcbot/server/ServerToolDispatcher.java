@@ -429,6 +429,11 @@ public final class ServerToolDispatcher {
         int cap = tool.capTicks(args);
         replyAck(sender, seq, jobId, toolName, acceptText(tool, args, jobId, cap), cap);
         McbotMod.LOG.info("[brain] job {} 受理 {} seq={} 帽={}tick", jobId, toolName, seq, cap);
+        if ("move_to".equals(toolName)) scheduler.watch(companion.id(), activity -> {
+            var data = new JsonObject();
+            data.addProperty("activity", activity.name());
+            replyJobEvent(sender, seq, jobId, toolName, "progress", activity.label(), data);
+        });
         fut.whenComplete((res, err) -> {
             String phase;
             String text;

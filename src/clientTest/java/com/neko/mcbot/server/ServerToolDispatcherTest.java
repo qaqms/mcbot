@@ -88,6 +88,37 @@ class ServerToolDispatcherTest {
         return JsonParser.parseString(text).getAsJsonObject();
     }
 
+    @Test void navigationProgressUsesItsAcceptedJobIdentityAndOnlyTerminalSettlesTheCall() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        var activity = new java.util.concurrent.atomic.AtomicReference<>(com.neko.mcbot.task.TickTask.Activity.SEARCH);
+        var task = new com.neko.mcbot.task.TickTask() {
+            @Override public Activity activity() { return activity.get(); }
+            @Override public Progress tick(com.neko.mcbot.body.CompanionPlayer body) { return running(); }
+        };
+        onRun = () -> assertTrue(com.neko.mcbot.task.SchedulerProgressFixture.submit(
+                scheduler, companion, task, nextResult));
+        call(1, "move_to", "{}");
+        var ack = receipts.stream().filter(env -> "job_ack".equals(env.kind())).findFirst().orElseThrow();
+        var first = receipts.getLast();
+        assertEquals("progress", first.str("phase"));
+        assertEquals("SEARCH", first.obj("data").get("activity").getAsString());
+        assertEquals(ack.str("job_id"), first.str("job_id"));
+        assertEquals(ack.num("seq", -1), first.num("seq", -1));
+        assertFalse(nextResult.isDone());
+        activity.set(com.neko.mcbot.task.TickTask.Activity.DIG);
+        for (int tick = 0; tick < 5; tick++) com.neko.mcbot.task.SchedulerProgressFixture.tick(scheduler);
+        assertEquals("DIG", receipts.getLast().obj("data").get("activity").getAsString());
+        assertFalse(nextResult.isDone());
+        scheduler.cancel(companion, "owner");
+        assertEquals("cancelled", receipts.getLast().str("phase"));
+        int count = receipts.size();
+        for (int tick = 0; tick < 10; tick++) com.neko.mcbot.task.SchedulerProgressFixture.tick(scheduler);
+        assertEquals(count, receipts.size());
+        assertEquals(1, receipts.stream().filter(env -> "job_event".equals(env.kind())
+                && !"progress".equals(env.str("phase"))).count());
+    }
+
     @Test void invalidRecoveryRevokesNewPermissionsAndCannotDispatchActions() {
         begin(sender, 71, false);
         nextResult = new CompletableFuture<>();

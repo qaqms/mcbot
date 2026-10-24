@@ -148,6 +148,24 @@ public final class BlockPlacement {
         return false;
     }
 
+    /** Route supports can depend on earlier edits; execution still uses the ordinary native placement path. */
+    public static boolean attachedSupportAt(CompanionPlayer player, BlockPos pos, int slot,
+                                           Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
+        if (!pendingNativeTerrain(pos, edits))
+            return attachedAt(player, pos, slot, eye, body, edits, temporaryPurpose);
+        if (temporaryPurpose != null || player.buildSite().active() || !player.gameMode.isSurvival()
+                || !player.getAbilities().mayBuild || slot < 0 || slot >= Inventory.INVENTORY_SIZE
+                || BuildRecordAccess.guard(player, pos, false, null) != null) return false;
+        var level = player.level();
+        var material = player.getInventory().getItem(slot);
+        return SupportPlacement.canPlan(level, BlockAim.forPlayer(player), pos, eye, body, material,
+                Math.min(6.5, player.blockInteractionRange()), edits,
+                near -> level.isInWorldBounds(near) && level.getWorldBorder().isWithinBounds(near)
+                        && level.isLoaded(near) && level.mayInteract(player, near),
+                face -> player.mayUseItemAt(pos, face, material),
+                bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)));
+    }
+
     public static boolean supported(BlockItem item) {
         Class<?> type = item.getClass();
         return type == BlockItem.class || type == BedItem.class || type == DoubleHighBlockItem.class

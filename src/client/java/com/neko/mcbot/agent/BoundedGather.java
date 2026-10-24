@@ -108,6 +108,7 @@ final class BoundedGather {
     private int calls;
     private int dug;
     private int cleared;
+    private long pickupTerrainRevision;
     private int lastProgress;
     private int workPositionAttempts;
     private String currentFeet;
@@ -378,8 +379,7 @@ final class BoundedGather {
                 String key = itemKey(item);
                 if (skippedItems.contains(key)) {
                     var tried = itemStances.getOrDefault(key, Set.of());
-                    boolean freshStance = tried.size() < 6
-                            && positions(item).stream().anyMatch(p -> !tried.contains(blockKey(p)));
+                    boolean freshStance = !tried.contains(pickupObservation(item));
                     if (!flag(item, "can_touch_here") && !freshStance) continue;
                     skippedItems.remove(key);
                 }
@@ -421,15 +421,13 @@ final class BoundedGather {
             return true;
         }
         var tried = itemStances.computeIfAbsent(key, ignored -> new HashSet<>());
-        var positions = positions(item);
-        if (positions.isEmpty() || tried.size() >= 6
-                || positions.stream().allMatch(p -> tried.contains(blockKey(p)))) {
+        if (!tried.add(pickupObservation(item))) {
             skippedItems.add(itemKey(item));
-            lastProblem = "掉落没有剩余的安全触碰站位；已按最新实体位置核对，本段不重复尝试旧站位。";
+            lastProblem = "该掉落的同一触碰目标已搜索；不能据此证明无路，现场变化后可重评。";
             return false;
         }
         // Movement ticks may already have picked it up. Only a fresh inventory proves progress.
-        walk(positions, 0, tried, () -> { skippedItems.add(itemKey(item)); scanDrops(); });
+        walkToDrop(item);
         return true;
     }
 
@@ -470,19 +468,12 @@ final class BoundedGather {
                     unharvestableBlocks.add(blockKey(block));
                     continue;
                 }
-                var positions = positions(block);
+                var positions = workPositions(block);
                 var tried = new HashSet<String>();
                 tried.add(currentFeet);
                 if (flag(block, "can_work_here") || block.has("can_clear_here") && flag(block, "can_clear_here")) {
                     beginBatch(blocks, block);
                     mine(block, positions, 0, tried); return;
-                }
-                if (positions.isEmpty()) {
-                    // Nearby standing samples do not prove a buried object has no working route.
-                    var semantic = new JsonObject();
-                    for (String axis : List.of("x", "y", "z")) semantic.add(axis, block.get(axis));
-                    semantic.addProperty("arrival", "work");
-                    positions = List.of(semantic);
                 }
                 approachBlock(block, positions, 0, tried);
                 return;
@@ -533,7 +524,7 @@ final class BoundedGather {
         tried.add(currentFeet);
         batchContinuations++;
         // The observation only nominates work. Each primitive rechecks the live target, hand and permission.
-        mine(next, positions(next), 0, tried);
+        mine(next, workPositions(next), 0, tried);
         return true;
     }
 
@@ -555,7 +546,11 @@ final class BoundedGather {
         var points = lastData.getAsJsonArray("exploration_points");
         if (points == null) { resourceBlocked("RESOURCE_BLOCKED:服务端未提供探索落脚样本。"); return; }
         JsonObject chosen = exploration.choose(points, plan.radius());
-        if (chosen == null) { resourceBlocked("RESOURCE_BLOCKED:没有预算内尚未检查的已加载落脚样本。"); return; }
+        if (chosen == null) {
+            resourceBlocked("RESOURCE_BLOCKED:本次步行采样没有可选的新落脚点；不表示探索次数耗尽或地下无路。"
+                    + "需要挖放开路时可在原许可/范围内用explore mode=underground指定direction和target_y，或move_to另选工作目标。");
+            return;
+        }
         var move = new JsonObject();
         for (String key : List.of("x", "y", "z")) move.addProperty(key, exact(chosen, key));
         exploration.attempt(chosen);
@@ -598,7 +593,11 @@ final class BoundedGather {
                 afterMovement(receipt, () -> mine(block, positions, next, tried));
             } else if (localRouteFailure(receipt.feedback())) {
                 lastProblem = receipt.feedback();
-                afterMovement(receipt, () -> approachBlock(block, positions, next, tried));
+                if (next >= positions.size()) {
+                    skippedBlocks.add(blockKey(block));
+                    // afterMovement already checks fresh inventory/scope; do not request the same status twice.
+                    afterMovement(receipt, this::scanDrops);
+                } else afterMovement(receipt, () -> approachBlock(block, positions, next, tried));
             } else if (receipt.feedback().startsWith("TARGET_LOST:")) {
                 lastProblem = receipt.feedback();
                 blocked(block);
@@ -607,6 +606,14 @@ final class BoundedGather {
                 finish(false, receipt.feedback());
             }
         });
+    }
+
+    private static List<JsonObject> workPositions(JsonObject block) {
+        // Standing samples prove local geometry, not reachability. Search all valid work stances together.
+        var point = new JsonObject();
+        for (String axis : List.of("x", "y", "z")) point.add(axis, block.get(axis).deepCopy());
+        point.addProperty("arrival", "work");
+        return List.of(point);
     }
 
     private static boolean localStanceFailure(String feedback) {
@@ -625,7 +632,10 @@ final class BoundedGather {
             int changes = exact(receipt.data(), key);
             if (changes < 0) throw new IllegalArgumentException();
             if (key.equals("removed_blocks")) cleared = Math.addExact(cleared, changes);
-            if (changes > 0) exploration.invalidateCoverage();
+            if (changes > 0) {
+                exploration.invalidateCoverage();
+                pickupTerrainRevision = Math.addExact(pickupTerrainRevision, changes);
+            }
         }
         // Failed routes can move or collect items too. Recheck scope and quantity before another action.
         observe(next);
@@ -705,11 +715,10 @@ final class BoundedGather {
         if (sourceObservations.size() < 8) sourceObservations.add(evidence);
     }
 
-    private void walk(List<JsonObject> positions, int index, Set<String> tried, Runnable unavailable) {
-        while (index < positions.size() && tried.contains(blockKey(positions.get(index)))) index++;
-        if (index >= positions.size() || tried.size() >= 6) { unavailable.run(); return; }
-        JsonObject point = positions.get(index).deepCopy();
-        tried.add(blockKey(point));
+    private void walkToDrop(JsonObject item) {
+        var point = new JsonObject();
+        for (String axis : List.of("x", "y", "z")) point.addProperty(axis, (int) Math.floor(finite(item, axis)));
+        point.addProperty("pickup_target_uuid", itemKey(item));
         point.addProperty("exact", true);
         point.addProperty("max_digs", Math.max(0, plan.maxBlocks() - dug - cleared));
         call("move_to", point, receipt -> {
@@ -726,16 +735,32 @@ final class BoundedGather {
         });
     }
 
+    private String pickupObservation(JsonObject item) {
+        var signature = new StringBuilder();
+        for (String axis : List.of("x", "y", "z"))
+            signature.append((long) Math.floor(finite(item, axis) * 4)).append(':');
+        // Samples describe changed geometry, not separate destinations to retry one by one.
+        positions(item).stream().map(BoundedGather::blockKey).sorted()
+                .forEach(key -> signature.append(key).append(';'));
+        return signature.append('/').append(dug).append('/').append(cleared)
+                .append('/').append(pickupTerrainRevision).toString();
+    }
+
     private List<JsonObject> positions(JsonObject target) {
         var array = target.getAsJsonArray("stand_positions");
         if (array == null || array.size() > 6) throw new IllegalArgumentException();
         var points = new java.util.ArrayList<JsonObject>();
         var seen = new HashSet<String>();
-        for (var entry : array) {
-            var pos = entry.getAsJsonObject();
-            var point = new JsonObject();
-            for (String key : List.of("x", "y", "z")) point.addProperty(key, exact(pos, key));
-            if (within(point) && seen.add(blockKey(point))) points.add(point);
+        for (String source : List.of("stand_positions", "approach_positions")) {
+            var candidates = target.getAsJsonArray(source);
+            if (candidates == null) continue;
+            if (candidates.size() > 6) throw new IllegalArgumentException();
+            for (var entry : candidates) {
+                var pos = entry.getAsJsonObject();
+                var point = new JsonObject();
+                for (String key : List.of("x", "y", "z")) point.addProperty(key, exact(pos, key));
+                if (within(point) && seen.add(blockKey(point))) points.add(point);
+            }
         }
         return List.copyOf(points);
     }

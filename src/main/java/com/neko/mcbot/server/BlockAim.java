@@ -113,7 +113,12 @@ public final class BlockAim {
     /** Path materials are full cubes; planned supports must also occlude later work rays. */
     public static BlockHitResult clipEdited(BlockGetter world, Vec3 from, Vec3 to, CollisionContext context,
                                              Set<BlockPos> removed, Set<BlockPos> placed) {
-        BlockGetter view = new BlockGetter() {
+        return editedWorld(world, removed, placed).clip(
+                new ClipContext(from, to, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, context));
+    }
+
+    public static BlockGetter editedWorld(BlockGetter world, Set<BlockPos> removed, Set<BlockPos> placed) {
+        return new BlockGetter() {
             @Override public net.minecraft.world.level.block.state.BlockState getBlockState(BlockPos pos) {
                 if (removed.contains(pos)) return net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
                 if (placed.contains(pos)) return net.minecraft.world.level.block.Blocks.COBBLESTONE.defaultBlockState();
@@ -128,7 +133,6 @@ public final class BlockAim {
             @Override public int getHeight() { return world.getHeight(); }
             @Override public int getMinY() { return world.getMinY(); }
         };
-        return view.clip(new ClipContext(from, to, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, context));
     }
 
     /** A small concrete sight-clearing plan, ranked by actual blockers rather than target distance. */

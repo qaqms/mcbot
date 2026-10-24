@@ -190,6 +190,9 @@ class EditedTerrainSearchTest {
         assertTrue(route.budgetReached());
         assertTrue(route.failure().startsWith("BUDGET_EXCEEDED:"));
         assertEquals(DigAStar.MAX_STORED_NODES, route.storedNodes(), "the fixture exercises the storage ceiling");
+        assertTrue(route.storageCollections() > 0, "storage refusal must follow reclamation");
+        assertTrue(route.createdNodes() > route.storedNodes(),
+                "discarded allocations are reclaimed rather than counted forever as live memory");
     }
 
     @Test void yieldingTheCurrentSliceCannotSkipTheAccumulatedTimeCeiling() {

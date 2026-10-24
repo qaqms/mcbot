@@ -19,7 +19,7 @@ public final class AttackFixtures {
         public float health = 20, absorption;
         public int strikes, reservations;
         public boolean approach;
-        public int moves, stops;
+        public int moves, stops, aims;
         public ServerTool.Result guard, permission;
         public Runnable effect = () -> health -= 3;
         public Runnable movement = () -> {};
@@ -38,6 +38,7 @@ public final class AttackFixtures {
         @Override public boolean ready() { return ready; }
         @Override public boolean reserve() { reservations++; return reserved; }
         @Override public void strike() { strikes++; effect.run(); }
+        @Override public void faceTarget() { aims++; }
         @Override public boolean canApproach() { return approach; }
         @Override public ServerTool.Result approach() { moves++; movement.run(); return movementFailure; }
         @Override public void stopMoving() { stops++; }

@@ -16,6 +16,25 @@ import static org.junit.jupiter.api.Assertions.*;
 class EntityAttackTest {
     @BeforeAll static void registriesOnly() { BlockActionFixtures.bootstrap(); }
 
+    @Test void cooldownKeepsFacingTheValidatedTargetButBlockedOrCancelledWorkCannotAimAgain() {
+        var access = new Access();
+        access.approach = true;
+        access.ready = false;
+        var attack = new EntityAttack(access, 1);
+        assertNull(attack.tick());
+        assertNull(attack.tick());
+        assertEquals(2, access.aims);
+        assertEquals(0, access.strikes);
+        access.guard = new ServerTool.Result(false, "OUT_OF_REACH:moving target", null);
+        assertNull(attack.tick());
+        assertEquals(2, access.aims, "an active route retains its own walking heading");
+        attack.interrupt("CANCELLED:owner");
+        access.guard = null;
+        attack.tick();
+        assertEquals(2, access.aims);
+        assertEquals(0, access.strikes);
+    }
+
     @Test void movementAndNativeStrikeEligibilityAreIndependentOnTheSameTick() {
         var access = new Access();
         access.approach = true;

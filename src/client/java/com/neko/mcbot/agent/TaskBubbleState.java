@@ -15,7 +15,7 @@ public final class TaskBubbleState {
         SMELTING("正在烧制"), EQUIPPING("正在整理装备"), WAITING("正在等待"),
         COLLECTING("正在拾取"), TRANSFERRING("正在搬运物品"), ATTACKING("正在战斗"),
         RECIPES("正在查看配方"), SURVEY("正在地下勘探"), RETURNING("正在沿路标返回"),
-        FOLLOWING("正在跟随");
+        FOLLOWING("正在跟随"), ROUTING("正在寻路"), SETTLING("正在等待落稳"), AVOIDING("正在避险");
 
         private final String label;
         Activity(String label) { this.label = label; }
@@ -24,7 +24,7 @@ public final class TaskBubbleState {
             return switch (name) {
                 case "status", "inventory", "inspect_block" -> OBSERVING;
                 case "scan_area", "find_resource" -> SEARCHING;
-                case "move_to" -> MOVING;
+                case "move_to" -> ROUTING;
                 case "break_block" -> MINING;
                 case "place_block" -> query ? OBSERVING : PLACING;
                 case "build_nearby" -> PLACING;
@@ -59,6 +59,19 @@ public final class TaskBubbleState {
         if (id != 0 && id == taskId && terminal == null) inFlight.put(seq, activity);
     }
     void settled(long id, long seq) { if (id == taskId) inFlight.remove(seq); }
+    void progress(long id, long seq, String tool, String activity) {
+        if (id != taskId || terminal != null || !"move_to".equals(tool) || !inFlight.containsKey(seq)) return;
+        Activity next = switch (activity) {
+            case "SEARCH" -> Activity.ROUTING;
+            case "MOVE" -> Activity.MOVING;
+            case "DIG" -> Activity.MINING;
+            case "PLACE" -> Activity.PLACING;
+            case "WAIT" -> Activity.SETTLING;
+            case "SUSPENDED" -> Activity.AVOIDING;
+            default -> null;
+        };
+        if (next != null) inFlight.put(seq, next);
+    }
     Activity primitive() { return inFlight.isEmpty() ? null : inFlight.lastEntry().getValue(); }
     void finish(long id, AgentLoop.TaskStatus status, String text, ItemGoal.Progress progress, long now) {
         if (taskId != id || terminal != null) return;

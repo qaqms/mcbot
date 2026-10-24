@@ -51,6 +51,9 @@ public final class CompanionScheduler {
         int elapsed;
         boolean suspended;
         boolean dormant;
+        java.util.function.Consumer<TickTask.Activity> progress;
+        TickTask.Activity reported;
+        int reportedAt = -5;
         Slot(UUID id, CompanionPlayer companion, TickTask task,
              CompletableFuture<ServerTool.Result> future, int capTicks, ControlScope control) {
             this.id = id; this.companion = companion; this.task = task; this.future = future;
@@ -219,6 +222,27 @@ public final class CompanionScheduler {
         return active.containsKey(companionId);
     }
 
+    /** Bound to this exact slot; replacing or finishing it drops the observer with it. */
+    public void watch(UUID companionId, java.util.function.Consumer<TickTask.Activity> progress) {
+        var slot = active.get(companionId);
+        if (slot == null) return;
+        slot.progress = progress;
+        publish(slot);
+    }
+
+    private void publish(Slot slot) {
+        if (slot.progress == null || active.get(slot.id()) != slot) return;
+        var activity = slot.suspended ? TickTask.Activity.SUSPENDED : slot.task().activity();
+        if (activity == null || activity == slot.reported || slot.elapsed - slot.reportedAt < 5) return;
+        slot.reported = activity;
+        slot.reportedAt = slot.elapsed;
+        try { slot.progress.accept(activity); }
+        catch (RuntimeException failure) {
+            slot.progress = null;
+            McbotMod.LOG.warn("任务显示进度发送失败；原工作继续", failure);
+        }
+    }
+
     public com.google.gson.JsonObject observation(UUID companionId) {
         Slot slot = active.get(companionId);
         var data = new com.google.gson.JsonObject();
@@ -360,12 +384,14 @@ public final class CompanionScheduler {
                 if (active.get(slot.id()) != slot) continue;
                 if (slot.dormant) {
                     preempt(slot.id());
+                    publish(slot);
                     if (active.get(slot.id()) == slot && slot.timedOut())
                         finish(slot, timeout(slot), true);
                     continue;
                 }
                 if (slot.control != null && !slot.control.control.owns(slot.control)) {
                     preempt(slot.id());
+                    publish(slot);
                     if (active.get(slot.id()) != slot) continue;
                     if (slot.timedOut()) finish(slot, timeout(slot), true);
                     continue;
@@ -398,7 +424,7 @@ public final class CompanionScheduler {
                 // 于是模型看到的是"60 秒没做完"、实际等了 3 分钟——一句自相矛盾的读数会把
                 // "到底该不该重试"的判断带偏。（效率评估 §5.6 点名的那处。）
                 finish(slot, timeout(slot), true);
-            }
+            } else publish(slot);
         }
     }
 

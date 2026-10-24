@@ -42,6 +42,7 @@ class BoundedGatherTest {
         final ArrayDeque<String> breakFailures = new ArrayDeque<>();
         final ArrayDeque<String> moveFailures = new ArrayDeque<>();
         int[] dropStances = {1};
+        int[] dropApproaches = {};
         boolean pickupOnFailedMove, leaveScopeOnFailedMove;
         int missedPickupMoves;
         int hiddenDropScans;
@@ -82,6 +83,7 @@ class BoundedGatherTest {
         final List<JsonObject> breakArgs = new ArrayList<>();
         CompletableFuture<ToolOutcome> mining;
         CompletableFuture<ToolOutcome> movement;
+        JsonObject movementEffects;
         CompletableFuture<ToolOutcome> waiting;
         final BoundedGather gather;
         Fixture(int requested, int baseline) {
@@ -118,6 +120,7 @@ class BoundedGatherTest {
                     boolean hidden = dug > 0 && hiddenDropScans-- > 0;
                     if (ground && !hidden) {
                         var item = withStances(false, dropStances);
+                        item.add("approach_positions", withStances(false, dropApproaches).get("stand_positions"));
                         item.addProperty("item", "minecraft:dirt");
                         item.addProperty("target_uuid", stableDropIdentity ? "drop" : "drop-" + dug);
                         item.addProperty("count", 1);
@@ -186,6 +189,7 @@ class BoundedGatherTest {
                     if (pickupDuringMining) automaticPickup(true);
                 }
                 case "move_to" -> {
+                    if (movementEffects != null) data = movementEffects.deepCopy();
                     var args = JsonParser.parseString(json).getAsJsonObject();
                     assertTrue(args.get("exact").getAsBoolean(),
                             "a selected work/pickup stance must not finish in an adjacent cell");
@@ -412,35 +416,38 @@ class BoundedGatherTest {
         return target;
     }
 
-    @Test void blockedArrivalTriesTheNextStanceWithoutAnInvalidMiningCall() {
+    @Test void blockedWorkRouteDoesNotRepeatSearchForEachSampleOrDispatchInvalidMining() {
         var f = new Fixture(1, 0);
         f.blockTargets = List.of(withStances(false, 1, 3));
         f.moveFailures.add("TARGET_BLOCKED:changed after scan");
         f.pickupDuringMining = true;
         var result = f.run();
-        assertTrue(result.ok(), result.feedback());
-        assertEquals(2, f.moved);
-        assertEquals(1, f.breakAttempts);
-        assertEquals(2, result.data().get("work_position_attempts").getAsInt());
-        assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertFalse(result.ok());
+        assertEquals(1, f.moved);
+        assertEquals(0, f.breakAttempts);
+        assertEquals(1, result.data().get("work_position_attempts").getAsInt());
+        assertEquals(List.of(2), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals("work", f.moves.getFirst().get("arrival").getAsString());
         assertTrue(f.moves.stream().allMatch(p -> p.getAsJsonObject("work_target").get("x").getAsInt() == 2));
     }
 
-    @Test void blockedDropApproachRecoversLocallyAndRechecksInventoryBetweenStances() {
+    @Test void failedContactSearchRechecksInventoryAndMovesOnWithoutRepeatingTheGoal() {
         for (String failure : List.of("TARGET_BLOCKED:cover", "OUT_OF_REACH:changed",
                 "PARTIAL:made progress", "NO_PATH:blocked")) {
             var f = new Fixture(1, 0);
             f.ground = true;
             f.dropStances = new int[]{1, 3};
             f.moveFailures.add(failure);
+            f.pickupDuringMining = true;
             var result = f.run();
             assertTrue(result.ok(), result.feedback());
-            assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
-            assertEquals(0, f.dug);
+            assertEquals(1, f.moved);
+            assertTrue(f.moves.getFirst().has("pickup_target_uuid"));
+            assertEquals(1, f.dug);
             int firstMove = f.calls.indexOf("move_to");
             assertEquals("status", f.calls.get(firstMove + 1));
             assertEquals("scan_area", f.calls.get(firstMove + 2));
-            assertEquals("move_to", f.calls.get(firstMove + 3));
+            assertEquals("find_resource", f.calls.get(firstMove + 3));
         }
     }
 
@@ -451,22 +458,24 @@ class BoundedGatherTest {
         f.dropStancesAfterFailedMove = new int[]{5};
         f.moveFailures.add("PARTIAL:item moved");
         assertTrue(f.run().ok());
-        assertEquals(List.of(1, 5), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(2, f.moved);
+        assertTrue(f.moves.stream().allMatch(p -> p.has("pickup_target_uuid")));
         assertTrue(f.moves.stream().allMatch(p -> p.has("max_digs")));
     }
 
-    @Test void successfulRouteWithoutContactRescansAndTriesAnotherDistinctStance() {
+    @Test void routeReceiptWithoutPickupCannotReplayTheSameContactSearch() {
         var f = new Fixture(1, 0);
         f.ground = true;
         f.dropStances = new int[]{1, 3};
         f.missedPickupMoves = 1;
+        f.pickupDuringMining = true;
         var result = f.run();
         assertTrue(result.ok(), result.feedback());
-        assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
-        assertEquals(0, f.dug, "a route receipt is not a pickup receipt");
+        assertEquals(1, f.moved);
+        assertEquals(1, f.dug, "a route receipt is not a pickup receipt; other work may still make progress");
     }
 
-    @Test void persistentUntouchableDropExhaustsDistinctStancesOnceBeforeOtherWork() {
+    @Test void persistentUntouchableDropUsesOneGoalBeforeOtherWork() {
         var f = new Fixture(1, 0);
         f.ground = true;
         f.dropStances = new int[]{1, 3};
@@ -474,11 +483,11 @@ class BoundedGatherTest {
         f.pickupDuringMining = true;
         var result = f.run();
         assertTrue(result.ok(), result.feedback());
-        assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(1, f.moved);
         assertEquals(1, result.data().get("skipped_items").getAsInt());
     }
 
-    @Test void pickupRetriesNeverExceedSixDistinctStancesForOneEntity() {
+    @Test void sixObservedStancesAreOneSearchInsteadOfSixIndependentRoutes() {
         var f = new Fixture(1, 0);
         f.ground = true;
         f.dropStances = new int[]{1, 3, 4, 5, 6, 7};
@@ -486,9 +495,22 @@ class BoundedGatherTest {
         f.pickupDuringMining = true;
         var result = f.run();
         assertTrue(result.ok(), result.feedback());
-        assertEquals(List.of(1, 3, 4, 5, 6, 7),
-                f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(1, f.moved);
+        assertEquals(2, f.moves.getFirst().get("x").getAsInt(), "coordinates nominate the item, not a stance");
         assertEquals(1, result.data().get("skipped_items").getAsInt());
+    }
+
+    @Test void existingAndEditableSamplesShareOneContactGoalWithEditsAvailable() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{1, 3, 4, 5, 6, 7};
+        f.dropApproaches = new int[]{7, 8};
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(1, f.moved);
+        assertTrue(f.moves.getFirst().has("pickup_target_uuid"));
+        assertEquals(0, f.dug);
+        assertTrue(f.moves.stream().allMatch(p -> p.has("max_digs")));
     }
 
     @Test void anInitiallyUnreachableSameDropCanBeCollectedAfterWorkingOpensANewStance() {
@@ -497,12 +519,14 @@ class BoundedGatherTest {
         f.stableDropIdentity = true;
         f.dropStances = new int[]{};
         f.dropStancesAfterMining = new int[]{3};
+        f.moveFailures.add("NO_PROGRESS:current contact search needs terrain changes");
         assertTrue(f.run().ok());
         assertEquals(1, f.dug);
-        assertEquals(List.of(3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(2, f.moved, "new terrain permits another search for the same entity");
+        assertEquals(f.moves.getFirst().get("pickup_target_uuid"), f.moves.getLast().get("pickup_target_uuid"));
     }
 
-    @Test void workingOpensNewStancesWithoutResettingTheSameDropsSixAttemptLimit() {
+    @Test void workingOpensANewContactSearchWithoutReplayingAllSixSamples() {
         var f = new Fixture(1, 0);
         f.ground = true;
         f.stableDropIdentity = true;
@@ -513,8 +537,8 @@ class BoundedGatherTest {
         var result = f.run();
         assertFalse(result.ok());
         assertEquals(1, f.dug);
-        assertEquals(List.of(1, 3, 4, 5, 6, 7),
-                f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(2, f.moved);
+        assertTrue(f.moves.stream().allMatch(p -> p.has("pickup_target_uuid")));
     }
 
     @Test void aPreviouslySkippedDropThatFallsIntoContactIsRecheckedWithoutAnotherRoute() {
@@ -522,10 +546,11 @@ class BoundedGatherTest {
         f.ground = true;
         f.stableDropIdentity = true;
         f.dropStances = new int[]{};
+        f.missedPickupMoves = 1;
         f.touchingAfterMining = true;
         assertTrue(f.run().ok());
         assertEquals(1, f.dug);
-        assertEquals(0, f.moved);
+        assertEquals(1, f.moved);
         assertEquals(1, f.calls.stream().filter("wait"::equals).count());
     }
 
@@ -915,27 +940,28 @@ class BoundedGatherTest {
         assertEquals(0, f.dug);
     }
 
-    @Test void exhaustingUnreachableDropStancesStillAllowsOtherResourcesToMakeProgress() {
+    @Test void anUnsuccessfulContactGoalStillAllowsOtherResourcesToMakeProgress() {
         var f = new Fixture(1, 0);
         f.ground = true;
         f.dropStances = new int[]{1, 3};
-        f.moveFailures.addAll(List.of("TARGET_BLOCKED:first", "NO_PROGRESS:second"));
+        f.moveFailures.add("NO_PROGRESS:current contact goal");
         f.pickupDuringMining = true;
         var result = f.run();
         assertTrue(result.ok(), result.feedback());
-        assertEquals(2, f.moved);
+        assertEquals(1, f.moved);
         assertEquals(1, f.dug);
         assertEquals(1, result.data().get("skipped_items").getAsInt());
     }
 
-    @Test void changedSightAtMiningRetriesOtherStancesOnceAndDeduplicatesCandidates() {
+    @Test void changedSightUsesOneWorkGoalCoveringAllSampledStances() {
         var f = new Fixture(1, 0);
         f.blockTargets = List.of(withStances(true, 1, 1, 3));
-        f.breakFailures.addAll(List.of("TARGET_BLOCKED:cover", "OUT_OF_REACH:displaced"));
+        f.breakFailures.add("TARGET_BLOCKED:cover");
         f.pickupDuringMining = true;
         assertTrue(f.run().ok());
-        assertEquals(3, f.breakAttempts);
-        assertEquals(List.of(1, 3), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals(2, f.breakAttempts);
+        assertEquals(List.of(2), f.moves.stream().map(p -> p.get("x").getAsInt()).toList());
+        assertEquals("work", f.moves.getFirst().get("arrival").getAsString());
     }
 
     @Test void allStancesBlockedStopWithoutRevisitingTheSameTargetOrBreakingAnything() {
@@ -945,7 +971,7 @@ class BoundedGatherTest {
         var result = f.run();
         assertFalse(result.ok());
         assertTrue(result.feedback().startsWith("RESOURCE_BLOCKED:"));
-        assertEquals(6, f.moved);
+        assertEquals(1, f.moved, "one goal already includes alternatives; six identical searches add no evidence");
         assertEquals(0, f.breakAttempts);
         assertEquals(1, result.data().get("skipped_blocks").getAsInt());
     }
@@ -999,6 +1025,23 @@ class BoundedGatherTest {
         assertEquals("work", f.moves.getFirst().get("arrival").getAsString());
         assertEquals(2, f.moves.getFirst().get("x").getAsInt());
         assertEquals(1, f.breakAttempts);
+    }
+
+    @Test void highTreeStandingSamplesUseTheBlockAsAWorkGoalAndKeepTheSameDigBudget() {
+        var f = new Fixture(1, 0);
+        var tree = withStances(false, 1, 3, 4);
+        for (var entry : tree.getAsJsonArray("stand_positions"))
+            entry.getAsJsonObject().addProperty("y", 95);
+        f.blockTargets = List.of(tree);
+        f.pickupDuringMining = true;
+        assertTrue(f.run().ok());
+        assertEquals(1, f.moved);
+        var args = f.moves.getFirst();
+        assertEquals(90, args.get("y").getAsInt());
+        assertEquals(2, args.get("x").getAsInt());
+        assertEquals("work", args.get("arrival").getAsString());
+        assertEquals(127, args.get("max_digs").getAsInt());
+        assertEquals(1, f.dug);
     }
 
     @Test void anUnreachableBuriedCandidateIsNotRetriedOrMined() {
@@ -1246,5 +1289,46 @@ class BoundedGatherTest {
         assertEquals(5, result.data().get("actual_progress").getAsInt());
         assertEquals(0, f.dug);
         assertEquals(List.of("status"), f.calls);
+    }
+
+    @Test void existingDropsWithoutAStandingSampleUseAnEditableContactNominationBeforeMiningMore() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{};
+        f.dropApproaches = new int[]{1};
+        var receipt = f.run();
+        assertTrue(receipt.ok(), receipt.feedback());
+        assertEquals(1, f.moved);
+        assertEquals(0, f.dug);
+        assertTrue(f.moves.getFirst().get("max_digs").getAsInt() > 0);
+        assertFalse(f.moves.getFirst().has("walk_only"), "native edit planning remains available");
+        assertEquals(1, f.count, "fresh inventory, not the nomination, proves collection");
+    }
+
+    @Test void noSampleDoesNotPreventThePlannerFromFindingAnEditableContactLanding() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.dropStances = new int[]{};
+        f.dropApproaches = new int[]{};
+        var receipt = f.run();
+        assertTrue(receipt.ok(), receipt.feedback());
+        assertEquals(1, f.moved);
+        assertEquals(0, f.dug);
+        assertTrue(f.moves.getFirst().has("pickup_target_uuid"));
+        assertEquals(1, f.count);
+    }
+
+    @Test void actualSupportPlacedByAFailedRouteAllowsAFreshGoalEvenWhenSamplesStayTheSame() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.stableDropIdentity = true;
+        f.moveFailures.add("NO_PROGRESS:one support completed");
+        f.movementEffects = JsonParser.parseString("{\"placed_blocks\":1,\"removed_blocks\":0}").getAsJsonObject();
+        var receipt = f.run();
+        assertTrue(receipt.ok(), receipt.feedback());
+        assertEquals(2, f.moved);
+        assertEquals(0, f.dug);
+        assertEquals(f.moves.getFirst().get("pickup_target_uuid"), f.moves.getLast().get("pickup_target_uuid"));
+        assertEquals(1, f.count);
     }
 }

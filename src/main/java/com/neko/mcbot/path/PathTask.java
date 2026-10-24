@@ -28,8 +28,10 @@ import java.util.List;
  * （该清的还清着、支撑还在、放过的没被拆）；变了就切 REPLAN_SEARCH 相位从当前
  * 位置**分帧**重搜（R1-S3：旧版单拍同步 while 的单帧冻结点已杀），旧路格 ×0.7 降权
  * 抑抖动，不以累计重规划次数停工。普通只行走候选使用世界快照和后台搜索；
- * 工作到达与编辑路线保留主线程分帧搜索。每段搜索最多 4000 节点，无默认累计时间门，
- * 保留可行答案；分段及可返程的部分路线落地后自动接续，共用按路程分配的整趟节点账。
+ * 工作到达也先用独占快照后台寻找可工作位置；需要编辑的路线保留主线程分帧回退。
+ * 每段搜索最多 4000 节点，无默认累计时间门，
+ * 保留可行答案；分段及可返程的部分路线自动接续，共用按路程分配的整趟节点账。
+ * 普通导航在执行时以世界线程剩余切片预搜后段，实际落地后复核采用。
  *
  * 取消/超时：onAbort 清掉进行中的裂纹动画；future 由调度器统一完成。
  */
@@ -71,7 +73,8 @@ public final class PathTask extends TickTask {
 
     private enum Phase { SEARCH, REPLAN_SEARCH, EXECUTE }
 
-    private final BlockPos target;
+    private BlockPos target;
+    private final long approvalTarget;
     private final boolean exact;
     private final ActionPermissions permissions;
     private final ActionPermissions.Context context;
@@ -100,6 +103,8 @@ public final class PathTask extends TickTask {
     private boolean segmentTail;
     private int segments;
     private NavigationAllowance allowance;
+    private final NavigationContinuation continuation = new NavigationContinuation();
+    private boolean waitingForContinuation;
     private int partialRemain = -1;
     /** 复核认定"变了"的格（§D：这点周围不入旧路降权集，防把坏格当旧路便宜复用）。 */
     private long replanBadKey;
@@ -117,7 +122,11 @@ public final class PathTask extends TickTask {
     private final PathSpec spec;
     private final com.neko.mcbot.server.PlacementWork placement;
     private NavigationGoal suppliedGoal;
+    private java.util.UUID pickupTarget;
+    private net.minecraft.world.phys.AABB pickupBounds;
+    private boolean pickupFalling;
     private NavigationGoal activeGoal;
+    private long goalRevision, searchGoalRevision, continuationGoalRevision;
     private NavigationBudget sharedBudget;
     private PathSpec outerScope = PathSpec.DEFAULT;
     private java.util.function.BiPredicate<BlockPos, BlockPos> stepConstraint = (from, to) -> true;
@@ -137,6 +146,12 @@ public final class PathTask extends TickTask {
         outerScope = java.util.Objects.requireNonNull(original);
         return this;
     }
+
+    public PathTask pickingUp(java.util.UUID targetId) {
+        if (suppliedGoal != null || pickupTarget != null) throw new IllegalStateException("goal already bound");
+        pickupTarget = java.util.Objects.requireNonNull(targetId);
+        return this;
+    }
     public PathTask usingBudget(NavigationBudget budget) {
         if (sharedBudget != null && sharedBudget != budget) throw new IllegalStateException("original navigation account");
         sharedBudget = java.util.Objects.requireNonNull(budget);
@@ -149,6 +164,19 @@ public final class PathTask extends TickTask {
         return this;
     }
 
+    /** Keep a valid executing prefix and any in-flight search; evaluate its endpoint against the new goal. */
+    public void retarget(BlockPos toward, NavigationGoal goal) {
+        if (suppliedGoal == null) throw new IllegalStateException("not a dynamic route");
+        target = toward.immutable();
+        suppliedGoal = java.util.Objects.requireNonNull(goal);
+        goalRevision++;
+        activeGoal = goal;
+        if (path != null && !path.isEmpty()) {
+            var end = path.getLast();
+            segmentTail = !goal.reached(end.x(), end.y(), end.z());
+        }
+    }
+
     @Override public PathSpec movementScope() { return spec.anchor() == null ? outerScope : spec; }
 
     // 挖掘子状态
@@ -159,6 +187,9 @@ public final class PathTask extends TickTask {
     private final DropObservations drops = new DropObservations();
 
     private PathSteering steering;
+    private BlockPos departure;
+    private PathSteering departureSteering;
+    private int departureAlignments;
     private CompanionPlayer drivenBody;
     private PathFailure planFailure;
     private final PathTiming timing = new PathTiming();
@@ -200,6 +231,7 @@ public final class PathTask extends TickTask {
                     com.neko.mcbot.server.PlacementWork placement) {
         this.level = level;
         this.target = target;
+        this.approvalTarget = target.asLong();
         this.permissions = permissions;
         this.context = context;
         this.authorization = new ActionPermissions.Execution(approved);
@@ -218,6 +250,7 @@ public final class PathTask extends TickTask {
         data.addProperty("walk_only", walkOnly);
         data.addProperty("phase", phase.name());
         data.addProperty("search_mode", searchMode());
+        if (pickupTarget != null) data.addProperty("pickup_target_uuid", pickupTarget.toString());
         data.addProperty("committed_nodes", executed);
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
@@ -227,8 +260,23 @@ public final class PathTask extends TickTask {
         return data;
     }
 
+    @Override public Activity activity() {
+        if (pickupFalling) return Activity.WAIT;
+        if (timing.phase() == PathTiming.Phase.GROUND_WAIT) return Activity.WAIT;
+        if (departure != null) return Activity.MOVE;
+        if (phase != Phase.EXECUTE || waitingForContinuation) return Activity.SEARCH;
+        if (timing.phase() == PathTiming.Phase.DIG) return Activity.DIG;
+        if (timing.phase() == PathTiming.Phase.PLACE) return Activity.PLACE;
+        return Activity.MOVE;
+    }
+
     private void addTripData(JsonObject data) {
+        data.addProperty("navigation_goal", pickupTarget != null ? "pickup" : spec.workArrival() ? "work" : "position");
+        data.addProperty("departure_alignments", departureAlignments);
         data.addProperty("segments", segments);
+        data.addProperty("presearches", continuation.started());
+        data.addProperty("presearches_adopted", continuation.adopted());
+        data.addProperty("presearches_discarded", continuation.discarded());
         if (allowance == null) return;
         allowance.observe(search);
         data.addProperty("search_nodes_used", allowance.used());
@@ -237,10 +285,15 @@ public final class PathTask extends TickTask {
 
     @Override
     public Progress tick(CompanionPlayer c) {
+        long tickStarted = System.nanoTime();
         timing.beginTick();
         Progress progress;
         try {
             progress = tickBody(c);
+            if (progress instanceof Progress.Running && phase == Phase.EXECUTE) {
+                long remaining = Math.min(2_000_000L, SEARCH_SLICE_NS - (System.nanoTime() - tickStarted));
+                if (remaining > 0) advanceContinuation(c, remaining);
+            }
         } finally {
             timing.endTick();
         }
@@ -249,7 +302,7 @@ public final class PathTask extends TickTask {
 
     private Progress tickBody(CompanionPlayer c) {
         drivenBody = c;
-        c.releaseMovement();
+        c.clearMovementInput();
         if (navigationFailure != null) return terminal(navigationFailure);
         if (c.level() != level) {
             onAbort();
@@ -266,6 +319,10 @@ public final class PathTask extends TickTask {
         if (!spec.contains(current.getX(), current.getY(), current.getZ())
                 || !outerScope.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
+        if (pickupTarget != null) {
+            var contact = updatePickup(c);
+            if (contact != null) return contact;
+        }
         c.navigationTrail().observe(current.getX(), current.getY(), current.getZ(), c.getY(), c.onGround(), spec);
         // While steering, the next landing belongs to the route, including its airborne ticks.
         PathGrounding.Decision grounded = steering == null
@@ -288,6 +345,64 @@ public final class PathTask extends TickTask {
         Progress progress = phase == Phase.EXECUTE ? executeTick(c) : searchTick(c);
         if (c.onGround() && steering == null) grounding.committed(c.getY());
         return progress instanceof Progress.Done done ? terminal(done.result()) : progress;
+    }
+
+    private Progress updatePickup(CompanionPlayer c) {
+        var entity = level.getEntity(pickupTarget);
+        if (!(entity instanceof net.minecraft.world.entity.item.ItemEntity item)
+                || !item.isAlive() || !level.isLoaded(item.blockPosition()))
+            return terminal(new Result(false, "TARGET_LOST:掉落实体已离场或未加载；请核对新鲜背包及掉落。", null));
+        var owner = ((com.neko.mcbot.mixin.ItemTargetAccess) item).mcbot$getPickupTarget();
+        if (owner != null && !owner.equals(c.getUUID()))
+            return terminal(new Result(false, "TARGET_LOST:该掉落当前不允许本身体拾取。", null));
+        var pos = item.blockPosition();
+        if (!spec.contains(pos.getX(), pos.getY(), pos.getZ())
+                || !outerScope.contains(pos.getX(), pos.getY(), pos.getZ()))
+            return terminal(new Result(false, "SCOPE_CHANGED:掉落已离开原路线范围。", null));
+        var bounds = item.getBoundingBox();
+        if (com.neko.mcbot.server.GroundItems.touches(c.getBoundingBox(), bounds)) {
+            var data = new JsonObject();
+            data.addProperty("arrival", "pickup");
+            data.addProperty("target_uuid", pickupTarget.toString());
+            data.addProperty("can_touch_here", true);
+            data.addProperty("x", c.blockPosition().getX());
+            data.addProperty("y", c.blockPosition().getY());
+            data.addProperty("z", c.blockPosition().getZ());
+            data.addProperty("feet_y", c.getY());
+            return terminal(new Result(true, "已进入掉落触碰范围；实际入包数量仍须核对背包。", data));
+        }
+        // Nearby falling drops settle under vanilla physics before we build a route to their old height.
+        boolean falling = phase != Phase.EXECUTE && !item.onGround() && item.getDeltaMovement().y < -.05
+                && Math.abs(item.getX() - c.getX()) <= 4 && Math.abs(item.getZ() - c.getZ()) <= 4;
+        if (falling) {
+            if (!pickupFalling) {
+                cancelSearch();
+                if (allowance != null) allowance.observe(search);
+                search = null;
+                backgroundTried = false;
+                stopMovement();
+            }
+            pickupFalling = true;
+            timing.phase(PathTiming.Phase.GROUND_WAIT);
+            return running();
+        }
+        boolean changed = pickupBounds == null || pickupFalling
+                || pickupBounds.getCenter().distanceToSqr(bounds.getCenter()) >= .25;
+        pickupFalling = false;
+        if (changed) {
+            pickupBounds = bounds;
+            var goal = new com.neko.mcbot.server.PickupGoal(bounds, c.getBbWidth(), c.getBbHeight(),
+                    StandingGeometry.forPlayer(c));
+            boolean initial = suppliedGoal == null;
+            if (initial) {
+                suppliedGoal = activeGoal = goal;
+                target = pos;
+            } else {
+                retarget(pos, goal);
+                if (phase != Phase.EXECUTE) beginReplan(c);
+            }
+        }
+        return null;
     }
 
     private Progress terminal(Result result) {
@@ -334,7 +449,12 @@ public final class PathTask extends TickTask {
             diagnostics.addProperty("estimate_expanded", search.estimateExpanded());
             diagnostics.addProperty("estimate_seed_probes", search.estimateSeedProbes());
             diagnostics.addProperty("stored_nodes", search.storedNodes());
+            diagnostics.addProperty("created_nodes", search.createdNodes());
+            diagnostics.addProperty("storage_collections", search.storageCollections());
+            diagnostics.addProperty("partial_candidate_checks", search.partialCandidateChecks());
             diagnostics.addProperty("elapsed_ms", search.elapsedMillis());
+            diagnostics.addProperty("remaining_digs", Math.max(0, spec.maxDigs() - actualDigs));
+            diagnostics.addProperty("dig_limit_explicit", spec.maxDigs() != Integer.MAX_VALUE);
             if (search.budgetKind() != null) diagnostics.addProperty("budget_kind", search.budgetKind());
             var counts = new JsonObject();
             search.rejections().forEach(counts::addProperty);
@@ -392,12 +512,20 @@ public final class PathTask extends TickTask {
 
     private Progress searchTick(CompanionPlayer c) {
         timing.phase(PathTiming.Phase.SEARCH);
+        if (search == null && pendingSearch == null) {
+            var aligning = alignDeparture(c);
+            if (aligning != null) return aligning;
+        }
         if (pendingSearch != null) {
             if (!pendingSearch.done()) return running();
             try {
                 search = pendingSearch.take();
                 detachedSearch = true;
                 if (sharedBudget != null) sharedBudget.recordCompleted(search);
+                McbotMod.LOG.info("[path] 后台搜索完成 work={} expanded={} batches={} worker_ms={} result={} route={} goal={}",
+                        spec.workArrival(), search.expanded(), search.batches(), search.elapsedMillis(),
+                        search.failure() == null ? "route" : search.budgetKind() == null ? "no_path" : search.budgetKind(),
+                        timing.id(), pickupTarget != null ? "pickup" : spec.workArrival() ? "work" : "position");
             } catch (RuntimeException failed) {
                 return terminal(new Result(false, "INTERNAL:后台寻路未产生有效结果，已停止。", null));
             } finally { pendingSearch = null; }
@@ -443,6 +571,10 @@ public final class PathTask extends TickTask {
             return running(); // 还在算（分帧）
         }
         if (search.failure() != null) {
+            if (suppliedGoal != null && searchGoalRevision != goalRevision && !search.partialAvailable()) {
+                beginReplan(c);
+                return running();
+            }
             if (search.budgetReached() && search.partialAvailable()) {
                 // A reversible prefix can advance the same trip without another model request.
                 partialTail = true;
@@ -479,13 +611,65 @@ public final class PathTask extends TickTask {
                             + "），尚未证明目标不可达。"
                     : "NO_PATH:" + lead + "当前观测和实际挖放条件下未找到完整路线。";
             why += " 局部拒绝计数=" + search.rejections()
-                    + "；其中DIG_LIMIT表示剩余挖掘额度或工具耐久不足，PLACE_LIMIT表示缺少可用支撑材料；"
+                    + "；本次调用剩余挖掘额度="
+                    + (spec.maxDigs() == Integer.MAX_VALUE ? "不限" : Math.max(0, spec.maxDigs() - actualDigs))
+                    + "，这是调用参数/实际工具条件，不是模型步数。"
+                    + "DIG_LIMIT表示路线所需挖掘超过本次剩余额度，地下调用会按真实耐久及预留量设额度；"
+                    + "PLACE_LIMIT表示缺少可用支撑材料；"
                     + "单项计数不代表所有路线均受该项阻挡。";
             return new Progress.Done(new Result(false, why, null));
         }
         // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
         segmentTail = search.segmentEnd();
         return afterPlanReady(c, liveify(search.path()));
+    }
+
+    private Progress alignDeparture(CompanionPlayer c) {
+        var current = StandingGeometry.feetCell(c);
+        var geometry = StandingGeometry.forPlayer(c);
+        var foot = geometry.standing(current.getX(), current.getY(), current.getZ(), TerrainEdits.EMPTY);
+        if (departure == null && foot != null && Math.abs(foot.height() - c.getY()) < 1e-5) return null;
+        if (!c.onGround()) {
+            timing.phase(PathTiming.Phase.GROUND_WAIT);
+            return running();
+        }
+        if (sharedBudget != null && sharedBudget.exhausted() || allowance != null && allowance.next() == 0)
+            return new Progress.Done(new Result(false,
+                    "NO_PROGRESS:原导航资源已耗尽，未通过起步对齐重开账户或继续移动。", null));
+        if (departure == null) {
+            departure = geometry.departure(c.getX(), c.getY(), c.getZ(), pos ->
+                    spec.contains(pos.getX(), pos.getY(), pos.getZ())
+                            && outerScope.contains(pos.getX(), pos.getY(), pos.getZ())
+                            && (pos.equals(current) || spec.allowsStep(current.getX(), current.getY(), current.getZ(),
+                            pos.getX(), pos.getY(), pos.getZ()) && stepConstraint.test(current, pos)));
+            if (departure == null) return new Progress.Done(new Result(false,
+                    "NO_PATH:实际脚底附近没有可验证的同高度起步站位；未证明目标无路，"
+                            + "也不能据此认定缺少垫脚材料。请核对脚下碰撞、加载和路线范围。", null));
+            departureSteering = new PathSteering(departure.getX(), c.getY(), departure.getZ(), false);
+            departureAlignments++;
+            McbotMod.LOG.info("[path] 格边起步对齐 actual={} to={} route={}",
+                    c.position(), departure.toShortString(), timing.id());
+        }
+        if (!geometry.canAlign(c.getX(), c.getY(), c.getZ(), departure))
+            return new Progress.Done(new Result(false,
+                    "NO_PATH:起步对齐的支撑或净空已变化，停止输入；请重新观察实际站位。", null));
+        timing.phase(PathTiming.Phase.STEER);
+        var state = bodyState(c);
+        var command = departureSteering.tick(state);
+        if (command.stuck()) return new Progress.Done(new Result(false,
+                "NO_PATH:身体未能实际挪到可站起点，已停止输入；请核对当前位置及碰撞。", null));
+        if (command.arrived()) {
+            departure = null;
+            departureSteering = null;
+            sampler = null;
+            grounding.committed(c.getY());
+            return null;
+        }
+        var facing = departureSteering.facing(state);
+        if (facing != null) c.facePoint(c.getEyePosition().add(facing.x(), 0, facing.z()));
+        timing.input(command.x(), command.z(), false);
+        c.walkForTick(command.x(), command.z(), false);
+        return running();
     }
 
     static boolean continueSearch(DigAStar search, NavigationAllowance allowance, NavigationBudget shared) {
@@ -509,6 +693,11 @@ public final class PathTask extends TickTask {
             return running();
         }
         path = plan;
+        if (suppliedGoal != null && !plan.isEmpty()) {
+            activeGoal = suppliedGoal;
+            var end = plan.getLast();
+            segmentTail = !suppliedGoal.reached(end.x(), end.y(), end.z());
+        }
         cursor = path.size() > 1 && path.getFirst().action() == DigAStar.ACT_START ? 1 : 0;
         int digs = planDigs;
         int places = planPlaces;
@@ -587,7 +776,7 @@ public final class PathTask extends TickTask {
                     .append(sampler.blockName(pos.getX(), pos.getY(), pos.getZ())).append(';');
         }
         String id = com.neko.mcbot.common.WireSize.utf8Bytes(cells.toString()) > 12_000 ? null
-                : permissions.propose(new ActionPermissions.Scope(context, target.asLong(), changes));
+                : permissions.propose(new ActionPermissions.Scope(context, approvalTarget, changes));
         if (id != null) data.addProperty("authorization_id", id);
         String instruction = id == null ? "当前无有效任务权限或清单超过展示上限，请缩短路线并重新提交任务。"
                 : "用 ask_owner 携带 authorization_id=" + id
@@ -611,7 +800,7 @@ public final class PathTask extends TickTask {
 
     /** 记下刚算好的路（连同**起点**，见 {@link PlanCache} 里"起点必须相同"的理由）。只在主线程调用。 */
     private void rememberPlan(CompanionPlayer c, List<DigAStar.Step> plan) {
-        if (c == null || !spec.equals(PathSpec.DEFAULT) || partialTail || segmentTail) {
+        if (c == null || suppliedGoal != null || !spec.equals(PathSpec.DEFAULT) || partialTail || segmentTail) {
             return;
         }
         cacheKey = c.getUUID();
@@ -629,7 +818,7 @@ public final class PathTask extends TickTask {
      * @return true = 已装载 path/planDigs/planPlaces，调用方可直接走 afterPlanReady 的后续
      */
     private boolean tryReusePlan(CompanionPlayer c) {
-        if (c == null) {
+        if (c == null || suppliedGoal != null || pickupTarget != null) {
             return false;
         }
         PlanCache.Entry p = PLANS.take(c.getUUID(), StandingGeometry.feetCell(c), target, System.currentTimeMillis());
@@ -727,6 +916,7 @@ public final class PathTask extends TickTask {
 
     /** 搜索构造统一入口：裸 sampler 必在之前建好；memo 套在搜索侧，执行侧永不见缓存。 */
     private DigAStar newSearch(BlockPos from) {
+        searchGoalRevision = goalRevision;
         if (allowance == null) {
             double distance = suppliedGoal != null ? suppliedGoal.remaining(from.getX(), from.getY(), from.getZ())
                     : Math.abs((double) from.getX() - target.getX()) + Math.abs((double) from.getY() - target.getY())
@@ -738,15 +928,14 @@ public final class PathTask extends TickTask {
         if (nodes == 0) return null;
         boolean previousDetached = detachedSearch;
         detachedSearch = false;
-        if (!backgroundTried && !spec.workArrival() && !constrained && !drivenBody.buildSite().active()
+        NavigationGoal goal = goalFor(from, sampler);
+        activeGoal = goal;
+        if (!backgroundTried && !constrained && !drivenBody.buildSite().active()
                 && (sharedBudget == null || sharedBudget.perSearch())) {
             backgroundTried = true;
             var snapshot = NavigationSnapshot.capture(level, from, drivenBody.getBbWidth(),
                     drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope);
-            var liveGoal = suppliedGoal != null ? suppliedGoal
-                    : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
-            activeGoal = liveGoal;
-            var frozenGoal = liveGoal.snapshot(snapshot);
+            var frozenGoal = goal.snapshot(snapshot);
             if (frozenGoal != null) {
                 var dry = new DigAStar(snapshot, from.getX(), from.getY(), from.getZ(),
                         target.getX(), target.getY(), target.getZ(), nodes, 0, frozenGoal).segments();
@@ -770,14 +959,6 @@ public final class PathTask extends TickTask {
             if (!previousDetached) sharedBudget.observe(search);
             if (sharedBudget.exhausted()) return null;
         }
-        NavigationGoal goal = suppliedGoal != null ? suppliedGoal : spec.workArrival() && placement != null
-                ? placement.goal(drivenBody, workTarget, sampler.geometry()) : spec.workArrival()
-                ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
-                workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
-                Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),
-                pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, sampler, from, pos), sampler.geometry())
-                : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
-        activeGoal = goal;
         DigAStar d = sharedBudget != null ? sharedBudget.search(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(), goal, nodes)
                 : new DigAStar(memo != null ? memo : sampler,
@@ -790,6 +971,53 @@ public final class PathTask extends TickTask {
             d.reuseBias(reusePending);
         }
         return d;
+    }
+
+    private NavigationGoal goalFor(BlockPos from, LevelDigSampler terrain) {
+        return suppliedGoal != null ? suppliedGoal : spec.workArrival() && placement != null
+                ? placement.goal(drivenBody, workTarget, terrain.geometry()) : spec.workArrival()
+                ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
+                workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
+                Math.min(5.5, drivenBody.blockInteractionRange()), spec.clear(),
+                pos -> com.neko.mcbot.server.MiningWork.safe(drivenBody, terrain, from, pos), terrain.geometry())
+                : NavigationGoal.position(target.getX(), target.getY(), target.getZ(), exact ? 0 : 1);
+    }
+
+    private void advanceContinuation(CompanionPlayer c, long slice) {
+        if ((!partialTail && !segmentTail) || allowance == null || path == null || path.size() < 2
+                || c.buildSite().active()
+                || sharedBudget != null && !sharedBudget.perSearch()) return;
+        var previousPhase = timing.phase();
+        timing.phase(PathTiming.Phase.PLAN_AHEAD);
+        try {
+            continuation.advance(() -> {
+                continuationGoalRevision = goalRevision;
+                int nodes = allowance.next();
+                if (nodes == 0) return null;
+                var edits = NavigationContinuation.remainingEdits(path, cursor);
+                int reservedDigs = 0, reservedPlaces = 0;
+                for (int i = cursor; i < path.size(); i++) {
+                    reservedDigs += path.get(i).dig().size();
+                    reservedPlaces += path.get(i).place().size();
+                }
+                var end = path.getLast();
+                var from = new BlockPos(end.x(), end.y(), end.z());
+                var terrain = new LevelDigSampler(level, c, from, walkOnly ? 0
+                        : Math.max(0, LevelDigSampler.countPlaceables(c.getInventory()) - reservedPlaces),
+                        workTarget, spec, outerScope).constrainSteps(stepConstraint);
+                var next = new DigAStar(new MemoDigSampler(terrain),
+                        end.x(), end.y(), end.z(), target.getX(), target.getY(), target.getZ(),
+                        nodes, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs - reservedDigs),
+                        goalFor(from, terrain)).segments().after(edits);
+                next.totalBudget(SEARCH_TOTAL_NS);
+                McbotMod.LOG.info("[path] 执行中预搜 from={} reserved_digs={} reserved_places={} route={}",
+                        from.toShortString(), reservedDigs, reservedPlaces, timing.id());
+                if (sharedBudget != null) sharedBudget.trackConcurrent(next);
+                return next;
+            }, allowance, EXPAND_PER_TICK, slice);
+            if (sharedBudget != null && continuation.search() != null)
+                sharedBudget.trackConcurrent(continuation.search());
+        } finally { timing.phase(previousPhase); }
     }
 
     static DigAStar searchFor(DigSampler sampler, BlockPos from, BlockPos target, boolean exact, boolean walkOnly) {
@@ -1097,11 +1325,6 @@ public final class PathTask extends TickTask {
         }
         // 3) Native travel owns position, collision, jump arc and descent.
         timing.phase(PathTiming.Phase.STEER);
-        double facingX = next.x() + .5 - c.getX();
-        double facingZ = next.z() + .5 - c.getZ();
-        if (Math.hypot(facingX, facingZ) > 1e-5) {
-            c.facePoint(new net.minecraft.world.phys.Vec3(next.x() + .5, c.getEyeY(), next.z() + .5));
-        }
         if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
         boolean through = canPassThrough();
         var body = bodyState(c);
@@ -1112,18 +1335,24 @@ public final class PathTask extends TickTask {
         var command = steering.tick(body, through);
         if (command.stuck()) return stuck(c, next);
         if (!command.arrived()) {
-            timing.input(command.x(), command.z(), command.jump());
-            c.walkForTick(command.x(), command.z(), command.jump());
+            var facing = steering.facing(body);
+            if (facing != null) c.facePoint(new net.minecraft.world.phys.Vec3(
+                    c.getX() + facing.x(), c.getEyeY(), c.getZ() + facing.z()));
+            boolean sprint = through && canSprint(c, body, command.x(), command.z(), cursor);
+            timing.input(command.x(), command.z(), command.jump(), sprint);
+            c.moveForTick(command.x(), command.z(), command.jump(), sprint);
             return running();
         }
         timing.phase(PathTiming.Phase.HANDOFF);
         timing.node(through);
-        stopMovement();
         if (through) {
+            steering = null;
             var following = path.get(cursor + 1);
-            timing.input(following.x() - next.x(), following.z() - next.z(), false);
-            c.walkForTick(following.x() - next.x(), following.z() - next.z(), false);
-        }
+            double dx = following.x() - next.x(), dz = following.z() - next.z();
+            boolean sprint = canSprint(c, body, dx, dz, cursor + 1);
+            timing.input(dx, dz, false, sprint);
+            c.moveForTick(dx, dz, false, sprint);
+        } else stopMovement();
         cursor++;
         executed++;
         return running();
@@ -1140,13 +1369,69 @@ public final class PathTask extends TickTask {
         return edge.plan() != null && Math.abs(edge.plan().feetY() - after.feetY()) < 1e-5;
     }
 
+    private boolean canSprint(CompanionPlayer c, PathSteering.Body body, double ix, double iz, int index) {
+        if (!body.grounded() || index <= 0 || index + 2 >= path.size()
+                || !sprintSpeedFits(c.getSpeed(), c.isSprinting(), body.vx(), body.vz())) return false;
+        var from = path.get(index - 1);
+        var to = path.get(index);
+        if (!runningAligned(body, ix, iz, from, to)) return false;
+        if (!sprintable(path, index, sampler)) return false;
+        // This first running gait uses ordinary ground friction; slippery or unusual surfaces walk.
+        for (int i = index - 1; i <= index + 2; i++) {
+            var point = path.get(i);
+            var support = BlockPos.containing(point.x() + .5, point.feetY() - 1e-5, point.z() + .5);
+            if (level.getBlockState(support).getBlock().getFriction() != .6f) return false;
+        }
+        return true;
+    }
+
+    static boolean sprintSpeedFits(double speed, boolean alreadySprinting, double vx, double vz) {
+        double retained = .6 * .91;
+        // Standard-ground coast must fit inside one cell, with two flat cells still ahead.
+        double stride = Math.max(Math.hypot(vx, vz), speed * (alreadySprinting ? 1 : 1.3) / (1 - retained));
+        return Double.isFinite(stride) && speed > 0 && stride / (1 - retained) <= 1;
+    }
+
+    static boolean runningAligned(PathSteering.Body body, double ix, double iz,
+                                  DigAStar.Step from, DigAStar.Step to) {
+        double dx = to.x() - from.x(), dz = to.z() - from.z(), length = Math.hypot(dx, dz);
+        if (length == 0) return false;
+        double cross = Math.abs((body.x() - from.x() - .5) * dz
+                - (body.z() - from.z() - .5) * dx) / length;
+        double lateral = Math.abs(body.vx() * dz - body.vz() * dx) / length;
+        return cross + lateral / (1 - .6 * .91) <= .1 && Math.abs(body.y() - to.feetY()) <= .08
+                && (ix * dx + iz * dz) / length >= .8;
+    }
+
+    static boolean sprintable(List<DigAStar.Step> plan, int index, DigSampler terrain) {
+        if (index <= 0 || index + 2 >= plan.size()
+                || !(terrain.geometry() instanceof StandingGeometry geometry)) return false;
+        var start = plan.get(index - 1);
+        int dx = plan.get(index).x() - start.x(), dz = plan.get(index).z() - start.z();
+        if (dx == 0 && dz == 0) return false;
+        for (int i = index; i <= index + 2; i++) {
+            var before = plan.get(i - 1);
+            var next = plan.get(i);
+            if (next.action() != DigAStar.ACT_WALK || next.jump() || !next.dig().isEmpty()
+                    || !next.place().isEmpty() || Math.abs(next.feetY() - start.feetY()) > 1e-5
+                    || next.x() - before.x() != dx || next.z() - before.z() != dz) return false;
+            var edge = PathTransition.check(terrain, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),
+                    next.x(), next.y(), next.z(), 0, 0);
+            if (edge.plan() == null || Math.abs(edge.plan().feetY() - next.feetY()) > 1e-5
+                    || !geometry.runningLane(before.x(), before.feetY(), before.z(), next.x(), next.z()))
+                return false;
+        }
+        return true;
+    }
+
     static boolean continuous(DigAStar.Step before, DigAStar.Step here, DigAStar.Step after) {
-        return here.action() == DigAStar.ACT_WALK && after.action() == DigAStar.ACT_WALK
+        return (here.action() == DigAStar.ACT_WALK || here.action() == DigAStar.ACT_FALL)
+                && (after.action() == DigAStar.ACT_WALK || after.action() == DigAStar.ACT_FALL)
                 && here.dig().isEmpty() && here.place().isEmpty()
                 && after.dig().isEmpty() && after.place().isEmpty()
-                && before.y() == here.y() && here.y() == after.y()
-                && Math.abs(before.feetY() - here.feetY()) < 1e-5
-                && Math.abs(here.feetY() - after.feetY()) < 1e-5 && !here.jump() && !after.jump()
+                && before.feetY() >= here.feetY() && before.feetY() - here.feetY() <= 1.00001
+                && here.feetY() >= after.feetY() && here.feetY() - after.feetY() <= 1.00001
+                && !here.jump() && !after.jump()
                 && (here.x() - before.x()) * (after.x() - here.x())
                 + (here.z() - before.z()) * (after.z() - here.z()) >= 0;
     }
@@ -1188,6 +1473,8 @@ public final class PathTask extends TickTask {
     private void stopMovement() {
         if (drivenBody != null) drivenBody.releaseMovement();
         steering = null;
+        departure = null;
+        departureSteering = null;
     }
 
     private Progress arrived(CompanionPlayer c) {
@@ -1216,14 +1503,58 @@ public final class PathTask extends TickTask {
         if (!c.onGround() || !reached && !partialTail && !segmentTail)
             return new Progress.Done(new Result(false,
                     "NO_PATH:路线结束但身体未实际到达目标范围，重新观察当前位置。", null));
+        if (pickupTarget != null && reached) {
+            // updatePickup already tested live contact this tick; a frozen goal alone is insufficient.
+            return new Progress.Done(new Result(false,
+                    "TARGET_BLOCKED:路线末点未实际触碰掉落；物品或身体已偏移，请重新观察。", null));
+        }
         int need = actualDigs + actualPlaces;
         JsonObject data = new JsonObject();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
         if ((partialTail || segmentTail) && !reached) {
+            if (continuation.pending()) {
+                waitingForContinuation = true;
+                return running();
+            }
+            waitingForContinuation = false;
             segments++;
             McbotMod.LOG.info("[path] 路段完成，按实际落点接续 target={} at={} segments={} nodes={}/{}",
                     target.toShortString(), at.toShortString(), segments, allowance.used(), allowance.limit());
+            var next = continuation.take(at.getX(), at.getY(), at.getZ());
+            if (next != null) {
+                allowance.observe(next);
+                if (sharedBudget != null) sharedBudget.recordCompleted(next);
+                search = next;
+                searchGoalRevision = continuationGoalRevision;
+                detachedSearch = false;
+                sampler = samplerFor(c, at);
+                memo = null;
+                activeGoal = goalFor(at, sampler);
+                partialTail = next.path() == null && next.partialAvailable();
+                segmentTail = next.segmentEnd();
+                if (next.failure() != null && !next.partialAvailable()) {
+                    if (suppliedGoal != null && searchGoalRevision != goalRevision) {
+                        continuation.rejected();
+                        beginReplan(c);
+                        return running();
+                    }
+                    path = null;
+                    cursor = 0;
+                    phase = Phase.REPLAN_SEARCH;
+                    McbotMod.LOG.info("[path] 采用预搜结论而不重复同次搜索 result={} route={}",
+                            next.budgetKind() == null ? "no_path" : next.budgetKind(), timing.id());
+                    return searchTick(c);
+                }
+                var proposed = liveify(partialTail ? next.partialPath() : next.path());
+                if (planFailure(proposed, sampler, spec.maxDigs() - actualDigs) == null) {
+                    McbotMod.LOG.info("[path] 采用执行中预搜 expanded={} stored={} route={}",
+                            next.expanded(), next.storedNodes(), timing.id());
+                    return afterPlanReady(c, proposed);
+                }
+                continuation.rejected();
+                McbotMod.LOG.info("[path] 预搜路线现场已变化，按实际脚格重搜 route={}", timing.id());
+            }
             beginReplan(c);
             return running();
         }
@@ -1259,7 +1590,8 @@ public final class PathTask extends TickTask {
         reusePending = reuseCells();
         path = null;
         cursor = 0;
-        search = newSearch(from);
+        var foot = ((StandingGeometry) sampler.geometry()).standing(from.getX(), from.getY(), from.getZ(), TerrainEdits.EMPTY);
+        search = foot != null && Math.abs(foot.height() - c.getY()) < 1e-5 ? newSearch(from) : null;
         phase = Phase.REPLAN_SEARCH;
         McbotMod.LOG.info("[path] 复核失效→分帧重规划（第 {} 次，旧路降权格 {}）", replans, reusePending.size());
     }
@@ -1442,6 +1774,12 @@ public final class PathTask extends TickTask {
     private void cancelSearch() {
         if (pendingSearch != null) pendingSearch.cancel();
         pendingSearch = null;
+        var speculative = continuation.clear();
+        waitingForContinuation = false;
+        if (speculative != null) {
+            allowance.observe(speculative);
+            if (sharedBudget != null) sharedBudget.retireConcurrent(speculative);
+        }
     }
 
     public boolean usefulFor(NavigationGoal goal) {

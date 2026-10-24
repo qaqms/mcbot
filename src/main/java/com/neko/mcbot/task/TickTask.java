@@ -39,6 +39,15 @@ public abstract class TickTask {
         return new com.google.gson.JsonObject();
     }
 
+    public enum Activity {
+        SEARCH("正在寻路"), MOVE("正在移动"), DIG("正在挖掘"),
+        PLACE("正在放置"), WAIT("正在等待落稳"), SUSPENDED("正在避险");
+        private final String label;
+        Activity(String label) { this.label = label; }
+        public String label() { return label; }
+    }
+    public Activity activity() { return null; }
+
     public static Progress running() {
         return RUNNING;
     }

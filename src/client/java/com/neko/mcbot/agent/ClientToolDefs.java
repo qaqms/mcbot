@@ -104,10 +104,11 @@ public final class ClientToolDefs {
                     + "produced_item/produced_count/input_count/inputs/requires_fuel/cooking_ticks?。"
                     + "ingredients[n]的材料分组序号是n-1；缺口按required_count与available_count计算，"
                     + "options可能重叠，最终可制作仍以can_craft为准。";
-            case "scan_area" -> "data.item_targets是[{item,count,x,y,z,target_uuid,stand_positions,"
+            case "scan_area" -> "data.item_targets是[{item,count,x,y,z,target_uuid,stand_positions,approach_positions,"
                     + "can_touch_here,pickup_allowed,pickup_delayed,pickup_delay_ticks,drop_origins}]；"
                     + "drop_origins含recorded_own_count、unattributed_to_body_count及有界parts，不认领历史掉落；"
-                    + "stand_positions是整数脚格{x,y,z}，用exact=true走到候选后核对新鲜背包。"
+                    + "stand_positions是现成站位；approach_positions是可能需挖放的触碰候选，不证明可达。"
+                    + "两者为整数脚格{x,y,z}样本；拾取用target_uuid填move_to pickup_target_uuid统一寻路，之后核对新鲜背包。"
                     + "一般扫描另有entity_targets、summary_lines、groups、special_blocks；"
                     + "entities/summary_lines/groups/special_blocks是文字列表，不是带坐标的对象。"
                     + "entity_targets条目的entity_id/target_uuid供attack，target_uuid也供follow，不可猜编号或身份。"
@@ -160,7 +161,7 @@ public final class ClientToolDefs {
                     + "clearing_results/clearing_drop_summary与目标分开。拾取累计不替代新鲜背包或最终目标。";
             case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position或work，"
                     + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
-                    + "拾取用scan_area.item_targets[].stand_positions及exact=true；工作用arrival=work。"
+                    + "拾取用scan_area.item_targets[].target_uuid填pickup_target_uuid；工作用arrival=work。"
                     + "放置工作可加place_item和face，can_work_here仅当前放置预检，到站未执行放置。"
                     + "remaining_items是开路来源当前在地量，picked_up_self_items/picked_up_other_items/"
                     + "destroyed_drop_items/unresolved_drop_items分别结算，未知不冒充入包。"
@@ -237,7 +238,9 @@ public final class ClientToolDefs {
                     + "探索默认不限总移动次数和总半径；max_steps可显式限制次数，radius省略/0不限总范围；与gather共享已查点。"
                     + "后续省略参数继承首次值，显式修改拒绝；耗尽后重复调用不会补充，按回执汇报范围与障碍。"
                     + "timeout_seconds默认0不限总时长，可选0-180；失败/权限/未知状态交回模型，取消迟到不续跑。"
-                    + "data.state是本段终态新鲜身体/背包，exploration_advanced仅表示实际换区，不证明找到任务目标",
+                    + "data.state是本段终态新鲜身体/背包，exploration_advanced仅表示实际换区，不证明找到任务目标。"
+                    + "地下data.supply给selected_remaining/reserve_durability/selected_dig_capacity及durable_spares[{slot,item,remaining}]；"
+                    + "备用耐久物品不保证采收资格，须按实际工具/配方补给后继续原目标；一次局部失败不等于整体受阻",
                     "{\"type\":\"object\",\"properties\":{\"max_steps\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647},"
                             + "\"radius\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":180},"
@@ -304,6 +307,7 @@ public final class ClientToolDefs {
                             + "\"max_runs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647}},"
                             + "\"additionalProperties\":false}"),
             new ToolSpec("report_blocked", "确实无法继续时停止当前任务并报告实际障碍，保留已完成动作与物品。"
+                    + "缺工具/耐久/材料先核对真实配方、备用工具、补给及原路返回等替代途径，自主补缺后继续原目标；一次局部NO_PATH不证明整体受阻。"
                     + "不用于临时思考或让主人逐步操作；取消后不会续跑。目标未满足按失败/受阻结束，不能写成完成",
                     "{\"type\":\"object\",\"properties\":{\"reason\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":512}},"
                             + "\"required\":[\"reason\"],\"additionalProperties\":false}"),
@@ -534,7 +538,10 @@ public final class ClientToolDefs {
                     + "max_hits省略或0表示不限；仅主人明确要求有限挥击时填写正整数。等满冷却与目标受伤恢复后出手。"
                     + "玩家/同伴/宠物/同队目标拒绝；最新服务端观测为自主执行时可直接调用，"
                     + "确认模式的中立或命名目标收到NEED_CONFIRM后才用ask_owner携带服务端authorization_id确认，"
-                    + "再用同一实体编号/UUID/max_hits/approach和批准编号调用，原接近锚点随授权保留。剑横扫范围有其他活物时拒绝；"
+                    + "再用同一实体编号/UUID/max_hits/approach和批准编号调用，原接近锚点随授权保留。"
+                    + "普通安全近战可先inventory/equip选合适的剑；剑并非禁用。"
+                    + "仅当本次原版攻击会横扫其他未选中目标时拒绝，远处目标仍可先接近；"
+                    + "遇UNSAFE_SWEEP按当前旁及风险换非横扫工具或等分开，不要把一次拒绝概括成不能用剑。"
                     + "穿刺/动能武器和重锤不支持。ACCEPTED只是受理，等终态；挥击次数不等于伤害或击杀，"
                     + "看实际生命/吸收减少及target_dead，失败不自动重投。"
                     + "参数拒绝会给原因码和字段；按回执核对扫描身份/类型/上限，不猜目标或授权",
@@ -569,11 +576,13 @@ public final class ClientToolDefs {
                     + "walk_only=true只走路/跳跃/下落，规划/重规划与执行均不挖放，探索使用此模式。"
                     + "return_waypoint可填status/move_to实际路标id，坐标须匹配、exact=true、walk_only=true且保留路标bounds/underground；"
                     + "先核当前支撑再正常导航，不继承许可，不自动连续返回或重开预算。"
-                    + "默认到目标相邻一格范围；拾取或精确工作站位用exact=true，要求指定脚格实际站稳。"
+                    + "普通坐标默认到目标相邻一格范围；指定脚格用exact=true，要求实际站稳。"
                     + "work_target={x,y,z}且exact=true保留工作对象；arrival='work'让寻路选择实际够得着/看得见或可有限清理的工作终点，x/y/z此时填工作对象坐标。"
                     + "放置站位另填place_item=物品ID、face（默认up），须exact=true、arrival=work且x/y/z与work_target相同；"
                     + "从当前材料/真实点击面和原版精确落位选目标格外站位，到站不放置。普通方块/原木/半砖/楼梯/工作台/炉可用，特殊/多格/状态组件待扩展。"
                     + "省略arrival仍精确走指定脚格；两者终态都复核工作条件。underground=true走相邻横向阶梯，可用真实材料和点击面补支撑，不原地直挖或垫柱，避流体/重力块。"
+                    + "拾取填pickup_target_uuid及该物品的取整坐标，以身体实际可触碰的任意落点到达；"
+                    + "物品移位复核，消失不当作入包，仍核对背包。不能与work_target/arrival/place_item/return_waypoint组合。"
                     + "单批节点用完可在整趟资源内保留边界续搜或执行可返回的安全前缀；搜索耗尽不等于地形封闭，更不等于模型/工具次数耗尽。"
                     + "默认无总时长及累计挖掘次数上限；仅需限制开路时填写非负max_digs，0禁止挖掘。"
                     + "bounds={x,y,z,radius}限制所有路径节点和改动；逐次搜索资源及实际卡住保护保留。"
@@ -592,6 +601,7 @@ public final class ClientToolDefs {
                             + "\"temporary_purpose\":{\"type\":\"string\",\"enum\":[\"support\",\"workstation\"]},"
                             + "\"face\":{\"type\":\"string\",\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]},"
                             + "\"clear_obstructions\":{\"type\":\"boolean\"},"
+                            + "\"pickup_target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
                             + "\"arrival\":{\"type\":\"string\",\"enum\":[\"work\"]},\"underground\":{\"type\":\"boolean\"},"
                             + "\"max_digs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647},"
                             + "\"bounds\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},"

@@ -20,6 +20,7 @@ import net.minecraft.world.entity.OwnableEntity;
 import net.minecraft.world.entity.TamableAnimal;
 import net.minecraft.world.entity.animal.equine.AbstractHorse;
 import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.MaceItem;
@@ -287,19 +288,33 @@ public final class AttackTool implements ServerTool {
             return failed("TARGET_LOST:攻击及视线邻域未加载或超出边界，不强制加载。");
         }
         if (!level.mayInteract(player, entity.blockPosition())) return failed("DENIED:世界规则不允许操作目标位置。");
-        ItemStack held = player.getMainHandItem();
-        // This is conservative even when current motion would prevent a vanilla sweep.
-        if (held.is(ItemTags.SWORDS) && !level.getEntitiesOfClass(LivingEntity.class,
-                entity.getBoundingBox().inflate(1, .25, 1),
-                other -> other != player && other != entity && other.isAlive()).isEmpty()) {
-            return failed("UNSAFE_SWEEP:剑的横扫范围有其他活物，先更换非横扫工具或等待目标分开。");
-        }
         if (player.distanceToSqr(entity) > LOCAL_RADIUS * LOCAL_RADIUS
                 || !player.isWithinAttackRange(entity.getBoundingBox(), 0)) {
             return failed("OUT_OF_REACH:超出当前原版攻击距离；仅approach=true允许原范围内只行走接近。");
         }
         if (!player.hasLineOfSight(entity)) return failed("OCCLUDED:目标被遮挡，不隔墙攻击。");
+        // Charge is measured before Player.attack resets it. Airborne attacks cannot sweep,
+        // so critical=false is sufficient when querying the native grounded sweep predicate.
+        boolean sweeps = wouldSweep(player.getMainHandItem().is(ItemTags.SWORDS),
+                player.getAttackStrengthScale(.5f), player.isSprinting(),
+                (com.neko.mcbot.mixin.PlayerAttackAccess) (Player) player);
+        if (sweeps && !level.getEntitiesOfClass(LivingEntity.class,
+                entity.getBoundingBox().inflate(1, .25, 1), other -> other != player && other != entity
+                        && other.isAlive() && sweepCanHit(player.isAlliedTo(other),
+                        other instanceof ArmorStand stand && stand.isMarker(), player.distanceToSqr(other))).isEmpty())
+            return failed("UNSAFE_SWEEP:这次原版剑攻击会横扫其他未选中目标；可换非横扫工具或等目标分开。"
+                    + "这是当前站位的旁及风险，不是剑不可用；普通安全目标仍可装备剑攻击。");
         return null;
+    }
+
+    static boolean wouldSweep(boolean sword, float charge, boolean sprinting,
+                              com.neko.mcbot.mixin.PlayerAttackAccess nativeAttack) {
+        boolean charged = charge > .9f;
+        return sword && nativeAttack.mcbot$isSweepAttack(charged, false, charged && sprinting);
+    }
+
+    static boolean sweepCanHit(boolean allied, boolean marker, double distanceSquared) {
+        return !allied && !marker && Double.isFinite(distanceSquared) && distanceSquared < 9;
     }
 
     public static boolean supportedWeapon(ItemStack held) {
@@ -377,6 +392,11 @@ public final class AttackTool implements ServerTool {
                     return route instanceof com.neko.mcbot.path.PathTask path
                             && path.usefulFor(com.neko.mcbot.server.MeleeWork.goal(player, entity));
                 }
+                @Override public boolean retarget(TickTask route) {
+                    if (!(route instanceof com.neko.mcbot.path.PathTask path)) return false;
+                    path.retarget(entity.blockPosition(), com.neko.mcbot.server.MeleeWork.goal(player, entity));
+                    return true;
+                }
                 @Override public TickTask.Progress advance(TickTask route) { return route.tickSafe(player); }
                 @Override public void stopInput() { player.releaseMovement(); }
             }, budget) : null;
@@ -451,6 +471,7 @@ public final class AttackTool implements ServerTool {
             player.attack(entity);
             player.swing(InteractionHand.MAIN_HAND);
         }
+        @Override public void faceTarget() { player.facePoint(entity.getEyePosition()); }
     }
 
     static Result permission(ActionPermissions permissions, ActionPermissions.Context context,

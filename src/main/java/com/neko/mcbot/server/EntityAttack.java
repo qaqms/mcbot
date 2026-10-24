@@ -24,6 +24,7 @@ public final class EntityAttack {
         boolean ready();
         boolean reserve();
         void strike();
+        default void faceTarget() { }
         default boolean canApproach() { return false; }
         default ServerTool.Result approach() { return null; }
         default void stopMoving() { }
@@ -107,6 +108,7 @@ public final class EntityAttack {
             if (failure != null) return failure;
             if (strikeGuard != null) return null;
         }
+        access.faceTarget();
         if (!access.ready()) return null;
         Target before = access.target();
         strikes++;

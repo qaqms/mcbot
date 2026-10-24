@@ -66,6 +66,38 @@ class AgentRunnerTaskBubbleTest {
         client.now += 6000;
         assertNull(runner.taskBubbleSnapshot());
     }
+
+    @Test void navigationProgressDisplaysTheRealPhaseWithoutUnlockingThePendingWork() {
+        start();
+        client.engine().tools(0, new ToolCall("walk", "move_to", "{\"x\":4,\"y\":90,\"z\":0}"));
+        client.drain();
+        long seq = client.lastTool().num("seq", -1);
+        assertEquals("正在寻路", runner.taskBubbleSnapshot().action());
+        var ack = json("{\"job_id\":\"walk\",\"cap_ticks\":-1}");
+        ack.addProperty("seq", seq);
+        runner.handleS2c(new Envelope("job_ack", ack));
+        client.drain();
+        var progress = json("{\"job_id\":\"walk\",\"phase\":\"progress\",\"tool\":\"move_to\","
+                + "\"text\":\"digging\",\"data\":{\"activity\":\"DIG\"}}");
+        progress.addProperty("seq", seq + 1);
+        runner.handleS2c(new Envelope("job_event", progress));
+        client.drain();
+        assertEquals("正在寻路", runner.taskBubbleSnapshot().action());
+        progress.addProperty("seq", seq);
+        runner.handleS2c(new Envelope("job_event", progress));
+        client.drain();
+        assertEquals("正在挖掘", runner.taskBubbleSnapshot().action());
+        progress.getAsJsonObject("data").addProperty("activity", "MOVE");
+        runner.handleS2c(new Envelope("job_event", progress));
+        client.drain();
+        assertEquals("正在移动", runner.taskBubbleSnapshot().action());
+        assertEquals(1, client.engine().histories.size(), "progress must never wake the next model request");
+        runner.cancelTask(0);
+        client.drain();
+        runner.handleS2c(new Envelope("job_event", progress));
+        client.drain();
+        assertEquals(TaskBubbleState.Tone.CANCELLED, runner.taskBubbleSnapshot().tone());
+    }
     @Test void questionAndDisplayPreferenceChangesPreserveExecutionAndSaveFailurePreservesOldPreference() {
         long task = start();
         client.engine().tools(0, new ToolCall("ask", "ask_owner", "{\"text\":\"往哪走？\"}")); client.drain();

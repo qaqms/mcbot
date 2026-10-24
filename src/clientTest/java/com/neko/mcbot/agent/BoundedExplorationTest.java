@@ -139,7 +139,8 @@ class BoundedExplorationTest {
                     }
                 }
                 case "move_to" -> {
-                    assertEquals(11,args.get("x").getAsInt());
+                    assertEquals(12,args.get("x").getAsInt());
+                    assertEquals("work",args.get("arrival").getAsString());
                     assertEquals(12,args.getAsJsonObject("work_target").get("x").getAsInt());
                     x[0] = 11;
                 }

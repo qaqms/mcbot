@@ -58,6 +58,21 @@ class MoveToWorkTest {
     }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
 
+    @Test void pickupIntentUsesStrictStableIdentityAndCannotOverrideOtherArrivalContracts() {
+        String id = "46c4cf30-69a8-44de-8880-cfc9ed053ac9";
+        assertEquals(java.util.UUID.fromString(id), MoveToTool.pickupTarget(json("{\"pickup_target_uuid\":\"" + id + "\"}")));
+        assertNull(MoveToTool.pickupTarget(new JsonObject()));
+        for (String value : java.util.List.of("\"bad\"", "\"1-1-1-1-1\"", "null", "1")) {
+            var args = json("{\"x\":0,\"y\":0,\"z\":0,\"pickup_target_uuid\":" + value + "}");
+            assertTrue(new MoveToTool().runAsync(null, args, null).join().feedback().startsWith("DENIED:"));
+        }
+        for (String field : java.util.List.of("work_target", "arrival", "place_item", "return_waypoint")) {
+            var args = json("{\"pickup_target_uuid\":\"" + id + "\"}");
+            args.addProperty(field, "conflicting");
+            assertThrows(RuntimeException.class, () -> MoveToTool.pickupTarget(args));
+        }
+    }
+
     @Test void workTargetRequiresExactMovementAndStrictCoordinatesBeforeWorldAccess() {
         assertNull(MoveToTool.workTarget(new JsonObject()));
         assertEquals(new BlockPos(3, 64, -2), MoveToTool.workTarget(json(

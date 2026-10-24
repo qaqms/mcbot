@@ -759,7 +759,7 @@ public final class McbotPanelScreen extends Screen {
         }
         String footer = messageUntil > System.currentTimeMillis() ? message : historical() ? "当前会话记录"
                 : view == View.SETTINGS ? "" : runner() == null ? "未连接世界"
-                : runner().brainOnline() ? runner().config().model + " · " + runner().contextSnapshot().steps() + "/40 步" : "模型未配置";
+                : runner().brainOnline() ? runner().config().model : "模型未配置";
         g.drawString(font, font.plainSubstrByWidth(footer, layout.status().width()), layout.status().x(), layout.status().y(), muted(), false);
     }
     private void avatar(GuiGraphics g, int x, int y, int size) {

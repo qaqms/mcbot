@@ -61,6 +61,9 @@ public final class DigAStar {
     public static final int MAX_STORED_NODES = 32_768;
     public static final int SEGMENT_DISTANCE = 32;
     private static final int GREEDY_NODES = 1000;
+    private static final int IMPROVE_NODES = 64;
+    private static final int PARTIAL_CANDIDATES = 16;
+    private int firstAnswerAt = -1;
 
     private record State(long position, int digs, int places, TerrainEdits terrain) { }
 
@@ -85,6 +88,7 @@ public final class DigAStar {
     private String budgetKind;
     private boolean segmented, greedy, segmentEnd;
     private double segmentRemaining;
+    private TerrainEdits initialTerrain = TerrainEdits.EMPTY;
 
     private final PriorityQueue<Node> open =
             new PriorityQueue<>(java.util.Comparator.comparingDouble(Node::f)
@@ -92,6 +96,9 @@ public final class DigAStar {
     private final Map<State, Node> best = new HashMap<>();
     private int storedNodes = 1;
     private int maxStoredNodes = MAX_STORED_NODES;
+    private int createdNodes = 1, storageCollections;
+    private java.util.ArrayDeque<Node> retaining;
+    private java.util.Set<Node> retained;
 
     private int expanded;
     private int batches = 1;
@@ -105,6 +112,8 @@ public final class DigAStar {
     /** 已扩展（settled）节点中距目标体积最近者（同 L1 取 g 小）——部分提交候选。 */
     private Node bestPartial;
     private java.util.Iterator<Node> partialCandidates;
+    private final List<Node> partialFrontier = new ArrayList<>();
+    private int partialCandidateChecks;
     private Node partialProbe, partialCursor;
     private boolean preparingPartial;
     private List<Step> path;
@@ -151,10 +160,22 @@ public final class DigAStar {
     }
 
     private Node start() {
-        var foot = prepared && s.geometry() != null ? s.geometry().foot(sx, sy, sz, TerrainEdits.EMPTY) : null;
-        return new Node(new State(pack(sx, sy, sz), 0, 0, TerrainEdits.EMPTY),
-                sx, sy, sz, 0, 0, 0, h(sx, sy, sz, TerrainEdits.EMPTY), null,
+        var foot = prepared && s.geometry() != null ? s.geometry().foot(sx, sy, sz, initialTerrain) : null;
+        return new Node(new State(pack(sx, sy, sz), 0, 0, initialTerrain),
+                sx, sy, sz, 0, 0, 0, h(sx, sy, sz, initialTerrain), null,
                 new Step(sx, sy, sz, List.of(), List.of(), ACT_START, foot == null ? sy : foot.height(), false));
+    }
+
+    /** Edits belong to the preceding route, so they do not consume this search's remaining stock. */
+    DigAStar after(TerrainEdits terrain) {
+        if (prepared || estimate != null || expanded != 0) throw new IllegalStateException("search already started");
+        initialTerrain = java.util.Objects.requireNonNull(terrain);
+        open.clear();
+        best.clear();
+        Node initial = start();
+        best.put(initial.key, initial);
+        open.add(initial);
+        return this;
     }
 
     /** Both passes share the node, storage and time account and the same transition checks. */
@@ -171,6 +192,7 @@ public final class DigAStar {
     }
 
     public boolean segmentEnd() { return segmentEnd; }
+    boolean startsAt(int x, int y, int z) { return sx == x && sy == y && sz == z; }
 
     /** 分帧推进（不限时，单测/兼容用）。 */
     public boolean advance(int budget) {
@@ -189,6 +211,21 @@ public final class DigAStar {
         long t0 = System.nanoTime();
         try {
         for (int i = 0; i < budget; i++) {
+            if (retaining != null) {
+                if (usedNanos + System.nanoTime() - t0 >= totalBudgetNanos) {
+                    retaining = null;
+                    retained = null;
+                    return budgetFailure("TIME", "搜索整理耗尽累计时间预算。");
+                }
+                if (System.nanoTime() - t0 >= sliceNanos) return false;
+                if (!retainOne()) {
+                    i--; // Reclaiming records spends slice time, not forward expansion allowance.
+                    continue;
+                }
+                if (storedNodes() >= maxStoredNodes)
+                    return budgetFailure("STORAGE", "当前仍被引用的路径状态已到存储上限，尚未证明目标无路。");
+                continue;
+            }
             if (preparingPartial) {
                 if (usedNanos + System.nanoTime() - t0 >= totalBudgetNanos) {
                     preparingPartial = false;
@@ -205,11 +242,12 @@ public final class DigAStar {
                 if (estimate == null) {
                     if (goal.remaining(sx, sy, sz) == 0
                             && usedNanos + System.nanoTime() - t0 < totalBudgetNanos
-                            && goal.arrivalCost(s, sx, sy, sz, TerrainEdits.EMPTY) == 0) {
+                            && goal.arrivalCost(s, sx, sy, sz, initialTerrain) == 0) {
                         prepared = true;
                         return arrive(start(), 0);
                     }
-                    estimate = new ApproachEstimate(s, goal, sx, sy, sz, maxDigs > 0 ? maxNodes / 4 : 0);
+                    estimate = new ApproachEstimate(s, goal, sx, sy, sz,
+                            !greedy && maxDigs > 0 ? maxNodes / 4 : 0);
                 }
                 if (!estimate.done()) {
                     // Preprocessing is optional, but its CPU, work and allocations are never free.
@@ -228,6 +266,9 @@ public final class DigAStar {
             }
             if (greedy && expanded >= Math.min(GREEDY_NODES, maxNodes / 4))
                 weightedPass();
+            if (!prepared) { i--; continue; }
+            if (segmented && stoppingNode != null && expanded - firstAnswerAt >= IMPROVE_NODES)
+                return arrive(stoppingNode, stoppingCost);
             if (!greedy && stoppingNode != null && (open.isEmpty() || stoppingCost <= open.peek().f))
                 return arrive(stoppingNode, stoppingCost);
             Node cur = open.poll();
@@ -245,6 +286,7 @@ public final class DigAStar {
             if (Double.isFinite(arrival) && arrival >= 0 && cur.g + arrival < stoppingCost) {
                 stoppingNode = cur;
                 stoppingCost = cur.g + arrival;
+                if (firstAnswerAt < 0) firstAnswerAt = expanded;
                 if (greedy) {
                     weightedPass();
                     continue;
@@ -267,7 +309,8 @@ public final class DigAStar {
             expanded++;
             expand(cur);
             if (storedNodes() >= maxStoredNodes) {
-                return budgetFailure("STORAGE", "路径状态存储已到上限，未证明目标无路；请重新观察并分短段移动。");
+                beginStorageCollection();
+                return false;
             }
             // 每 16 拓才探一次钟：nanoTime 本身不免费，粗粒度换开销（帽语义不差这 16 节点）
             if ((expanded & 15) == 0) {
@@ -298,12 +341,41 @@ public final class DigAStar {
 
     private void weightedPass() {
         greedy = false;
+        // Pay for relaxed terrain guidance only if the fast feasibility pass found no answer.
+        if (stoppingNode == null) {
+            prepared = false;
+            estimate = null;
+        }
         open.clear();
         best.clear();
         Node initial = start();
         storedNodes++;
+        if (createdNodes < Integer.MAX_VALUE) createdNodes++;
         best.put(initial.key, initial);
         open.add(initial);
+    }
+
+    private void beginStorageCollection() {
+        open.removeIf(node -> best.get(node.key) != node);
+        retaining = new java.util.ArrayDeque<>(best.values());
+        retaining.addAll(partialFrontier);
+        if (stoppingNode != null) retaining.add(stoppingNode);
+        if (bestPartial != null) retaining.add(bestPartial);
+        retained = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        storageCollections++;
+    }
+
+    /** Parent chains preserve edit history; only unreachable records and stale heap entries are reclaimed. */
+    private boolean retainOne() {
+        Node node = retaining.poll();
+        if (node != null) {
+            if (retained.add(node) && node.prev != null) retaining.add(node.prev);
+            return false;
+        }
+        storedNodes = retained.size();
+        retaining = null;
+        retained = null;
+        return true;
     }
 
     private boolean budgetFailure(String kind, String why) {
@@ -314,7 +386,7 @@ public final class DigAStar {
         if (segmented && !"TIME".equals(kind)) {
             failure = "BUDGET_EXCEEDED:" + why;
             preparingPartial = true;
-            partialCandidates = best.values().iterator();
+            partialCandidates = List.copyOf(partialFrontier).iterator();
             partialProbe = partialCursor = bestPartial;
             bestPartial = null;
             return false;
@@ -358,6 +430,7 @@ public final class DigAStar {
         }
         if (partialCandidates.hasNext()) {
             Node candidate = partialCandidates.next();
+            partialCandidateChecks++;
             if (betterPartial(candidate)) partialProbe = partialCursor = candidate;
             return false;
         }
@@ -373,6 +446,25 @@ public final class DigAStar {
         return bestPartial == null || l1(candidate.x, candidate.y, candidate.z) < l1(bestPartial.x, bestPartial.y, bestPartial.z)
                 || l1(candidate.x, candidate.y, candidate.z) == l1(bestPartial.x, bestPartial.y, bestPartial.z)
                 && candidate.g < bestPartial.g;
+    }
+
+    private void nominatePartial(Node candidate) {
+        if (!segmented || candidate.prev == null
+                || goal.remaining(sx, sy, sz) - l1(candidate.x, candidate.y, candidate.z) < 1) return;
+        for (int i = 0; i < partialFrontier.size(); i++) {
+            var previous = partialFrontier.get(i);
+            if (previous.key.position() != candidate.key.position()) continue;
+            if (previous.g <= candidate.g) return;
+            partialFrontier.remove(i);
+            break;
+        }
+        var order = java.util.Comparator.comparingDouble((Node node) -> l1(node.x, node.y, node.z))
+                .thenComparingDouble(Node::g).thenComparingLong(node -> node.key.position());
+        int index = 0;
+        while (index < partialFrontier.size() && order.compare(partialFrontier.get(index), candidate) <= 0) index++;
+        if (index >= PARTIAL_CANDIDATES) return;
+        partialFrontier.add(index, candidate);
+        if (partialFrontier.size() > PARTIAL_CANDIDATES) partialFrontier.removeLast();
     }
 
     /** 累计搜索 CPU 预算（纳秒）；PathTask 传 SEARCH_TOTAL_NS。越界后与节点帽同位撞帽。 */
@@ -420,6 +512,9 @@ public final class DigAStar {
     public int storedNodes() {
         return storedNodes + (estimate == null ? 0 : estimate.admitted());
     }
+    public int createdNodes() { return createdNodes; }
+    public int storageCollections() { return storageCollections; }
+    public int partialCandidateChecks() { return partialCandidateChecks; }
 
     public int estimateExpanded() { return estimate == null ? 0 : estimate.expanded(); }
     /** Segmented route expansion and optional preprocessing have separate bounded accounts. */
@@ -548,7 +643,9 @@ public final class DigAStar {
                 classify(cur, bx, by, bz, plan.dig(), plan.place()), plan.feetY(), plan.jump());
         Node n = new Node(key, bx, by, bz, digs, places, g,
                 (greedy ? 0 : g) + h(bx, by, bz, plan.terrain()), cur, step);
+        nominatePartial(n);
         storedNodes++;
+        if (createdNodes < Integer.MAX_VALUE) createdNodes++;
         best.put(key, n);
         open.add(n);
     }

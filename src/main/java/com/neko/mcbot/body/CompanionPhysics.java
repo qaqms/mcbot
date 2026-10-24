@@ -19,6 +19,8 @@ final class CompanionPhysics {
         default MovementInput.Frame takeInput() { return MovementInput.Frame.IDLE; }
         default float yaw() { return 0; }
         default boolean grounded() { return false; }
+        default boolean maySprint() { return false; }
+        default void sprint(boolean enabled) {}
         default void jump() {}
         default MovementInput.Frame recoveryInput() { return null; }
         default boolean inWater() { return false; }
@@ -33,10 +35,10 @@ final class CompanionPhysics {
 
     static void tick(Access body) {
         MovementInput.Frame input = body.takeInput();
-        if (!body.active()) { body.unavailable(); return; }
+        if (!body.active()) { unavailable(body); return; }
         // Native movement may inspect the support block and adjacent collision/fluid cells.
         if (!body.loaded(body.bounds().expandTowards(body.velocity()).inflate(1))) {
-            body.unavailable();
+            unavailable(body);
             return;
         }
         Vec3 before = body.position();
@@ -45,25 +47,32 @@ final class CompanionPhysics {
         // Native environmental effects can kill the body or enter a portal before movement.
         if (!body.active() || body.worldIdentity() != world
                 || !body.loaded(body.bounds().expandTowards(body.velocity()).inflate(1))) {
-            body.unavailable();
+            unavailable(body);
             return;
         }
         MovementInput.Frame recovery = body.recoveryInput();
         if (recovery != null) input = recovery;
+        var relative = input.relativeTo(body.yaw());
+        body.sprint(input.sprint() && relative.z > 1e-5 && body.maySprint());
         if (input.jump()) {
             if (body.inWater()) body.swimUp();
             else if (body.grounded()) body.jump();
         }
-        body.travel(input.relativeTo(body.yaw()));
-        if (!body.active() || body.worldIdentity() != world) { body.unavailable(); return; }
+        body.travel(relative);
+        if (!body.active() || body.worldIdentity() != world) { unavailable(body); return; }
         body.applyBlockEffects();
-        if (!body.active() || body.worldIdentity() != world) { body.unavailable(); return; }
+        if (!body.active() || body.worldIdentity() != world) { unavailable(body); return; }
         body.refreshEyes();
         Vec3 movement = body.position().subtract(before);
         // Server players normally receive this settlement from movement packets.
         body.checkFall(movement);
-        if (!body.active() || body.worldIdentity() != world) { body.unavailable(); return; }
+        if (!body.active() || body.worldIdentity() != world) { unavailable(body); return; }
         body.recordMovement(movement);
         body.afterMovement();
+    }
+
+    private static void unavailable(Access body) {
+        body.sprint(false);
+        body.unavailable();
     }
 }

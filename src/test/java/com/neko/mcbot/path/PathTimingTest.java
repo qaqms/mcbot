@@ -7,6 +7,23 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PathTimingTest {
+    @Test void sprintDiagnosticsCountRenewedInputOncePerTickAndFreezeAtCompletion() {
+        var timing = new PathTiming();
+        timing.beginTick();
+        timing.input(1, 0, false, true);
+        timing.input(1, 0, false, true);
+        timing.endTick();
+        timing.beginTick();
+        timing.input(1, 0, false);
+        timing.endTick();
+        timing.beginTick();
+        timing.input(0, 0, false, true);
+        timing.finish();
+        timing.input(1, 0, false, true);
+        assertEquals(1, timing.snapshot().get("sprint_input_ticks").getAsInt());
+        assertEquals(2, timing.snapshot().get("input_ticks").getAsInt());
+        assertEquals(1, timing.snapshot().get("no_input_ticks").getAsInt());
+    }
     @Test void exclusivePhasesExcludeBetweenTickWaitAndDoNotDoubleCountReentry() {
         var clock = new AtomicLong();
         var timing = new PathTiming(clock::get);

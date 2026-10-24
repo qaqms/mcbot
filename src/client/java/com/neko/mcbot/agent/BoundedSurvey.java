@@ -274,6 +274,8 @@ final class BoundedSurvey {
         data.addProperty("survey_hops", hops);
         data.add("return_trail", route.trail());
         data.add("state", state.deepCopy());
+        var supply = supplyFacts(state, option("reserve_durability", 16));
+        data.add("supply", supply);
         data.add("discovery", discovery.deepCopy());
         data.add("movement", movement.deepCopy());
         for (String key : List.of("authorization_id", "authorization_summary"))
@@ -284,6 +286,39 @@ final class BoundedSurvey {
         var targets = discovery.getAsJsonArray("targets");
         if (targets != null && !targets.isEmpty()) text += "\n查询候选：" + targets;
         if (movement.has("authorization_summary")) text += "\n" + movement.get("authorization_summary").getAsString();
+        if (!ok && supply.has("selected_remaining")) {
+            text += "\n实际补给条件：" + supply
+                    + "。本次地下执行结束不等于原目标无法完成；先按新鲜背包、真实配方和原许可选择"
+                    + "备用工具、补做工具/工位/材料或原路返程，再继续原目标。不要把工具剩余耐久称为模型步数限制。";
+        }
         result.complete(new ToolOutcome(ok, text, data));
+    }
+
+    static JsonObject supplyFacts(JsonObject state, int reserve) {
+        var facts = new JsonObject();
+        var tools = new com.google.gson.JsonArray();
+        facts.add("durable_spares", tools);
+        facts.addProperty("reserve_durability", reserve);
+        var inventory = state.getAsJsonObject("inventory");
+        if (inventory == null || !inventory.has("selected_slot") || !inventory.has("slots")) return facts;
+        int selected = ExplorationRoute.integer(inventory, "selected_slot");
+        for (var entry : inventory.getAsJsonArray("slots")) {
+            var slot = entry.getAsJsonObject();
+            if (!slot.has("damage") || !slot.has("max_damage") || ExplorationRoute.integer(slot, "count") <= 0) continue;
+            int remaining = Math.max(0, ExplorationRoute.integer(slot, "max_damage") - ExplorationRoute.integer(slot, "damage"));
+            int index = ExplorationRoute.integer(slot, "slot");
+            if (index == selected) {
+                facts.addProperty("selected_tool", slot.get("item").getAsString());
+                facts.addProperty("selected_remaining", remaining);
+                facts.addProperty("selected_dig_capacity", Math.max(0, remaining - reserve));
+            } else if (remaining > reserve) {
+                var tool = new JsonObject();
+                tool.add("slot", slot.get("slot").deepCopy());
+                tool.add("item", slot.get("item").deepCopy());
+                tool.addProperty("remaining", remaining);
+                tools.add(tool);
+            }
+        }
+        return facts;
     }
 }

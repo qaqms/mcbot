@@ -149,6 +149,67 @@ class StandingGeometryTest {
         assertEquals(-2, NavigationGeometry.cell(-1.5));
     }
 
+    @Test void departureUsesTheColumnUnderTheActualSoleAtEitherSideOfACellBoundary() {
+        for (int direction : new int[]{-1, 1}) {
+            var grid = new Grid();
+            grid.blocks.clear();
+            var floor = new BlockPos(direction > 0 ? 1 : -1, -1, 0);
+            grid.blocks.put(floor, Blocks.STONE.defaultBlockState());
+            double x = direction > 0 ? .98 : .02;
+            var geometry = grid.geometry();
+            assertNull(geometry.standing(0, 0, 0, TerrainEdits.EMPTY),
+                    "the floored center alone cannot seed a route here");
+            assertEquals(floor.above(), geometry.departure(x, 0, .5, p -> true));
+            assertTrue(geometry.canAlign(x, 0, .5, floor.above()));
+            assertEquals(Map.of(floor, Blocks.STONE.defaultBlockState()), grid.blocks);
+            assertNull(geometry.departure(x, 0, .5, p -> p.getX() == 0),
+                    "alignment cannot leave the original allowed scope");
+        }
+    }
+
+    @Test void departureNeedsActualSupportRatherThanBorrowingAnUnrelatedNearbyFloor() {
+        var grid = new Grid();
+        grid.blocks.clear();
+        grid.blocks.put(new BlockPos(1, -1, 0), Blocks.STONE.defaultBlockState());
+        assertNull(grid.geometry().departure(.5, 0, .5, p -> true));
+        assertFalse(grid.geometry().canAlign(.5, 0, .5, new BlockPos(1, 0, 0)));
+        assertNull(grid.geometry().departure(Double.NaN, 0, .5, p -> true));
+        grid.blocks.put(new BlockPos(1, 0, 0), Blocks.OAK_SLAB.defaultBlockState());
+        assertNull(grid.geometry().departure(.98, 0, .5, p -> true), "cannot silently lift the body");
+        assertEquals(new BlockPos(1, 0, 0), grid.geometry().departure(.98, .5, .5, p -> true),
+                "a genuinely supported fractional pose can align at its actual height");
+    }
+
+    @Test void cornerDepartureReadsOnlyTheRealSupportLayerAtTheWorldBottom() {
+        var floor = new BlockPos(1, -1, 1);
+        var geometry = new StandingGeometry(new StandingGeometry.Access() {
+            @Override public boolean known(BlockPos pos) { return pos.getY() >= -1; }
+            @Override public List<AABB> boxes(BlockPos pos) {
+                assertTrue(pos.getY() >= -1);
+                return floor.equals(pos) ? List.of(new AABB(0, 0, 0, 1, 1, 1)) : List.of();
+            }
+        }, .6, 1.8, .6);
+        assertEquals(floor.above(), geometry.departure(.98, 0, .98, p -> true));
+        assertNull(geometry.departure(.5, 0, .5, p -> true));
+    }
+
+    @Test void departureCannotCrossWallsOrUnknownGeometryAndRevalidatesChangedSupport() {
+        var grid = new Grid();
+        var geometry = grid.geometry();
+        grid.blocks.put(BlockPos.ZERO, Blocks.OAK_DOOR.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.DoorBlock.FACING, Direction.WEST));
+        assertFalse(geometry.canAlign(1.31, 0, .5, BlockPos.ZERO));
+        grid.blocks.remove(BlockPos.ZERO);
+        assertTrue(geometry.canAlign(.98, 0, .5, BlockPos.ZERO));
+        grid.unknown.add(new BlockPos(1, 1, 0));
+        assertFalse(geometry.canAlign(.98, 0, .5, BlockPos.ZERO));
+        grid.unknown.clear();
+        grid.blocks.remove(BlockPos.ZERO.below());
+        assertFalse(geometry.canAlign(.98, 0, .5, BlockPos.ZERO));
+        grid.blocks.put(BlockPos.ZERO.below(), Blocks.MAGMA_BLOCK.defaultBlockState());
+        assertFalse(geometry.canAlign(.98, 0, .5, BlockPos.ZERO));
+    }
+
     @Test void dryGroundRejectsFluidsHazardsAndEntityDependentSupport() {
         for (var block : List.of(Blocks.WATER, Blocks.LAVA, Blocks.SCAFFOLDING, Blocks.POWDER_SNOW,
                 Blocks.FIRE, Blocks.COBWEB, Blocks.CACTUS, Blocks.MAGMA_BLOCK)) {

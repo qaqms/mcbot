@@ -11,12 +11,14 @@ import static org.junit.jupiter.api.Assertions.*;
 class EntityApproachTest {
     private static final class Access implements EntityApproach.Access {
         Vec3 position = new Vec3(4, 0, 0);
-        boolean strike, enterRange;
+        boolean strike, enterRange, keepRoute;
+        int retargets;
         int plans, advances, aborts, releases;
         NavigationBudget original;
         TickTask.Progress progress = new TickTask.Progress.Running();
         @Override public Vec3 targetPosition() { return position; }
         @Override public boolean canStrike() { return strike; }
+        @Override public boolean retarget(TickTask route) { retargets++; return keepRoute; }
         @Override public TickTask route(NavigationBudget budget) {
             if (original == null) original = budget;
             else assertSame(original, budget);
@@ -87,6 +89,26 @@ class EntityApproachTest {
         assertNull(move.tick());
         assertEquals(10, access.plans);
         assertEquals(9, access.aborts);
+    }
+
+    @Test void liveRetargetingContinuesAdvancingTheSameRouteWithoutReleaseOrSearchReplacement() {
+        var access = new Access();
+        access.keepRoute = true;
+        var move = new EntityApproach(access);
+        for (int tick = 0; tick < 3; tick++) assertNull(move.tick());
+        int releases = access.releases;
+        for (int replacement = 0; replacement < 12; replacement++) {
+            access.position = access.position.add(3, 0, 0);
+            for (int tick = 0; tick < 10; tick++) assertNull(move.tick());
+        }
+        assertEquals(1, access.plans);
+        assertEquals(12, access.retargets);
+        assertEquals(121, access.advances);
+        assertEquals(0, access.aborts);
+        assertEquals(releases, access.releases);
+        assertEquals(0, access.original.replans(), "retargeting does not buy another search account");
+        move.stop();
+        assertEquals(1, access.aborts);
     }
 
     @Test void suspensionDiscardsOldRouteButRetainsOriginalReplacementAccount() {

@@ -87,6 +87,27 @@ class NavigationSearchTest {
         assertNotNull(PathTask.planFailure(result.path(), capture(source), 0));
     }
 
+    @Test void pickupWorkerUsesOnlyCopiedTerrainAndCanStopBelowTheObservedItemCell() throws Exception {
+        var source = sections();
+        var snapshot = capture(source);
+        var item = new net.minecraft.world.phys.AABB(10.3, 2.1, 4.3, 10.55, 2.35, 4.55);
+        var liveGoal = new com.neko.mcbot.server.PickupGoal(item, .6, 1.8,
+                capture(source).geometry());
+        var goal = liveGoal.snapshot(snapshot);
+        source[0].set(9, 15, 4, Blocks.AIR.defaultBlockState());
+        source[0].set(10, 15, 4, Blocks.AIR.defaultBlockState());
+        var pending = NavigationSearch.submit(search(snapshot, goal));
+        await(pending);
+        var result = pending.take();
+        assertNull(result.failure(), result.failure());
+        var end = result.path().getLast();
+        assertEquals(0, end.y());
+        assertTrue(goal.reached(end.x(), end.y(), end.z()));
+        assertNull(PathTask.planFailure(result.path(), snapshot, 0));
+        assertNotNull(PathTask.planFailure(result.path(), capture(source), 0),
+                "the live route still rejects support removed after snapshot capture");
+    }
+
     @Test void cancellationDiscardsTheLateWorkerResult() throws Exception {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
@@ -149,5 +170,46 @@ class NavigationSearchTest {
         assertEquals(allowance.limit(), allowance.used());
         assertTrue(search.done());
         assertEquals(1, search.batches());
+    }
+
+    @Test void highTreeSamplesDoNotForceClimbingWhenAGroundWorkStanceIsReachable() throws Exception {
+        var source = sections();
+        var target = new BlockPos(10, 4, 4);
+        source[1].set(10, 4, 4, Blocks.OAK_LOG.defaultBlockState());
+        var snapshot = capture(source);
+        var live = com.neko.mcbot.server.NavigationWork.goal(snapshot.sight(net.minecraft.world.phys.Vec3.ZERO),
+                target, 1.62, 4.5, true, pos -> { fail("live safe predicate reached the worker"); return false; },
+                snapshot.geometry());
+        var frozen = live.snapshot(snapshot);
+        assertNotNull(frozen);
+        var route = new DigAStar(snapshot, 4, 0, 4, 10, 4, 4, 4000, 0, frozen).segments();
+        var pending = NavigationSearch.submit(route);
+        await(pending);
+        assertNull(pending.take().failure());
+        var landing = route.path().getLast();
+        assertEquals(0, landing.y(), "the tree can be mined from ground level");
+        assertTrue(frozen.reached(landing.x(), landing.y(), landing.z()));
+        assertTrue(route.path().stream().allMatch(step -> step.dig().isEmpty() && step.place().isEmpty()));
+        var exact = PathTask.searchFor(snapshot, new BlockPos(4, 0, 4), new BlockPos(9, 4, 4), true, true);
+        while (!exact.advance(300)) { }
+        assertNotNull(exact.failure(), "a sampled high stand is not a reachable route");
+        source[1].set(10, 4, 4, Blocks.AIR.defaultBlockState());
+        assertTrue(frozen.reached(landing.x(), landing.y(), landing.z()), "copied target stays stable");
+        assertFalse(capture(source).workGoal(target, 1.62, 4.5).reached(landing.x(), landing.y(), landing.z()),
+                "a fresh goal rejects the removed target");
+    }
+
+    @Test void snapshotEditedRaysRespectRemovedCellsPlacedSupportsAndUnknownChunks() {
+        var source = sections();
+        source[1].set(7, 1, 4, Blocks.STONE.defaultBlockState());
+        source[1].set(10, 1, 4, Blocks.OAK_LOG.defaultBlockState());
+        var snapshot = capture(source);
+        var goal = snapshot.workGoal(new BlockPos(10, 1, 4), 1.62, 5.5);
+        assertFalse(goal.reached(5, 0, 4));
+        var opening = TerrainEdits.EMPTY.after(java.util.List.of(DigAStar.pack(7, 1, 4)), java.util.List.of());
+        assertTrue(goal.reached(5, 0, 4, opening));
+        assertFalse(goal.reached(5, 0, 4,
+                opening.after(java.util.List.of(), java.util.List.of(DigAStar.pack(8, 1, 4)))));
+        assertFalse(snapshot.workGoal(new BlockPos(17, 1, 4), 1.62, 5.5).reached(14, 0, 4));
     }
 }

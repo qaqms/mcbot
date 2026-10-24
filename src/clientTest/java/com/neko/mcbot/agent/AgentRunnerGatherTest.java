@@ -55,18 +55,27 @@ class AgentRunnerGatherTest {
         target.getAsJsonArray("stand_positions").add(JsonParser.parseString("{\"x\":3,\"y\":90,\"z\":0}"));
         var targets = new JsonArray();
         targets.add(target);
+        var alternative = target.deepCopy();
+        alternative.addProperty("x", 4);
+        targets.add(alternative);
         var found = new JsonObject();
         found.add("targets", targets);
         reply(found);
         assertEquals("move_to", client.lastTool().str("tool"));
         assertTrue(client.lastTool().obj("args").get("exact").getAsBoolean());
+        assertEquals("work", client.lastTool().obj("args").get("arrival").getAsString());
         assertEquals(2, client.lastTool().obj("args").getAsJsonObject("work_target").get("x").getAsInt());
         reply(false, "TARGET_BLOCKED:arrival scene changed", new JsonObject());
         assertEquals("status", client.lastTool().str("tool"));
         assertEquals(1, client.engine().responses.size());
         reply(BoundedGatherTest.state(0));
+        assertEquals("scan_area", client.lastTool().str("tool"));
+        reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+        assertEquals("find_resource", client.lastTool().str("tool"));
+        reply(found);
         assertEquals("move_to", client.lastTool().str("tool"));
-        assertEquals(3, client.lastTool().obj("args").get("x").getAsInt());
+        assertEquals(4, client.lastTool().obj("args").get("x").getAsInt(),
+                "a failed work goal advances to another resource, not another exact stand for the same block");
         long seq = client.lastTool().num("seq", -1);
         var ack = new JsonObject();
         ack.addProperty("seq", seq);

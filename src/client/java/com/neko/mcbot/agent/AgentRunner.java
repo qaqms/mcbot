@@ -675,6 +675,9 @@ public final class AgentRunner implements ToolExecutor {
         var known = pending.peekJob(jobId);
         if (known == null || known.seq() != env.num("seq", -1)) return;
         if ("progress".equals(phase)) {
+            var activity = resultData(env).get("activity");
+            if (activity != null && activity.isJsonPrimitive() && activity.getAsJsonPrimitive().isString())
+                taskBubble.progress(known.ticket().taskId(), known.seq(), known.tool(), activity.getAsString());
             // 进度帧不进对话（模型不需要、也看不懂"第 3/7 格"），只喂给桥与面板
             JsonObject d = new JsonObject();
             d.addProperty("text", text);
@@ -1199,7 +1202,7 @@ public final class AgentRunner implements ToolExecutor {
                         if (command.equals("目标状态")) {
                             emitDone(commandId, AgentLoop.TaskStatus.COMPLETED, "有待恢复的长期目标："
                                     + core.get("directive").getAsString() + "；累计模型步数="
-                                    + core.get("steps").getAsInt() + "/" + core.get("step_limit").getAsInt()
+                                    + core.get("steps").getAsInt()
                                     + "。当前未恢复执行。");
                             return;
                         }

@@ -195,7 +195,7 @@ public final class LevelDigSampler implements DigSampler {
         if (foot == null) return false;
         var bounds = body.getBoundingBox().move(x + .5 - body.getX(),
                 foot.height() - body.getY(), z + .5 - body.getZ());
-        return com.neko.mcbot.server.BlockPlacement.attachedAt(body,
+        return com.neko.mcbot.server.BlockPlacement.attachedSupportAt(body,
                 new BlockPos(DigAStar.unpackX(target), DigAStar.unpackY(target), DigAStar.unpackZ(target)),
                 PathMaterials.find(body.getInventory()),
                 new net.minecraft.world.phys.Vec3(x + .5, foot.height() + body.getEyeHeight(), z + .5),

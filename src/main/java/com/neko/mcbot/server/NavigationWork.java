@@ -82,6 +82,11 @@ public final class NavigationWork {
     public static NavigationGoal goal(BlockAim.Access world, BlockPos target, double eyeHeight, double reach,
                                       boolean clear, Predicate<BlockPos> safe, NavigationGeometry geometry) {
         return new NavigationGoal() {
+            @Override public NavigationGoal snapshot(com.neko.mcbot.path.DigSampler terrain) {
+                // Freeze only the dry work predicate; never publish the live safe/world closures.
+                return terrain instanceof com.neko.mcbot.path.NavigationSnapshot snapshot
+                        ? snapshot.workGoal(target, eyeHeight, reach) : null;
+            }
             @Override public Bounds estimateBounds() {
                 int radius = (int) Math.ceil(reach + .87);
                 double feetY = target.getY() + .5 - eyeHeight;

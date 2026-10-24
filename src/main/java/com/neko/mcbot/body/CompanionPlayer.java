@@ -7,7 +7,6 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
-import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -206,6 +205,15 @@ public final class CompanionPlayer extends ServerPlayer {
         @Override public MovementInput.Frame takeInput() { return movementInput.take(); }
         @Override public float yaw() { return getYRot(); }
         @Override public boolean grounded() { return onGround(); }
+        @Override public boolean maySprint() {
+            return hasEnoughFoodToDoExhaustiveManoeuvres() && !isMobilityRestricted()
+                    && !isUsingItem() && !isCrouching() && !isVisuallyCrawling()
+                    && !isPassenger() && !isFallFlying() && !isInWater() && !isInLava()
+                    && !(horizontalCollision && !minorHorizontalCollision);
+        }
+        @Override public void sprint(boolean enabled) {
+            if (isSprinting() != enabled) setSprinting(enabled);
+        }
         @Override public void jump() { jumpFromGround(); }
         @Override public void updateFluids() {
             // ServerPlayer.tick omits the living base tick. It includes fluids/eyes exactly once,
@@ -374,9 +382,13 @@ public final class CompanionPlayer extends ServerPlayer {
     public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }
 
     public void walkForTick(double x, double z, boolean jump) {
+        moveForTick(x, z, jump, false);
+    }
+
+    public void moveForTick(double x, double z, boolean jump, boolean sprint) {
         if (bodyControl.owner() == BodyControl.Owner.WORK
                 || defenseDriving && bodyControl.owner() == BodyControl.Owner.REFLEX)
-            movementInput.renew(x, z, jump);
+            movementInput.renew(x, z, jump, sprint);
     }
 
     public com.neko.mcbot.server.DefenseDriver defense() { return defense; }
@@ -390,7 +402,13 @@ public final class CompanionPlayer extends ServerPlayer {
         maintenance.tick();
     }
 
-    public void releaseMovement() { movementInput.clear(); }
+    /** Replace this tick's pending frame without toggling a renewed native sprint off and on. */
+    public void clearMovementInput() { movementInput.clear(); }
+
+    public void releaseMovement() {
+        clearMovementInput();
+        if (isSprinting()) setSprinting(false);
+    }
 
     public BodyControl bodyControl() { return bodyControl; }
 
@@ -460,10 +478,7 @@ public final class CompanionPlayer extends ServerPlayer {
     public void newBodyTask() { environment.newTask(); defense.newTask(); maintenance.newTask(); }
 
     public void facePoint(Vec3 point) {
-        if (getEyePosition().distanceToSqr(point) < 1e-10) return;
-        lookAt(EntityAnchorArgument.Anchor.EYES, point);
-        // FakeConnection does not drive the normal living tick that aligns the torso.
-        setYBodyRot(getYRot());
+        BodyLook.face(this, point);
     }
 
     @Override

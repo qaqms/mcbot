@@ -42,6 +42,18 @@ public final class WorkPositions {
         return candidates(target, access, true);
     }
 
+    /** Contact nominations may need terrain edits; only the navigation planner can admit a route. */
+    public static List<BlockPos> pickupApproaches(BlockPos target, Access access) {
+        var points = new ArrayList<BlockPos>();
+        for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) for (int z = -1; z <= 1; z++) {
+            var point = target.offset(x, y, z);
+            if (access.workable(point)) points.add(point);
+        }
+        points.sort(Comparator.comparingDouble(access::distanceSquared)
+                .thenComparingInt(BlockPos::getY).thenComparingInt(BlockPos::getX).thenComparingInt(BlockPos::getZ));
+        return List.copyOf(points.subList(0, Math.min(MAX_POSITIONS, points.size())));
+    }
+
     private static List<BlockPos> candidates(BlockPos target, Access access, boolean contact) {
         List<BlockPos> candidates = new ArrayList<>();
         for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) for (int z = -1; z <= 1; z++) {
@@ -106,6 +118,28 @@ public final class WorkPositions {
             point.addProperty("z", pos.getZ());
             var foot = WorkPositions.foot(player, pos);
             if (foot != null) point.addProperty("feet_y", foot.height());
+            result.add(point);
+        }
+        return result;
+    }
+
+    public static JsonArray describePickupApproaches(CompanionPlayer player, net.minecraft.world.entity.item.ItemEntity item) {
+        var points = pickupApproaches(item.blockPosition(), new Access() {
+            @Override public boolean standable(BlockPos pos) { return false; }
+            @Override public double distanceSquared(BlockPos pos) {
+                return player.distanceToSqr(pos.getX() + .5, pos.getY(), pos.getZ() + .5);
+            }
+            @Override public boolean workable(BlockPos pos) {
+                if (!player.level().isLoaded(pos) || !player.level().getWorldBorder().isWithinBounds(pos)) return false;
+                var bounds = player.getBoundingBox().move(pos.getX() + .5 - player.getX(),
+                        pos.getY() - player.getY(), pos.getZ() + .5 - player.getZ());
+                return GroundItems.touches(bounds, item.getBoundingBox());
+            }
+        });
+        var result = new JsonArray();
+        for (var pos : points) {
+            var point = new JsonObject();
+            point.addProperty("x", pos.getX()); point.addProperty("y", pos.getY()); point.addProperty("z", pos.getZ());
             result.add(point);
         }
         return result;

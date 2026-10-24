@@ -73,7 +73,11 @@ final class BoundedExplore {
                 var points = scan.data().getAsJsonArray("exploration_points");
                 if (points == null) { finish(false, "RESOURCE_BLOCKED:没有服务端探索样本。"); return; }
                 var point = route.choose(points, 0);
-                if (point == null) { finish(false, "NO_PATH:没有范围内尚未检查的已加载落脚样本。"); return; }
+                if (point == null) {
+                    finish(false, "NO_PATH:本次步行采样没有可选的新落脚点；不是探索次数耗尽，也没有证明地下无路。"
+                            + "需要挖放开路时可在原许可/范围内用explore mode=underground指定direction和target_y，或move_to另选工作目标。");
+                    return;
+                }
                 route.attempt(point);
                 point.addProperty("exact", true);
                 point.addProperty("walk_only", true);

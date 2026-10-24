@@ -10,6 +10,15 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void pickupIdentityIsDiscoverableInCompactAndFullMovementHelp() {
+        var move = ToolCatalog.MODEL_SPECS.stream().filter(spec -> spec.name().equals("move_to")).findFirst().orElseThrow();
+        assertTrue(move.description().contains("pickup_target_uuid"));
+        var schema = JsonParser.parseString(move.paramsJsonSchema()).getAsJsonObject();
+        assertTrue(schema.getAsJsonObject("properties").has("pickup_target_uuid"));
+        var help = ToolCatalog.read("{\"names\":[\"move_to\",\"scan_area\"]}");
+        assertTrue(help.ok(), help.feedback());
+        assertTrue(help.feedback().contains("pickup_target_uuid"));
+    }
     @Test void actualWireToolSchemasHaveObjectRootsWithoutTopLevelCombinators() {
         var provider = new OpenAiCompatProvider("offline", "http://127.0.0.1", "synthetic", "fixture");
         var tools = provider.buildBody("system", List.of(), ToolCatalog.MODEL_SPECS).getAsJsonArray("tools");

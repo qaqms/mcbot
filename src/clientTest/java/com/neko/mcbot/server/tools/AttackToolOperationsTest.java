@@ -7,6 +7,7 @@ import com.neko.mcbot.server.EntityAttack;
 import com.neko.mcbot.server.ActionPermissions;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.entity.player.Player;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -88,6 +89,33 @@ class AttackToolOperationsTest {
         assertFalse(AttackTool.supportedWeapon(new ItemStack(Items.WOODEN_SPEAR)));
         assertFalse(AttackTool.supportedWeapon(new ItemStack(Items.DIAMOND_SPEAR)));
         assertFalse(AttackTool.supportedWeapon(new ItemStack(Items.MACE)));
+    }
+
+    @Test void swordSafetyAsksTheNativeSweepPredicateWithChargeBeforeTheStrike() throws Exception {
+        var descriptor = Player.class.getDeclaredMethod("isSweepAttack", boolean.class, boolean.class, boolean.class);
+        assertEquals(boolean.class, descriptor.getReturnType());
+        var flags = new java.util.ArrayList<java.util.List<Boolean>>();
+        com.neko.mcbot.mixin.PlayerAttackAccess nativeAttack = (charged, critical, sprint) -> {
+            flags.add(java.util.List.of(charged, critical, sprint));
+            return charged && !critical && !sprint;
+        };
+        assertFalse(AttackTool.wouldSweep(false, 1, false, nativeAttack));
+        assertTrue(flags.isEmpty(), "ordinary tools do not need the sword-only check");
+        assertTrue(AttackTool.wouldSweep(true, 1, false, nativeAttack));
+        assertFalse(AttackTool.wouldSweep(true, .9f, false, nativeAttack));
+        assertFalse(AttackTool.wouldSweep(true, 1, true, nativeAttack));
+        assertEquals(java.util.List.of(java.util.List.of(true, false, false),
+                java.util.List.of(false, false, false), java.util.List.of(true, false, true)), flags);
+        assertFalse(AttackTool.wouldSweep(true, 1, false, (charged, critical, sprint) -> false),
+                "when native movement/grounding prevents a sweep, a sword is not rejected");
+    }
+
+    @Test void swordBystanderFilterMatchesNativeAllyMarkerAndStrictDistanceExclusions() {
+        assertTrue(AttackTool.sweepCanHit(false, false, 8.999));
+        assertFalse(AttackTool.sweepCanHit(false, false, 9));
+        assertFalse(AttackTool.sweepCanHit(true, false, 1));
+        assertFalse(AttackTool.sweepCanHit(false, true, 1));
+        assertFalse(AttackTool.sweepCanHit(false, false, Double.NaN));
     }
 
     @Test void scanFeedbackAndStructuredTargetCarrySameStableIdentityWithoutNames() {
