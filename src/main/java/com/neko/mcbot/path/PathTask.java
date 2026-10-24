@@ -29,8 +29,8 @@ import java.util.List;
  * 位置**分帧**重搜（R1-S3：旧版单拍同步 while 的单帧冻结点已杀），旧路格 ×0.7 降权
  * 抑抖动，不以累计重规划次数停工。普通只行走候选使用世界快照和后台搜索；
  * 工作到达也先用独占快照后台寻找可工作位置；需要编辑的路线保留主线程分帧回退。
- * 每段搜索最多 4000 节点，无默认累计时间门，
- * 保留可行答案；分段及可返程的部分路线自动接续，共用按路程分配的整趟节点账。
+ * 每批搜索 4000 节点，保留边界续搜，无默认整趟节点/记录/累计时间门。
+ * 保留可行答案；分段及可返程的部分路线自动接续，整趟诊断累计不清零。
  * 普通导航在执行时以世界线程剩余切片预搜后段，实际落地后复核采用。
  *
  * 取消/超时：onAbort 清掉进行中的裂纹动画；future 由调度器统一完成。
@@ -44,7 +44,7 @@ public final class PathTask extends TickTask {
     private static final int RECHECK_AHEAD = 5;
     /** 单帧搜索时间切片（R1-S3 双帽之一）：节点帽 300 防无界，时间帽 6ms 防重节点撑爆单帧。 */
     private static final long SEARCH_SLICE_NS = 6_000_000L;
-    /** Node and storage bounds terminate searches; slices keep the world thread responsive. */
+    /** Explicit callers can bound resources; ordinary navigation yields through world-thread slices. */
     private static final long SEARCH_TOTAL_NS = NavigationBudget.NANOS;
     /**
      * NEED_CONFIRM 清单内联进回执文本的字节预算（效率评估 §5.4）。
@@ -98,7 +98,7 @@ public final class PathTask extends TickTask {
     private int planPlaces;
     /** 本轮搜索是重规划（失败文案加"路被改变后"前缀；旧路降权集只在重搜时装）。 */
     private boolean wasReplan;
-    /** Resource-limited, reversible prefix; continue from its actual landing. */
+    /** Reversible prefix from a search batch; continue from its actual landing. */
     private boolean partialTail;
     private boolean segmentTail;
     private int segments;
@@ -949,7 +949,7 @@ public final class PathTask extends TickTask {
             var frozenGoal = goal.snapshot(snapshot);
             if (frozenGoal != null) {
                 var dry = new DigAStar(snapshot, from.getX(), from.getY(), from.getZ(),
-                        target.getX(), target.getY(), target.getZ(), nodes, 0, frozenGoal).segments();
+                        target.getX(), target.getY(), target.getZ(), nodes, 0, frozenGoal).segments().continuousStorage();
                 dry.totalBudget(SEARCH_TOTAL_NS);
                 if (reusePending != null) dry.reuseBias(reusePending);
                 try {
@@ -971,11 +971,12 @@ public final class PathTask extends TickTask {
             if (sharedBudget.exhausted()) return null;
         }
         DigAStar d = sharedBudget != null ? sharedBudget.search(memo != null ? memo : sampler,
-                from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(), goal, nodes)
+                from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(), goal, nodes,
+                walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs))
                 : new DigAStar(memo != null ? memo : sampler,
                 from.getX(), from.getY(), from.getZ(), target.getX(), target.getY(), target.getZ(),
                 nodes, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs), goal);
-        if (d != null && (sharedBudget == null || sharedBudget.perSearch())) d.segments();
+        if (d != null && (sharedBudget == null || sharedBudget.perSearch())) d.segments().continuousStorage();
         if (d == null) return null;
         if (sharedBudget == null) d.totalBudget(SEARCH_TOTAL_NS);
         if (reusePending != null) {
@@ -996,7 +997,6 @@ public final class PathTask extends TickTask {
 
     private void advanceContinuation(CompanionPlayer c, long slice) {
         if ((!partialTail && !segmentTail) || allowance == null || path == null || path.size() < 2
-                || c.buildSite().active()
                 || sharedBudget != null && !sharedBudget.perSearch()) return;
         var previousPhase = timing.phase();
         timing.phase(PathTiming.Phase.PLAN_AHEAD);
@@ -1019,7 +1019,7 @@ public final class PathTask extends TickTask {
                 var next = new DigAStar(new MemoDigSampler(terrain),
                         end.x(), end.y(), end.z(), target.getX(), target.getY(), target.getZ(),
                         nodes, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs - reservedDigs),
-                        goalFor(from, terrain)).segments().after(edits);
+                        goalFor(from, terrain)).segments().continuousStorage().after(edits);
                 next.totalBudget(SEARCH_TOTAL_NS);
                 McbotMod.LOG.info("[path] 执行中预搜 from={} reserved_digs={} reserved_places={} route={}",
                         from.toShortString(), reservedDigs, reservedPlaces, timing.id());
@@ -1692,7 +1692,8 @@ public final class PathTask extends TickTask {
         if (digPos == null || !digPos.equals(pos)) {
             clearCrack();
             digPos = pos;
-            mining = BlockMining.forPlayer(c, pos, null, "path_clear", null, false, spec.reserveDurability());
+            String revision = c.buildSite().navigationRevision(pos, new com.neko.mcbot.server.BuildSiteAccess(c));
+            mining = BlockMining.forPlayer(c, pos, null, "path_clear", revision, false, spec.reserveDurability());
         }
         double seconds = sampler.digSeconds(x, y, z);
         if (!DigSampler.feasibleDig(seconds)) {

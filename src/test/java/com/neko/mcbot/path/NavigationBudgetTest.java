@@ -5,6 +5,62 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationBudgetTest {
+    @Test void sharedConstructionAccountPreservesEditableRoutesAndAnExplicitZeroStillForbidsDigging() {
+        DigSampler tunnel = new DigSampler() {
+            @Override public boolean passable(int x, int y, int z) { return y >= 0 && (x != 1 || y > 1); }
+            @Override public boolean support(int x, int y, int z) { return y == -1; }
+            @Override public double digSeconds(int x, int y, int z) { return 0.1; }
+            @Override public boolean placeable(int x, int y, int z) { return false; }
+            @Override public double placeCost(int x, int y, int z) { return INFEASIBLE; }
+            @Override public int maxPlaces() { return 0; }
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x >= 0 && x <= 3 && y >= -1 && y <= 2 && z == 0;
+            }
+        };
+        for (int digs : new int[]{0, 2, Integer.MAX_VALUE}) {
+            var budget = new NavigationBudget();
+            var route = budget.search(tunnel, 0, 0, 0, 3, 0, 0,
+                    NavigationGoal.position(3, 0, 0, 0), 4000, digs).segments();
+            while (!route.advance(100)) { }
+            if (digs == 0) assertNotNull(route.failure());
+            else {
+                assertNull(route.failure(), route.failure());
+                assertEquals(2, route.dugCount());
+            }
+            budget.observe(route);
+            assertTrue(budget.nodes() > 0);
+        }
+    }
+
+    @Test void defaultStorageMaintenanceDoesNotEndAnOtherwiseFiniteSearchAt32768Records() {
+        DigSampler hall = new DigSampler() {
+            @Override public boolean passable(int x, int y, int z) { return y >= 0; }
+            @Override public boolean support(int x, int y, int z) { return y == -1; }
+            @Override public double digSeconds(int x, int y, int z) { return INFEASIBLE; }
+            @Override public boolean placeable(int x, int y, int z) { return false; }
+            @Override public double placeCost(int x, int y, int z) { return INFEASIBLE; }
+            @Override public int maxPlaces() { return 0; }
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x >= 0 && x <= 34000 && y >= -1 && y <= 2 && z == 0;
+            }
+        };
+        var nowhere = new NavigationGoal() {
+            @Override public boolean reached(int x, int y, int z) { return false; }
+            @Override public double remaining(int x, int y, int z) { return 1; }
+        };
+        var budget = new NavigationBudget();
+        var route = budget.search(hall, 0, 0, 0, 0, 0, 0, nowhere).segments();
+        while (true) {
+            while (!route.advance(300)) { }
+            budget.observe(route);
+            if (!route.continueSearch(4000)) break;
+        }
+        assertTrue(route.failure().startsWith("NO_PATH:"), route.failure());
+        assertEquals(35001, route.expanded(), "the corridor plus the first 1000 greedy expansions were charged");
+        assertTrue(route.storedNodes() > 32768);
+        assertTrue(route.storageCollections() > 0);
+        assertFalse(route.budgetReached());
+    }
     @Test void aCompletedWorkerSearchCanContinueOnTheWorldThreadWithoutDoubleCharging() {
         var budget = new NavigationBudget();
         var route = new DigAStar(FLOOR, 0, 0, 0, 30, 0, 0, 2, 0,

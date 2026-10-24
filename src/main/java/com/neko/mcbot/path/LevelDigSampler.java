@@ -281,9 +281,11 @@ public final class LevelDigSampler implements DigSampler {
 
     private boolean protectedWork(BlockPos cell) {
         return preserved(workTarget, cell) || companion instanceof com.neko.mcbot.body.CompanionPlayer body
-                && (body.workTargets().protects(cell) || body.buildSite().protects(cell)
+                && (body.workTargets().protects(cell) || body.buildSite().protectsNavigation(cell,
+                        new com.neko.mcbot.server.BuildSiteAccess(body))
                 || com.neko.mcbot.server.BuildRecordAccess.protects(body,cell)
-                || body.buildSite().active() && body.navigationTrail().protectsPassage(cell));
+                || body.buildSite().active() && body.navigationTrail().protectsPassage(cell)
+                && body.buildSite().navigationRevision(cell, new com.neko.mcbot.server.BuildSiteAccess(body)) == null);
     }
 
     static boolean isSacred(BlockState st) {

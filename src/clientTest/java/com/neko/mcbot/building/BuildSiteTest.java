@@ -185,6 +185,9 @@ class BuildSiteTest {
         w.material=true; w.states.put(TARGET,Blocks.STONE.defaultBlockState());
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
         w.states.put(TARGET,Blocks.DIRT.defaultBlockState()); w.states.put(TARGET.above(),Blocks.STONE.defaultBlockState());
+        assertNull(site.miningGuard(TARGET,target().revision(),false,w),
+                "a static full cube above is not a falling or attached dependency");
+        w.states.put(TARGET.above(),Blocks.SAND.defaultBlockState());
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
         w.states.remove(TARGET.above()); w.states.put(TARGET.east(),Blocks.TORCH.defaultBlockState());
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
@@ -340,7 +343,8 @@ class BuildSiteTest {
         assertNotNull(site.miningGuard(TARGET,design.revision(),false,w));
         w.occupied.clear();
         w.states.put(TARGET.above(),Blocks.STONE.defaultBlockState());
-        assertNotNull(site.miningGuard(TARGET,design.revision(),false,w),"finished wall support remains protected");
+        assertNull(site.miningGuard(TARGET,design.revision(),false,w),
+                "native static walls do not prevent replacing the authored floor from an unoccupied stance");
         w.states.remove(TARGET.above()); w.states.put(TARGET,Blocks.AIR.defaultBlockState());
         assertNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
     }
@@ -377,9 +381,28 @@ class BuildSiteTest {
         assertNull(site.checkpoint(target().revision(),FEET,w));
         assertFalse(site.report(w).get("passage_observation_complete").getAsBoolean());
         assertNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
-        assertFalse(site.allowsStanding(TARGET));
-        assertFalse(site.allowsStanding(TARGET.below()));
+        assertTrue(site.allowsStanding(TARGET), "future design cells are not current collision");
+        assertTrue(site.allowsStanding(TARGET.below()));
         assertTrue(site.allowsStanding(TARGET.east()));
+    }
+
+    @Test void leafyObstaclesCanBeClearedWithoutTreatingTheCanopyAsAnAttachmentOrChangingFinishedWork() {
+        var w=new World(); var site=site(w);
+        w.states.put(TARGET,Blocks.SPRUCE_LEAVES.defaultBlockState());
+        w.states.put(TARGET.above(),Blocks.SPRUCE_LEAVES.defaultBlockState());
+        w.states.put(TARGET.east(),Blocks.SPRUCE_LEAVES.defaultBlockState());
+        assertNull(site.miningGuard(TARGET,target().revision(),false,w));
+        assertEquals(target().revision(),site.navigationRevision(TARGET,w));
+        assertFalse(site.protectsNavigation(TARGET,w));
+        assertTrue(site.protects(TARGET),"the complete design stays protected for unrelated actions");
+        assertNotNull(site.miningGuard(TARGET,null,false,w));
+        w.states.put(TARGET,Blocks.STONE.defaultBlockState());
+        assertNull(site.navigationRevision(TARGET,w));
+        assertTrue(site.protectsNavigation(TARGET,w));
+        w.states.put(TARGET,Blocks.SPRUCE_LEAVES.defaultBlockState());
+        w.states.put(TARGET.above(),Blocks.TORCH.defaultBlockState());
+        assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
+        assertNull(site.navigationRevision(TARGET,w));
     }
     @Test void missingHistoricalPassagesKeepTemporaryCleanupConservativeWithoutStoppingNormalEdits() {
         var w=new World(); var site=site(w); temporary(site,w);

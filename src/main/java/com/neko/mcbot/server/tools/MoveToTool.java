@@ -210,7 +210,8 @@ public final class MoveToTool implements ServerTool {
         if (args.has("temporary_purpose")) input.add("temporary_purpose", args.get("temporary_purpose"));
         var parsed = PlaceBlockTool.arguments(input);
         if (parsed == null || !BlockPlacement.supported(parsed.item())) throw new IllegalArgumentException();
-        return new com.neko.mcbot.server.PlacementWork(parsed.item(), parsed.face(), PlaceBlockTool.temporaryPurpose(input));
+        return new com.neko.mcbot.server.PlacementWork(parsed.item(), args.has("face") ? parsed.face() : null,
+                PlaceBlockTool.temporaryPurpose(input));
     }
 
     static boolean walkOnly(JsonObject args) {

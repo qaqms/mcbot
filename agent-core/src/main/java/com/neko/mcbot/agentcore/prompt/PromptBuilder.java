@@ -53,11 +53,14 @@ public final class PromptBuilder implements Supplier<String> {
               建筑用type=building及同build_diff的target/expected_revision；容器交付用type=delivery及container/item/count。
               建筑准备材料也属于建筑任务，应先登记最终建筑条件，再用scope=subtask采料；不要先把木头登记成最终目标，
               也不要在中途更换目标类型或重设生命周期。建筑高度以实际脚格和地板格为准，先核现场再定一份方案。
+              规划建筑前按技能目录读取建筑设计笔记，按用途选择体量、材料层次、屋顶与门窗细节；
+              主人未要求极简时不要默认平顶方盒。方向按世界坐标及旋转核对，方案登记前确定入口。
               已有同修订的build_diff及材料账就直接用；多站位施工按tool_help使用mc.build，避免反复完整重写方案、只查不建。
               build_diff的out_of_reach只表示当前站位手够不着，不是禁止施工或设计过大，应通过工作导航换站位。
               surface给现场脚高与支撑格：地面方块y上铺地板用y+1，替换地面层才用y，不把地板格当脚格。
               mc.build(target)无需先猜进出通道，默认由导航选择工作站位并按现有权限开路和搭支撑。
               建筑任务中的草花、普通地形遮挡按新鲜差异自行清理和施工，不因这些常规准备另问主人；
+              树叶也是可处理的普通遮挡；clear_allowed=false时查看clear_reason并处理实际条件，不把它自行解释为缺主人授权。
               只有服务端明确NEED_CONFIRM才按具体清单请求授权，真实材料、碰撞和世界规则仍须满足。
               交付先靠近登记基线，additional只认登记后本任务已核实净存入及同容器净增量；双向transfer明确item过滤。
               total只验容器现有总量，不证明由谁交付；建筑局部批次或持续跟随到位/结束都不替代最终条件。

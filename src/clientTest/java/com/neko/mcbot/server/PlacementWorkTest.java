@@ -20,6 +20,40 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlacementWorkTest {
+    @Test void automaticPlacementFacesCanUseAnExposedSideWhileAnExplicitFaceStaysExact() {
+        var tried = new java.util.ArrayList<Direction>();
+        java.util.function.Function<Direction, ServerTool.Result> assess = face -> {
+            tried.add(face);
+            return face == Direction.EAST ? null : new ServerTool.Result(false,
+                    "TARGET_BLOCKED:no clickable face", null);
+        };
+        assertNull(PlacementWork.assessFaces(null, assess));
+        assertTrue(tried.contains(Direction.EAST));
+        tried.clear();
+        assertNotNull(PlacementWork.assessFaces(Direction.UP, assess));
+        assertEquals(List.of(Direction.UP), tried);
+    }
+
+    @Test void aRoofExtensionWithOnlyASideAnchorUsesRealShapeRaysWithoutDemandingABlockUnderIt() {
+        var grid=new StandingGeometryTest.Grid();
+        var sight=new BlockAimTest.Grid();
+        sight.blocks.clear();
+        var target=new BlockPos(2,2,0);
+        sight.blocks.put(target.west(),Blocks.STONE.defaultBlockState());
+        PlacementWork.Assessor automatic=(eye,bounds,edits)->PlacementWork.assessFaces(null,face->{
+            var hit=BlockAim.placementContact(BlockAim.fromEye(sight,eye),
+                    target.relative(face.getOpposite()),face,4.5);
+            return hit.ok()?null:new ServerTool.Result(false,hit.failure(),null);
+        });
+        var goal=PlacementWork.goal(target,grid.geometry(),1.62,.6,1.8,4.5,automatic);
+        assertTrue(goal.reached(3,0,0));
+        var up=BlockAim.placementContact(BlockAim.fromEye(sight,new Vec3(3.5,1.62,.5)),
+                target.below(),Direction.UP,4.5);
+        assertFalse(up.ok());
+        assertEquals(1,sight.blocks.size(),"read-only standing assessment never invents an anchor");
+        sight.blocks.clear();
+        assertFalse(goal.reached(3,0,0),"a real lost anchor invalidates the stance");
+    }
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
 
     @Test void searchLeavesTheRequestedCellWithoutChangingTheTargetOrConsumingMaterial() {

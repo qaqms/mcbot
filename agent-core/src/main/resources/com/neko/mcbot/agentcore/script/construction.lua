@@ -8,19 +8,19 @@ local function move(cell, item, bounds)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
         arrival="work",bounds=bounds}
-    if item then args.place_item=item; args.face=cell.face or "up"; args.temporary_purpose=cell.purpose end
+    if item then args.place_item=item; args.face=cell.face; args.temporary_purpose=cell.purpose end
     local result = attempt("move_to", args)
     -- Only the bridge's existing local-failure policy can return an unsuccessful result.
     if not result.ok then
         if result.failure_kind=="TARGET_LOST" then error("unknown work facts") end
         call("status",{details=true})
     end
-    return result.ok
+    return result.ok, result
 end
 
 local function checked(target, revision)
     local pages, offset, stamp = {}, 0, nil
-    for page=1,8 do
+    while true do
         local d=call("build_diff",{target=target,expected_revision=revision,offset=offset}).data
         if d.target_revision~=revision or not d.observation_complete or not d.spatial_stable
             or d.budget_exhausted or not d.material_bill_complete then
@@ -33,7 +33,14 @@ local function checked(target, revision)
         if d.next_offset==-1 then return pages end
         offset=d.next_offset
     end
-    return nil,"page_limit"
+end
+
+local function workkey(cell, kind, stamp)
+    return kind..":"..cell.x..":"..cell.y..":"..cell.z..":"..stamp
+end
+
+local function lower(candidate, current)
+    return not current or candidate.cell.y<current.cell.y
 end
 
 function mc.build(target, options)
@@ -74,7 +81,7 @@ function mc.build(target, options)
             site=call("build_site",{operation="query"}).data
         end
     end
-    local round=0
+    local round, failed, last_reason, last_failure=0,{},nil,nil
     while rounds==0 or round<rounds do
         round=round+1
         call("status",{details=true})
@@ -84,24 +91,33 @@ function mc.build(target, options)
             return {goal_satisfied=true,target_revision=revision,rounds=round-1,
                 evidence="fresh_whole_target_diff",outer_goal_verified=false}
         end
-        call("build_site",{operation="checkpoint",expected_revision=revision})
         local ready,clear,far=nil,nil,nil
         for _,page in ipairs(pages) do
             for _,cell in ipairs(page.cells) do
-                if cell.state=="ready" and not ready then ready=page.offset end
-                if cell.state=="needs_clear" and cell.clear_allowed and not clear then
-                    clear={cell=cell,offset=page.offset}
+                local kind=nil
+                if cell.state=="ready" then kind="ready"
+                elseif cell.state=="needs_clear" and cell.clear_allowed then kind="clear"
+                elseif (cell.state=="out_of_reach" or cell.state=="blocked") and cell.item
+                    and cell.material_available then kind="place" end
+                if kind then
+                    local key=workkey(cell,kind,page.observation_key)
+                    local candidate={cell=cell,offset=page.offset,key=key}
+                    if not failed[key] then
+                        if kind=="ready" and lower(candidate,ready) then ready=candidate end
+                        if kind=="clear" and lower(candidate,clear) then clear=candidate end
+                        if kind=="place" and lower(candidate,far) then far=candidate end
+                    end
                 end
-                if (cell.state=="out_of_reach" or cell.state=="blocked") and cell.item and cell.material_available
-                    and not far then far=cell end
             end
         end
-        if ready then
-            call("build_nearby",{target=target,expected_revision=revision,offset=ready,max_actions=actions})
-        elseif clear then
+        if ready or clear or far then call("build_site",{operation="checkpoint",expected_revision=revision}) end
+        -- Prepare the floor before walls can hide it, and try other cells after a local route failure.
+        if clear and (not ready or clear.cell.y<=ready.cell.y) then
             local cell=clear.cell
-            if not move(cell,nil,site.bounds) then
-                return blocked("clearing_stance_unavailable",revision)
+            local ok,result=move(cell,nil,site.bounds)
+            if not ok then
+                failed[clear.key]=true
+                last_reason,last_failure="clearing_stance_unavailable",result.feedback
             else
                 -- Arrival does not authorize clearing a replacement or a newly completed cell.
                 local fresh=call("build_diff",{target=target,expected_revision=revision,offset=clear.offset}).data
@@ -115,12 +131,24 @@ function mc.build(target, options)
                     end
                 end
             end
+        elseif ready then
+            local result=attempt("build_nearby",{target=target,expected_revision=revision,
+                offset=ready.offset,max_actions=actions})
+            if not result.ok then
+                call("status",{details=true})
+                failed[ready.key]=true
+                last_reason,last_failure="nearby_work_unavailable",result.feedback
+            end
         elseif far then
-            if not move(far,far.item,site.bounds) then
-                return blocked("placement_stance_unavailable",revision)
+            local ok,result=move(far.cell,far.cell.item,site.bounds)
+            if not ok then
+                failed[far.key]=true
+                last_reason,last_failure="placement_stance_unavailable",result.feedback
             end
         else
-            return blocked("no_feasible_work_material_support_state_or_protection",revision)
+            local result=blocked(last_reason or "no_feasible_work_material_support_state_or_protection",revision)
+            result.last_failure=last_failure
+            return result
         end
     end
     local pages,reason=checked(target,revision)

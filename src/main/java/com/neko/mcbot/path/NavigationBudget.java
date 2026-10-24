@@ -1,6 +1,6 @@
 package com.neko.mcbot.path;
 
-/** Per-search resource bounds with cumulative diagnostics; explicit accounts can still impose a total. */
+/** Search batches with cumulative diagnostics; only explicit accounts impose completion quotas. */
 public final class NavigationBudget {
     public static final int NODES = 4000, RECORDS = 32768, REPLANS = Integer.MAX_VALUE;
     public static final long NANOS = Long.MAX_VALUE;
@@ -51,12 +51,18 @@ public final class NavigationBudget {
 
     DigAStar search(DigSampler sampler, int x, int y, int z, int tx, int ty, int tz,
                     NavigationGoal goal, int available) {
+        return search(sampler, x, y, z, tx, ty, tz, goal, available, 0);
+    }
+
+    DigAStar search(DigSampler sampler, int x, int y, int z, int tx, int ty, int tz,
+                    NavigationGoal goal, int available, int digs) {
         observe(current);
         if (available <= 0 || exhausted()) return null;
         var search = new DigAStar(sampler, x, y, z, tx, ty, tz,
-                Math.min(available, perSearch ? nodeCap : nodeCap - nodes), 0, goal);
+                Math.min(available, perSearch ? nodeCap : nodeCap - nodes), digs, goal);
         search.totalBudget(perSearch ? timeCap : timeCap - nanos);
-        search.storageBudget(perSearch ? recordCap : recordCap - records);
+        if (perSearch) search.continuousStorage();
+        else search.storageBudget(recordCap - records);
         if (perSearch) observations.remove(current);
         current = search;
         lastNodes = lastRecords = 0;
@@ -105,6 +111,7 @@ public final class NavigationBudget {
         observe(current);
         var data = new com.google.gson.JsonObject();
         data.addProperty("per_search", perSearch);
+        data.addProperty("records_limited", !perSearch);
         data.addProperty("nodes", nodes); data.addProperty("node_cap", nodeCap);
         data.addProperty("records", records); data.addProperty("record_cap", recordCap);
         data.addProperty("nanos", nanos); data.addProperty("time_cap", timeCap);

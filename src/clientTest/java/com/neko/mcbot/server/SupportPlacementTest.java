@@ -16,6 +16,37 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SupportPlacementTest {
+    @Test void aPlankWorkStanceCanUseActualRouteClearingAndSupportsWithoutWritingTheWorld() {
+        var world=new BlockAimTest.Grid();
+        world.blocks.clear();
+        var target=new BlockPos(2,1,0);
+        var obstruction=new BlockPos(0,1,0);
+        var anchor=target.below();
+        world.blocks.put(obstruction,Blocks.SPRUCE_LEAVES.defaultBlockState());
+        var edits=TerrainEdits.EMPTY.after(List.of(DigAStar.pack(0,1,0)),
+                List.of(DigAStar.pack(2,0,0)));
+        var material=new ItemStack(Items.SPRUCE_PLANKS,4);
+        var eye=new Vec3(.5,1.62,.5);
+        var body=new AABB(.2,0,.2,.8,1.8,.8);
+        assertFalse(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                TerrainEdits.EMPTY,p->true,face->true,box->true));
+        assertTrue(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                edits,p->true,face->true,box->true));
+        assertFalse(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                edits,p->false,face->true,box->true));
+        assertFalse(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                edits,p->true,face->false,box->true));
+        assertFalse(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                edits,p->true,face->true,box->false));
+        assertEquals(4,material.getCount());
+        assertTrue(world.getBlockState(obstruction).is(Blocks.SPRUCE_LEAVES));
+        assertTrue(world.getBlockState(anchor).isAir());
+        world.blocks.remove(obstruction);
+        world.blocks.put(anchor,Blocks.COBBLESTONE.defaultBlockState());
+        assertTrue(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                TerrainEdits.EMPTY,p->true,face->true,box->true),
+                "the same stance is valid after the route edits actually happen");
+    }
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
 
     private static final class Terrain implements DigSampler {

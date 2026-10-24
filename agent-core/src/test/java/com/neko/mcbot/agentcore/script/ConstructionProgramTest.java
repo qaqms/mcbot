@@ -144,6 +144,44 @@ class ConstructionProgramTest {
         assertTrue(run(w,CODE,128).data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean(),
                 "a local failure is not a persistent ban on the owner's task or later dispatch");
     }
+    @Test void aFailedCellDoesNotPreventReachingAnotherCellInTheSameUnchangedDesign() throws Exception {
+        var w=new World(); w.moveFailure="NO_PATH:sealed first cell";
+        w.override=(name,args)-> {
+            if(name.equals("build_diff") && w.remaining>0) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                    "observation_complete":true,"spatial_stable":true,"material_bill_complete":true,
+                    "budget_exhausted":false,"observation_key":"unchanged","offset":0,"next_offset":-1,
+                    "cells":[{"x":4,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true},
+                    {"x":5,"y":90,"z":0,"state":"%s","item":"stone","material_available":true}]}
+                    """.formatted(REV,w.moved>0?"ready":"out_of_reach"));
+            if(name.equals("move_to") && args.get("x").getAsInt()==5) {
+                w.moved++; return actual("{\"can_work_here\":true}");
+            }
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(2,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        assertTrue(w.calls.stream().filter(c->c.name().equals("move_to")).noneMatch(c->c.args().has("face")),
+                "work navigation chooses a real clickable face rather than forcing UP");
+    }
+
+    @Test void lowerFoundationClearingPrecedesAReadyWallFromAnotherPage() throws Exception {
+        var w=new World(); w.clearing=true;
+        w.override=(name,args)-> name.equals("build_diff") && w.clearing ? actual("""
+                {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                "observation_complete":true,"spatial_stable":true,"material_bill_complete":true,
+                "budget_exhausted":false,"observation_key":"before","offset":0,"next_offset":-1,
+                "cells":[{"x":4,"y":91,"z":0,"state":"ready","item":"stone","material_available":true},
+                {"x":4,"y":90,"z":0,"state":"needs_clear","actual_block":"minecraft:dirt",
+                "item":"stone","material_available":true,"clear_allowed":true}]}
+                """.formatted(REV)) : null;
+        assertTrue(run(w,CODE,128).ok());
+        var actions=w.calls.stream().map(Sent::name)
+                .filter(n->n.equals("break_block")||n.equals("build_nearby")).toList();
+        assertEquals(List.of("break_block","build_nearby"),actions);
+    }
     @Test void explicitRoundLimitStillBoundsProductiveWorkWithoutChangingTheOuterTask() throws Exception {
         var w=new World(); w.moved=1; w.repeat=true;
         var result=run(w,CODE,128);

@@ -24,7 +24,8 @@ class MoveToWorkTest {
         assertEquals(net.minecraft.world.item.Items.COBBLESTONE, placement.item());
         assertEquals(net.minecraft.core.Direction.EAST, placement.face());
         args.remove("face");
-        assertEquals(net.minecraft.core.Direction.UP, MoveToTool.placement(args, MoveToTool.workTarget(args)).face());
+        assertNull(MoveToTool.placement(args, MoveToTool.workTarget(args)).face(),
+                "omitting face permits all native clickable faces");
         assertNull(MoveToTool.placement(new JsonObject(), null));
     }
 

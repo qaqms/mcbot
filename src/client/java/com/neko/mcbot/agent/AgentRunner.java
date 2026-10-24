@@ -191,7 +191,7 @@ public final class AgentRunner implements ToolExecutor {
         }
 
         @Override public SkillCatalog skills() {
-            return SkillCatalog.load(FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"));
+            return SkillCatalog.loadBundled(FabricLoader.getInstance().getGameDir().resolve("mcbot").resolve("skills"));
         }
         @Override
         public void showChat(String text) {

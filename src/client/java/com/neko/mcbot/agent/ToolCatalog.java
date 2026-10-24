@@ -67,12 +67,13 @@ public final class ToolCatalog {
                     + "ACCEPTED等终态，局部批次不代表全目标满足；Lua按max_actions预扣原子预算，详情tool_help。";
             case "build_site" -> "任务内登记完整目标，进出通道和范围可选，共用施工保护及累计账。"
                     + "多站位用run_program的mc.build(target)，无需手写通道；超出当前手距就换站位，草花和目标清障按原权限自动处理。"
-                    + "query只读；登记不授予许可，不自动找料，不保证全局返程，取消不自动恢复。";
+                    + "先清低层障碍，局部站位失败可尝试其他工作格；query只读，登记不授予许可，不自动找料，不保证全局返程。";
             case "build_diff" -> "只读建筑格集或fill线/面/体差异与材料；最多128格，锚点/旋转/作者属性固定，未指定格不动。"
                     + "明细及料单独立分页；双格门保留两半验收，仅下半动作/一件料。"
                     + "未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
-            case "move_to" -> "规划有界行走/挖穿/搭路；walk_only=true不挖放，exact=true指定脚格，"
+            case "move_to" -> "规划行走/挖穿/搭路；默认搜索按切片续推，无整趟节点/记录停止额度；walk_only=true不挖放，exact=true指定脚格，"
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
+                    + "place_item工作导航省略face时自动检查可点击面，显式face保持原要求。"
                     + "拾取用新鲜掉落UUID填pickup_target_uuid及物品取整坐标，统一搜索实际触碰落点；到达后核背包。"
                     + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";
             case "follow" -> "持续只行走跟随主人或扫描所得target_uuid；distance默认3、seconds默认30最多60。"

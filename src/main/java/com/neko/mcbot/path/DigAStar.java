@@ -57,7 +57,7 @@ public final class DigAStar {
      * 同地形重搜必原路复现；不复用 open/best（旧 g/f 建在旧地形上，复用会带进失效代价）。 */
     public static final double BIAS_REUSE = 0.7;
 
-    /** Search memory is bounded independently of the number of settled nodes. */
+    /** Bounded algorithm callers use this cap; continuous navigation uses it as a collection watermark. */
     public static final int MAX_STORED_NODES = 32_768;
     public static final int SEGMENT_DISTANCE = 32;
     private static final int GREEDY_NODES = 1000;
@@ -96,6 +96,7 @@ public final class DigAStar {
     private final Map<State, Node> best = new HashMap<>();
     private int storedNodes = 1;
     private int maxStoredNodes = MAX_STORED_NODES;
+    private int collectionAt = MAX_STORED_NODES;
     private int createdNodes = 1, storageCollections;
     private java.util.ArrayDeque<Node> retaining;
     private java.util.Set<Node> retained;
@@ -308,7 +309,7 @@ public final class DigAStar {
             }
             expanded++;
             expand(cur);
-            if (storedNodes() >= maxStoredNodes) {
+            if (storedNodes() >= Math.min(collectionAt, maxStoredNodes)) {
                 beginStorageCollection();
                 return false;
             }
@@ -375,6 +376,7 @@ public final class DigAStar {
         storedNodes = retained.size();
         retaining = null;
         retained = null;
+        collectionAt = (int) Math.min(Integer.MAX_VALUE, (long) storedNodes() + MAX_STORED_NODES);
         return true;
     }
 
@@ -474,9 +476,15 @@ public final class DigAStar {
 
     public void storageBudget(int records) {
         if (records < 1 || records > MAX_STORED_NODES) throw new IllegalArgumentException("records");
-        // A reduced account is currently used only by walk-only dynamic routes.
-        if (maxDigs > 0 || prepared || estimate != null) throw new IllegalStateException("search already prepared or editable");
+        if (prepared || estimate != null) throw new IllegalStateException("search already prepared");
         maxStoredNodes = records;
+    }
+
+    /** Ordinary navigation collects stale records incrementally instead of failing at a fixed record count. */
+    public DigAStar continuousStorage() {
+        if (prepared || estimate != null) throw new IllegalStateException("search already prepared");
+        maxStoredNodes = Integer.MAX_VALUE;
+        return this;
     }
 
     public long elapsedNanos() { return usedNanos; }

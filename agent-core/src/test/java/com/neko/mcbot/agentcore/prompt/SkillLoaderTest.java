@@ -167,4 +167,37 @@ class SkillLoaderTest {
         assertFalse(Files.exists(missing));
         assertEquals("", SkillCatalog.empty().promptIndex());
     }
+
+    @Test void packagedDesignKnowledgeIsDiscoverableWithoutCreatingUserFiles() throws Exception {
+        var missing=directory.resolve("not-created");
+        var bundled=SkillCatalog.loadBundled(missing);
+        var entry=bundled.index().getAsJsonArray("skills").get(0).getAsJsonObject();
+        assertEquals("bundled",entry.get("source").getAsString());
+        assertEquals("construction-design.md",entry.get("label").getAsString());
+        assertFalse(bundled.promptIndex().contains("先选屋脊方向"),"body is read on demand");
+        String selector=entry.get("name").getAsString();
+        var body=new StringBuilder();
+        do {
+            var result=bundled.read(selector);
+            assertTrue(result.ok());
+            body.append(result.data().get("body").getAsString());
+            selector=result.data().has("next_name")?result.data().get("next_name").getAsString():null;
+        } while(selector!=null);
+        assertTrue(body.toString().contains("屋顶"));
+        assertTrue(body.toString().contains("mc.build"));
+        assertFalse(Files.exists(missing));
+    }
+
+    @Test void bundledDesignStillHonorsOwnerDisableLocalOverrideAndMalformedSettings() throws Exception {
+        Files.writeString(directory.resolve("construction-design.md"),"OWNER_DESIGN_KNOWLEDGE");
+        var overridden=SkillCatalog.loadBundled(directory);
+        assertEquals("OWNER_DESIGN_KNOWLEDGE",overridden.read(name(overridden)).data().get("body").getAsString());
+        Files.writeString(directory.resolve("index.json"),
+                "{\"version\":1,\"skills\":{\"construction-design.md\":{\"enabled\":false}}}");
+        assertTrue(SkillCatalog.loadBundled(directory).index().getAsJsonArray("skills").isEmpty());
+        Files.writeString(directory.resolve("index.json"),"{broken");
+        var invalid=SkillCatalog.loadBundled(directory);
+        assertTrue(invalid.index().getAsJsonArray("skills").isEmpty());
+        assertFalse(invalid.index().getAsJsonArray("skill_diagnostics").isEmpty());
+    }
 }

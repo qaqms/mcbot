@@ -151,23 +151,23 @@ class SegmentNavigationTest {
         }
     }
 
-    @Test void tripAllowanceChargesReplacementsAndGrowsWithDistanceWithoutRefillingOnSegments() {
+    @Test void tripDiagnosticsChargeReplacementsWithoutAnImplicitDistanceQuota() {
         var near = new NavigationAllowance(4);
-        assertEquals(40000, near.limit());
+        assertEquals(Long.MAX_VALUE, near.limit());
         var far = new NavigationAllowance(320);
-        assertEquals(120000, far.limit());
+        assertEquals(Long.MAX_VALUE, far.limit());
         var route = run(new Rock(), 4, 36, 4000, true);
         near.observe(route);
         long spent = near.used();
         near.observe(route);
         assertEquals(spent, near.used());
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 22; i++) {
             var failed = run(new Rock(), 4, 36, 4000, false);
             near.observe(failed);
         }
         assertTrue(near.used() > spent);
-        assertTrue(near.used() >= near.limit());
-        assertEquals(0, near.next());
+        assertTrue(near.used() > 40000);
+        assertEquals(4000, near.next());
     }
 
     private static class Corridors implements DigSampler {

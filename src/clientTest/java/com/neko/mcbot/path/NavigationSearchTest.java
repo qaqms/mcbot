@@ -157,7 +157,7 @@ class NavigationSearchTest {
         assertNull(PathTask.planFailure(completed.path(), snapshot, 0));
     }
 
-    @Test void exhaustedTripCannotResumeAFinishedSearch() throws Exception {
+    @Test void accumulatedTripDiagnosticsDoNotPreventContinuingTheNextBatch() throws Exception {
         var snapshot = capture(sections());
         var search = new DigAStar(snapshot, 4, 0, 4, 10, 0, 4, 2, 0,
                 NavigationGoal.position(10, 0, 4, 0)).segments();
@@ -166,10 +166,10 @@ class NavigationSearchTest {
         var used = NavigationAllowance.class.getDeclaredField("used");
         used.setAccessible(true);
         used.setLong(allowance, allowance.limit() - 2);
-        assertFalse(PathTask.continueSearch(search, allowance, null));
+        assertTrue(PathTask.continueSearch(search, allowance, null));
         assertEquals(allowance.limit(), allowance.used());
-        assertTrue(search.done());
-        assertEquals(1, search.batches());
+        assertFalse(search.done());
+        assertEquals(2, search.batches());
     }
 
     @Test void highTreeSamplesDoNotForceClimbingWhenAGroundWorkStanceIsReachable() throws Exception {

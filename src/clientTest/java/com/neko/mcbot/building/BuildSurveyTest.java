@@ -27,6 +27,19 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSurveyTest {
+    @Test void aRejectedClearReportsTheActualConditionInsteadOfInventingAnAuthorizationRequest() {
+        var world=new World() {
+            @Override public String clearReason(BuildTarget.Cell cell) { return "body_support"; }
+        };
+        world.blocks.put(new BlockPos(0,90,0),Blocks.DIRT.defaultBlockState());
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var row=world.query(cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"stone\"}]"))
+                .getAsJsonArray("cells").get(0).getAsJsonObject();
+        assertEquals("needs_clear",row.get("state").getAsString());
+        assertFalse(row.get("clear_allowed").getAsBoolean());
+        assertEquals("body_support",row.get("clear_reason").getAsString());
+        assertFalse(row.has("authorization_id"));
+    }
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
     static class World implements BuildSurvey.Access, BlockPlacement.Access {

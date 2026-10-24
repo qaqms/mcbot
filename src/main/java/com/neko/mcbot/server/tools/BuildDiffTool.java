@@ -47,6 +47,12 @@ public final class BuildDiffTool implements ServerTool {
                             && body.buildSite().miningGuard(cell.pos(), target.revision(), false,
                             new com.neko.mcbot.server.BuildSiteAccess(body)) == null;
                 }
+                @Override public String clearReason(BuildTarget.Cell cell) {
+                    if (!body.buildSite().same(target.revision())) return "build_site_not_registered";
+                    var failure = body.buildSite().miningGuard(cell.pos(), target.revision(), false,
+                            new com.neko.mcbot.server.BuildSiteAccess(body));
+                    return failure == null ? "" : failure.feedback();
+                }
                 @Override public boolean near(BlockPos pos) {
                     double range = Math.min(6.5, body.blockInteractionRange()) + 1;
                     return body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos)) <= range * range;

@@ -29,8 +29,20 @@ public record PlacementWork(BlockItem item, Direction face, String temporaryPurp
     public NavigationGoal goal(CompanionPlayer body, BlockPos target, NavigationGeometry geometry) {
         return goal(target, geometry, body.getEyeHeight(), body.getBbWidth(), body.getBbHeight(),
                 Math.min(6.5, body.blockInteractionRange()),
-                (eye, bounds, edits) -> BlockPlacement.assessAt(body, target,
-                        BlockPlacement.findSlot(body.getInventory(), item), face, eye, bounds, edits, temporaryPurpose));
+                (eye, bounds, edits) -> assessFaces(face, candidate -> BlockPlacement.assessPlannedAt(body, target,
+                        BlockPlacement.findSlot(body.getInventory(), item), candidate, eye, bounds, edits, temporaryPurpose)));
+    }
+
+    static ServerTool.Result assessFaces(Direction selected,
+                                         java.util.function.Function<Direction, ServerTool.Result> assess) {
+        if (selected != null) return assess.apply(selected);
+        ServerTool.Result first = null;
+        for (Direction face : Direction.values()) {
+            var failure = assess.apply(face);
+            if (failure == null) return null;
+            if (first == null) first = failure;
+        }
+        return first;
     }
 
     public static NavigationGoal goal(BlockPos target, NavigationGeometry geometry, double eyeHeight,
@@ -67,7 +79,8 @@ public record PlacementWork(BlockItem item, Direction face, String temporaryPurp
         if (BlockPlacement.occupiesWorkTarget(body.getBoundingBox(), target))
             return new ServerTool.Result(false, "TARGET_BLOCKED:身体占用了放置目标格，未认定工作到达。", null);
         var access = temporaryPurpose == null ? BlockPlacement.forPlayer(body) : BlockPlacement.forTemporary(body, temporaryPurpose);
-        var failure = BlockPlacement.assess(access, target, BlockPlacement.findSlot(body.getInventory(), item), face);
+        var failure = assessFaces(face, candidate -> BlockPlacement.assess(access, target,
+                BlockPlacement.findSlot(body.getInventory(), item), candidate));
         if (failure != null) return failure;
         var data = new com.google.gson.JsonObject();
         data.addProperty("preflight_passed", true);

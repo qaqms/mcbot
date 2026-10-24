@@ -18,6 +18,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class AgentRunnerSkillTest {
+    @Test void aFreshInstallationCanDiscoverAndReadThePackagedBuildingKnowledgeThroughTheRealRunner() {
+        client.bundledSkills=true;
+        client.skillsDirectory=directory.resolve("missing");
+        runner.start();
+        runner.submitTask("[只读] consult building design");
+        var catalog=SkillCatalog.loadBundled(client.skillsDirectory);
+        String name=catalog.index().getAsJsonArray("skills").get(0).getAsJsonObject().get("name").getAsString();
+        assertTrue(client.engine().prompts.getFirst().contains("construction-design.md"));
+        assertFalse(client.engine().prompts.getFirst().contains("先选屋脊方向"));
+        help(0,name);
+        assertTrue(result("help-0").ok());
+        assertTrue(result("help-0").content().contains("建筑方案"));
+        assertEquals(31,client.engine().definitions.getFirst().size());
+        assertEquals(0,client.toolCount());
+        assertFalse(Files.exists(client.skillsDirectory));
+    }
     @TempDir Path directory;
     private final OfflineAgentClient client = new OfflineAgentClient();
     private final AgentRunner runner = client.create();

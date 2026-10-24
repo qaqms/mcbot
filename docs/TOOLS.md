@@ -3,7 +3,19 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## 工地地形与清障更新（2026-10-24）
+## 连续施工与搜索更新（2026-10-24）
+
+详见[施工连续性](CONSTRUCTION-CONTINUITY-2026-10-24.md)，工具数仍31。
+move_to放置工作省略face自动比较六面；显式face保持精确要求，省略不再等同up。
+工地共享账户使用真实max_digs/walk_only，普通搜索按批次续推、记录按水位整理，
+不因默认整趟节点或32768条记录停止；显式有限账户、材料、原版几何与取消仍有效。
+mc.build先清低层，局部工作失败先核status，再按新鲜观测尝试其他候选。
+clear_allowed=false时看cells[].clear_reason，不自行称为需要主人授权。
+树叶及普通施工准备走原权限；仅真正NEED_CONFIRM使用原授权流程。
+tool_help技能目录包含内置construction-design.md，按需分页读取且可被本地覆盖或禁用，
+不安装额外文件，不把知识或局部批次当成目标完成。
+
+## 工地地形与清障更新（2026-10-24，前次检查点）
 
 详见[工地地形与清障](BUILD-SITE-TERRAIN-2026-10-24.md)。
 build_site begin只需target，可选expected_revision核同修订；不再必填access_route。

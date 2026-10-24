@@ -36,6 +36,7 @@ public final class BuildSite {
     private record Temporary(BlockPos pos, BlockState state, String purpose, Object chunk, CellWitness witness) { }
     private Object task, world;
     private BuildTarget target;
+    private final Map<BlockPos, BuildTarget.Cell> targetCells = new HashMap<>();
     private List<BlockPos> route = List.of();
     private final Map<BlockPos, Temporary> temporary = new LinkedHashMap<>();
     private final Set<String> rounds = new LinkedHashSet<>();
@@ -50,7 +51,7 @@ public final class BuildSite {
 
     public void bind(Object nextTask, Object nextWorld) {
         if (task != nextTask || world != nextWorld) {
-            target = null; route = List.of(); temporary.clear(); rounds.clear();
+            target = null; targetCells.clear(); route = List.of(); temporary.clear(); rounds.clear();
             protectedCells.clear(); accessCells.clear(); scope = com.neko.mcbot.path.PathSpec.DEFAULT;
             navigation = new com.neko.mcbot.path.NavigationBudget();
             checkpoints = edits = 0; stopped = false; task = nextTask; world = nextWorld;
@@ -132,6 +133,7 @@ public final class BuildSite {
             previous = p;
         }
         target = next;
+        target.cells().forEach(cell -> targetCells.put(cell.pos(), cell));
         scope = selectedScope;
         route = accessRoute.stream().map(BlockPos::immutable).toList();
         for (var p : route) {
@@ -176,16 +178,25 @@ public final class BuildSite {
         return accessCells.contains(pos);
     }
     public boolean allowsStanding(BlockPos feet) {
-        var lower=cell(feet); var upper=cell(feet.above());
-        return !active() || (lower==null || lower.authored().isAir()) && (upper==null || upper.authored().isAir());
+        return inScope(feet);
+    }
+    public String navigationRevision(BlockPos pos, Access access) {
+        return active() && cell(pos) != null && miningGuard(pos, target.revision(), false, access) == null
+                ? target.revision() : null;
+    }
+    public boolean protectsNavigation(BlockPos pos, Access access) {
+        return protects(pos) && navigationRevision(pos, access) == null;
     }
     private BuildTarget.Cell cell(BlockPos pos) {
-        return target == null ? null : target.cells().stream().filter(c -> c.pos().equals(pos)).findFirst().orElse(null);
+        return targetCells.get(pos);
     }
     private boolean dependent(BlockPos pos, Access access) {
         return dependent(pos, access, Set.of());
     }
     private boolean dependent(BlockPos pos, Access access, Set<BlockPos> removing) {
+        return dependent(pos, access, removing, false);
+    }
+    private boolean dependent(BlockPos pos, Access access, Set<BlockPos> removing, boolean preparation) {
         for (Direction side : Direction.values()) {
             var near = pos.relative(side);
             if (removing.contains(near)) continue;
@@ -193,6 +204,8 @@ public final class BuildSite {
             if (state == null || access.facility(near)) return true;
             if (state.isAir()) continue;
             if (softClearance(state)) continue;
+            if (state.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
+            if (preparation && plainCube(state)) continue;
             // Unknown attachment behavior is retained. Dry full cubes beside/below are the narrow safe case.
             if (side == Direction.UP || !plainCube(state)) return true;
         }
@@ -209,7 +222,7 @@ public final class BuildSite {
     }
     private boolean supportsFinished(BlockPos pos, Access access) {
         return target.cells().stream().anyMatch(c -> !c.authored().isAir()
-                && c.pos().below().equals(pos) && c.matches(access.state(c.pos())));
+                && c.pos().below().equals(pos) && c.matches(access.state(c.pos())) && !plainCube(c.desired()));
     }
     public static boolean plainCube(BlockState state) {
         return state != null && !state.hasBlockEntity() && state.getFluidState().isEmpty()
@@ -267,7 +280,7 @@ public final class BuildSite {
             var actual = access.state(pos);
             if (selected == null || actual == null || selected.matches(actual)
                     || instance==null && actual.getBlock() == selected.authored().getBlock() || !selected.material().supported()
-                    || !access.material(selected) || access.facility(pos) || dependent(pos, access)
+                    || !access.material(selected) || access.facility(pos) || dependent(pos, access, Set.of(), true)
                     || supportsFinished(pos, access))
                 return failed("DENIED:只清有材料可替换、非成品且无依赖的冻结目标障碍；状态冲突交回模型。");
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))

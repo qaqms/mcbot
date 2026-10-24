@@ -27,6 +27,7 @@ public final class BuildSurvey {
         BlockPlacement.Access placement();
         JsonObject terrain();
         default boolean clearable(BuildTarget.Cell cell) { return false; }
+        default String clearReason(BuildTarget.Cell cell) { return ""; }
         default JsonObject surface(BlockPos pos) { return null; }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
@@ -114,6 +115,8 @@ public final class BuildSurvey {
             }
             data.addProperty("state", state);
             data.addProperty("clear_allowed", state.equals("needs_clear") && access.clearable(cell));
+            if (state.equals("needs_clear") && !data.get("clear_allowed").getAsBoolean())
+                data.addProperty("clear_reason", access.clearReason(cell));
             if (material.item() != null)
                 data.addProperty("item", BuiltInRegistries.ITEM.getKey(material.item()).toString());
             rows.add(new Row(cell, material, data));

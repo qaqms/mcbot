@@ -129,6 +129,39 @@ public final class BlockPlacement {
         return preflight(access, pos, slot, face);
     }
 
+    /** Only state-free cubes can be predicted through pending edits; all actual placements use the native preflight. */
+    public static ServerTool.Result assessPlannedAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
+                                                    Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
+        if (edits.equals(TerrainEdits.EMPTY)) return assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose);
+        if (slot < 0 || slot >= Inventory.INVENTORY_SIZE)
+            return failed("NO_ITEM:没有可用放置材料。", false, 0);
+        var material = player.getInventory().getItem(slot);
+        if (!(material.getItem() instanceof BlockItem item)
+                || item.getClass() != BlockItem.class
+                || item.getBlock().getClass() != net.minecraft.world.level.block.Block.class
+                || !item.getBlock().defaultBlockState().getValues().isEmpty())
+            return assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose);
+        if (!player.gameMode.isSurvival() || !player.getAbilities().mayBuild)
+            return failed("DENIED:当前模式不允许生存放置。", false, 0);
+        var failure = BuildRecordAccess.guard(player, pos, false, null);
+        var site = new BuildSiteAccess(player);
+        if (failure == null && temporaryPurpose != null)
+            failure = player.buildSite().temporaryGuard(pos, temporaryPurpose, site);
+        if (failure == null)
+            failure = player.buildSite().placementGuard(pos, item.getBlock().defaultBlockState(), site, temporaryPurpose != null);
+        if (failure != null) return failure;
+        if (temporaryPurpose != null && !temporaryPurpose.equals("support"))
+            return failed("TARGET_BLOCKED:特殊临时工位须在实际现场核对。", false, 0);
+        var level = player.level();
+        boolean planned = SupportPlacement.canPlanBlock(level, BlockAim.forPlayer(player), pos, eye, body,
+                material, Math.min(6.5, player.blockInteractionRange()), edits,
+                near -> level.isInWorldBounds(near) && level.getWorldBorder().isWithinBounds(near)
+                        && level.isLoaded(near) && level.mayInteract(player, near),
+                candidate -> candidate == face && player.mayUseItemAt(pos, candidate, material),
+                bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)));
+        return planned ? null : failed("TARGET_BLOCKED:计划改动后的碰撞、点击面、材料或放置条件尚未满足。", false, 0);
+    }
+
     static boolean pendingNativeTerrain(BlockPos pos, TerrainEdits edits) {
         for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
             long cell = DigAStar.pack(near.getX(), near.getY(), near.getZ());
@@ -151,19 +184,13 @@ public final class BlockPlacement {
     /** Route supports can depend on earlier edits; execution still uses the ordinary native placement path. */
     public static boolean attachedSupportAt(CompanionPlayer player, BlockPos pos, int slot,
                                            Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
-        if (!pendingNativeTerrain(pos, edits))
+        if (edits.equals(TerrainEdits.EMPTY))
             return attachedAt(player, pos, slot, eye, body, edits, temporaryPurpose);
-        if (temporaryPurpose != null || player.buildSite().active() || !player.gameMode.isSurvival()
-                || !player.getAbilities().mayBuild || slot < 0 || slot >= Inventory.INVENTORY_SIZE
-                || BuildRecordAccess.guard(player, pos, false, null) != null) return false;
-        var level = player.level();
-        var material = player.getInventory().getItem(slot);
-        return SupportPlacement.canPlan(level, BlockAim.forPlayer(player), pos, eye, body, material,
-                Math.min(6.5, player.blockInteractionRange()), edits,
-                near -> level.isInWorldBounds(near) && level.getWorldBorder().isWithinBounds(near)
-                        && level.isLoaded(near) && level.mayInteract(player, near),
-                face -> player.mayUseItemAt(pos, face, material),
-                bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)));
+        if (slot < 0 || slot >= Inventory.INVENTORY_SIZE
+                || !PathMaterials.allowed(player.getInventory().getItem(slot))) return false;
+        for (Direction face : Direction.values())
+            if (assessPlannedAt(player, pos, slot, face, eye, body, edits, temporaryPurpose) == null) return true;
+        return false;
     }
 
     public static boolean supported(BlockItem item) {

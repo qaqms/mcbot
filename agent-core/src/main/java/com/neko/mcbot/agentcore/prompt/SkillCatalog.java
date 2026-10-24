@@ -48,6 +48,38 @@ public final class SkillCatalog {
 
     public static SkillCatalog empty() { return EMPTY; }
 
+    /** Packaged knowledge is opt-in for application callers; local overrides and disables still win. */
+    public static SkillCatalog loadBundled(Path directory) {
+        var local = load(directory);
+        if (!local.diagnostics.isEmpty()) return local;
+        String key = "construction-design.md";
+        String name = "skill:" + digest(key).substring(0, 16);
+        if (local.notes.containsKey(name) || local.notes.size() >= MAX_SKILLS) return local;
+        try {
+            Preference preference = new Preference(true, "");
+            if (directory != null && Files.exists(directory, LinkOption.NOFOLLOW_LINKS))
+                preference = preferences(directory.toRealPath()).getOrDefault(key, preference);
+            if (!preference.enabled()) return local;
+            var notes = new LinkedHashMap<>(local.notes);
+            try (var source = SkillCatalog.class.getResourceAsStream("construction-design.md")) {
+                if (source == null) return unavailable("BUNDLED_SKILL_UNAVAILABLE");
+                byte[] text = source.readNBytes(FILE_BYTES + 1);
+                if (text.length > FILE_BYTES) return unavailable("BUNDLED_SKILL_UNAVAILABLE");
+                String body = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(text)).toString();
+                int total = local.notes.values().stream().mapToInt(Note::bytes).sum() + text.length;
+                if (total > TOTAL_BYTES) return local;
+                String description = preference.description().isBlank()
+                        ? "建筑设计：体量、材料对比、屋顶、门窗与施工次序" : preference.description();
+                notes.put(name, new Note(name, key, description, "bundled", digest(body),
+                        text.length, pages(body), ""));
+            }
+            return new SkillCatalog(notes, local.diagnostics);
+        } catch (IOException | RuntimeException invalid) {
+            return unavailable("BUNDLED_SKILL_UNAVAILABLE");
+        }
+    }
+
     public static SkillCatalog load(Path directory) {
         if (directory == null || !Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) return empty();
         try {

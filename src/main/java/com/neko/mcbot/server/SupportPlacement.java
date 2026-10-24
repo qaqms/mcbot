@@ -14,7 +14,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Predicate;
 
-/** Read-only planning for the fixed plain support materials, including earlier route edits. */
+/** Shared read-only contact and collision planning for state-free cubes through earlier route edits. */
 public final class SupportPlacement {
     private SupportPlacement() { }
 
@@ -22,7 +22,17 @@ public final class SupportPlacement {
                                   Vec3 eye, AABB body, ItemStack material, double reach, TerrainEdits edits,
                                   Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
                                   Predicate<AABB> entityClear) {
-        if (!PathMaterials.allowed(material) || !(material.getItem() instanceof BlockItem item)
+        return PathMaterials.allowed(material) && canPlanBlock(world, sight, target, eye, body, material,
+                reach, edits, permitted, mayUse, entityClear);
+    }
+
+    /** A state-free construction block uses the same edited collision and real contact checks as a route support. */
+    public static boolean canPlanBlock(BlockGetter world, BlockAim.Access sight, BlockPos target,
+                                      Vec3 eye, AABB body, ItemStack material, double reach, TerrainEdits edits,
+                                      Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
+                                      Predicate<AABB> entityClear) {
+        if (material.isEmpty() || !ItemStack.isSameItemSameComponents(material, new ItemStack(material.getItem()))
+                || !(material.getItem() instanceof BlockItem item)
                 || item.getClass() != BlockItem.class || body.intersects(new AABB(target))) return false;
         for (var near : BlockPos.betweenClosed(target.offset(-1, -1, -1), target.offset(1, 1, 1)))
             if (!sight.loaded(near) || !permitted.test(near)) return false;
@@ -33,7 +43,8 @@ public final class SupportPlacement {
         if (!current.isAir() || !current.getFluidState().isEmpty()) return false;
         // All admitted materials are ordinary, state-free full cubes; special/native contexts stay on assessAt.
         var state = item.getBlock().defaultBlockState();
-        if (!state.getValues().isEmpty() || !state.isCollisionShapeFullBlock(view, target)) return false;
+        if (state.getBlock().getClass() != net.minecraft.world.level.block.Block.class
+                || !state.getValues().isEmpty() || !state.isCollisionShapeFullBlock(view, target)) return false;
         for (var near : BlockPos.betweenClosed(BlockPos.containing(body.minX, body.minY, body.minZ).offset(-1, -1, -1),
                 BlockPos.containing(body.maxX, body.maxY, body.maxZ).offset(1, 1, 1)))
             if (!sight.loaded(near)) return false;
