@@ -100,6 +100,11 @@ public final class NavigationWork {
                 double dz = z + .5 - (target.getZ() + .5);
                 return Math.max(0, Math.sqrt(dx * dx + dy * dy + dz * dz) - reach - .87);
             }
+            @Override public double approach(int x, int y, int z) {
+                double dx = (double) x - target.getX(), dz = (double) z - target.getZ();
+                double dy = y + eyeHeight - (target.getY() + .5);
+                return dx * dx + dy * dy + dz * dz;
+            }
             @Override public boolean reached(int x, int y, int z) {
                 return reached(x, y, z, TerrainEdits.EMPTY);
             }

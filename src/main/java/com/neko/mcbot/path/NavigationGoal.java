@@ -5,6 +5,9 @@ public interface NavigationGoal {
     boolean reached(int x, int y, int z);
     double remaining(int x, int y, int z);
 
+    /** Direction within a geometric reach plateau, used only to order equal search priorities. */
+    default double approach(int x, int y, int z) { return 0; }
+
     /** Null keeps goals with live premises on the world thread. */
     default NavigationGoal snapshot(DigSampler terrain) { return null; }
     default boolean reached(int x, int y, int z, TerrainEdits edits) {

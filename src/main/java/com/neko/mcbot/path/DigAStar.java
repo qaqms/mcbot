@@ -92,6 +92,10 @@ public final class DigAStar {
 
     private final PriorityQueue<Node> open =
             new PriorityQueue<>(java.util.Comparator.comparingDouble(Node::f)
+                    // Reach alone can leave many nonworking stances tied at zero. Try dry approaches
+                    // before inventing edit histories, without changing admission or accumulated cost.
+                    .thenComparingInt(n -> n.digs + n.places)
+                    .thenComparingDouble(n -> goal.approach(n.x, n.y, n.z))
                     .thenComparingDouble(Node::g).thenComparingLong(n -> n.key.position()));
     private final Map<State, Node> best = new HashMap<>();
     private int storedNodes = 1;

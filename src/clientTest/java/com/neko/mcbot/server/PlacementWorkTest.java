@@ -20,6 +20,39 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlacementWorkTest {
+    @Test void nearButUnworkableReachDoesNotFloodEditableGroundBeforeTryingTheBuilding() {
+        var grid = new StandingGeometryTest.Grid();
+        grid.blocks.clear();
+        for (int x = -8; x <= 12; x++) for (int z = -8; z <= 8; z++)
+            grid.blocks.put(new BlockPos(x, -1, z), Blocks.STONE.defaultBlockState());
+        var target = new BlockPos(5, 0, 0);
+        var goal = PlacementWork.goal(target, grid.geometry(), 1.62, .6, 1.8, 4.5,
+                (eye, bounds, edits) -> eye.x >= 7.5 && eye.y == 1.62 && eye.z == .5
+                        ? null : new ServerTool.Result(false, "TARGET_BLOCKED:no clickable face", null));
+        DigSampler terrain = new DigSampler() {
+            @Override public NavigationGeometry geometry() { return grid.geometry(); }
+            @Override public boolean passable(int x, int y, int z) { return y >= 0; }
+            @Override public boolean support(int x, int y, int z) { return y == -1; }
+            @Override public double digSeconds(int x, int y, int z) { return INFEASIBLE; }
+            @Override public boolean placeable(int x, int y, int z) { return y >= 0; }
+            @Override public double placeCost(int x, int y, int z) { return 1; }
+            @Override public int maxPlaces() { return 16; }
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x >= -8 && x <= 12 && z >= -8 && z <= 8 && y >= -1 && y <= 6;
+            }
+        };
+        assertEquals(0, goal.remaining(0, 0, 0));
+        assertFalse(goal.reached(0, 0, 0), "geometric reach is not actual work arrival");
+        var route = new DigAStar(terrain, 0, 0, 0, 5, 0, 0, 4000, 0, goal).segments();
+        while (!route.advance(300)) { }
+        assertNull(route.failure());
+        assertTrue(route.expanded() < 1000, "short feasible work approach must precede flooding edit histories: "
+                + route.expanded());
+        var end = route.path().getLast();
+        assertTrue(goal.reached(end.x(), end.y(), end.z(), TerrainEdits.EMPTY));
+        assertEquals(0, route.placedCount());
+    }
+
     @Test void automaticPlacementFacesCanUseAnExposedSideWhileAnExplicitFaceStaysExact() {
         var tried = new java.util.ArrayList<Direction>();
         java.util.function.Function<Direction, ServerTool.Result> assess = face -> {

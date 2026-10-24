@@ -565,6 +565,12 @@ public final class PathTask extends TickTask {
             if (search == null) return new Progress.Done(new Result(false,
                     "NO_PROGRESS:本趟搜索资源已用完，尚未证实目标不可达；请结合实际障碍重新选择目标或路线。", null));
         }
+        var actualStart = StandingGeometry.feetCell(c);
+        if (!search.startsAt(actualStart.getX(), actualStart.getY(), actualStart.getZ())) {
+            McbotMod.LOG.info("[path] 搜索起点已变化，立即按新鲜脚格重规划 route={}", timing.id());
+            beginReplan(c);
+            return running();
+        }
         boolean finished;
         try { finished = search.advance(EXPAND_PER_TICK, SEARCH_SLICE_NS); }
         finally { if (sharedBudget != null && !detachedSearch) sharedBudget.observe(search); }
