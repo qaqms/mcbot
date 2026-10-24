@@ -14,6 +14,56 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BlockMiningTest {
     @BeforeAll static void registriesOnly() { bootstrap(); }
+    @Test void selectsOnlyAtActualWorkStartAndNeverMasksExternalChangesDuringMining() {
+        int[] selections = {0};
+        var access = new Mining() {
+            com.google.gson.JsonObject selected;
+            @Override public ServerTool.Result selectTool(net.minecraft.world.level.block.state.BlockState state) {
+                selections[0]++;
+                var result = MiningTools.take(inventory, new MiningTools(inventory, stack -> 0, stack -> 1).best(state));
+                selected = result.data();
+                return result.ok() ? null : result;
+            }
+            @Override public com.google.gson.JsonObject toolSelection() { return selected; }
+        };
+        access.state = Blocks.SPRUCE_LOG.defaultBlockState();
+        access.inventory.setItem(21, MiningToolsTest.tool(Items.STONE_AXE, Blocks.SPRUCE_LOG, 6));
+        var mining = new BlockMining(access);
+        assertNull(mining.preflight(5.5));
+        assertEquals(0, selections[0]);
+        assertTrue(access.held().is(Items.IRON_PICKAXE));
+        assertNull(mining.tick());
+        assertTrue(access.held().is(Items.STONE_AXE));
+        assertEquals(1, selections[0]);
+        assertTrue(mining.observation().has("tool_selection"));
+        access.inventory.setSelectedSlot(4);
+        var result = mining.tick();
+        assertTrue(result.feedback().startsWith("WRONG_TOOL:"));
+        assertEquals(0, access.destroys);
+        assertEquals(1, selections[0]);
+        assertTrue(result.data().has("tool_selection"));
+        assertSame(result, mining.tick());
+    }
+    @Test void invalidOrUnseenWorkCannotChangeTheHandAndAbortNeverStartsSelection() {
+        for (int scenario = 0; scenario < 4; scenario++) {
+            var access = new Mining() {
+                @Override public ServerTool.Result selectTool(net.minecraft.world.level.block.state.BlockState state) {
+                    fail("no hand change before original guards and sight");
+                    return null;
+                }
+            };
+            var mining = new BlockMining(access);
+            switch (scenario) {
+                case 0 -> access.denied = new ServerTool.Result(false, "DENIED:permission", null);
+                case 1 -> access.sightFailure = new ServerTool.Result(false, "TARGET_BLOCKED:wall", null);
+                case 2 -> access.environmentSafe = false;
+                case 3 -> mining.abort();
+            }
+            assertFalse(mining.tick().ok());
+            assertEquals(0, access.destroys);
+            assertTrue(access.held().is(Items.IRON_PICKAXE));
+        }
+    }
     @Test void exhaustedSharedWorksiteAccountStopsTheOriginalMiningCoreBeforeNativeDestruction() {
         var access=new Mining(); access.gain=1;
         access.attemptFailure=new ServerTool.Result(false,"ACTION_LIMIT:original worksite account",null);

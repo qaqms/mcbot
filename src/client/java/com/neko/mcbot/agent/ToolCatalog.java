@@ -38,7 +38,8 @@ public final class ToolCatalog {
                     + "逐真实动作落盘，未知来源/外部修改保守冲突；不自动续已取消目标，不补预算，参数先tool_help。";
             case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"
                     + "默认不限总半径和移动次数，显式max_steps/radius保留，与gather共享已查点；发现不等于入包，取消不返程。";
-            case "gather" -> "连续扫描、工作导航、挖掘、触碰拾取并核对实际背包。item是入包物品，targets是来源方块；先核对工具。"
+            case "gather" -> "连续扫描、工作导航、挖掘、触碰拾取并核对实际背包。item是入包物品，targets是来源方块；挖掘从背包自动选工具。"
+                    + "批量木料先按真实配方准备斧，石矿选合适镐；自动换手不自动制作或升级。"
                     + "材料阶段scope=subtask默认mode=total复用已有材料，要求再收集才用additional；默认task登记最终目标。"
                     + "任意木材等可替换材料用material_for查询真实配方来源，勿固定oak_log再挖spruce_log；不自动转换。"
                     + "完整实际掉落不匹配时SOURCE_MISMATCH交回调整；explore_steps=0只在当前工区采集，原探索账不重置。";
@@ -51,12 +52,13 @@ public final class ToolCatalog {
                     + "本地最多5页/30秒；work=true评估工作站位与采收/干燥安全。"
                     + "候选不证明可达或入包，空结果不证明未知区域没有资源。";
             case "find_resource" -> "单页资源查询，一般用search_resource；续页按next_offset及原scan_center，移动后从0重查。"
-                    + "work=true时先核对harvestable_with_hand及dry_work_safe，不合格不为其开路。";
+                    + "work=true时核对harvestable_with_inventory和mining_tool（工具/单格耗时/备料建议）及dry_work_safe。";
             case "craft" -> "按真实配方合成，count为至少成品数，可能整批多产；query=true只查询，须看can_craft，"
                     + "实际成果看crafted_count和背包。material_index查询替代物品及processes；不自动补料，3×3需附近工作台。";
             case "smelt" -> "近身熔炉query只读，load按实际背包槽装料，take取出；装料不是烧制完成，wait后query/take。"
                     + "取消任务不熄炉，停产须取出原料。";
-            case "break_block" -> "挖一格，主手须有采收资格；按实际进度消耗耐久，掉落留地，走近后核对背包。"
+            case "break_block" -> "挖一格，按方块从真实背包选有采收资格的最快工具，同速优先不磨损；按实际进度消耗耐久。"
+                    + "掉落留地，走近后核对背包。"
                     + "expected_block保护观测目标，clear_obstructions按具体安全清单且须原权限，默认无格数/总时长上限；ACCEPTED等真终态，不重发。";
             case "place_block" -> "放置到准确目标格，须真实命中可替换轮廓或邻接面；face默认up。"
                     + "query只读，须看preflight_passed；执行重验，失败核对实际消耗/变化，不自动重试。";

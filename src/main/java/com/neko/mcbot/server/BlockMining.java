@@ -31,6 +31,8 @@ public final class BlockMining {
         default ServerTool.Result beforeDestroy() { return null; }
         default boolean recordingKnown() { return true; }
         default JsonObject effects() { return null; }
+        default ServerTool.Result selectTool(BlockState state) { return null; }
+        default JsonObject toolSelection() { return null; }
         void crack(int stage);
     }
 
@@ -42,6 +44,7 @@ public final class BlockMining {
     private int stalled;
     private ServerTool.Result terminal;
     private boolean destructionStarted;
+    private boolean toolSelected;
 
     public BlockMining(Access access) {
         this.access = access;
@@ -52,6 +55,7 @@ public final class BlockMining {
         data.addProperty("action", "break_block");
         data.addProperty("mining_progress", Float.isFinite(progress) ? Math.min(1, progress) : 1);
         data.addProperty("stalled_ticks", stalled);
+        addToolSelection(data);
         if (terminal != null && terminal.data() != null) data.add("result", terminal.data().deepCopy());
         return data;
     }
@@ -70,7 +74,12 @@ public final class BlockMining {
 
     public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock, String role,
                                        String siteRevision, boolean cleanup) {
-        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock, role, siteRevision, cleanup));
+        return forPlayer(player, pos, expectedBlock, role, siteRevision, cleanup, 0);
+    }
+    public static BlockMining forPlayer(CompanionPlayer player, BlockPos pos, String expectedBlock, String role,
+                                       String siteRevision, boolean cleanup, int reserve) {
+        return new BlockMining(new PlayerAccess(player, player.level(), pos.immutable(), expectedBlock, role,
+                siteRevision, cleanup, reserve));
     }
 
     public static boolean matchesExpected(BlockState state, String expectedBlock) {
@@ -93,7 +102,7 @@ public final class BlockMining {
         if (access.hardness(current) < 0) return failure("UNBREAKABLE:该方块不能用生存手段破坏，换目标。");
         if (!access.mayDestroy(current)) return failure("DENIED:当前玩家或物品不能破坏这格，换目标或工具。");
         if (!access.correctTool(current)) {
-            return failure("WRONG_TOOL:当前主手没有采收资格；先 inventory/equip 换合适工具，目标未破坏。");
+            return failure("WRONG_TOOL:没有满足采收资格及本次耐久预留的可用工具；先核对背包与配方补给，目标未破坏。");
         }
         failure = access.sight(reach);
         if (failure != null) return failure;
@@ -119,6 +128,16 @@ public final class BlockMining {
         }
         ServerTool.Result failure = preflight(6.5);
         if (failure != null) return finish(failure);
+        if (!toolSelected) {
+            failure = access.selectTool(target);
+            if (failure != null) return finish(failure);
+            toolSelected = true;
+            tool = new HandSnapshot(access.selectedSlot(), access.held(), access.handPickups());
+            if (access.toolSelection() != null) {
+                failure = preflight(6.5);
+                if (failure != null) return finish(failure);
+            }
+        }
         float gain = access.progress(target);
         // Zero-hardness blocks yield +infinity in vanilla and complete in this tick.
         if (Float.isNaN(gain) || gain <= 0) {
@@ -166,10 +185,16 @@ public final class BlockMining {
 
     /** A fresh observation only; the terminal action and its world effects remain stable. */
     public ServerTool.Result refreshDrops(ServerTool.Result result) {
-        if (!destructionStarted) return result;
+        if (!destructionStarted) {
+            if (access.toolSelection() == null) return result;
+            var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
+            addToolSelection(data);
+            return new ServerTool.Result(result.ok(), result.feedback(), data);
+        }
         var data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         addDropReport(data);
         addEffects(data);
+        addToolSelection(data);
         var observations = new DropObservations();
         observations.record(data);
         // Counters at removal are historical; the appended observation is the terminal state.
@@ -191,12 +216,22 @@ public final class BlockMining {
     private ServerTool.Result finish(ServerTool.Result result) {
         clearCrack();
         terminal = result.data() == null ? failure(result.feedback()) : result;
+        if (access.toolSelection() != null) {
+            var data = terminal.data().deepCopy();
+            addToolSelection(data);
+            terminal = new ServerTool.Result(terminal.ok(), terminal.feedback()
+                    + " 本次挖掘选用的真实主手：" + data.getAsJsonObject("tool_selection").get("held") + "。", data);
+        }
         if (destructionStarted) {
             var data = terminal.data().deepCopy();
             addEffects(data);
             terminal = new ServerTool.Result(terminal.ok(),terminal.feedback(),data);
         }
         return terminal;
+    }
+    private void addToolSelection(JsonObject data) {
+        var selection = access.toolSelection();
+        if (selection != null) data.add("tool_selection", selection.deepCopy());
     }
     private void addEffects(JsonObject data) {
         if (!destructionStarted) return;
@@ -233,9 +268,12 @@ public final class BlockMining {
         private final boolean cleanup;
         private BlockAim.Aim aim;
         private JsonObject effects;
+        private MiningTools.Pick selectedTool;
+        private JsonObject selection;
+        private final int reserve;
 
         private PlayerAccess(CompanionPlayer player, ServerLevel level, BlockPos pos, String expectedBlock, String role,
-                             String siteRevision, boolean cleanup) {
+                             String siteRevision, boolean cleanup, int reserve) {
             this.player = player;
             this.level = level;
             this.pos = pos;
@@ -243,6 +281,7 @@ public final class BlockMining {
             this.dropRequest = DropTracker.request(player, pos, role);
             this.siteRevision = siteRevision;
             this.cleanup = cleanup;
+            this.reserve = reserve;
         }
 
         @Override public ServerTool.Result guard(double reach) {
@@ -297,11 +336,26 @@ public final class BlockMining {
         }
         @Override public String expectedBlock() { return expectedBlock; }
         @Override public float hardness(BlockState state) { return state.getDestroySpeed(level, pos); }
-        @Override public boolean correctTool(BlockState state) { return player.hasCorrectToolForDrops(state); }
+        @Override public boolean correctTool(BlockState state) {
+            if (selection != null) return player.hasCorrectToolForDrops(state)
+                    && MiningTools.usable(player.getMainHandItem(), reserve);
+            if (selectedTool == null) selectedTool = MiningTools.forPlayer(player).best(state, reserve);
+            return selectedTool != null;
+        }
         @Override public boolean mayDestroy(BlockState state) {
             return !player.blockActionRestricted(level, pos, player.gameMode.getGameModeForPlayer())
-                    && player.getMainHandItem().canDestroyBlock(state, level, pos, player);
+                    && (selection == null && selectedTool != null ? selectedTool.stack() : player.getMainHandItem())
+                    .canDestroyBlock(state, level, pos, player);
         }
+        @Override public ServerTool.Result selectTool(BlockState state) {
+            var result = MiningTools.take(player.getInventory(), selectedTool);
+            if (!result.ok()) return result;
+            selection = result.data();
+            ((com.neko.mcbot.mixin.LivingEquipmentAccess) (net.minecraft.world.entity.LivingEntity) player)
+                    .mcbot$detectEquipmentUpdates();
+            return null;
+        }
+        @Override public JsonObject toolSelection() { return selection; }
         @Override public float progress(BlockState state) { return state.getDestroyProgress(player, level, pos); }
         @Override public ServerTool.Result sight(double reach) {
             aim = BlockAim.mining(BlockAim.forPlayer(player), pos, Math.min(reach, player.blockInteractionRange()));

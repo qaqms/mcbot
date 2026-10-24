@@ -3,7 +3,63 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 拾取途中实体消失后的采集接续（2026-10-24 19:38，Asia/Shanghai）
+## 采掘工具效率、地面停顿与等待动画（2026-10-24，Asia/Shanghai）
+
+- 维护者要求学习参考项目处理斧/镐和装备升级、出矿后长时间等待及气泡转圈。
+  开工main为`8e12c91`，fetch后与origin/main一致；只改本体。
+  快照`build/tools-idle-session-20261024.log`为407725 bytes，原件末写20:04:11，
+  严格UTF-8有效，SHA256
+  `9f48fadaf73b4dd52b74b5155e48984e68a24873434038b2e4d97192877d2876`；
+  实例磁盘包与上一轮`6a22afbc...`一致，未替换。
+- 日志53请求/53响应；19:52:49已结束地面返程，随后至19:55:30的16条首次派发
+  合计159.033秒，含建筑改案、目标冻结拒绝、工地参数/通道拒绝及Lua调用错误。
+  未见任务槽死锁；这不是本轮已证明的省时量。route56另经30.100秒、603任务刻、
+  56输入刻/351 SEARCH刻：从(-6,71,-5)走到(-1,70,2)，请求目标(-1,71,2)，
+  续搜四批失败，未挖放。原日志无完整参数，不将局部拒绝计数当唯一原因。
+  19:50:45制作石镐后曾按旧槽号装备原木，19:51:07才装备石镐；制作前槽号不可沿用。
+- 只读核对参考ToolChoice/DigTime/BlockDigger、Destination/Goals、技能与模型职责、
+  SpeechBubbles/Renderer；仅学机制，未复制或翻译源码/注释/技能/提示/资产。
+  新MiningTools读36槽及原生属性副本，统一路线估价与BlockMining实际选择；
+  有采收资格的工具按速度选择，同速优先不磨耐久/真实空槽，满包不丢物。
+  观察/预检不换手，原守卫/目标/视线后才沿EquipmentActions及原生装备更新换手；
+  单格期间外部换手、取消或失效仍停止。清障同步自身换手，原挖掘/掉落/背包验收保持。
+- work观测保留harvestable_with_hand，加harvestable_with_inventory/mining_tool，
+  gather复用库存工具并报告有界tool_changes。inventory的实际TOOL组件布尔及
+  mining_tools_known供地下复用未装备工具；盔甲不算采掘工具。
+  explore把原reserve_durability传到move_to，PathSpec保存/恢复、路线估价与逐格
+  真选手均保留该值；原版每格耐久消耗须在预留之上，备用斧头不能担保低耐久镐。
+  新可选参数0-1024、默认0，工具数仍31；显式挖掘/原整趟/探索与权限账不重开。
+- 仅精确只行走的位置请求提前核碰撞站位；无站位给TARGET_BLOCKED和现场脚格建议，
+  不自动换目标、不修改世界；半砖、可编辑及工作/拾取语义保持，不恢复旧地下高度门。
+  模型提示加强批量工作前按真实配方制作高效工具/考虑武器升级、制作后查新槽位，
+  建筑先登记整项目标再subtask采料、复用差异并衔接mc.build；没有新增成品链或并行模型。
+- 气泡增加结构化modelWaiting：响应等待/上下文整理使用单调时钟的旋转标记，
+  固定占位不挤文字；实际工具活动、问答和终态仍优先。渲染只读不可变Frame，
+  保持遮挡/深浅色/数量条/开关和取消，不编造模型推理或以动画计成果。
+- focused1旧预检次数断言失败、focused2新增夹具方法名编译失败、
+  focused3动画测试代理未走原生默认顶点方法，均修正且未削弱旧断言；
+  focused4/5分别26/36秒通过，focused5为228项/14 suites。
+  最终强制全量`./gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  `build/tool-efficiency-final1-20261024.log`第65至66行，**1分1秒、20任务全执行**。
+  三根XML **1848项/197 suites，failures/errors/skipped全0**：
+  核心415/46、根168/23、客户端1265/128，比上一轮新增19项/1 suite。
+- JAR `build/libs/mcbot-0.1.0.jar` **1,760,325 bytes**，末写20:32:20，
+  SHA256 `df28e71cc7ec6d35b1cc5012ebbf45b9be53e5b47cc2ad7f1ab7f4347f7af2b9`。
+  内嵌core与独立产物一致，SHA256
+  `f684dbe5e9d38e116f1895d4c97002deda6e7ff0451c3302645b1ddd9579ebc4`；
+  版本/入口、新选择器/动画、LuaJ及许可证已核，源码/资源未晚于JAR。
+  导入包为`build/mcbot-import-20261024-tool-efficiency.zip`，旧包保留；提交/推送以Git为准。
+- 本机官方映射javap核对Player.getDestroySpeed、ItemStack.forEachModifier（含附魔）、
+  AttributeInstance副本、TOOL.damagePerBlock及LivingEntity.lastEquipmentItems的Map签名。
+  新Accessor及原Invoker经编译/产物核对，不冒充原生Mixin注入实测。
+  完整机制、日志定位与边界见
+  [采掘工具与等待显示](docs/TOOL-EFFICIENCY-AND-WAITING-2026-10-24.md)。
+  未启动游戏/服务器/真实模型，未改宿主/连接器/参考/玩家配置/实例或无敌；
+  检查时玩家Minecraft进程仍在，未终止。真实模型是否先做斧/升级武器、
+  原生工具切换/矿洞/完整建筑及GPU动画仍待实机，不能保证消除所有停顿。
+  二十完整卡、B5/P1仍部分，完整编辑后台/跨段学习和并行模型未补记完成。
+
+## 拾取途中实体消失后的采集接续（2026-10-24 19:38，Asia/Shanghai，前次检查点）
 
 - 维护者反馈挖树时常站着等待下一步。本轮读取快照
   `build/chopping-session-20261024.log`，170906 bytes，原件末写19:25:49，严格UTF-8有效；

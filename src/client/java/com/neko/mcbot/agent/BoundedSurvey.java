@@ -160,12 +160,9 @@ final class BoundedSurvey {
             finish(false, "EXPLORATION_LIMIT:已预留返程移动次数，停止向外推进；可用explore mode=return返回。"); return;
         }
         int budget = route.remainingDigs();
-        var slots = state.getAsJsonObject("inventory");
-        var selected = slots.getAsJsonArray("slots").get(ExplorationRoute.integer(slots, "selected_slot")).getAsJsonObject();
         int reserve = option("reserve_durability", 16);
-        budget = Math.min(budget, ExplorationRoute.integer(selected, "max_damage")
-                - ExplorationRoute.integer(selected, "damage") - reserve);
-        if (budget <= 0) { finish(false, "SUPPLY_LOW:主手耐久已到保留值，停止开新通道。"); return; }
+        budget = Math.min(budget, digCapacity(state, reserve));
+        if (budget <= 0) { finish(false, "SUPPLY_LOW:可用采掘工具耐久已到保留值，停止开新通道。"); return; }
         int x = (int) Math.floor(ExplorationRoute.number(state, "x"));
         int y = (int) Math.floor(ExplorationRoute.number(state, "y"));
         int z = (int) Math.floor(ExplorationRoute.number(state, "z"));
@@ -193,6 +190,7 @@ final class BoundedSurvey {
         args.addProperty("exact", true);
         args.addProperty("underground", true);
         args.addProperty("max_digs", digs);
+        args.addProperty("reserve_durability", option("reserve_durability", 16));
         args.addProperty("walk_only", back);
         if (route.radius > 0) args.add("bounds", route.bounds());
         call("move_to", args, receipt -> {
@@ -248,11 +246,29 @@ final class BoundedSurvey {
             return "INVENTORY_FULL:背包已满，停止向外勘探。";
         int selected = ExplorationRoute.integer(inventory, "selected_slot");
         var slot = inventory.getAsJsonArray("slots").get(selected).getAsJsonObject();
+        if (inventory.has("mining_tools_known") && inventory.get("mining_tools_known").getAsBoolean())
+            return digCapacity(state, option("reserve_durability", 16)) > 0 ? null
+                    : "SUPPLY_LOW:背包没有超过耐久保留值的可用采掘工具；先核对配方补给再继续。";
         if (!slot.has("max_damage") || !slot.has("damage"))
             return "TOOL_REQUIRED:地下开路需要已装备、具备实际耐久的工具，采收资格仍由身体检查。";
         if (ExplorationRoute.integer(slot, "max_damage") - ExplorationRoute.integer(slot, "damage")
                 <= option("reserve_durability", 16)) return "SUPPLY_LOW:主手耐久已到保留值。";
         return null;
+    }
+    static int digCapacity(JsonObject state, int reserve) {
+        var inventory = state.getAsJsonObject("inventory");
+        boolean known = inventory.has("mining_tools_known") && inventory.get("mining_tools_known").getAsBoolean();
+        int selected = ExplorationRoute.integer(inventory, "selected_slot"), capacity = 0;
+        for (var entry : inventory.getAsJsonArray("slots")) {
+            var slot = entry.getAsJsonObject();
+            if (known ? !slot.has("mining_tool") || !slot.get("mining_tool").getAsBoolean()
+                    : ExplorationRoute.integer(slot, "slot") != selected) continue;
+            if (!slot.has("max_damage") || !slot.has("damage")) continue;
+            if (ExplorationRoute.integer(slot, "count") <= 0) continue;
+            capacity = Math.max(capacity, ExplorationRoute.integer(slot, "max_damage")
+                    - ExplorationRoute.integer(slot, "damage") - reserve);
+        }
+        return capacity;
     }
     private boolean stopUnsafeEnvironment() {
         if (!com.neko.mcbot.agentcore.loop.BodyFacts.environmentUnsafe(state)) return false;
@@ -302,6 +318,7 @@ final class BoundedSurvey {
         var inventory = state.getAsJsonObject("inventory");
         if (inventory == null || !inventory.has("selected_slot") || !inventory.has("slots")) return facts;
         int selected = ExplorationRoute.integer(inventory, "selected_slot");
+        facts.addProperty("inventory_dig_capacity", digCapacity(state, reserve));
         for (var entry : inventory.getAsJsonArray("slots")) {
             var slot = entry.getAsJsonObject();
             if (!slot.has("damage") || !slot.has("max_damage") || ExplorationRoute.integer(slot, "count") <= 0) continue;
@@ -316,6 +333,7 @@ final class BoundedSurvey {
                 tool.add("slot", slot.get("slot").deepCopy());
                 tool.add("item", slot.get("item").deepCopy());
                 tool.addProperty("remaining", remaining);
+                if (slot.has("mining_tool")) tool.add("mining_tool", slot.get("mining_tool").deepCopy());
                 tools.add(tool);
             }
         }

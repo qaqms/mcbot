@@ -1,6 +1,7 @@
 package com.neko.mcbot.path;
 
 import com.neko.mcbot.server.PathMaterials;
+import com.neko.mcbot.server.MiningTools;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
@@ -14,9 +15,8 @@ import java.util.Set;
 /**
  * 服务器世界 → DigSampler 的翻译层：这里承载全部"不许踩的线"——
  * 神圣方块（容器/工作台/床/机关类，含其正下方支撑）、岩浆邻接否决（HAZARD）、
- * 起点脚下不挖（防自塌）、生存不可破坏集=不可挖、当前手持挖不动=不可挖。
- * 挖掘耗时按"同伴当前手持"的真实速率折算成代价秒，搜索因此天然偏好
- * "绕开硬石头、走向用镐挖得动的软块"。
+ * 起点脚下不挖（防自塌）、生存不可破坏集=不可挖。
+ * 挖掘按背包中具有采收资格的最快工具估价，实际动作仍重验并沿原版入口执行。
  */
 public final class LevelDigSampler implements DigSampler {
 
@@ -43,6 +43,7 @@ public final class LevelDigSampler implements DigSampler {
     private final BlockPos workTarget;
     private final PathSpec spec;
     private final PathSpec outerScope;
+    private MiningTools tools;
     private java.util.function.BiPredicate<BlockPos, BlockPos> stepConstraint = (from, to) -> true;
 
     public LevelDigSampler constrainSteps(java.util.function.BiPredicate<BlockPos, BlockPos> constraint) {
@@ -133,13 +134,14 @@ public final class LevelDigSampler implements DigSampler {
         if (hardness < 0) {
             return INFEASIBLE; // UNBREAKABLE（基岩/末地石核心等生存不可破）
         }
-        if (!companion.hasCorrectToolForDrops(st)
-                || !companion.getMainHandItem().canDestroyBlock(st, level, p, companion)) return INFEASIBLE;
-        float gain = st.getDestroyProgress(companion, level, p);
-        if (Float.isNaN(gain) || gain <= 0) return INFEASIBLE;
-        double sec = 1.0 / (gain * 20.0);
+        if (tools == null) tools = MiningTools.forPlayer(companion);
+        var pick = tools.best(st, spec.reserveDurability());
+        if (pick == null || !pick.stack().canDestroyBlock(st, level, p, companion)) return INFEASIBLE;
+        double sec = pick.seconds(hardness);
         return sec > MAX_DIG_SECONDS ? INFEASIBLE : sec;
     }
+
+    public void refreshTools() { tools = null; }
 
     @Override
     public boolean support(int x, int y, int z) {

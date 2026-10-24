@@ -42,7 +42,12 @@ public final class TaskBubbleState {
     }
 
     public record Snapshot(long taskId, String title, Tone tone, String action, String detail,
-                           ItemGoal.Progress progress, long remainingMs) {}
+                           ItemGoal.Progress progress, long remainingMs, boolean modelWaiting) {
+        public Snapshot(long taskId, String title, Tone tone, String action, String detail,
+                        ItemGoal.Progress progress, long remainingMs) {
+            this(taskId, title, tone, action, detail, progress, remainingMs, false);
+        }
+    }
     private final TreeMap<Long, Activity> inFlight = new TreeMap<>();
     private long taskId;
     private String title = "";
@@ -98,7 +103,8 @@ public final class TaskBubbleState {
             return new Snapshot(taskId, title, Tone.QUESTION,
                     question.authorization() ? "这一步需要确认" : "想问你一下",
                     clean(question.text(), 180), progress, question.remainingMs());
-        return new Snapshot(taskId, title, Tone.WORKING, activity.label(), detail, progress, 0);
+        return new Snapshot(taskId, title, Tone.WORKING, activity.label(), detail, progress, 0,
+                activity == Activity.MODEL || activity == Activity.COMPACTING);
     }
     void clear() {
         taskId = 0;

@@ -5,7 +5,10 @@ import net.minecraft.core.BlockPos;
 
 /** Per-route constraints are reapplied to search, cached plans and every live edit. */
 public record PathSpec(boolean workArrival, boolean clear, boolean underground, int maxDigs,
-                       BlockPos anchor, int radius) {
+                       BlockPos anchor, int radius, int reserveDurability) {
+    public PathSpec(boolean workArrival, boolean clear, boolean underground, int maxDigs, BlockPos anchor, int radius) {
+        this(workArrival, clear, underground, maxDigs, anchor, radius, 0);
+    }
     public static final PathSpec DEFAULT = new PathSpec(false, false, false, Integer.MAX_VALUE, null, 64);
 
     public static PathSpec parse(JsonObject args) {
@@ -21,6 +24,8 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
         boolean underground = bool(args, "underground");
         int digs = args.has("max_digs") ? integer(args, "max_digs") : Integer.MAX_VALUE;
         if (digs < 0) throw new IllegalArgumentException();
+        int reserve = args.has("reserve_durability") ? integer(args, "reserve_durability") : 0;
+        if (reserve < 0 || reserve > 1024) throw new IllegalArgumentException();
         BlockPos anchor = null;
         int radius = 64;
         if (args.has("bounds")) {
@@ -31,7 +36,7 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
             radius = integer(box, "radius");
             if (radius < 1) throw new IllegalArgumentException();
         }
-        return new PathSpec(work, clear, underground, digs, anchor, radius);
+        return new PathSpec(work, clear, underground, digs, anchor, radius, reserve);
     }
 
     public boolean contains(int x, int y, int z) {
@@ -46,6 +51,7 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
         data.addProperty("clear_obstructions", clear);
         data.addProperty("underground", underground);
         data.addProperty("max_digs", maxDigs);
+        if (reserveDurability > 0) data.addProperty("reserve_durability", reserveDurability);
         if (anchor != null) {
             var bounds = new JsonObject();
             bounds.addProperty("x", anchor.getX()); bounds.addProperty("y", anchor.getY());
@@ -58,7 +64,7 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
     public static PathSpec restore(JsonObject data) {
         var parsed = parse(data);
         return new PathSpec(bool(data, "work"), parsed.clear, parsed.underground,
-                parsed.maxDigs, parsed.anchor, parsed.radius);
+                parsed.maxDigs, parsed.anchor, parsed.radius, parsed.reserveDurability);
     }
 
     public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {

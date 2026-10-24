@@ -26,7 +26,11 @@ public final class CompanionTaskBubble {
     private static final RenderStateDataKey<Frame> FRAME = RenderStateDataKey.create(() -> "mcbot:task_bubble");
     record Palette(int background, int border, int text, int muted, int accent) {}
     record Frame(Vec3 anchor, float scale, float opacity, TaskBubbleLayout.Layout layout,
-                 Palette palette) {}
+                 Palette palette, float rotation) {
+        Frame(Vec3 anchor, float scale, float opacity, TaskBubbleLayout.Layout layout, Palette palette) {
+            this(anchor, scale, opacity, layout, palette, 0);
+        }
+    }
     private CompanionTaskBubble() {}
     public static void register() {
         WorldRenderEvents.END_EXTRACTION.register(CompanionTaskBubble::extract);
@@ -66,7 +70,7 @@ public final class CompanionTaskBubble {
         }
         var layout = TaskBubbleLayout.create(state, runner.companionName(), item, mc.font::width);
         context.worldState().setData(FRAME, new Frame(anchor, TaskBubbleVisibility.scale(distance), opacity,
-                layout, palette(runner.config().preferences.dark(), state.tone())));
+                layout, palette(runner.config().preferences.dark(), state.tone()), rotation(System.nanoTime())));
     }
     private static void render(WorldRenderContext context) {
         Frame frame = context.worldState().getData(FRAME);
@@ -111,6 +115,26 @@ public final class CompanionTaskBubble {
             if (frame.layout.progress() > 0)
                 quad(matrix, vertices, 8, 70, 8 + (w - 16) * frame.layout.progress(), 72, .4f,
                         alpha(frame.palette.accent, frame.opacity));
+        }
+        if (frame.layout.spinning()) spinner(matrix, vertices, frame);
+    }
+    static float rotation(long nanos) {
+        return Math.floorMod(nanos, 1_200_000_000L) / 1_200_000_000f * (float) (2 * Math.PI);
+    }
+    private static void spinner(PoseStack.Pose pose, VertexConsumer vertices, Frame frame) {
+        for (int i = 0; i < 10; i++) {
+            double angle = frame.rotation - i * Math.PI / 5;
+            float x = (float) Math.cos(angle), y = (float) Math.sin(angle);
+            float cx = TaskBubbleLayout.PADDING + 5, cy = 26;
+            int color = alpha(frame.palette.accent, frame.opacity * (1 - i * .075f));
+            vertices.addVertex(pose, cx + 3 * x - .6f * y, cy + 3 * y + .6f * x, .4f)
+                    .setColor(color).setLight(LightTexture.FULL_BRIGHT);
+            vertices.addVertex(pose, cx + 5 * x - .6f * y, cy + 5 * y + .6f * x, .4f)
+                    .setColor(color).setLight(LightTexture.FULL_BRIGHT);
+            vertices.addVertex(pose, cx + 5 * x + .6f * y, cy + 5 * y - .6f * x, .4f)
+                    .setColor(color).setLight(LightTexture.FULL_BRIGHT);
+            vertices.addVertex(pose, cx + 3 * x + .6f * y, cy + 3 * y - .6f * x, .4f)
+                    .setColor(color).setLight(LightTexture.FULL_BRIGHT);
         }
     }
     private static void rounded(PoseStack.Pose pose, VertexConsumer vertices, float x, float y,

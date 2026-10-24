@@ -12,6 +12,18 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BoundedGatherTest {
+    @Test void inventoryHarvestEvidenceContinuesTheSameGatherDespiteAnUnsuitableCurrentHand() {
+        var f = new Fixture(2, 0);
+        var block = block(true);
+        block.addProperty("harvestable_with_hand", false);
+        block.addProperty("harvestable_with_inventory", true);
+        f.blockTargets = List.of(block);
+        var result = f.gather.start();
+        f.drain();
+        assertTrue(result.join().ok());
+        assertEquals(2, f.dug);
+        assertEquals(2, f.count);
+    }
     static JsonObject state(int count) {
         var state = JsonParser.parseString("{\"x\":0,\"y\":90,\"z\":0,\"dimension\":\"minecraft:overworld\"}").getAsJsonObject();
         var inventory = new JsonObject();

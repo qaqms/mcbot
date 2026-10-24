@@ -29,6 +29,7 @@ class ClearingMiningTest {
         boolean safe = true, hand = true, reserved = true, reported = true, correctTarget = true;
         float gain = 1;
         boolean emitDrops;
+        boolean selectTools;
         final Map<BlockPos, BlockActionFixtures.Mining> actions = new HashMap<>();
         Fixture(boolean autonomous) {
             context = new ActionPermissions.Context(UUID.randomUUID(), UUID.randomUUID(), "world", 1,
@@ -48,6 +49,7 @@ class ClearingMiningTest {
         @Override public boolean safe(BlockPos pos) { return safe; }
         @Override public boolean reserve(Map<String, ActionPermissions.Change> changes) { return reserved; }
         @Override public boolean sameHand() { return hand; }
+        @Override public void selectedTool() { hand = true; }
         @Override public ServerTool.Result targetGuard() {
             var nativeAction = new BlockActionFixtures.Mining();
             nativeAction.state = state(TARGET);
@@ -56,7 +58,18 @@ class ClearingMiningTest {
             return new BlockMining(nativeAction).preflight(5.5);
         }
         @Override public BlockMining mining(BlockPos pos) {
-            var nativeAction = new BlockActionFixtures.Mining();
+            var nativeAction = new BlockActionFixtures.Mining() {
+                private com.google.gson.JsonObject selection;
+                @Override public ServerTool.Result selectTool(BlockState state) {
+                    if (!selectTools) return null;
+                    hand = false;
+                    selection = new com.google.gson.JsonObject();
+                    selection.addProperty("changed", true);
+                    selection.add("held", com.neko.mcbot.server.tools.InventoryTool.stackData(held()));
+                    return null;
+                }
+                @Override public com.google.gson.JsonObject toolSelection() { return selection; }
+            };
             nativeAction.state = state(pos);
             nativeAction.gain = gain;
             nativeAction.reported = reported;
@@ -72,6 +85,31 @@ class ClearingMiningTest {
                                 ? net.minecraft.world.item.Items.COBBLESTONE : net.minecraft.world.item.Items.LEAF_LITTER)));
             };
             return new BlockMining(nativeAction);
+        }
+    }
+
+    @Test void plannedToolSelectionContinuesAcrossTicksButExternalHandChangesStillStopClearing() {
+        for (boolean external : new boolean[]{false, true}) {
+            var f = new Fixture(true);
+            f.selectTools = true;
+            f.gain = .25f;
+            var work = f.sequence(null, 3);
+            assertNull(work.tick());
+            assertTrue(f.hand, "the sequence must accept its own validated selection");
+            if (external) {
+                f.hand = false;
+                assertTrue(work.tick().feedback().startsWith("WRONG_TOOL:"));
+                assertTrue(f.removed.isEmpty());
+            } else {
+                ServerTool.Result result = null;
+                for (int tick = 0; tick < 8 && result == null; tick++) result = work.tick();
+                assertNotNull(result);
+                assertTrue(result.ok(), result.feedback());
+                assertEquals(List.of(COVER, TARGET), f.removed);
+                assertTrue(result.data().has("tool_selection"));
+                assertTrue(result.data().getAsJsonArray("clearing_results").get(0).getAsJsonObject()
+                        .getAsJsonObject("result").has("tool_selection"));
+            }
         }
     }
 

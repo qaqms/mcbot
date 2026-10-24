@@ -12,7 +12,7 @@ final class TaskBubbleLayout {
     static final int WIDTH = 184, HEIGHT = 88, PADDING = 8;
     enum Ink { PRIMARY, SECONDARY, ACCENT }
     record Line(String text, int x, int y, Ink ink) {}
-    record Layout(List<Line> lines, float progress) {}
+    record Layout(List<Line> lines, float progress, boolean spinning) {}
     private TaskBubbleLayout() {}
 
     static Layout create(TaskBubbleState.Snapshot state, String name, String item,
@@ -28,7 +28,9 @@ final class TaskBubbleLayout {
         int badgeX = WIDTH - PADDING - measure.applyAsInt(badge);
         lines.add(new Line(fit(name, badgeX - PADDING - 10, measure), PADDING, 7, Ink.SECONDARY));
         lines.add(new Line(badge, badgeX, 7, Ink.ACCENT));
-        lines.add(new Line(fit(state.action(), WIDTH - 2 * PADDING, measure), PADDING, 22, Ink.PRIMARY));
+        boolean spinning = state.tone() == TaskBubbleState.Tone.WORKING && state.modelWaiting();
+        int actionX = PADDING + (spinning ? 14 : 0);
+        lines.add(new Line(fit(state.action(), WIDTH - PADDING - actionX, measure), actionX, 22, Ink.PRIMARY));
         var details = wrap(state.detail(), WIDTH - 2 * PADDING, measure);
         for (int i = 0; i < details.size(); i++)
             lines.add(new Line(details.get(i), PADDING, 36 + i * 10, Ink.SECONDARY));
@@ -45,7 +47,7 @@ final class TaskBubbleLayout {
         }
         lines.add(new Line(fit(state.title(), WIDTH - 2 * PADDING, measure), PADDING, 75, Ink.SECONDARY));
         return new Layout(List.copyOf(lines), progress == null ? -1
-                : Math.clamp((float) progress.current() / progress.target(), 0, 1));
+                : Math.clamp((float) progress.current() / progress.target(), 0, 1), spinning);
     }
     static String fit(String text, int width, ToIntFunction<String> measure) {
         if (measure.applyAsInt(text) <= width) return text;

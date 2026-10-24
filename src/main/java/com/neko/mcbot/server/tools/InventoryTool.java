@@ -28,6 +28,7 @@ public final class InventoryTool implements ServerTool {
         JsonObject data = new JsonObject();
         data.addProperty("selected_slot", selected);
         data.addProperty("storage_size", Inventory.INVENTORY_SIZE);
+        data.addProperty("mining_tools_known", true);
         JsonArray slots = new JsonArray();
         JsonArray equipment = new JsonArray();
         StringBuilder feedback = new StringBuilder("背包槽位 0-35（快捷栏 0-8），当前主手槽 ")
@@ -67,6 +68,7 @@ public final class InventoryTool implements ServerTool {
         data.addProperty("item", id);
         data.addProperty("count", stack.isEmpty() ? 0 : stack.getCount());
         if (!stack.isEmpty()) {
+            data.addProperty("mining_tool", stack.has(net.minecraft.core.component.DataComponents.TOOL));
             data.addProperty("item_id_truncated", idTruncated(stack));
             if (stack.isDamageableItem()) {
                 data.addProperty("damage", stack.getDamageValue());

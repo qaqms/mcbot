@@ -9,6 +9,19 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TaskBubbleStateTest {
+    @Test void waitingFlagUsesStructuredActivityAndEndsForQuestionsAndTerminals() {
+        var state = new TaskBubbleState();
+        state.begin(7, "work");
+        for (var activity : TaskBubbleState.Activity.values()) {
+            var display = state.snapshot(7, activity, "", null, null, 0);
+            assertEquals(activity == TaskBubbleState.Activity.MODEL || activity == TaskBubbleState.Activity.COMPACTING,
+                    display.modelWaiting(), activity.name());
+        }
+        var q = new AgentRunner.QuestionSnapshot("q1", 7, "继续？", 7000, true);
+        assertFalse(state.snapshot(7, TaskBubbleState.Activity.MODEL, "", null, q, 0).modelWaiting());
+        state.finish(7, TaskStatus.CANCELLED, "", null, 10);
+        assertFalse(state.snapshot(0, TaskBubbleState.Activity.MODEL, "", null, null, 20).modelWaiting());
+    }
     private final TaskBubbleState state = new TaskBubbleState();
     private TaskBubbleState.Snapshot snapshot(long active, long now) {
         return state.snapshot(active, TaskBubbleState.Activity.MODEL, "", null, null, now);

@@ -7,6 +7,20 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TaskBubbleLayoutTest {
+    @Test void spinnerReservesFixedSpaceAndCannotOverlapLongActionTextOrOtherRows() {
+        for (var tone : TaskBubbleState.Tone.values()) {
+            var state = new TaskBubbleState.Snapshot(7, "long task", tone,
+                    "等待下一步".repeat(80), "等待模型响应", null, 0, true);
+            var layout = TaskBubbleLayout.create(state, "Bot", "", TaskBubbleLayoutTest::width);
+            boolean visible = tone == TaskBubbleState.Tone.WORKING;
+            assertEquals(visible, layout.spinning());
+            var action = layout.lines().stream().filter(line -> line.y() == 22).findFirst().orElseThrow();
+            assertEquals(TaskBubbleLayout.PADDING + (visible ? 14 : 0), action.x());
+            assertTrue(action.x() + width(action.text()) <= TaskBubbleLayout.WIDTH - TaskBubbleLayout.PADDING);
+            assertTrue(layout.lines().stream().filter(line -> line.y() != 22)
+                    .allMatch(line -> line.x() >= TaskBubbleLayout.PADDING));
+        }
+    }
     private static int width(String text) {
         return text.codePoints().map(c -> c < 128 ? 6 : 9).sum();
     }

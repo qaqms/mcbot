@@ -43,6 +43,30 @@ class AwarenessToolTest {
         assertTrue(result.feedback().contains("不代表甩掉追兵"));
     }
     @BeforeAll static void boot() { SharedConstants.tryDetectVersion(); Bootstrap.bootStrap(); }
+    @Test void usableStoredToolAllowsWorkWithoutMisreportingTheCurrentHand() {
+        int[] checks = {0};
+        var scan = new Scan() {
+            @Override public Boolean harvestable(BlockState state) { return false; }
+            @Override public JsonObject miningTool(BlockState state, BlockPos pos) {
+                return json("{\"harvestable\":true,\"slot\":20,\"estimated_seconds\":0.5,\"base_speed\":6}");
+            }
+            @Override public void work(JsonObject target, BlockPos pos, com.neko.mcbot.server.BlockAim.TraceBudget budget) {
+                checks[0]++;
+                target.addProperty("can_work_here", true);
+                target.addProperty("can_clear_here", true);
+                target.add("stand_positions", new com.google.gson.JsonArray());
+            }
+        };
+        scan.cells.put(scan.center().offset(1, 0, 0), Blocks.IRON_ORE.defaultBlockState());
+        var result = FindResourceTool.execute(json("{\"targets\":[\"iron_ore\"],\"r\":2,\"work\":true}"), scan);
+        assertTrue(result.ok());
+        var target = result.data().getAsJsonArray("targets").get(0).getAsJsonObject();
+        assertFalse(target.get("harvestable_with_hand").getAsBoolean());
+        assertTrue(target.get("harvestable_with_inventory").getAsBoolean());
+        assertTrue(target.get("can_work_here").getAsBoolean());
+        assertEquals(20, target.getAsJsonObject("mining_tool").get("slot").getAsInt());
+        assertEquals(1, checks[0]);
+    }
     private static JsonObject json(String value) { return JsonParser.parseString(value).getAsJsonObject(); }
     private static class Scan implements FindResourceTool.Access {
         final Map<BlockPos, BlockState> cells = new HashMap<>();

@@ -92,7 +92,8 @@ public final class ClientToolDefs {
                     + "threat_scan_complete为概要，局部拉开不保证甩掉追兵，取消后不自动接旧活。"
                     + "spatial_facts为区块版本；navigation_trail给当前任务实际路标和有限改动，非可返保证。";
             case "inventory" -> "data.selected_slot、storage_size、slots_used；"
-                    + "data.slots是[{slot,item,count,damage?,max_damage?}]，data.equipment是装备列表。"
+                    + "data.slots是[{slot,item,count,damage?,max_damage?,mining_tool?}]，data.equipment是装备列表。"
+                    + "mining_tools_known=true表示mining_tool依据真实TOOL组件；它不保证具体方块的采收资格。"
                     + "slots是从1起的列表，传给equip的是entry.slot实际0-35槽号。";
             case "craft" -> "data.can_craft布尔；false时data.failure说明缺口，不是脚本异常。"
                     + "data.ingredients是[{options:物品ID字符串列表,per_batch,required_count,available_count,options_truncated}]；"
@@ -116,7 +117,10 @@ public final class ClientToolDefs {
                     + "没有blocks字段；查指定方块应search_resource，不逐格inspect代替区域搜索。";
             case "find_resource", "search_resource" -> "data.targets是[{block,x,y,z,distance,...}]；"
                     + "work=true时按预算附work_checked/can_work_here/can_clear_here/stand_positions/work_failure/"
-                    + "harvestable_with_hand/dry_work_safe，缺字段表示未知。stand_positions是脚格{x,y,z}。"
+                    + "harvestable_with_hand/harvestable_with_inventory/dry_work_safe，缺字段表示未知。"
+                    + "有库存采收资格时即使当前主手不合适也可工作，实际挖掘会选工具。"
+                    + "mining_tool含harvestable/slot/stack/estimated_seconds/base_speed及preferred_kind/preparation_recommended；"
+                    + "时间只估当前状态的单格破坏，批量工作先按真实配方补高效工具，未自动制作。stand_positions是脚格{x,y,z}。"
                     + "no_targets为布尔，unknown为数量，results_truncated/work_truncated表示输出/工作评估截断；"
                     + "find_resource续页看next_offset及scan_center；search_resource给scan_complete/coverage_complete/"
                     + "search_pages。局部空结果不等于没有资源；目标发现不等于可采或入包。";
@@ -153,6 +157,7 @@ public final class ClientToolDefs {
                     + "survey是收尾重查全目标，仍有cells/materials分页；final_verified=false不可验收。"
                     + "batch_finished只表示局部批次结束，goal_satisfied才是同修订全目标现场满足，仍不完成外层set_goal。";
             case "break_block" -> "data.removed表示真实移除；collected_count=0表示挖掘不直接塞包。"
+                    + "tool_selection为原许可下真实换手，含source_slot/previous_slot/selected_slot/held/changed；观测和预检不换手。"
                     + "drop_accounting_known表示原生来源观察可用；可用时drop_accounting含ledger_id/origin_id/role/source、"
                     + "spawned_count/live_count/picked_up_self_count/picked_up_other_count/destroyed_count/unresolved_count。"
                     + "accounting_complete仅结算已观察生成物；同步区间外延迟生成不归源，混堆部分转移可变未知。"
@@ -160,6 +165,7 @@ public final class ClientToolDefs {
                     + "drop_spawns是源格生成样本，须drop_spawns_complete=true才可据未出现判断。"
                     + "clearing_results/clearing_drop_summary与目标分开。拾取累计不替代新鲜背包或最终目标。";
             case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position/work/pickup，"
+                    + "tool_changes为最多16次实际开路换手，tool_changes_truncated为是否截短；已有工具可自动切换，制作仍由模型安排。"
                     + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
                     + "拾取用scan_area.item_targets[].target_uuid填pickup_target_uuid；工作用arrival=work。"
                     + "TARGET_LOST且pickup_target_missing=true、target_uuid匹配时，仅表示原掉落不在场；先核新鲜背包再重扫，不据消失算入包。"
@@ -240,8 +246,9 @@ public final class ClientToolDefs {
                     + "后续省略参数继承首次值，显式修改拒绝；耗尽后重复调用不会补充，按回执汇报范围与障碍。"
                     + "timeout_seconds默认0不限总时长，可选0-180；失败/权限/未知状态交回模型，取消迟到不续跑。"
                     + "data.state是本段终态新鲜身体/背包，exploration_advanced仅表示实际换区，不证明找到任务目标。"
-                    + "地下data.supply给selected_remaining/reserve_durability/selected_dig_capacity及durable_spares[{slot,item,remaining}]；"
-                    + "备用耐久物品不保证采收资格，须按实际工具/配方补给后继续原目标；一次局部失败不等于整体受阻",
+                    + "地下data.supply给selected_remaining/reserve_durability/selected_dig_capacity、inventory_dig_capacity及durable_spares；"
+                    + "新鲜背包带mining_tools_known时按可用采掘工具开路，逐格选有采收资格且保留耐久的工具；"
+                    + "inventory_dig_capacity只是工具中最大剩余额度，不保证全部矿种可采。须按配方补给后继续原目标；一次局部失败不等于整体受阻",
                     "{\"type\":\"object\",\"properties\":{\"max_steps\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647},"
                             + "\"radius\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647},"
                             + "\"timeout_seconds\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":180},"
@@ -438,7 +445,8 @@ public final class ClientToolDefs {
                             + "\"work\":{\"type\":\"boolean\"}},\"required\":[\"targets\"],\"additionalProperties\":false}"),
             new ToolSpec("find_resource", "底层单页资源查询；一般发现资源优先search_resource自动查完分页。targets为方块ID或#方块标签，如#minecraft:logs、oak_log、iron_ore。"
                     + "r默认8、最多16；每页采样4096格、最多16候选，work=true在预算内优先露出/可工作资源。"
-                    + "harvestable_with_hand=false时先核对/装备工具，不为该目标移动开路。"
+                    + "harvestable_with_inventory=false时先补可用采收工具，不为该目标移动开路；"
+                    + "mining_tool给已有最优工具与单格耗时/专用工具建议，挖掘可自动换手，观测不换手。"
                     + "dry_work_safe=false表示流体/重力/未知邻域危险，当前不进行干燥采掘，换工作面。"
                     + "offset默认0；续页须用next_offset并携带原scan_center、同一targets/r，-1为页末；身体移动后从0重查。"
                     + "frontiers=true在末页给exploration_points已加载落脚样本，路径仍须move_to walk_only=true核验。"
@@ -505,7 +513,7 @@ public final class ClientToolDefs {
                             + "\"fuel_count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64},"
                             + "\"slot\":{\"type\":\"string\",\"enum\":[\"input\",\"fuel\",\"output\"]},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
-            new ToolSpec("break_block", "挖一格干燥方块，需主手有采收资格；先inventory/equip选工具。"
+            new ToolSpec("break_block", "挖一格干燥方块，执行时从真实背包选有采收资格的最快工具，同速优先不消耗耐久；不自动制作工具。"
                     + "expected_block可填写最新观测的完整方块ID，目标被替换则停止；gather自动携带。"
                     + "工地障碍显式site_revision并带expected_block，只清非成品且有替换材料、无支撑依赖的目标；"
                     + "temporary_cleanup=true回收实际来源仍有效且依赖解除的临时格，不与clear_obstructions组合。"
@@ -586,6 +594,7 @@ public final class ClientToolDefs {
                     + "物品移位复核，消失不当作入包，仍核对背包。不能与work_target/arrival/place_item/return_waypoint组合。"
                     + "单批节点用完可在整趟资源内保留边界续搜或执行可返回的安全前缀；搜索耗尽不等于地形封闭，更不等于模型/工具次数耗尽。"
                     + "默认无总时长及累计挖掘次数上限；仅需限制开路时填写非负max_digs，0禁止挖掘。"
+                    + "reserve_durability默认0，0-1024；规划与每格实际选工具均保留该耐久，不能借无采收资格的备用工具续挖。"
                     + "bounds={x,y,z,radius}限制所有路径节点和改动；逐次搜索资源及实际卡住保护保留。"
                     + "clear_obstructions=true时可按有界安全清理评估工作站位，移动本身不会额外清理目标射线。"
                     + "place_item不与clear_obstructions=true组合；原放置查询可给原目标stand_positions，不能把alternatives当原目标站位。"
@@ -605,6 +614,7 @@ public final class ClientToolDefs {
                             + "\"pickup_target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
                             + "\"arrival\":{\"type\":\"string\",\"enum\":[\"work\"]},\"underground\":{\"type\":\"boolean\"},"
                             + "\"max_digs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647},"
+                            + "\"reserve_durability\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":1024},"
                             + "\"bounds\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"},"
                             + "\"z\":{\"type\":\"integer\"},\"radius\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647}},"
                             + "\"required\":[\"x\",\"y\",\"z\",\"radius\"],\"additionalProperties\":false},"

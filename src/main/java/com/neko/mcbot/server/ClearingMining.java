@@ -18,6 +18,7 @@ public final class ClearingMining {
         boolean reserve(Map<String, ActionPermissions.Change> changes);
         boolean sameHand();
         default void completed() { }
+        default void selectedTool() { }
         default ServerTool.Result targetGuard() { return null; }
     }
 
@@ -37,6 +38,7 @@ public final class ClearingMining {
     private boolean requiresApproval;
     private final java.util.List<BlockMining> completedMining = new java.util.ArrayList<>();
     private BlockMining targetMining;
+    private boolean selectionObserved;
 
     public ClearingMining(Access access, BlockPos target, String expectedBlock,
                           ActionPermissions permissions, ActionPermissions.Context context,
@@ -109,6 +111,7 @@ public final class ClearingMining {
             if (!active.equals(target) && clears.size() >= clearLimit)
                 return finish(false, "BLOCK_LIMIT:本次局部清理预算已到。", null);
             mining = access.mining(active);
+            selectionObserved = false;
         }
         var change = new ActionPermissions.Change("dig", active.asLong(), access.state(active));
         if (!change.equals(planned.get(ActionPermissions.key(change))))
@@ -117,6 +120,10 @@ public final class ClearingMining {
                 || requiresApproval && !permissions.allowsChange(context, approval, change))
             return finish(false, "DENIED:遮挡清理许可或安全条件已变化，已停手。", null);
         var result = mining.tick();
+        if (!selectionObserved && mining.observation().has("tool_selection")) {
+            selectionObserved = true;
+            access.selectedTool();
+        }
         if (result == null) return null;
         access.completed();
         boolean removed = result.data().get("removed").getAsBoolean();

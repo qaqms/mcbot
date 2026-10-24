@@ -6,6 +6,18 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PathSpecTest {
+    @Test void perToolReserveSurvivesSnapshotsAndRejectsInvalidWireValues() {
+        var args = JsonParser.parseString(
+                "{\"underground\":true,\"max_digs\":80,\"reserve_durability\":16}").getAsJsonObject();
+        var spec = PathSpec.parse(args);
+        assertEquals(16, spec.reserveDurability());
+        assertEquals(spec, PathSpec.restore(spec.snapshot()));
+        assertEquals(0, PathSpec.DEFAULT.reserveDurability());
+        for (String value : java.util.List.of("-1", "1025", "1.5", "\"16\"", "null")) {
+            args.add("reserve_durability", JsonParser.parseString(value));
+            assertThrows(RuntimeException.class, () -> PathSpec.parse(args));
+        }
+    }
     @Test void scopeIncludesEveryCoordinateAndCannotBeCoercedFromStrings() {
         var spec = PathSpec.parse(JsonParser.parseString(
                 "{\"underground\":true,\"max_digs\":12,\"bounds\":{\"x\":0,\"y\":64,\"z\":0,\"radius\":8}}")

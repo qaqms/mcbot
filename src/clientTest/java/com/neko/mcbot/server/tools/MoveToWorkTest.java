@@ -57,6 +57,39 @@ class MoveToWorkTest {
         }
     }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
+    private static com.neko.mcbot.server.StandingGeometry floor(boolean slab, boolean unknown) {
+        return new com.neko.mcbot.server.StandingGeometry(new com.neko.mcbot.server.StandingGeometry.Access() {
+            @Override public boolean known(BlockPos pos) { return !unknown; }
+            @Override public java.util.List<net.minecraft.world.phys.AABB> boxes(BlockPos pos) {
+                assertFalse(unknown, "unknown cells must not be read");
+                var block = pos.getY() == -1 ? net.minecraft.world.level.block.Blocks.STONE.defaultBlockState()
+                        : slab && pos.equals(BlockPos.ZERO) ? net.minecraft.world.level.block.Blocks.OAK_SLAB.defaultBlockState()
+                        : net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+                return com.neko.mcbot.server.StandingGeometry.collision(block,
+                        net.minecraft.world.level.EmptyBlockGetter.INSTANCE, pos);
+            }
+        }, .6, 1.8, .6);
+    }
+    @Test void impossibleExactWalkingHeightReturnsLocalFactsBeforeSearchingAndDoesNotReplaceTheGoal() {
+        var target = BlockPos.ZERO.above();
+        var failure = MoveToTool.walkEndpoint(target, true, true, false, floor(false, false), p -> true);
+        assertFalse(failure.ok());
+        assertTrue(failure.feedback().startsWith("TARGET_BLOCKED:"));
+        assertEquals(1, failure.data().getAsJsonObject("requested_feet").get("y").getAsInt());
+        assertEquals(0, failure.data().getAsJsonObject("alternative_feet").get("y").getAsInt());
+        assertEquals(0, failure.data().getAsJsonObject("alternative_feet").get("feet_y").getAsDouble());
+        assertFalse(MoveToTool.walkEndpoint(target, true, true, false, floor(false, false), p -> false)
+                .data().has("alternative_feet"), "suggestions must remain in the original scope");
+        assertFalse(MoveToTool.walkEndpoint(target, true, true, false, floor(false, true), p -> true)
+                .data().has("alternative_feet"), "unknown terrain cannot prove an alternative stance");
+    }
+    @Test void validFractionalFeetEditableRoutesAndSemanticArrivalsKeepTheirOriginalPlanningContract() {
+        assertNull(MoveToTool.walkEndpoint(BlockPos.ZERO, true, true, false, floor(false, false), p -> true));
+        assertNull(MoveToTool.walkEndpoint(BlockPos.ZERO, true, true, false, floor(true, false), p -> true));
+        assertNull(MoveToTool.walkEndpoint(BlockPos.ZERO.above(), false, true, false, null, p -> true));
+        assertNull(MoveToTool.walkEndpoint(BlockPos.ZERO.above(), true, false, false, null, p -> true));
+        assertNull(MoveToTool.walkEndpoint(BlockPos.ZERO.above(), true, true, true, null, p -> true));
+    }
 
     @Test void pickupIntentUsesStrictStableIdentityAndCannotOverrideOtherArrivalContracts() {
         String id = "46c4cf30-69a8-44de-8880-cfc9ed053ac9";

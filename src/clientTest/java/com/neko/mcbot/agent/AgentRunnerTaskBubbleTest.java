@@ -42,10 +42,12 @@ class AgentRunnerTaskBubbleTest {
     @Test void sentPrimitiveRemainsVisibleAcrossAcceptanceAndIgnoresOtherInspectionsAndLateEvents() {
         long task = start();
         assertEquals("等待下一步", runner.taskBubbleSnapshot().action());
+        assertTrue(runner.taskBubbleSnapshot().modelWaiting());
         client.engine().tools(0, new ToolCall("mine", "break_block", "{\"x\":2,\"y\":90,\"z\":0}"));
         client.drain();
         long seq = client.lastTool().num("seq", -1);
         assertEquals("正在挖掘", runner.taskBubbleSnapshot().action());
+        assertFalse(runner.taskBubbleSnapshot().modelWaiting());
         var ack = json("{\"job_id\":\"mine\",\"cap_ticks\":1200}");
         ack.addProperty("seq", seq);
         runner.handleS2c(new Envelope("job_ack", ack)); client.drain();
@@ -61,8 +63,10 @@ class AgentRunnerTaskBubbleTest {
         terminal.addProperty("seq", seq);
         runner.handleS2c(new Envelope("job_event", terminal)); client.drain();
         assertEquals("等待下一步", runner.taskBubbleSnapshot().action());
+        assertTrue(runner.taskBubbleSnapshot().modelWaiting());
         client.engine().reply(1, "done"); client.drain();
         assertEquals(TaskBubbleState.Tone.COMPLETED, runner.taskBubbleSnapshot().tone());
+        assertFalse(runner.taskBubbleSnapshot().modelWaiting());
         client.now += 6000;
         assertNull(runner.taskBubbleSnapshot());
     }

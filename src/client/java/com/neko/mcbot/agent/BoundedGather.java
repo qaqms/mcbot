@@ -96,6 +96,8 @@ final class BoundedGather {
     private final java.util.Map<String, JsonObject> excludedBlocks = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, JsonObject> excludedItems = new java.util.LinkedHashMap<>();
     private final JsonArray sourceObservations = new JsonArray();
+    private final JsonArray toolChanges = new JsonArray();
+    private boolean toolChangesTruncated;
     private double originX, originY, originZ;
     private final ExplorationRoute exploration;
     private boolean exploring;
@@ -235,6 +237,7 @@ final class BoundedGather {
                 return;
             }
             try {
+                recordToolChanges(receipt.data());
                 if (mayConfirm && confirm != null && !receipt.ok()
                         && receipt.feedback().startsWith("NEED_CONFIRM:")
                         && Set.of("move_to", "break_block").contains(name)
@@ -244,6 +247,26 @@ final class BoundedGather {
             }
             catch (RuntimeException invalid) { stop("STATE_UNAVAILABLE:采集回执缺少完整事实，未猜测或续发动作。"); }
         }));
+    }
+
+    private void recordToolChanges(JsonObject data) {
+        if (data == null) return;
+        if (data.has("tool_selection")) {
+            var selection = data.getAsJsonObject("tool_selection");
+            if (flag(selection, "changed")) {
+                if (toolChanges.size() < 16) toolChanges.add(selection.deepCopy());
+                else toolChangesTruncated = true;
+            }
+        }
+        if (data.has("tool_changes")) {
+            for (var selection : data.getAsJsonArray("tool_changes")) {
+                if (toolChanges.size() < 16) toolChanges.add(selection.deepCopy());
+                else toolChangesTruncated = true;
+            }
+        }
+        if (data.has("tool_changes_truncated") && flag(data, "tool_changes_truncated")) toolChangesTruncated = true;
+        if (data.has("clearing_results")) for (var clear : data.getAsJsonArray("clearing_results"))
+            recordToolChanges(clear.getAsJsonObject().getAsJsonObject("result"));
     }
 
     private void awaitConfirmation(String name, JsonObject args, ToolOutcome proposal, Consumer<ToolOutcome> next) {
@@ -465,7 +488,7 @@ final class BoundedGather {
                     lastProblem = "候选不满足干燥采掘安全条件；未为它移动或开路。";
                     continue;
                 }
-                if (block.has("harvestable_with_hand") && !flag(block, "harvestable_with_hand")) {
+                if (!canHarvest(block)) {
                     unharvestableBlocks.add(blockKey(block));
                     continue;
                 }
@@ -493,8 +516,8 @@ final class BoundedGather {
                 targetGroup += 8; sampleOffset = 0; findBlocks(); return;
             }
             if (!unharvestableBlocks.isEmpty()) {
-                finish(false, "WRONG_TOOL:已发现范围内匹配方块，但当前主手没有采收资格；"
-                        + "未为这些目标开路，先inventory/equip核对工具再决定后续。"); return;
+                finish(false, "WRONG_TOOL:已发现范围内匹配方块，但背包没有具有采收资格的可用工具；"
+                        + "未为这些目标开路，先核对背包与真实配方，补做合适工具再继续。"); return;
             }
             explore();
         });
@@ -511,10 +534,15 @@ final class BoundedGather {
             var target = entry.getAsJsonObject();
             if (workBatch.size() >= batchLimit - 1) break;
             if (!within(target) || skippedBlocks.contains(blockKey(target))
-                    || target.has("harvestable_with_hand") && !flag(target, "harvestable_with_hand")
+                    || !canHarvest(target)
                     || !flag(target, "can_work_here") || !seen.add(blockKey(target))) continue;
             workBatch.addLast(target.deepCopy());
         }
+    }
+
+    private static boolean canHarvest(JsonObject target) {
+        String key = target.has("harvestable_with_inventory") ? "harvestable_with_inventory" : "harvestable_with_hand";
+        return !target.has(key) || flag(target, key);
     }
 
     private boolean continueBatch() {
@@ -824,6 +852,8 @@ final class BoundedGather {
         data.addProperty("batch_continuations", batchContinuations);
         data.addProperty("drop_settle_waits", dropSettleWaits);
         data.addProperty("pickup_reobservations", pickupReobservations);
+        data.add("tool_changes", toolChanges.deepCopy());
+        data.addProperty("tool_changes_truncated", toolChangesTruncated);
         data.addProperty("exploration_enabled", plan.exploreSteps() > 0);
         data.addProperty("exploration_attempts", exploration.attempts());
         data.addProperty("exploration_max_steps", exploration.maxSteps);

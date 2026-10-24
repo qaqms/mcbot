@@ -12,6 +12,32 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BoundedSurveyTest {
+    @Test void storedMiningToolsContributeRealDurabilityWithoutTreatingArmorOrAnEmptyHandAsATool() {
+        var w = new World();
+        var state = w.state();
+        var inventory = state.getAsJsonObject("inventory");
+        inventory.addProperty("mining_tools_known", true);
+        var slots = inventory.getAsJsonArray("slots");
+        slots.get(0).getAsJsonObject().addProperty("mining_tool", false);
+        var stored = slots.get(19).getAsJsonObject();
+        stored.addProperty("item", "minecraft:stone_pickaxe");
+        stored.addProperty("count", 1);
+        stored.addProperty("mining_tool", true);
+        stored.addProperty("damage", 30);
+        stored.addProperty("max_damage", 131);
+        var armor = slots.get(20).getAsJsonObject();
+        armor.addProperty("item", "minecraft:diamond_chestplate");
+        armor.addProperty("count", 1);
+        armor.addProperty("mining_tool", false);
+        armor.addProperty("damage", 0);
+        armor.addProperty("max_damage", 528);
+        assertEquals(85, BoundedSurvey.digCapacity(state, 16));
+        assertEquals(85, BoundedSurvey.supplyFacts(state, 16).get("inventory_dig_capacity").getAsInt());
+        stored.addProperty("damage", 120);
+        assertEquals(0, BoundedSurvey.digCapacity(state, 16));
+        inventory.remove("mining_tools_known");
+        assertEquals(115, BoundedSurvey.digCapacity(state, 16), "old server observations retain selected-hand semantics");
+    }
     static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     static final class World {
         final ArrayDeque<Runnable> queue = new ArrayDeque<>();
@@ -24,6 +50,7 @@ class BoundedSurveyTest {
         int maxDamage = 131, targetY = 70;
         long now;
         boolean failMove, unknownPosition, environmentSafe = true;
+        boolean toolInStorage;
         String moveFailure = "PARTIAL:short route";
         CompletableFuture<ToolOutcome> pending;
         JsonObject state() {
@@ -36,6 +63,16 @@ class BoundedSurveyTest {
             var slot = inv.getAsJsonArray("slots").get(0).getAsJsonObject();
             slot.addProperty("item", "minecraft:stone_pickaxe"); slot.addProperty("count", 1);
             slot.addProperty("damage", damage); slot.addProperty("max_damage", maxDamage);
+            if (toolInStorage) {
+                var stored = slot.deepCopy();
+                stored.addProperty("slot", 19);
+                stored.addProperty("mining_tool", true);
+                inv.getAsJsonArray("slots").set(19, stored);
+                inv.addProperty("mining_tools_known", true);
+                slot.addProperty("item", "minecraft:spruce_log");
+                slot.addProperty("mining_tool", false);
+                slot.remove("damage"); slot.remove("max_damage");
+            }
             return data;
         }
         CompletableFuture<ToolOutcome> remote(String name, String text) {
@@ -82,6 +119,20 @@ class BoundedSurveyTest {
             int budget = 1000;
             while (!queue.isEmpty()) { assertTrue(--budget > 0); queue.removeFirst().run(); }
         }
+    }
+
+    @Test void anUnequippedUsableToolCanStartUndergroundWorkWithTheOriginalPerToolReserve() {
+        var w = new World();
+        w.toolInStorage = true;
+        w.foundAfter = 1;
+        var future = w.survey(false).start();
+        w.drain();
+        assertTrue(future.join().ok(), future.join().feedback());
+        assertEquals(1, w.moves.size());
+        assertEquals(16, w.moves.getFirst().get("reserve_durability").getAsInt());
+        assertEquals(115, w.moves.getFirst().get("max_digs").getAsInt());
+        assertFalse(future.join().data().getAsJsonObject("supply").has("selected_remaining"));
+        assertEquals(103, future.join().data().getAsJsonObject("supply").get("inventory_dig_capacity").getAsInt());
     }
 
     @Test void descentSearchAndReturnShareTheOriginalBudgetAndNeverCountDiscoveryAsInventory() {

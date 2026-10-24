@@ -9,6 +9,7 @@ import net.minecraft.world.phys.AABB;
 /** Native observations for the task's shared worksite. Never loads a missing chunk. */
 public final class BuildSiteAccess implements BuildSite.Access {
     private final CompanionPlayer body;
+    private MiningTools tools;
     public BuildSiteAccess(CompanionPlayer body) { this.body = body; }
     @Override public BlockState state(BlockPos pos) {
         var level = body.level();
@@ -45,5 +46,8 @@ public final class BuildSiteAccess implements BuildSite.Access {
     }
     @Override public boolean passage(BlockPos pos) { return body.navigationTrail().protectsPassage(pos); }
     @Override public boolean passageComplete() { return body.navigationTrail().passageComplete(); }
-    @Override public boolean canMine(BlockState state) { return body.hasCorrectToolForDrops(state); }
+    @Override public boolean canMine(BlockState state) {
+        if (tools == null) tools = MiningTools.forPlayer(body);
+        return tools.best(state) != null;
+    }
 }

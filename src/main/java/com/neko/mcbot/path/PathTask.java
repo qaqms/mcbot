@@ -182,6 +182,8 @@ public final class PathTask extends TickTask {
     // 挖掘子状态
     private BlockPos digPos;
     private BlockMining mining;
+    private final JsonArray toolChanges = new JsonArray();
+    private boolean toolChangesTruncated;
     private int actualDigs;
     private int actualPlaces;
     private final DropObservations drops = new DropObservations();
@@ -415,13 +417,18 @@ public final class PathTask extends TickTask {
         stopMovement();
         if (mining != null) {
             var partial = mining.refreshDrops(new Result(false, "", null));
-            if (partial.data() != null) drops.record(partial.data());
+            if (partial.data() != null) {
+                drops.record(partial.data());
+                recordToolChange(partial.data());
+            }
         }
         clearCrack();
         if (!result.feedback().startsWith("NEED_CONFIRM:")) dropPlan();
         JsonObject data = result.data() == null ? new JsonObject() : result.data().deepCopy();
         data.addProperty("removed_blocks", actualDigs);
         data.addProperty("placed_blocks", actualPlaces);
+        data.add("tool_changes", toolChanges.deepCopy());
+        data.addProperty("tool_changes_truncated", toolChangesTruncated);
         addTripData(data);
         if (drivenBody != null) {
             data.add("navigation_trail", drivenBody.navigationTrail().report());
@@ -1685,7 +1692,7 @@ public final class PathTask extends TickTask {
         if (digPos == null || !digPos.equals(pos)) {
             clearCrack();
             digPos = pos;
-            mining = BlockMining.forPlayer(c, pos, null, "path_clear");
+            mining = BlockMining.forPlayer(c, pos, null, "path_clear", null, false, spec.reserveDurability());
         }
         double seconds = sampler.digSeconds(x, y, z);
         if (!DigSampler.feasibleDig(seconds)) {
@@ -1693,6 +1700,8 @@ public final class PathTask extends TickTask {
         }
         Result result = mining.tick();
         if (result == null) return running();
+        recordToolChange(result.data());
+        sampler.refreshTools();
         mining = null;
         digPos = null;
         if (!result.data().get("removed").getAsBoolean()) return new Progress.Done(result);
@@ -1704,6 +1713,14 @@ public final class PathTask extends TickTask {
                 result.data().get("collected_count").getAsInt(), result.data().get("remaining_count").getAsInt());
         if (!result.data().get("reported_success").getAsBoolean()) return new Progress.Done(result);
         return null;
+    }
+
+    private void recordToolChange(JsonObject data) {
+        if (data == null || !data.has("tool_selection")) return;
+        var selection = data.getAsJsonObject("tool_selection");
+        if (!selection.get("changed").getAsBoolean()) return;
+        if (toolChanges.size() < 16) toolChanges.add(selection.deepCopy());
+        else toolChangesTruncated = true;
     }
 
     private Progress miningFailure(String feedback) {

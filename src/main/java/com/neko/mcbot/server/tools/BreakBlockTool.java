@@ -109,6 +109,10 @@ public final class BreakBlockTool implements ServerTool {
                     return hand[0].matches(c.getInventory().getSelectedSlot(), c.getMainHandItem());
                 }
                 @Override public void completed() {
+                    sampler.refreshTools();
+                    hand[0] = new HandSnapshot(c.getInventory().getSelectedSlot(), c.getMainHandItem(), c.handPickups());
+                }
+                @Override public void selectedTool() {
                     hand[0] = new HandSnapshot(c.getInventory().getSelectedSlot(), c.getMainHandItem(), c.handPickups());
                 }
                 @Override public Result targetGuard() {

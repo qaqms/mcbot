@@ -44,7 +44,7 @@ public final class BlockActionFixtures {
         }
     }
 
-    public static final class Mining implements BlockMining.Access {
+    public static class Mining implements BlockMining.Access {
         public boolean environmentSafe = true;
         @Override public boolean environmentSafe() { return environmentSafe; }
         public final Inventory inventory = BlockActionFixtures.inventory();

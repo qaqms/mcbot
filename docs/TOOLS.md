@@ -3,7 +3,21 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## 拾取寻路更新（2026-10-24）
+## 采掘工具与等待更新（2026-10-24）
+
+详见[采掘工具与等待显示](TOOL-EFFICIENCY-AND-WAITING-2026-10-24.md)。
+采掘/开路从真实36槽背包选具备采收资格的最快工具，同速优先不磨损；只读观测不换手。
+work查询新增harvestable_with_inventory/mining_tool，保留harvestable_with_hand原含义；
+gather可用未装备工具，但制作/升级仍由模型依真实配方安排。
+inventory明细的mining_tool布尔依据实际TOOL组件，mining_tools_known声明新格式。
+地下补给可复用库存工具；move_to新增可选reserve_durability（0-1024，默认0），
+规划、每格选择及恢复均保持，explore传原预留值；inventory_dig_capacity仅最大额度上界。
+tool_selection及有界tool_changes报告实际换手，原权限/取消/材料和真实耐久保持。
+仅精确只行走位置目标先核实际站位，不可站给endpoint_unstandable/requested_feet，
+原范围内同列建议为alternative_feet，不自动替换；其他目标仍走原搜索，不恢复地下高度禁发门。
+模型准备与建筑衔接指引同步；仍31工具，真实模型决策/游戏画面待验。
+
+## 拾取寻路更新（2026-10-24，前次检查点）
 
 详见[木头采集拾取寻路](WOOD-PICKUP-NAVIGATION-2026-10-24.md)，覆盖下方旧拾取口径。
 move_to增加可选pickup_target_uuid（标准UUID），x/y/z填新鲜掉落物品的取整坐标；

@@ -150,6 +150,10 @@ public final class MoveToTool implements ServerTool {
             var failure = placement.ready(c);
             if (failure != null) return CompletableFuture.completedFuture(failure);
         }
+        var endpoint = walkEndpoint(to, walkOnly, args.has("exact") && args.get("exact").getAsBoolean(),
+                workTarget != null || pickup != null, com.neko.mcbot.server.StandingGeometry.forPlayer(c),
+                pos -> spec.contains(pos.getX(), pos.getY(), pos.getZ()) && c.buildSite().inScope(pos));
+        if (endpoint != null) return CompletableFuture.completedFuture(endpoint);
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         var path = new PathTask(level, to, permissions, context, scope, sched,
                 args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement);
@@ -163,6 +167,32 @@ public final class MoveToTool implements ServerTool {
                 ? com.neko.mcbot.server.PlacementWork.finish(moved, () -> placement.assess(c, workTarget))
                 : finishWork(moved, workTarget == null ? null
                 : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget)));
+    }
+
+    static Result walkEndpoint(BlockPos target, boolean walkOnly, boolean exact, boolean semantic,
+                               com.neko.mcbot.server.StandingGeometry geometry,
+                               java.util.function.Predicate<BlockPos> allowed) {
+        if (!walkOnly || !exact || semantic) return null;
+        if (geometry.standing(target.getX(), target.getY(), target.getZ(),
+                com.neko.mcbot.path.TerrainEdits.EMPTY) != null) return null;
+        var data = new JsonObject();
+        data.addProperty("endpoint_unstandable", true);
+        data.add("requested_feet", com.neko.mcbot.building.BuildTarget.coordinates(target));
+        for (var alternative : java.util.List.of(target.below(), target.above())) {
+            if (!allowed.test(alternative)) continue;
+            var foot = geometry.standing(alternative.getX(), alternative.getY(), alternative.getZ(),
+                    com.neko.mcbot.path.TerrainEdits.EMPTY);
+            if (foot == null) continue;
+            var point = com.neko.mcbot.building.BuildTarget.coordinates(alternative);
+            point.addProperty("feet_y", foot.height());
+            data.add("alternative_feet", point);
+            break;
+        }
+        return new Result(false, "TARGET_BLOCKED:只行走无法精确站到请求脚格 " + target.toShortString()
+                + "：当前支撑、净空或已加载几何未确认；未启动整片寻路。"
+                + (data.has("alternative_feet") ? " 同列实际可站脚格为 " + data.get("alternative_feet")
+                + "，仅为现场建议，不证明路可达，未替换原目标；核对需要的脚格高度后再决定。"
+                : " 先核对真实脚格和地板高度，或在原许可内选择可挖放的路线。"), data);
     }
 
     static com.neko.mcbot.server.PlacementWork placement(JsonObject args, BlockPos target) {

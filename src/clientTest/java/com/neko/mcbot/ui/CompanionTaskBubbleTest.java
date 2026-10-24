@@ -25,6 +25,45 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CompanionTaskBubbleTest {
+    @Test void spinnerVerticesRotateWithCapturedTimeWithinTheReservedAreaAndRespectFade() {
+        var state = new TaskBubbleState.Snapshot(1, "work", TaskBubbleState.Tone.WORKING,
+                "等待下一步", "", null, 0, true);
+        var layout = TaskBubbleLayout.create(state, "Bot", "", s -> s.length() * 9);
+        var base = frame(Vec3.ZERO);
+        var frames = new ArrayList<List<float[]>>();
+        for (long nanos : new long[]{0, 150_000_000L}) {
+            var capture = new Capture();
+            CompanionTaskBubble.submit(new PoseStack(), capture.queue, Vec3.ZERO, new Quaternionf(),
+                    new CompanionTaskBubble.Frame(Vec3.ZERO, 1, .5f, layout, base.palette(),
+                            CompanionTaskBubble.rotation(nanos)));
+            var vertices = new ArrayList<float[]>();
+            var colors = new ArrayList<Integer>();
+            VertexConsumer sink = (VertexConsumer) Proxy.newProxyInstance(getClass().getClassLoader(),
+                    new Class<?>[]{VertexConsumer.class}, (proxy, method, args) -> {
+                        if (method.isDefault())
+                            return java.lang.reflect.InvocationHandler.invokeDefault(proxy, method, args);
+                        if (method.getName().equals("addVertex") && args.length == 3) {
+                            if ((float) args[2] == .4f) vertices.add(new float[]{
+                                    (float) args[0], (float) args[1], (float) args[2]});
+                        }
+                        if (method.getName().equals("setColor") && vertices.size() > colors.size())
+                            colors.add((int) args[0]);
+                        if (method.getName().equals("setLight")) return proxy;
+                        return proxy;
+                    });
+            capture.geometry.getFirst().draw.render(new PoseStack().last(), sink);
+            assertEquals(40, vertices.size());
+            for (var point : vertices) {
+                assertTrue(point[0] >= 7.8f && point[0] <= 18.2f);
+                assertTrue(point[1] >= 20.8f && point[1] <= 31.2f);
+            }
+            assertTrue(colors.stream().allMatch(c -> c >>> 24 > 0 && c >>> 24 <= 128));
+            frames.add(vertices);
+        }
+        assertNotEquals(frames.get(0).getFirst()[0], frames.get(1).getFirst()[0]);
+        assertEquals(CompanionTaskBubble.rotation(0), CompanionTaskBubble.rotation(1_200_000_000L));
+        assertTrue(CompanionTaskBubble.rotation(-1) >= 0);
+    }
     private record Geometry(PoseStack.Pose pose, RenderType type, SubmitNodeCollector.CustomGeometryRenderer draw) {}
     private static final class Capture {
         final List<Geometry> geometry = new ArrayList<>();

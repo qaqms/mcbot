@@ -36,6 +36,7 @@ public final class FindResourceTool implements ServerTool {
         boolean readable(BlockPos pos);
         BlockState state(BlockPos pos);
         default Boolean harvestable(BlockState state) { return null; }
+        default JsonObject miningTool(BlockState state, BlockPos pos) { return null; }
         default Boolean dryWorkSafe(BlockPos pos) { return null; }
         default void work(JsonObject target, BlockPos pos) { }
         default void work(JsonObject target, BlockPos pos, BlockAim.TraceBudget budget) { work(target, pos); }
@@ -45,6 +46,7 @@ public final class FindResourceTool implements ServerTool {
     @Override public String name() { return "find_resource"; }
     @Override public Result run(CompanionPlayer companion, JsonObject args) {
         var before = com.neko.mcbot.server.TerrainSnapshots.around(companion.level(), companion.blockPosition(), 16);
+        var tools = com.neko.mcbot.server.MiningTools.forPlayer(companion);
         var result = execute(args, new Access() {
             @Override public BlockPos center() { return companion.blockPosition(); }
             @Override public boolean readable(BlockPos pos) {
@@ -59,6 +61,10 @@ public final class FindResourceTool implements ServerTool {
             }
             @Override public Boolean harvestable(BlockState state) {
                 return companion.hasCorrectToolForDrops(state);
+            }
+            @Override public JsonObject miningTool(BlockState state, BlockPos pos) {
+                return com.neko.mcbot.server.MiningTools.describe(tools.best(state), state,
+                        state.getDestroySpeed(companion.level(), pos));
             }
             @Override public Boolean dryWorkSafe(BlockPos pos) {
                 return com.neko.mcbot.server.MiningEnvironment.safe(
@@ -185,6 +191,11 @@ public final class FindResourceTool implements ServerTool {
             if (work) {
                 Boolean harvestable = access.harvestable(state);
                 if (harvestable != null) target.addProperty("harvestable_with_hand", harvestable);
+                var tool = access.miningTool(state, pos);
+                if (tool != null) {
+                    target.add("mining_tool", tool);
+                    target.addProperty("harvestable_with_inventory", tool.get("harvestable").getAsBoolean());
+                }
                 Boolean safe = access.dryWorkSafe(pos);
                 if (safe != null) target.addProperty("dry_work_safe", safe);
             }
@@ -214,7 +225,7 @@ public final class FindResourceTool implements ServerTool {
                     target.add("stand_positions", new JsonArray());
                     continue;
                 }
-                if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) {
+                if (!canHarvest(target)) {
                     target.addProperty("work_checked", true);
                     target.addProperty("can_work_here", false);
                     target.addProperty("can_clear_here", false);
@@ -233,7 +244,7 @@ public final class FindResourceTool implements ServerTool {
                 if (!traceBudget.available()) break;
                 if (!target.has("work_checked")) continue;
                 if (target.has("dry_work_safe") && !target.get("dry_work_safe").getAsBoolean()) continue;
-                if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) continue;
+                if (!canHarvest(target)) continue;
                 access.stands(target, point(target), traceBudget);
             }
             // Unchecked candidates stay diagnostic; never advertise them as actionable.
@@ -256,7 +267,13 @@ public final class FindResourceTool implements ServerTool {
             if (work) {
                 lines.append("；");
                 if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean())
-                    lines.append("当前主手没有采收资格，先inventory/equip；");
+                    lines.append(canHarvest(target) ? "当前主手不适合，实际挖掘将从背包选可用工具；"
+                            : "背包没有已确认可用的采收工具，先核对配方补给；");
+                if (target.has("mining_tool")) {
+                    var tool = target.getAsJsonObject("mining_tool");
+                    if (tool.has("preparation_recommended") && tool.get("preparation_recommended").getAsBoolean())
+                        lines.append("批量工作前建议按真实配方准备").append(tool.get("preferred_kind").getAsString()).append("；");
+                }
                 if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean())
                     lines.append("当前可直接挖");
                 else if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean())
@@ -318,11 +335,16 @@ public final class FindResourceTool implements ServerTool {
 
     private static int workRank(JsonObject target) {
         if (target.has("dry_work_safe") && !target.get("dry_work_safe").getAsBoolean()) return 6;
-        if (target.has("harvestable_with_hand") && !target.get("harvestable_with_hand").getAsBoolean()) return 5;
+        if (!canHarvest(target)) return 5;
         if (target.has("can_work_here") && target.get("can_work_here").getAsBoolean()) return 0;
         if (target.has("can_clear_here") && target.get("can_clear_here").getAsBoolean()) return 1;
         if (target.has("stand_positions") && !target.getAsJsonArray("stand_positions").isEmpty()) return 2;
         return target.has("work_checked") ? 3 : 4;
+    }
+
+    private static boolean canHarvest(JsonObject target) {
+        String key = target.has("harvestable_with_inventory") ? "harvestable_with_inventory" : "harvestable_with_hand";
+        return !target.has(key) || target.get(key).getAsBoolean();
     }
 
     private static List<BlockPos> offsets() {
