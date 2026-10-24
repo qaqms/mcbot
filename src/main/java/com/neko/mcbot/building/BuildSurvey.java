@@ -29,6 +29,7 @@ public final class BuildSurvey {
         default boolean clearable(BuildTarget.Cell cell) { return false; }
         default String clearReason(BuildTarget.Cell cell) { return ""; }
         default JsonObject surface(BlockPos pos) { return null; }
+        default String workContext() { return ""; }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -301,6 +302,8 @@ public final class BuildSurvey {
         data.addProperty("observation_complete", observationComplete && stable);
         data.addProperty("spatial_stable", stable);
         data.addProperty("goal_observation_key", goalKey);
+        data.addProperty("work_observation_key",hash(observation + "|" + access.workContext()));
+        data.add("design_components",designComponents(target));
         if (after != null) data.add("spatial_facts", after);
         observation.append('|').append(after);
         data.addProperty("observation_key", hash(observation.toString()));
@@ -317,6 +320,27 @@ public final class BuildSurvey {
                 + "out_of_reach只是当前站位手够不着，使用工作导航换站位；surface为实际支撑/脚高，不是路线可达证明。"
                 + "page_counts仅本页，counts含全目标及页外未评估格；本页完成不等于整栋完成。"
                 + "明细和料单分别按next_offset/material_next_offset及同一expected_revision续页，Lua可用mc.build_diff(target)。", data);
+    }
+
+    private static JsonObject designComponents(BuildTarget target) {
+        var data=new JsonObject();
+        for (String key:List.of("doors","beds","crafting_tables","containers","lights","stairs","slabs"))
+            data.addProperty(key,0);
+        for (var cell:target.cells()) {
+            var state=cell.authored();
+            var block=state.getBlock();
+            String key=null;
+            if (block instanceof net.minecraft.world.level.block.DoorBlock && !BuildObjects.secondary(state)) key="doors";
+            else if (BuildObjects.bed(state) && !BuildObjects.secondary(state)) key="beds";
+            else if (block==net.minecraft.world.level.block.Blocks.CRAFTING_TABLE) key="crafting_tables";
+            else if (block instanceof net.minecraft.world.level.block.ChestBlock
+                    || block instanceof net.minecraft.world.level.block.BarrelBlock) key="containers";
+            else if (state.getLightEmission()>0) key="lights";
+            else if (block instanceof net.minecraft.world.level.block.StairBlock) key="stairs";
+            else if (block instanceof net.minecraft.world.level.block.SlabBlock) key="slabs";
+            if (key!=null) data.addProperty(key,data.get(key).getAsInt()+1);
+        }
+        return data;
     }
 
     private static String hash(String facts) {

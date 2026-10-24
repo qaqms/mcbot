@@ -3,6 +3,22 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 施工封口与进展更新（2026-10-25）
+
+build_diff新增work_observation_key与design_components，工具仍31项。
+前者供本次mc.build去重失败候选，身体/目标实际状态/库存变化可重评，
+粗区块stamp变化不算施工进展；原observation_key仍核分页稳定性，不替换或放宽。
+后者统计整图doors/beds/crafting_tables/containers/lights/stairs/slabs；
+门床只计主格，灯按实际声明状态发光量，描述图纸内容而非当前完工数或美观评分。
+住宅登记前核门/功能是否漏写，门洞空气不计doors；冻结原图不自动追改。
+
+活动工地放置会封住当前站位最后局部出口时报placement_failure=would_seal_exit，
+工作导航以同一预检找外侧站位再补，门/床两格和计划地形同验，不扣料或自动改图。
+这不是完整退路规划，不能据此保证已封闭身体能脱困或允许拆脚下成品。
+move_to失败仅在NO_PATH搜索穷尽且只产生起点节点时返回departure_blocked=true。
+mc.build仍读取新鲜status并保留last_failure，随即结束本次远端候选枚举；
+其他局部失败仍可换格，预算不足不冒充封闭起点。没有新事实时模型不应原样刷调用。
+
 ## 屋顶换位更新（2026-10-25）
 
 move_to及mc.build的原导航支持普通干燥地面两/三格下降，无需增加工具参数。

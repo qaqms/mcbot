@@ -329,6 +329,53 @@ class ConstructionProgramTest {
         assertTrue(run(w,CODE,128).data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean(),
                 "a local failure is not a persistent ban on the owner's task or later dispatch");
     }
+    @Test void unrelatedChunkChangesDoNotReplayFailedCandidatesAcrossWorkPages() throws Exception {
+        var w=new World(); w.moveFailure="NO_PATH:unchanged work";
+        int[] observed={0};
+        w.override=(name,args)-> {
+            if (!name.equals("build_diff")) return null;
+            int cursor=args.has("work_cursor")?args.get("work_cursor").getAsInt():0;
+            return actual("""
+                    {"target_revision":"%s","total":40,"remaining":40,"goal_satisfied":false,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"chunk-%d","work_observation_key":"same-work",
+                    "work_scan":true,"work_next_cursor":%d,"offset":0,"next_offset":16,
+                    "counts":{"out_of_reach":40},"cells":[{"x":%d,"y":90,"z":0,
+                    "state":"out_of_reach","item":"stone","material_available":true}]}
+                    """.formatted(REV,observed[0]++,cursor==0?16:-1,cursor==0?4:5));
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(List.of(4,5),w.calls.stream().filter(c->c.name().equals("move_to"))
+                .map(c->c.args().get("x").getAsInt()).toList());
+        assertEquals("placement_stance_unavailable",result.data().getAsJsonObject("returned").get("blocked").getAsString());
+    }
+
+    @Test void aProvenBlockedDepartureStopsRemoteCandidateEnumerationButKeepsFreshBodyAndFailure() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"same","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true},
+                    {"x":5,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true}]}
+                    """.formatted(REV));
+            if (name.equals("move_to")) return new ToolOutcome(false,"NO_PATH:departure has no edge",
+                    JsonParser.parseString("{\"departure_blocked\":true}").getAsJsonObject());
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        var report=result.data().getAsJsonObject("returned");
+        assertFalse(report.get("goal_satisfied").getAsBoolean());
+        assertEquals("departure_blocked",report.get("blocked").getAsString());
+        assertEquals("NO_PATH:departure has no edge",report.get("last_failure").getAsString());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        int index=0; while(!w.calls.get(index).name().equals("move_to")) index++;
+        assertEquals("status",w.calls.get(index+1).name());
+        assertTrue(result.feedback().contains("NO_PATH:departure has no edge"),result.feedback());
+    }
     @Test void aFailedCellDoesNotPreventReachingAnotherCellInTheSameUnchangedDesign() throws Exception {
         var w=new World(); w.moveFailure="NO_PATH:sealed first cell";
         w.override=(name,args)-> {

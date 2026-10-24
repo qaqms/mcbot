@@ -461,6 +461,8 @@ public final class PathTask extends TickTask {
             diagnostics.addProperty("estimate_seed_probes", search.estimateSeedProbes());
             diagnostics.addProperty("stored_nodes", search.storedNodes());
             diagnostics.addProperty("created_nodes", search.createdNodes());
+            data.addProperty("departure_blocked", search.failure()!=null && search.failure().startsWith("NO_PATH:")
+                    && search.expanded()==1 && search.createdNodes()==1);
             diagnostics.addProperty("storage_collections", search.storageCollections());
             diagnostics.addProperty("partial_candidate_checks", search.partialCandidateChecks());
             diagnostics.addProperty("elapsed_ms", search.elapsedMillis());

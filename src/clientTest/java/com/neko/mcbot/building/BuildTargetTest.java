@@ -21,6 +21,23 @@ class BuildTargetTest {
                 """.formatted(cells)).getAsJsonObject());
     }
 
+    @Test void bundledDoorExampleParsesAsOneCompleteObjectAndCostsOneItem() throws Exception {
+        String body;
+        try(var resource=getClass().getResourceAsStream("/com/neko/mcbot/agentcore/prompt/construction-design.md")) {
+            assertNotNull(resource);
+            body=new String(resource.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int start=body.indexOf("```json\n")+8;
+        int end=body.indexOf("```",start);
+        var target=BuildTarget.parse(JsonParser.parseString(body.substring(start,end)).getAsJsonObject());
+        assertEquals(2,target.cells().size());
+        assertTrue(target.cells().stream().allMatch(c -> BuildObjects.problem(target,c).isEmpty()));
+        assertEquals(1,target.cells().stream().mapToInt(c -> c.material().units()).sum());
+        assertEquals(new BlockPos(0,1,0),target.cells().getFirst().pos());
+        assertEquals(new BlockPos(0,2,0),BuildObjects.other(target.cells().getFirst().pos(),
+                target.cells().getFirst().authored()));
+    }
+
     @Test void coordinateAndAuthoredOrientationRotateTogetherAboutTheStableAnchor() {
         var target = BuildTarget.parse(JsonParser.parseString("""
                 {"anchor":{"x":10,"y":90,"z":20},"rotation":90,

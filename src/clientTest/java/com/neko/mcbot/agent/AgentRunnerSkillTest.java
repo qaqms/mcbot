@@ -26,10 +26,14 @@ class AgentRunnerSkillTest {
         var catalog=SkillCatalog.loadBundled(client.skillsDirectory);
         String name=catalog.index().getAsJsonArray("skills").get(0).getAsJsonObject().get("name").getAsString();
         assertTrue(client.engine().prompts.getFirst().contains("construction-design.md"));
-        assertFalse(client.engine().prompts.getFirst().contains("先选屋脊方向"));
+        assertFalse(client.engine().prompts.getFirst().contains("先做下面五件事"));
         help(0,name);
         assertTrue(result("help-0").ok());
-        assertTrue(result("help-0").content().contains("建筑方案"));
+        String firstPage=result("help-0").content();
+        assertTrue(firstPage.contains("设计并建成一栋能住的房子"));
+        assertTrue(firstPage.contains("design_components"));
+        assertTrue(firstPage.contains("doors"));
+        assertTrue(firstPage.contains("先做下面五件事"));
         assertEquals(31,client.engine().definitions.getFirst().size());
         assertEquals(0,client.toolCount());
         assertFalse(Files.exists(client.skillsDirectory));

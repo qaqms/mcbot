@@ -174,7 +174,7 @@ class SkillLoaderTest {
         var entry=bundled.index().getAsJsonArray("skills").get(0).getAsJsonObject();
         assertEquals("bundled",entry.get("source").getAsString());
         assertEquals("construction-design.md",entry.get("label").getAsString());
-        assertFalse(bundled.promptIndex().contains("先选屋脊方向"),"body is read on demand");
+        assertFalse(bundled.promptIndex().contains("先做下面五件事"),"body is read on demand");
         String selector=entry.get("name").getAsString();
         var body=new StringBuilder();
         do {

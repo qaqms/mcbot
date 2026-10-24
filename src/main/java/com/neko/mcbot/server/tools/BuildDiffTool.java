@@ -60,6 +60,16 @@ public final class BuildDiffTool implements ServerTool {
                     return body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos)) <= range * range;
                 }
                 @Override public BlockPlacement.Access placement() { return placement; }
+                @Override public String workContext() {
+                    var facts=new StringBuilder().append(body.getX()).append('|').append(body.getY())
+                            .append('|').append(body.getZ());
+                    for (int slot=0;slot<body.getInventory().getContainerSize();slot++) {
+                        var stack=body.getInventory().getItem(slot);
+                        facts.append('|').append(stack.getCount()).append(':')
+                                .append(net.minecraft.world.item.ItemStack.hashItemAndComponents(stack));
+                    }
+                    return facts.toString();
+                }
                 @Override public JsonObject surface(BlockPos pos) {
                     return observedSurface(geometry, pos, this::state);
                 }

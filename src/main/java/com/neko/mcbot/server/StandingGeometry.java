@@ -93,6 +93,46 @@ public final class StandingGeometry implements NavigationGeometry {
         return new AABB(x - half, feet, z - half, x + half, feet + height, z + half);
     }
 
+    /** Defer the cell that closes the last dry exit; the same check applies to projected work stances. */
+    public boolean preservesExit(int x, double feet, int z,
+                                 java.util.Map<BlockPos, BlockState> proposed, TerrainEdits edits) {
+        if (proposed.keySet().stream().noneMatch(pos -> Math.abs(pos.getX()-x)<=1
+                && Math.abs(pos.getZ()-z)<=1 && pos.getY()>=feet-maxDrop()-1 && pos.getY()<=feet+3)) return true;
+        var after = new StandingGeometry(new Access() {
+            @Override public boolean known(BlockPos pos) { return world.known(pos); }
+            @Override public List<AABB> boxes(BlockPos pos) {
+                var state = proposed.get(pos);
+                return state == null ? world.boxes(pos)
+                        : collision(state, net.minecraft.world.level.EmptyBlockGetter.INSTANCE, pos);
+            }
+        }, width, height, step, safeFall);
+        var removed = new java.util.ArrayList<>(edits.removed());
+        var placed = new java.util.ArrayList<>(edits.placed());
+        for (var pos : proposed.keySet()) {
+            long key = DigAStar.pack(pos.getX(),pos.getY(),pos.getZ());
+            removed.remove(key);
+            placed.remove(key);
+        }
+        var overlay = new TerrainEdits(java.util.Set.copyOf(removed),java.util.Set.copyOf(placed));
+        return after.exit(x,feet,z,overlay) || !exit(x,feet,z,edits);
+    }
+
+    private boolean exit(int x, double feet, int z, TerrainEdits edits) {
+        int y = NavigationGeometry.cell(feet);
+        var at = standing(x,y,z,edits);
+        if (at == null || !same(at.height(),feet)) return false;
+        for (int dx=-1;dx<=1;dx++) for (int dz=-1;dz<=1;dz++) {
+            if (dx==0 && dz==0) continue;
+            int depth = dx==0 || dz==0 ? (int) Math.ceil(maxDrop()) : 1;
+            for (int dy=1;dy>=-depth;dy--) {
+                var dest = standing(x+dx,y+dy,z+dz,edits);
+                if (dest != null && dx!=0 && dz!=0 && Math.abs(feet-dest.height())>1+1e-5) continue;
+                if (dest != null && motion(x,feet,z,x+dx,dest.height(),z+dz,edits)!=Motion.BLOCKED) return true;
+            }
+        }
+        return false;
+    }
+
     /** Recover only onto a column already under the real sole, through a supported, clear walk. */
     public BlockPos departure(double x, double feet, double z, java.util.function.Predicate<BlockPos> allowed) {
         if (!Double.isFinite(x) || !Double.isFinite(feet) || !Double.isFinite(z)) return null;

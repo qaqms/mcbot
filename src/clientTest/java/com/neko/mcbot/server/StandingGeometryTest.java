@@ -66,6 +66,38 @@ class StandingGeometryTest {
         }
     }
 
+    @Test void theLastRoofGapIsDeferredFromAnInteriorSupportButCanBeClosedFromOutside() {
+        var grid=new Grid();
+        grid.blocks.put(BlockPos.ZERO,Blocks.COBBLESTONE.defaultBlockState());
+        grid.blocks.put(BlockPos.ZERO.above(),Blocks.COBBLESTONE.defaultBlockState());
+        var gap=new BlockPos(0,3,-1);
+        for (int x=-1;x<=1;x++) for(int z=-1;z<=1;z++)
+            if ((x!=0 || z!=0) && !new BlockPos(x,3,z).equals(gap))
+                grid.blocks.put(new BlockPos(x,3,z),Blocks.OAK_PLANKS.defaultBlockState());
+        var original=Map.copyOf(grid.blocks);
+        var proposed=Map.of(gap,Blocks.OAK_PLANKS.defaultBlockState());
+        assertFalse(grid.geometry().preservesExit(0,2,0,proposed,TerrainEdits.EMPTY));
+        assertTrue(grid.geometry().preservesExit(0,0,-2,proposed,TerrainEdits.EMPTY),
+                "the same authored cell can be finished after moving outside");
+        assertEquals(original,grid.blocks,"preflight never edits the world");
+        grid.blocks.remove(new BlockPos(1,3,0));
+        assertTrue(grid.geometry().preservesExit(0,2,0,proposed,TerrainEdits.EMPTY),
+                "another existing exit is sufficient; do not impose a fixed route");
+    }
+
+    @Test void aPlannedSupportAndItsReplacementsAreIncludedInTheSameExitCheck() {
+        var grid=new Grid();
+        grid.blocks.put(BlockPos.ZERO,Blocks.COBBLESTONE.defaultBlockState());
+        var edits=TerrainEdits.EMPTY.after(List.of(),List.of(DigAStar.pack(0,1,0)));
+        var gap=new BlockPos(0,3,-1);
+        for(int x=-1;x<=1;x++) for(int z=-1;z<=1;z++)
+            if((x!=0 || z!=0) && !new BlockPos(x,3,z).equals(gap))
+                grid.blocks.put(new BlockPos(x,3,z),Blocks.OAK_PLANKS.defaultBlockState());
+        assertFalse(grid.geometry().preservesExit(0,2,0,Map.of(gap,Blocks.OAK_PLANKS.defaultBlockState()),edits));
+        assertEquals(Set.of(DigAStar.pack(0,1,0)),edits.placed());
+        assertTrue(grid.geometry().preservesExit(0,2,0,Map.of(gap,Blocks.AIR.defaultBlockState()),edits));
+    }
+
     @Test void stairsDoNotOfferAFalseHalfHeightStanceAndTheirFrontWalksWhileTheBackJumps() {
         var grid = new Grid();
         grid.blocks.put(new BlockPos(1, 0, 0), Blocks.OAK_STAIRS.defaultBlockState()

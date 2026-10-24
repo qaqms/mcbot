@@ -72,4 +72,35 @@ class DepartureNavigationTest {
             assertEquals(0, budget.replans());
         }
     }
+
+    @Test void theTerminalReceiptDistinguishesNoDepartureFromBudgetAndRemoteFailures() throws Exception {
+        var terrain=new Ledge();
+        var start=new BlockPos(62,65,143);
+        var target=new BlockPos(66,65,143);
+        var trapped=PathTask.searchFor(terrain,start,target,true,true);
+        while(!trapped.advance(300)) { }
+        assertEquals(1,trapped.expanded());
+        assertEquals(1,trapped.createdNodes());
+        assertTrue(receipt(trapped,target).get("departure_blocked").getAsBoolean());
+        var budget=new DigAStar(terrain,63,65,143,66,65,143,1,0,
+                NavigationGoal.position(66,65,143,0));
+        while(!budget.advance(300)) { }
+        assertEquals("NODES",budget.budgetKind());
+        assertFalse(receipt(budget,target).get("departure_blocked").getAsBoolean());
+        var remote=PathTask.searchFor(terrain,new BlockPos(63,65,143),target.east(),true,true);
+        while(!remote.advance(300)) { }
+        assertTrue(remote.expanded()>1);
+        assertNotNull(remote.failure());
+        assertFalse(receipt(remote,target).get("departure_blocked").getAsBoolean());
+    }
+
+    private com.google.gson.JsonObject receipt(DigAStar search,BlockPos target) throws Exception {
+        var task=new PathTask(null,target,null,null,null,null);
+        var field=PathTask.class.getDeclaredField("search");
+        field.setAccessible(true);
+        field.set(task,search);
+        var result=task.interruptedResult(new com.neko.mcbot.server.ServerTool.Result(false,search.failure(),null));
+        assertEquals(search.expanded(),result.data().getAsJsonObject("search_diagnostics").get("expanded").getAsInt());
+        return result.data();
+    }
 }

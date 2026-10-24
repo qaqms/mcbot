@@ -39,6 +39,51 @@ class BlockPlacementTest {
         return access;
     }
 
+    @Test void sealingTheLastRoofGapIsRefusedBeforeConsumptionAndTheSameCellCanBePlacedFromOutside() {
+        var grid=new StandingGeometryTest.Grid();
+        grid.blocks.put(BlockPos.ZERO,Blocks.COBBLESTONE.defaultBlockState());
+        grid.blocks.put(BlockPos.ZERO.above(),Blocks.COBBLESTONE.defaultBlockState());
+        var gap=new BlockPos(0,3,-1);
+        for(int x=-1;x<=1;x++) for(int z=-1;z<=1;z++)
+            if((x!=0 || z!=0) && !new BlockPos(x,3,z).equals(gap))
+                grid.blocks.put(new BlockPos(x,3,z),Blocks.OAK_PLANKS.defaultBlockState());
+        var bounds=new net.minecraft.world.phys.AABB[]{grid.geometry().body(0,2,0)};
+        var access=access();
+        access.prepareAt=p -> BlockPlacement.constructionExit(grid.geometry(),p,access.after,bounds[0],
+                com.neko.mcbot.path.TerrainEdits.EMPTY);
+        var query=BlockPlacement.query(access,gap,13,Direction.UP);
+        assertFalse(query.data().get("preflight_passed").getAsBoolean());
+        assertEquals("would_seal_exit",query.data().get("placement_failure").getAsString());
+        var refused=BlockPlacement.place(access,gap,13,Direction.UP);
+        assertFalse(refused.ok());
+        assertFalse(refused.data().get("changed").getAsBoolean());
+        assertEquals(0,access.calls);
+        assertEquals(3,access.inventory.getItem(13).getCount());
+        bounds[0]=grid.geometry().body(0,0,-2);
+        assertTrue(BlockPlacement.place(access,gap,13,Direction.UP).ok());
+        assertEquals(gap,access.target);
+        assertEquals(1,access.calls);
+        assertEquals(2,access.inventory.getItem(13).getCount());
+    }
+
+    @Test void aDoorExitCheckIncludesTheUpperHalfAndKeepsTheAuthoredFacing() {
+        var grid=new StandingGeometryTest.Grid();
+        grid.blocks.put(BlockPos.ZERO,Blocks.COBBLESTONE.defaultBlockState());
+        grid.blocks.put(BlockPos.ZERO.above(),Blocks.COBBLESTONE.defaultBlockState());
+        var gap=new BlockPos(0,3,-1);
+        for(int x=-1;x<=1;x++) for(int z=-1;z<=1;z++)
+            if((x!=0 || z!=0) && !new BlockPos(x,3,z).equals(gap))
+                grid.blocks.put(new BlockPos(x,3,z),Blocks.OAK_PLANKS.defaultBlockState());
+        var door=Blocks.OAK_DOOR.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.DoorBlock.FACING,Direction.NORTH);
+        var failure=BlockPlacement.constructionExit(grid.geometry(),gap.below(),door,
+                grid.geometry().body(0,2,0),com.neko.mcbot.path.TerrainEdits.EMPTY);
+        assertNotNull(failure);
+        assertEquals("would_seal_exit",failure.data().get("placement_failure").getAsString());
+        assertFalse(grid.blocks.containsKey(gap));
+        assertEquals(Direction.NORTH,door.getValue(net.minecraft.world.level.block.DoorBlock.FACING));
+    }
+
     @Test void blockedPlacementQueryDistinguishesStandingSuggestionsForTheOriginalTarget() {
         var access = access();
         var point = new com.google.gson.JsonObject();

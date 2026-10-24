@@ -288,7 +288,7 @@ public final class BoundedProgram {
         // Only mc.build's private calls use this view; raw mc.call and mc.build_diff retain the complete response.
         var view = new JsonObject();
         for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
-                "observation_key", "goal_satisfied", "offset", "next_offset", "total", "remaining",
+                "observation_key", "work_observation_key", "design_components", "goal_satisfied", "offset", "next_offset", "total", "remaining",
                 "material_bill_complete", "work_scan", "work_next_cursor", "counts"))
             if (data.has(key)) view.add(key, data.get(key));
         var cells = new JsonArray();

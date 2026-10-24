@@ -14,12 +14,11 @@ local function move(cell, item, bounds)
         arrival="work",bounds=bounds}
     if item then args.place_item=item; args.face=cell.face; args.temporary_purpose=cell.purpose end
     local result = attempt("move_to", args)
-    -- Only the bridge's existing local-failure policy can return an unsuccessful result.
     if not result.ok then
         if result.failure_kind=="TARGET_LOST" then error("unknown work facts") end
         call("status",{details=true})
     end
-    return result.ok, result
+    return result.ok, result, result.data.departure_blocked
 end
 
 local function checked(target, revision, all, cursor)
@@ -108,7 +107,7 @@ function mc.build(target, options)
             effects[#effects+1]={x=cell.x,y=cell.y,z=cell.z,block=cell.block,kind=kind}
         else omitted=omitted+1 end
     end
-    local function report(reason,round,pages)
+    local function report(reason,round,pages,failure)
         local current=pages~=nil
         pages=pages or last_pages
         local first=pages and pages[1]
@@ -119,7 +118,7 @@ function mc.build(target, options)
             cleared_blocks=cleared,consumed_count=consumed,changed=placed+cleared>0,
             initial_remaining=initial_remaining,total=first and first.total,remaining=first and first.remaining,
             remaining_known=current,outer_goal_verified=false,
-            effects=effects,effects_omitted=omitted}
+            effects=effects,effects_omitted=omitted,last_failure=failure}
         if satisfied then result.evidence="fresh_whole_target_diff" end
         if pages then
             local counts,unresolved={},{}
@@ -137,8 +136,8 @@ function mc.build(target, options)
             result.counts,result.unresolved=(satisfied or first.work_scan) and first.counts or counts,unresolved
             result.unresolved_omitted=first.remaining and first.remaining-#unresolved
             result.material_bill_complete=first.material_bill_complete
+            result.design_components=first.design_components
         end
-        -- A caller may ignore the return value; the model must still see the actual outcome.
         print("mc.build",result)
         return result
     end
@@ -173,7 +172,8 @@ function mc.build(target, options)
         call("status",{details=true})
         local pages,reason=checked(target,revision,nil,cursor)
         if not pages then return report(reason,round) end
-        if stamp~=pages[1].observation_key then
+        local workstamp=pages[1].work_observation_key or pages[1].observation_key
+        if stamp~=workstamp then
             failed={}
             if cursor~=0 then
                 cursor=0
@@ -181,7 +181,7 @@ function mc.build(target, options)
                 if not pages then return report(reason,round) end
             end
         end
-        stamp=pages[1].observation_key
+        stamp=workstamp
         last_pages=pages
         initial_remaining=initial_remaining or pages[1].remaining
         if pages[1].goal_satisfied then
@@ -198,7 +198,7 @@ function mc.build(target, options)
                     and cell.actual_block~=cell.block) and cell.item
                     and cell.material_available then kind="place" end
                 if kind then
-                    local key=workkey(cell,kind,page.observation_key)
+                    local key=workkey(cell,kind,stamp)
                     local candidate={cell=cell,offset=cell.source_offset or page.offset,key=key}
                     if not failed[key] then
                         if kind=="ready" and lower(candidate,ready) then ready=candidate end
@@ -212,7 +212,6 @@ function mc.build(target, options)
             end
         end
         if ready or clear or far then call("build_site",{operation="checkpoint",expected_revision=revision}) end
-        -- Prepare the floor before walls can hide it, and try other cells after a local route failure.
         if clear and (not ready or clear.cell.y<=ready.cell.y) then
             local worked=0
             for _,candidate in ipairs(clears) do
@@ -220,7 +219,8 @@ function mc.build(target, options)
                 if candidate.cell.y==clear.cell.y then
                     worked=worked+1
                     local cell=candidate.cell
-                    local ok,result=move(cell,nil,site.bounds)
+                    local ok,result,trapped=move(cell,nil,site.bounds)
+                    if trapped then return report("departure_blocked",round,pages,result.feedback) end
                     if not ok then
                         failed[candidate.key]=true
                         last_reason,last_failure="clearing_stance_unavailable",result.feedback
@@ -248,7 +248,7 @@ function mc.build(target, options)
             for _,page in ipairs(pages) do
                 if page.work_scan or page.offset==ready.offset then
                     for _,cell in ipairs(page.cells) do
-                        if cell.state=="ready" then failed[workkey(cell,"ready",page.observation_key)]=true end
+                        if cell.state=="ready" then failed[workkey(cell,"ready",stamp)]=true end
                     end
                 end
             end
@@ -268,12 +268,12 @@ function mc.build(target, options)
                 last_reason="nearby_no_actual_progress"
             end
         elseif far then
-            local ok,result=move(far.cell,far.cell.item,site.bounds)
+            local ok,result,trapped=move(far.cell,far.cell.item,site.bounds)
+            if trapped then return report("departure_blocked",round,pages,result.feedback) end
             if not ok then
                 failed[far.key]=true
                 last_reason,last_failure="placement_stance_unavailable",result.feedback
             else
-                -- If arrival leaves this candidate unchanged, try another rather than walk here again.
                 failed[far.key]=true
             end
         elseif pages[1].work_next_cursor and pages[1].work_next_cursor>=0 then

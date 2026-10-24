@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -61,6 +62,53 @@ class BuildSurveyTest {
         assertFalse(row.has("authorization_id"));
     }
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
+
+    @Test void constructionIdentityIgnoresUnrelatedChunkVersionsButChangesWithMaterialsTargetOrWorkContext() {
+        String[] stamp={"a"}, context={"standing"};
+        var world=new World() {
+            @Override public JsonObject terrain() {
+                return JsonParser.parseString("{\"dimension\":\"fixture:world\",\"chunks\":{\"0,0\":\""+stamp[0]+"\"}}").getAsJsonObject();
+            }
+            @Override public String workContext() { return context[0]; }
+        };
+        var target=cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"stone\"}]");
+        var before=world.query(target);
+        stamp[0]="b";
+        var chunkChanged=world.query(target);
+        assertNotEquals(before.get("observation_key"),chunkChanged.get("observation_key"));
+        assertEquals(before.get("work_observation_key"),chunkChanged.get("work_observation_key"));
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var stocked=world.query(target);
+        assertNotEquals(before.get("work_observation_key"),stocked.get("work_observation_key"));
+        context[0]="moved or equipped";
+        var moved=world.query(target);
+        assertNotEquals(stocked.get("work_observation_key"),moved.get("work_observation_key"));
+        world.blocks.put(new BlockPos(0,90,0),Blocks.STONE.defaultBlockState());
+        assertNotEquals(moved.get("work_observation_key"),world.query(target).get("work_observation_key"));
+    }
+
+    @Test void designComponentsReportOmittedDoorsAndCountPairedFurnitureOnlyOnce() {
+        var world=new World();
+        var shell=world.query(cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"stone\"}]"));
+        assertEquals(0,shell.getAsJsonObject("design_components").get("doors").getAsInt());
+        var target=cells("""
+                [{"x":0,"y":0,"z":0,"block":"oak_door","properties":[
+                {"name":"half","value":"lower"},{"name":"facing","value":"north"},{"name":"hinge","value":"left"}]},
+                {"x":0,"y":1,"z":0,"block":"oak_door","properties":[
+                {"name":"half","value":"upper"},{"name":"facing","value":"north"},{"name":"hinge","value":"left"}]},
+                {"x":2,"y":0,"z":0,"block":"crafting_table"},
+                {"x":3,"y":0,"z":0,"block":"chest"},
+                {"x":4,"y":0,"z":0,"block":"torch"},
+                {"x":5,"y":0,"z":0,"block":"oak_stairs"},
+                {"x":6,"y":0,"z":0,"block":"oak_slab"}]
+                """);
+        var parts=world.query(target).getAsJsonObject("design_components");
+        assertEquals(1,parts.get("doors").getAsInt());
+        assertEquals(0,parts.get("beds").getAsInt());
+        for(String key:List.of("crafting_tables","containers","lights","stairs","slabs"))
+            assertEquals(1,parts.get(key).getAsInt(),key);
+        assertTrue(world.blocks.isEmpty());
+    }
 
     static class World implements BuildSurvey.Access, BlockPlacement.Access {
         final net.minecraft.world.entity.player.Inventory inventory = com.neko.mcbot.server.BlockActionFixtures.inventory();

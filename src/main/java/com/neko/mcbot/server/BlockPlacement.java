@@ -159,7 +159,28 @@ public final class BlockPlacement {
                         && level.isLoaded(near) && level.mayInteract(player, near),
                 candidate -> candidate == face && player.mayUseItemAt(pos, candidate, material),
                 bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)));
-        return planned ? null : failed("TARGET_BLOCKED:计划改动后的碰撞、点击面、材料或放置条件尚未满足。", false, 0);
+        return planned ? constructionExit(player,pos,item.getBlock().defaultBlockState(),body,edits)
+                : failed("TARGET_BLOCKED:计划改动后的碰撞、点击面、材料或放置条件尚未满足。", false, 0);
+    }
+
+    private static ServerTool.Result constructionExit(CompanionPlayer player, BlockPos pos, BlockState state,
+                                                       AABB bounds, TerrainEdits edits) {
+        if (!player.buildSite().active() || state == null) return null;
+        return constructionExit(StandingGeometry.forPlayer(player,player.buildSite()::inScope),pos,state,bounds,edits);
+    }
+
+    static ServerTool.Result constructionExit(StandingGeometry geometry, BlockPos pos, BlockState state,
+                                              AABB bounds, TerrainEdits edits) {
+        var proposed = new java.util.HashMap<BlockPos,BlockState>();
+        proposed.put(pos,state);
+        if (BuildObjects.paired(state)) proposed.put(BuildObjects.other(pos,state),BuildObjects.partnerState(state));
+        var center = bounds.getCenter();
+        boolean open = geometry.preservesExit(
+                (int)Math.floor(center.x),bounds.minY,(int)Math.floor(center.z),proposed,edits);
+        if (open) return null;
+        var data = new JsonObject();
+        data.addProperty("placement_failure","would_seal_exit");
+        return new ServerTool.Result(false,"TARGET_BLOCKED:放置会封死当前工作站位的最后出口；先换到外侧站位再补此格。",data);
     }
 
     static boolean pendingNativeTerrain(BlockPos pos, TerrainEdits edits) {
@@ -581,7 +602,7 @@ public final class BlockPlacement {
                     || !com.neko.mcbot.building.BuildSite.plainCube(desired)
                     || WorksiteProtection.facility(desired, desired.hasBlockEntity()) != temporaryPurpose.equals("workstation")))
                 return failed("DENIED:临时工程只支持无组件的稳定单格整方块；workstation须无方块实体工位，support不可冒充工位。", false, 0);
-            return checkSite(pos, new Site() {
+            var geometryFailure = checkSite(pos, new Site() {
                 @Override public BlockState current() { return state(pos); }
                 @Override public boolean replaceable() { return context.canPlace(); }
                 @Override public BlockState placed() { return desired; }
@@ -597,6 +618,7 @@ public final class BlockPlacement {
                             .move(pos.getX(), pos.getY(), pos.getZ()));
                 }
             });
+            return geometryFailure != null ? geometryFailure : constructionExit(player,pos,desired,bounds,edits);
         }
         private BlockPlaceContext placementContext(ItemStack stack, BlockHitResult clickHit) {
             Vec3 click = clickHit.getLocation();
@@ -637,6 +659,7 @@ public final class BlockPlacement {
                     new BuildSiteAccess(player),temporaryPurpose!=null);
             if (failure==null && BuildObjects.paired(proposedState))
                 failure=objectGuard(this,context.getClickedPos(),proposedState);
+            if (failure==null) failure=constructionExit(player,context.getClickedPos(),proposedState,bounds,edits);
             return failure!=null ? failure : player.buildSite().charge();
         }
         @Override public void recordedObject(BlockPos primary, java.util.Map<BlockPos, BlockState> before,
