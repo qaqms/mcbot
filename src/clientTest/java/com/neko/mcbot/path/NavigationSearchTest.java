@@ -61,6 +61,26 @@ class NavigationSearchTest {
         assertFalse(DigSampler.feasibleDig(snapshot.digSeconds(4, 0, 4)));
     }
 
+    @Test void workerFindsTheSameDryRoofDescentAndKeepsTheCapturedFallPolicy() throws Exception {
+        var source = sections();
+        for (int y = 0; y < 3; y++) source[1].set(4,y,4,Blocks.OAK_LOG.defaultBlockState());
+        var start = new BlockPos(4,3,4);
+        var bounds = new NavigationSnapshot.Bounds(-16,48,-100,100,-100,100);
+        var snapshot = new NavigationSnapshot(bounds,(x,z) -> x==0 && z==0 ? source : null,
+                start,.6,1.8,.6,PathSpec.DEFAULT,PathSpec.DEFAULT,3);
+        var route = new DigAStar(snapshot,4,3,4,10,0,4,1000,0,NavigationGoal.position(10,0,4,0));
+        var pending = NavigationSearch.submit(route);
+        await(pending);
+        assertNull(pending.take().failure());
+        assertNull(PathTask.planFailure(route.path(),snapshot,0));
+        assertTrue(route.path().stream().allMatch(s -> s.dig().isEmpty() && s.place().isEmpty()));
+        var reduced = new NavigationSnapshot(bounds,(x,z) -> x==0 && z==0 ? source : null,
+                start,.6,1.8,.6,PathSpec.DEFAULT,PathSpec.DEFAULT,1);
+        assertNotNull(PathTask.planFailure(route.path(),reduced,0));
+        source[1].set(4,3,4,Blocks.STONE.defaultBlockState());
+        assertTrue(snapshot.passable(4,3,4), "worker terrain remains isolated from the live world");
+    }
+
     @Test void searchRunsOnWorkerAndLiveGeometryStillRejectsAChangedRoute() throws Exception {
         var source = sections();
         var snapshot = capture(source);

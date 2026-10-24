@@ -34,6 +34,14 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
     NavigationSnapshot(Bounds bounds,
                        java.util.function.BiFunction<Integer, Integer, PalettedContainer<BlockState>[]> source,
                        BlockPos start, double width, double bodyHeight, double step, PathSpec scope, PathSpec outer) {
+        this(bounds, source, start, width, bodyHeight, step, scope, outer,
+                net.minecraft.world.entity.Entity.BASE_SAFE_FALL_DISTANCE);
+    }
+
+    NavigationSnapshot(Bounds bounds,
+                       java.util.function.BiFunction<Integer, Integer, PalettedContainer<BlockState>[]> source,
+                       BlockPos start, double width, double bodyHeight, double step, PathSpec scope, PathSpec outer,
+                       double safeFall) {
         sx = start.getX(); sy = start.getY(); sz = start.getZ();
         minY = bounds.minY(); height = bounds.height();
         minX = bounds.minX(); maxX = bounds.maxX(); minZ = bounds.minZ(); maxZ = bounds.maxZ();
@@ -60,12 +68,12 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
             @Override public List<AABB> boxes(BlockPos pos) {
                 return StandingGeometry.collision(getBlockState(pos), NavigationSnapshot.this, pos);
             }
-        }, width, bodyHeight, step);
+        }, width, bodyHeight, step, () -> safeFall);
     }
 
     /** Called on the world thread before a worker receives this value. */
     public static NavigationSnapshot capture(ServerLevel level, BlockPos start, double width, double height,
-                                             double step, PathSpec scope, PathSpec outer) {
+                                             double step, PathSpec scope, PathSpec outer, double safeFall) {
         var border = level.getWorldBorder();
         var bounds = new Bounds(level.getMinY(), level.getHeight(),
                 border.getMinX(), border.getMaxX(), border.getMinZ(), border.getMaxZ());
@@ -78,7 +86,7 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
             for (int i = 0; i < source.length; i++)
                 if (!source[i].hasOnlyAir()) states[i] = source[i].getStates();
             return states;
-        }, start, width, height, step, scope, outer);
+        }, start, width, height, step, scope, outer, safeFall);
     }
 
     private static long chunkKey(int x, int z) { return ((long) x << 32) ^ (z & 0xffffffffL); }

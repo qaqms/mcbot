@@ -186,6 +186,33 @@ class MovementExecutionTest {
         assertEquals(0, body.jumps);
     }
 
+    @Test void aTwoOrThreeBlockLedgeWalksOffInEveryCardinalDirectionAndSettlesBeforeSuccess() {
+        for (int drop : new int[]{2,3}) for (int[] heading : new int[][]{{1,0},{-1,0},{0,1},{0,-1}}) {
+            var body = new Body();
+            body.position = new Vec3(.5, drop, .5);
+            body.obstacles = List.of(body.obstacles.getFirst(), Shapes.box(0, 0, 0, 1, drop, 1));
+            var route = new PathSteering(heading[0], 0, heading[1], false);
+            boolean airborne = false;
+            PathSteering.Command command = null;
+            for (int tick = 0; tick < 120; tick++) {
+                command = body.drive(route);
+                assertFalse(command.stuck());
+                if (!body.grounded) {
+                    airborne = true;
+                    assertFalse(command.arrived());
+                }
+                if (command.arrived()) break;
+            }
+            assertNotNull(command);
+            assertTrue(airborne);
+            assertTrue(command.arrived());
+            assertEquals(heading[0] + .5, body.position.x, .16);
+            assertEquals(heading[1] + .5, body.position.z, .16);
+            assertEquals(0, body.position.y, 1e-9);
+            assertEquals(0, body.jumps);
+        }
+    }
+
     @Test void aWallCannotBeCrossedAndStalledMovementYieldsABoundedFailure() {
         var body = new Body();
         body.obstacles = List.of(body.obstacles.getFirst(), Shapes.box(1, 0, -2, 2, 3, 2));

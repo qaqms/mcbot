@@ -610,6 +610,9 @@ public final class DigAStar {
                         relax(cur, dx, dy, dz);
                     }
                 }
+                if (Math.abs(dx) + Math.abs(dz) == 1 && s.geometry() != null)
+                    for (int depth = 2; depth <= Math.ceil(s.geometry().maxDrop()); depth++)
+                        relax(cur, dx, -depth, dz);
             }
         }
     }

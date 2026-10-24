@@ -14,5 +14,8 @@ public interface NavigationGeometry {
     Clearance clearance(int fx, double fromHeight, int fz, int x, double toHeight, int z, TerrainEdits edits);
     Motion motion(int fx, double fromHeight, int fz, int x, double toHeight, int z, TerrainEdits edits);
 
+    /** Dry, unedited descents admitted by this body's collision and fall policy. */
+    default double maxDrop() { return 1; }
+
     static int cell(double height) { return (int) Math.floor(height + 1e-5); }
 }

@@ -951,7 +951,7 @@ public final class PathTask extends TickTask {
                 && (sharedBudget == null || sharedBudget.perSearch())) {
             backgroundTried = true;
             var snapshot = NavigationSnapshot.capture(level, from, drivenBody.getBbWidth(),
-                    drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope);
+                    drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope, sampler.geometry().maxDrop());
             var frozenGoal = goal.snapshot(snapshot);
             if (frozenGoal != null) {
                 var dry = new DigAStar(snapshot, from.getX(), from.getY(), from.getZ(),

@@ -29,12 +29,19 @@ public final class StandingGeometry implements NavigationGeometry {
     private static final int MAX_CELLS = 64, MAX_PIECES = 256, WALK_SLICES = 16;
     private final Access world;
     private final double width, height, step;
+    private final java.util.function.DoubleSupplier safeFall;
 
     public StandingGeometry(Access world, double width, double height, double step) {
+        this(world, width, height, step, () -> net.minecraft.world.entity.Entity.BASE_SAFE_FALL_DISTANCE);
+    }
+
+    public StandingGeometry(Access world, double width, double height, double step,
+                            java.util.function.DoubleSupplier safeFall) {
         this.world = world;
         this.width = width;
         this.height = height;
         this.step = Math.max(0, Math.min(.6, step));
+        this.safeFall = java.util.Objects.requireNonNull(safeFall);
         if (!(width > 0 && width < 1 && height > 0 && height <= 2))
             throw new IllegalArgumentException("unsupported body dimensions");
     }
@@ -53,7 +60,13 @@ public final class StandingGeometry implements NavigationGeometry {
             @Override public List<AABB> boxes(BlockPos pos) {
                 return collision(level.getBlockState(pos), level, pos);
             }
-        }, body.getBbWidth(), body.getBbHeight(), body.maxUpStep());
+        }, body.getBbWidth(), body.getBbHeight(), body.maxUpStep(),
+                () -> body.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.SAFE_FALL_DISTANCE));
+    }
+
+    @Override public double maxDrop() {
+        // Higher falls need damage and special landing semantics, beyond ordinary dry walking.
+        return Math.max(0, Math.min(net.minecraft.world.entity.Entity.BASE_SAFE_FALL_DISTANCE, safeFall.getAsDouble()));
     }
 
     public static List<AABB> collision(BlockState state, BlockGetter level, BlockPos pos) {
@@ -62,6 +75,7 @@ public final class StandingGeometry implements NavigationGeometry {
                 || state.is(Blocks.POWDER_SNOW) || state.is(Blocks.SCAFFOLDING)
                 || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE) || state.is(Blocks.COBWEB)
                 || state.is(Blocks.SWEET_BERRY_BUSH) || state.is(Blocks.CACTUS)
+                || state.is(Blocks.POINTED_DRIPSTONE)
                 || state.is(Blocks.MAGMA_BLOCK) || state.is(Blocks.WITHER_ROSE)) return null;
         return state.getCollisionShape(level, pos).toAabbs();
     }
@@ -198,7 +212,7 @@ public final class StandingGeometry implements NavigationGeometry {
     }
 
     @Override public Motion motion(int fx, double from, int fz, int x, double to, int z, TerrainEdits edits) {
-        if (to - from > 1 + 1e-5 || from - to > 1 + 1e-5) return Motion.BLOCKED;
+        if (to - from > 1 + 1e-5 || from - to > Math.max(1, maxDrop()) + 1e-5) return Motion.BLOCKED;
         var clear = clearance(fx, from, fz, x, to, z, edits);
         if (!clear.known() || !clear.blockers().isEmpty()) return Motion.BLOCKED;
         if (x == fx && z == fz) return to > from ? Motion.JUMP : Motion.WALK;

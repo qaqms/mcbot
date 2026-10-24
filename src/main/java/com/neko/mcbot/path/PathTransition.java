@@ -20,10 +20,13 @@ final class PathTransition {
     static Check check(DigSampler base, TerrainEdits edits, int fx, int fy, int fz,
                        int x, int y, int z, int remainingDigs, int remainingPlaces) {
         int dx = x - fx, dy = y - fy, dz = z - fz;
-        if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || Math.abs(dz) > 1
+        boolean drop = dy < -1 && Math.abs(dx) + Math.abs(dz) == 1 && base.geometry() != null
+                && -dy <= Math.ceil(base.geometry().maxDrop());
+        if (Math.abs(dx) > 1 || (Math.abs(dy) > 1 && !drop) || Math.abs(dz) > 1
                 || dx == 0 && dy == 0 && dz == 0) return Check.refused("NON_ADJACENT", DigAStar.pack(x, y, z));
         if (!base.inBounds(x, y, z)) return Check.refused("OUT_OF_BOUNDS", DigAStar.pack(x, y, z));
         if (!base.allowsStep(fx, fy, fz, x, y, z)) return Check.refused("STEP_RESTRICTED", DigAStar.pack(x, y, z));
+        if (drop) return drop(base.geometry(), edits, fx, fy, fz, x, y, z);
         if (base.geometry() != null)
             return shaped(base, edits, fx, fy, fz, x, y, z, remainingDigs, remainingPlaces);
         DigSampler terrain = edits.view(base);
@@ -65,12 +68,34 @@ final class PathTransition {
         return new Check(new Plan(removed, place, edits.after(removed, place), y, dy > 0), null, null);
     }
 
+    private static Check drop(NavigationGeometry geometry, TerrainEdits edits, int fx, int fy, int fz,
+                              int x, int y, int z) {
+        var from = geometry.foot(fx, fy, fz, edits);
+        if (from == null) return Check.refused("DEPARTURE_FOOTING", DigAStar.pack(fx, fy, fz));
+        var dest = geometry.foot(x, y, z, edits);
+        if (dest == null) return Check.refused("NO_SUPPORT", DigAStar.pack(x, y - 1, z));
+        if (from.height() - dest.height() > geometry.maxDrop() + 1e-5)
+            return Check.refused("UNSAFE_FALL", dest.support());
+        var clear = geometry.clearance(fx, from.height(), fz, x, dest.height(), z, edits);
+        if (!clear.known()) return Check.refused(clear.failure(), clear.cell());
+        // A deeper edge is a walk off an existing ledge, never an excavation or a floating support.
+        if (!clear.blockers().isEmpty()) return Check.refused("DROP_BLOCKED", clear.blockers().getFirst());
+        if (geometry.motion(fx, from.height(), fz, x, dest.height(), z, edits) != NavigationGeometry.Motion.WALK)
+            return Check.refused("MOVEMENT_GEOMETRY", null);
+        return new Check(new Plan(List.of(), List.of(), edits, dest.height(), false), null, null);
+    }
+
     private static Check shaped(DigSampler base, TerrainEdits edits, int fx, int fy, int fz,
                                 int x, int y, int z, int remainingDigs, int remainingPlaces) {
         var geometry = base.geometry();
         var from = geometry.foot(fx, fy, fz, edits);
         if (from == null) return Check.refused("DEPARTURE_FOOTING", DigAStar.pack(fx, fy, fz));
         var dest = geometry.foot(x, y, z, edits);
+        if (dest != null && from.height() - dest.height() > 1 + 1e-5) {
+            if (Math.abs(x-fx) + Math.abs(z-fz) != 1)
+                return Check.refused("NON_ADJACENT", DigAStar.pack(x,y,z));
+            return drop(geometry, edits, fx, fy, fz, x, y, z);
+        }
         double feet = dest == null ? y : dest.height();
         var clear = geometry.clearance(fx, from.height(), fz, x, feet, z, edits);
         if (!clear.known()) return Check.refused(clear.failure(), clear.cell());

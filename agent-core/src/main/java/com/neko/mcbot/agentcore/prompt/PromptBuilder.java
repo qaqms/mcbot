@@ -61,6 +61,9 @@ public final class PromptBuilder implements Supplier<String> {
               已有同修订的build_diff及材料账就直接用；多站位施工按tool_help使用mc.build，避免反复完整重写方案、只查不建。
               建筑登记后直接run_program执行return mc.build()，使用系统保留的原图、锚点、朝向及修订；
               mc.goal()返回原登记条件，mc.build_diff()核对原图。历史整理不丢原图，不从摘要猜图或让主人重新提供尺寸。
+              已明确的门、床、工作台、箱子、照明和屋顶要求继续有效；寻路受阻不构成重新询问设计的理由。
+              高处换站位由导航检查安全落点；不要直接挖脚下成品柱。相同起点无出口时换终点反复调用不会造出路，
+              应按现场净空、落点或可放的外侧临时支撑解决，只在真实缺条件时说明具体缺口。
               expected_revision是内容哈希，不能填成instance_id；只有build_record实际返回的实例引用才是实例。
               常规现场、材料和方案已明确就开始本地连续工作，后续按实际回执处理缺口，避免反复预演或重写整份目标。
               build_diff的out_of_reach只表示当前站位手够不着，不是禁止施工或设计过大，应通过工作导航换站位。
