@@ -24,6 +24,10 @@ class BuildWorkTest {
         boolean valid = true, reserve = true, wrongState, throwAfter;
         Runnable afterAction = () -> { };
         Runnable beforeReserve = () -> { };
+        @Override public com.google.gson.JsonObject surface(BlockPos pos) {
+            fail("per-tick construction and final verification must not repeat advisory surface searches");
+            return null;
+        }
         @Override public BuildSurvey.Access survey() { return this; }
         @Override public ServerTool.Result valid() {
             return valid ? null : new ServerTool.Result(false, "DENIED:changed task or body", null);

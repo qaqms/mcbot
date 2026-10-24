@@ -65,8 +65,8 @@ public final class ToolCatalog {
             case "build_nearby" -> "按build_diff同一target/expected_revision，在原地施工指定16格页，max_actions默认/最多12；"
                     + "逐格共用原版放置及真实扣料，失败不重放，取消停手；不移动/挖掘/找料。"
                     + "ACCEPTED等终态，局部批次不代表全目标满足；Lua按max_actions预扣原子预算，详情tool_help。";
-            case "build_site" -> "任务内登记完整目标、明确进出通道和冻结范围，共用施工保护及累计账。"
-                    + "多站位用run_program的mc.build(target,{access_route=...})，临时工程及回收规则先tool_help。"
+            case "build_site" -> "任务内登记完整目标，进出通道和范围可选，共用施工保护及累计账。"
+                    + "多站位用run_program的mc.build(target)，无需手写通道；超出当前手距就换站位，草花和目标清障按原权限自动处理。"
                     + "query只读；登记不授予许可，不自动找料，不保证全局返程，取消不自动恢复。";
             case "build_diff" -> "只读建筑格集或fill线/面/体差异与材料；最多128格，锚点/旋转/作者属性固定，未指定格不动。"
                     + "明细及料单独立分页；双格门保留两半验收，仅下半动作/一件料。"

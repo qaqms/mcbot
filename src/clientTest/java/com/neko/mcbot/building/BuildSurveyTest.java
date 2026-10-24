@@ -76,6 +76,36 @@ class BuildSurveyTest {
     private static int count(JsonObject data, String state) { return data.getAsJsonObject("counts").get(state).getAsInt(); }
     private static JsonObject material(JsonObject data) { return data.getAsJsonArray("materials").get(0).getAsJsonObject(); }
 
+    @Test void currentPageSurfaceObservationsDoNotChangeTargetsReachClassificationOrFinalVerification() {
+        var surfaces=new java.util.ArrayList<BlockPos>();
+        var world=new World() {
+            @Override public JsonObject surface(BlockPos pos) {
+                surfaces.add(pos);
+                var data=new JsonObject(); data.addProperty("feet_y",89.5); return data;
+            }
+        };
+        var target=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
+                "to":{"x":7,"y":0,"z":3},"block":"stone"}}
+                """).getAsJsonObject());
+        target.cells().forEach(c->world.far.add(c.pos()));
+        var input=target.input().deepCopy();
+        var query=world.query(target);
+        assertEquals(32,count(query,"out_of_reach"));
+        assertEquals(16,surfaces.size());
+        assertTrue(query.getAsJsonArray("cells").get(0).getAsJsonObject().has("surface"));
+        assertEquals(input,target.input());
+        surfaces.clear();
+        BuildSurvey.queryForWork(target,world,0,()->0);
+        assertTrue(surfaces.isEmpty(),"native work assessment does not repeat advisory surface searches");
+        BuildSurvey.verify(target,world,0,()->0);
+        assertTrue(surfaces.isEmpty(),"final whole-target verification does not run advisory surface searches");
+        var next=BuildSurvey.query(target,world,16,0,()->0).data();
+        assertEquals(16,surfaces.size());
+        assertEquals(target.cells().get(16).pos(),surfaces.getFirst());
+        assertFalse(next.get("goal_satisfied").getAsBoolean());
+        assertEquals(0,world.prepares);
+    }
     @Test void actualSatisfiedCellsNeedNoMaterialPreflightOrActionAndExternalChangesReappear() {
         var target = cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"stone\"}]");
         var world = new World();

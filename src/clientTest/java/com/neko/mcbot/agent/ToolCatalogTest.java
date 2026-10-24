@@ -70,6 +70,15 @@ class ToolCatalogTest {
         }
         var site=ToolCatalog.MODEL_SPECS.stream().filter(s->s.name().equals("build_site")).findFirst().orElseThrow();
         assertTrue(site.description().contains("mc.build"));
+        assertTrue(site.description().contains("范围可选"));
+        var schema=JsonParser.parseString(site.paramsJsonSchema()).getAsJsonObject();
+        var properties=schema.getAsJsonObject("properties");
+        assertTrue(properties.has("expected_revision"));
+        assertEquals(Integer.MAX_VALUE,properties.getAsJsonObject("bounds").getAsJsonObject("properties")
+                .getAsJsonObject("radius").get("maximum").getAsInt());
+        assertFalse(schema.getAsJsonArray("required").asList().contains(new com.google.gson.JsonPrimitive("access_route")));
+        assertTrue(help.feedback().contains("无需手写"));
+        assertTrue(help.feedback().contains("scope_limited=false"));
     }
     @Test void nearbyConstructionIsABoundedActionUsingTheSameTargetSchema() {
         var help = ToolCatalog.read("{\"names\":[\"build_nearby\"]}");

@@ -3,7 +3,53 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 采掘工具效率、地面停顿与等待动画（2026-10-24，Asia/Shanghai）
+## 工地地形、草花清障与工作站位（2026-10-24，Asia/Shanghai）
+
+- 维护者要求继续处理地面层矛盾、工地登记、超手距及普通草花清理，不再要求主人手写路线。
+  开工main为1383616，fetch后与origin/main一致；只改本体。
+  快照build/buildsite-session-20261024.log为408103 bytes，原件末写20:45:03，严格UTF-8有效，
+  SHA256 `decfebfe520fac88f8c2bcfc31e2e928b5f0256118a8cdf27b98d7011bb8b905`。
+  实例磁盘包仍为6a22afbc...，该反馈对应前场，不能据此声称上一轮候选已实机验收。
+- 19:53:55/19:54:16/19:57:32有工地形状拒绝；旧回执将多种输入问题统称额外字段，
+  无完整原参数，具体字段未知。19:54:24拒绝非水平通道，19:54:38拒绝空气/整格地板；
+  19:58:16模型最终据此及route56失败要求主人确认清草花和指定路线。
+  route56局部DIG_LIMIT/CORNER_BLOCKED/PLACE_LIMIT等不证明所有路线的唯一原因。
+- 只读学习参考BuildApi/BuildOps/BuildSurvey/BuildCellRules/BuildCompanionTask、
+  Destination/Clearance及施工Lua组合，未复制或翻译代码/注释/技能/提示/资产。
+  本体begin现在仅需target，access_route可省略；支持匹配的expected_revision并明确各操作参数，
+  未静默接受未知字段。新工地默认不设总半径，显式bounds与原目标/实例修订仍冻结。
+- 可选明确通道按真实碰撞脚高、净空和相邻motion复核，不要求纯空气/水平整格地板；
+  草花、半砖和坡地按实际形状处理，分数脚高的第三格身体占位也保护。通道观察按格复用。
+  mc.build不再强制walk_only或凭空附加max_digs/bounds，按原权限使用工作导航挖放/换站位；
+  本地导航失败先核身体再交回原障碍，默认无限轮数下不重复同一路线，没有新增累计禁发门。
+- build_diff当前页增加surface脚格/feet_y/支撑格/方块，受原查询预算约束；
+  逐刻施工预检和最终核验不重复地面建议搜索。out_of_reach是当前手距分类，
+  模型帮助区分地板格/脚格和换站位，不远程施工、不自动改设计。
+  普通草花不冒充结构依赖，未来未建墙不阻止地基准备；同修订目标可翻修身体离开的旧经过格。
+  实际身体占位、完成支撑、设施、来源、显式通道与无关通行地板仍保护。
+- 旧路线记录缺口不再使整个工地停工，passage_observation_complete只报告实际完整性；
+  临时回收仍须完整来源与无通行依赖证明。只读、取消、材料/耐久、原生挖放和最终验收保持。
+  工具仍31项，未增加固定建筑模板或直接写世界的分支。
+- focused1两项新增花草测试失败，暴露普通花无canBeReplaced；按原生类签名修正识别。
+  focused2的恢复夹具仍repeat=true故不放置，修正后focused3于32秒通过。
+  完整构建final1/final2分别61/62秒通过；随后完善热路径与帮助文字的最终
+  `./gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/buildsite-final3-20261024.log第65至66行，**59秒、20任务全执行**。
+  三根XML **1859项/197 suites，failures/errors/skipped全0**：
+  核心417/46、根168/23、客户端1274/128，比上一轮新增11项、未减弱原安全/取消/物理断言。
+- JAR build/libs/mcbot-0.1.0.jar为**1,764,678 bytes**，末写21:04:12，
+  SHA256 `e2bfdf204c8a2461ef3234d31937ea70e026cdae322e13ef92d380848588fb04`。
+  内嵌core与独立产物一致：`e2997d4e3ca89984e15b2431df80996fbc27b34d14154fc1977ab07cd3ef4d0e`；
+  0.1.0/两入口/施工Lua/原选工具和气泡类、LuaJ及许可证已核，源码/资源未晚于JAR。
+  导入包为build/mcbot-import-20261024-buildsite-terrain.zip，旧包保留，提交/推送以Git为准。
+- javap核对FlowerBlock继承VegetationBlock、TallFlowerBlock继承DoublePlantBlock；
+  普通无碰撞花与危险植物/流体/设施保持区分。完整机制及验证边界见
+  [工地地形与清障](docs/BUILD-SITE-TERRAIN-2026-10-24.md)。
+  未安装或启动游戏/服务器/真实模型，未修改宿主/连接器/参考/配置/实例/无敌；
+  检查时玩家MC进程114108仍在，未终止。原生施工、复杂地形/实体与模型是否正确选址仍待实机，
+  不保证任意房屋均完成；二十完整卡、B5/P1仍部分。
+
+## 采掘工具效率、地面停顿与等待动画（2026-10-24，Asia/Shanghai，前次检查点）
 
 - 维护者要求学习参考项目处理斧/镐和装备升级、出矿后长时间等待及气泡转圈。
   开工main为`8e12c91`，fetch后与origin/main一致；只改本体。

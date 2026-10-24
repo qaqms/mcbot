@@ -27,6 +27,7 @@ public final class BuildDiffTool implements ServerTool {
 
     public static BuildSurvey.Access access(CompanionPlayer body, BuildTarget target) {
             var placement = BlockPlacement.forPlayer(body);
+            var geometry = com.neko.mcbot.server.StandingGeometry.forPlayer(body);
             return new BuildSurvey.Access() {
                 @Override public BlockState state(BlockPos pos) {
                     return inBounds(pos) && body.level().isLoaded(pos) ? body.level().getBlockState(pos) : null;
@@ -51,6 +52,9 @@ public final class BuildDiffTool implements ServerTool {
                     return body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos)) <= range * range;
                 }
                 @Override public BlockPlacement.Access placement() { return placement; }
+                @Override public JsonObject surface(BlockPos pos) {
+                    return observedSurface(geometry, pos, this::state);
+                }
                 @Override public JsonObject terrain() {
                     var data = new JsonObject();
                     data.addProperty("dimension", body.level().dimension().identifier().toString());
@@ -67,6 +71,29 @@ public final class BuildDiffTool implements ServerTool {
                     return data;
                 }
             };
+    }
+
+    static JsonObject observedSurface(com.neko.mcbot.server.StandingGeometry geometry, BlockPos pos,
+                                      Function<BlockPos, BlockState> state) {
+        for (int dy : new int[]{1, 0, 2, -1, 3, -2, -3}) {
+            var feet = pos.above(dy);
+            var foot = geometry.standing(feet.getX(), feet.getY(), feet.getZ(),
+                    com.neko.mcbot.path.TerrainEdits.EMPTY);
+            if (foot == null) continue;
+            var support = new BlockPos(com.neko.mcbot.path.DigAStar.unpackX(foot.support()),
+                    com.neko.mcbot.path.DigAStar.unpackY(foot.support()),
+                    com.neko.mcbot.path.DigAStar.unpackZ(foot.support()));
+            var actual = state.apply(support);
+            if (actual == null) continue;
+            var data = new JsonObject();
+            data.add("feet", BuildTarget.coordinates(feet));
+            data.addProperty("feet_y", foot.height());
+            data.add("support", BuildTarget.coordinates(support));
+            data.addProperty("support_block", net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                    .getKey(actual.getBlock()).toString());
+            return data;
+        }
+        return null;
     }
 
     static Result report(JsonObject args, Function<BuildTarget, BuildSurvey.Access> access, LongSupplier clock) {

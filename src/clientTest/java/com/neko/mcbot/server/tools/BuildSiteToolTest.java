@@ -8,6 +8,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteToolTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
+    @Test void beginNeedsOnlyATargetAndAcceptsAMatchingRevisionButNeverIgnoresUnknownFields() {
+        var args=JsonParser.parseString("""
+                {"operation":"begin","target":{"anchor":{"x":4,"y":90,"z":0},
+                "cells":[{"x":0,"y":0,"z":0,"block":"stone"}]}}
+                """).getAsJsonObject();
+        var input=BuildSiteTool.arguments(args);
+        assertTrue(input.route().isEmpty()); assertNull(input.scope());
+        args.addProperty("expected_revision",input.revision());
+        assertEquals(input,BuildSiteTool.arguments(args));
+        args.addProperty("max_digs",0);
+        assertThrows(RuntimeException.class,()->BuildSiteTool.arguments(args));
+        args.remove("max_digs"); args.addProperty("expected_revision","b".repeat(64));
+        assertThrows(RuntimeException.class,()->BuildSiteTool.arguments(args));
+    }
     @Test void queryIsStrictlyReadOnlyButBeginAndCheckpointRequireActionAuthority() {
         assertTrue(TaskPolicy.observation("build_site",JsonParser.parseString("{\"operation\":\"query\"}").getAsJsonObject()));
         for(String text:java.util.List.of("{}", "{\"operation\":\"begin\"}", "{\"operation\":\"checkpoint\"}",

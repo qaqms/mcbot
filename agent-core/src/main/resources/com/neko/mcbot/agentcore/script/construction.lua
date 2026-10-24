@@ -7,7 +7,7 @@ end
 local function move(cell, item, bounds)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
-        arrival="work",walk_only=true,bounds=bounds}
+        arrival="work",bounds=bounds}
     if item then args.place_item=item; args.face=cell.face or "up"; args.temporary_purpose=cell.purpose end
     local result = attempt("move_to", args)
     -- Only the bridge's existing local-failure policy can return an unsuccessful result.
@@ -41,7 +41,7 @@ function mc.build(target, options)
     local rounds, actions=o.max_rounds or 0,o.max_actions or 4
     assert(type(rounds)=="number" and rounds>=0 and rounds<=2147483647 and rounds%1==0)
     assert(type(actions)=="number" and actions>=1 and actions<=12 and actions%1==0)
-    assert(type(o.access_route)=="table")
+    assert(o.access_route==nil or type(o.access_route)=="table")
     for key in pairs(o) do
         assert(key=="access_route" or key=="bounds" or key=="max_rounds"
             or key=="max_actions" or key=="temporary")
@@ -100,7 +100,9 @@ function mc.build(target, options)
             call("build_nearby",{target=target,expected_revision=revision,offset=ready,max_actions=actions})
         elseif clear then
             local cell=clear.cell
-            if move(cell,nil,site.bounds) then
+            if not move(cell,nil,site.bounds) then
+                return blocked("clearing_stance_unavailable",revision)
+            else
                 -- Arrival does not authorize clearing a replacement or a newly completed cell.
                 local fresh=call("build_diff",{target=target,expected_revision=revision,offset=clear.offset}).data
                 if not fresh.observation_complete or not fresh.spatial_stable or fresh.budget_exhausted then
@@ -114,7 +116,9 @@ function mc.build(target, options)
                 end
             end
         elseif far then
-            move(far,far.item,site.bounds)
+            if not move(far,far.item,site.bounds) then
+                return blocked("placement_stance_unavailable",revision)
+            end
         else
             return blocked("no_feasible_work_material_support_state_or_protection",revision)
         end

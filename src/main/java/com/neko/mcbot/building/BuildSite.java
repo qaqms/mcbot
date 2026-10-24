@@ -19,6 +19,11 @@ public final class BuildSite {
     public interface Access {
         BlockState state(BlockPos pos);
         boolean corridor(BlockPos feet);
+        default List<BlockPos> corridorBody(BlockPos feet) { return List.of(feet, feet.above()); }
+        default boolean corridorStep(BlockPos from, BlockPos to) {
+            return Math.abs(from.getX() - to.getX()) + Math.abs(from.getZ() - to.getZ()) == 1
+                    && Math.abs(from.getY() - to.getY()) <= 1;
+        }
         boolean facility(BlockPos pos);
         boolean occupied(BlockPos pos);
         boolean material(BuildTarget.Cell cell);
@@ -84,7 +89,7 @@ public final class BuildSite {
 
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet, Access access) {
         return begin(next, accessRoute, feet, active() ? scope
-                : new com.neko.mcbot.path.PathSpec(false, false, false, 128, feet, 64), access);
+                : com.neko.mcbot.path.PathSpec.DEFAULT, access);
     }
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet,
                                    com.neko.mcbot.path.PathSpec selectedScope, Access access) {
@@ -92,38 +97,47 @@ public final class BuildSite {
         if (next.cells().stream().anyMatch(c -> !BuildObjects.problem(next,c).isEmpty()))
             return failed("DENIED:双格门须明确完整且一致的两半目标，不登记缺半或冲突工地。");
         if (target != null) {
+            if (accessRoute.isEmpty()) accessRoute = route;
             if (!same(next.revision()) || !route.equals(accessRoute) || !scope.equals(selectedScope))
                 return failed("TARGET_REVISION_CHANGED:任务内工地与通道已冻结，不换图、换通道或重开账。");
             return live(access);
         }
-        if (accessRoute.size() < 2 || accessRoute.size() > ROUTE_LIMIT
+        if (accessRoute.size() == 1 || accessRoute.size() > ROUTE_LIMIT
                 || new HashSet<>(accessRoute).size() != accessRoute.size()
-                || !accessRoute.contains(feet)) return failed("DENIED:须明确2-64格无重复且包含当前脚格的水平进出通道。");
+                || !accessRoute.isEmpty() && !accessRoute.contains(feet))
+            return failed("DENIED:可省略通道由导航选择工作站位；显式通道须2-64格无重复且包含当前脚格。");
         BlockPos previous = null;
         int minX=next.cells().stream().mapToInt(c -> c.pos().getX()).min().orElseThrow();
         int maxX=next.cells().stream().mapToInt(c -> c.pos().getX()).max().orElseThrow();
         int minZ=next.cells().stream().mapToInt(c -> c.pos().getZ()).min().orElseThrow();
         int maxZ=next.cells().stream().mapToInt(c -> c.pos().getZ()).max().orElseThrow();
-        if (java.util.stream.Stream.of(accessRoute.getFirst(), accessRoute.getLast()).noneMatch(
+        if (!accessRoute.isEmpty() && java.util.stream.Stream.of(accessRoute.getFirst(), accessRoute.getLast()).noneMatch(
                 p -> p.getX()<minX || p.getX()>maxX || p.getZ()<minZ || p.getZ()>maxZ))
             return failed("DENIED:通道至少一个端点须伸出完整目标的水平包围范围，不能只保留房间内两格。");
-        if (selectedScope.anchor() == null || !contains(selectedScope, feet)
+        if (!contains(selectedScope, feet)
                 || next.cells().stream().anyMatch(c -> !contains(selectedScope, c.pos()))
                 || accessRoute.stream().anyMatch(p -> !contains(selectedScope, p)))
             return failed("SCOPE_CHANGED:工地、通道或身体超出固定施工范围。");
         for (var p : accessRoute) {
-            if (previous != null && (p.getY() != previous.getY() || p.distManhattan(previous) != 1))
-                return failed("DENIED:当前只支持相邻水平、整格地板的明确通道。");
-            if (!access.corridor(p)) return failed("ENVIRONMENT_UNSAFE:通道未确认净空、完整地板或已加载，未登记工地。");
+            if (!access.corridor(p))
+                return failed("TARGET_BLOCKED:显式通道在 " + p.toShortString()
+                        + " 未确认真实支撑、身体净空或已加载；可省略access_route由正常导航选择工作站位。");
+            if (previous != null && !access.corridorStep(previous, p))
+                return failed("TARGET_BLOCKED:显式通道相邻段未通过实际碰撞移动检查；可省略access_route使用正常导航。");
+            var bodyCells = access.corridorBody(p);
             for (var cell : next.cells())
-                if ((cell.pos().equals(p) || cell.pos().equals(p.above())) && !cell.authored().isAir())
+                if (bodyCells.contains(cell.pos()) && !cell.authored().isAir()
+                        && !cell.matches(access.state(cell.pos())))
                     return failed("DENIED:非空气目标会封住声明的进出通道，先修改目标。");
             previous = p;
         }
         target = next;
         scope = selectedScope;
         route = accessRoute.stream().map(BlockPos::immutable).toList();
-        for (var p : route) { accessCells.add(p); accessCells.add(p.above()); accessCells.add(p.below()); }
+        for (var p : route) {
+            accessCells.addAll(access.corridorBody(p));
+            accessCells.add(p.below());
+        }
         for (var c : target.cells()) {
             protectedCells.add(c.pos());
             if (!c.authored().isAir()) protectedCells.add(c.pos().below());
@@ -138,9 +152,12 @@ public final class BuildSite {
         if (stopped) return failed("ACTION_LIMIT:工地有限工作已停止，不通过重开Lua续账。");
         if (instance!=null && (!records.healthy() || !same(instance.target().revision())))
             return failed("RECORD_UNAVAILABLE:实例记录不可用或修订已变，未继续施工。");
-        if (!access.passageComplete()) return failed("TARGET_LOST:实际路线记录有缺口或已到256条帽，未继续修改工地。");
-        for (var p : route) if (!access.corridor(p))
-            return failed("ENVIRONMENT_UNSAFE:声明的进出通道已改变或未知，停止施工并核对现场。");
+        BlockPos previous = null;
+        for (var p : route) {
+            if (!access.corridor(p) || previous != null && !access.corridorStep(previous, p))
+                return failed("TARGET_BLOCKED:显式进出通道的实际支撑、净空或相邻段已改变，须核对现场。");
+            previous = p;
+        }
         return null;
     }
 
@@ -175,10 +192,24 @@ public final class BuildSite {
             var state = access.state(near);
             if (state == null || access.facility(near)) return true;
             if (state.isAir()) continue;
+            if (softClearance(state)) continue;
             // Unknown attachment behavior is retained. Dry full cubes beside/below are the narrow safe case.
             if (side == Direction.UP || !plainCube(state)) return true;
         }
         return false;
+    }
+    /** Ordinary flowers may lack the replaceable flag but still have no structural collision. */
+    public static boolean softClearance(BlockState state) {
+        if (state == null || state.isAir() || state.hasBlockEntity()
+                || !(state.canBeReplaced() || state.getBlock() instanceof net.minecraft.world.level.block.FlowerBlock
+                || state.getBlock() instanceof net.minecraft.world.level.block.TallFlowerBlock)
+                || state.getBlock().hasDynamicShape()) return false;
+        var boxes = com.neko.mcbot.server.StandingGeometry.collision(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+        return boxes != null && boxes.isEmpty();
+    }
+    private boolean supportsFinished(BlockPos pos, Access access) {
+        return target.cells().stream().anyMatch(c -> !c.authored().isAir()
+                && c.pos().below().equals(pos) && c.matches(access.state(c.pos())));
     }
     public static boolean plainCube(BlockState state) {
         return state != null && !state.hasBlockEntity() && state.getFluidState().isEmpty()
@@ -194,9 +225,9 @@ public final class BuildSite {
         var failure = live(access);
         if (failure != null) return failure;
         if (!inScope(pos)) return failed("SCOPE_CHANGED:改动超出冻结工地范围。");
-        if (accessCell(pos) || access.passage(pos) || temporary.containsKey(pos))
-            return failed("DENIED:不覆盖工地通道、地板或已记录临时工程。");
         var selected = cell(pos);
+        if (accessCell(pos) || selected == null && access.passage(pos) || temporary.containsKey(pos))
+            return failed("DENIED:不覆盖工地通道、地板或已记录临时工程。");
         if (selected != null) {
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
                 return failed("DENIED:实例格来源冲突、未知或累计记录额度耗尽，不覆盖外部改动。");
@@ -213,13 +244,19 @@ public final class BuildSite {
         var failure = live(access);
         if (failure != null) return failure;
         if (!inScope(pos)) return failed("SCOPE_CHANGED:改动超出冻结工地范围。");
-        if (access.passage(pos)) return failed("DENIED:不拆实际经过的通道或其地板。");
+        var selected = cell(pos);
+        boolean targetEdit = same(revision) && !cleanup && selected != null;
+        if (access.passage(pos) && !targetEdit && !softClearance(access.state(pos)))
+            return failed("DENIED:不为无关清障拆实际经过的通道或其地板。");
         if (revision == null) return protects(pos) || access.facility(pos) || access.facility(pos.above())
                 ? failed("DENIED:工地目标、支撑、通道、工位或临时工程不可作为普通清障。") : null;
-        if (!same(revision) || accessCell(pos) || access.occupied(pos))
+        boolean soft = softClearance(access.state(pos));
+        if (!same(revision) || accessCell(pos) && !soft || access.occupied(pos) && !soft)
             return failed("DENIED:施工修订不符，或目标承担通道/身体支撑。");
         if (BuildObjects.door(access.state(pos))) return doorMiningGuard(pos, cleanup, access);
         if (cleanup) {
+            if (!access.passageComplete())
+                return failed("TARGET_LOST:实际路线记录有缺口，不能确认临时工程已无通行依赖，未回收。");
             var record = temporary.get(pos);
             if (record == null || record.witness == null || !record.witness.intact()
                     || record.chunk != access.chunk(pos) || record.state != access.state(pos))
@@ -227,12 +264,11 @@ public final class BuildSite {
             if (cell(pos) != null || target.cells().stream().anyMatch(c -> !c.authored().isAir() && c.pos().below().equals(pos))
                     || dependent(pos, access)) return failed("DENIED:临时工程仍有目标、承重、贴附或工位依赖，未回收。");
         } else {
-            var selected = cell(pos);
             var actual = access.state(pos);
             if (selected == null || actual == null || selected.matches(actual)
                     || instance==null && actual.getBlock() == selected.authored().getBlock() || !selected.material().supported()
                     || !access.material(selected) || access.facility(pos) || dependent(pos, access)
-                    || target.cells().stream().anyMatch(c -> !c.authored().isAir() && c.pos().below().equals(pos)))
+                    || supportsFinished(pos, access))
                 return failed("DENIED:只清有材料可替换、非成品且无依赖的冻结目标障碍；状态冲突交回模型。");
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
                 return failed("DENIED:旧实例格来源不可证、已被外部修改或累计记录额度耗尽，未拆除。");
@@ -348,7 +384,7 @@ public final class BuildSite {
         var target = BuildTarget.parse(data.getAsJsonObject("target"));
         var scope = com.neko.mcbot.path.PathSpec.restore(data.getAsJsonObject("scope"));
         var values = data.getAsJsonArray("route");
-        if (values.size() < 2 || values.size() > ROUTE_LIMIT || !scope.contains(feet.getX(), feet.getY(), feet.getZ()))
+        if (values.size() == 1 || values.size() > ROUTE_LIMIT || !scope.contains(feet.getX(), feet.getY(), feet.getZ()))
             throw new IllegalArgumentException();
         var restoredRoute = new ArrayList<BlockPos>();
         for (var value : values) {
@@ -356,7 +392,7 @@ public final class BuildSite {
             restoredRoute.add(new BlockPos(BuildTarget.integer(p.get("x"), -29999984, 29999984),
                     BuildTarget.integer(p.get("y"), -2048, 2047), BuildTarget.integer(p.get("z"), -29999984, 29999984)));
         }
-        var failure = begin(target, restoredRoute, restoredRoute.getFirst(), scope, access);
+        var failure = begin(target, restoredRoute, restoredRoute.isEmpty() ? feet : restoredRoute.getFirst(), scope, access);
         if (failure != null) throw new IllegalArgumentException("Worksite changed");
         checkpoints = BuildTarget.integer(data.get("checkpoints"), 0, Integer.MAX_VALUE);
         edits = BuildTarget.integer(data.get("edits"), 0, Integer.MAX_VALUE);
@@ -396,6 +432,7 @@ public final class BuildSite {
             data.addProperty("recording_known",records.healthy());
         }
         data.addProperty("return_guaranteed", false);
+        data.addProperty("passage_observation_complete", access.passageComplete());
         if (!active()) return data;
         data.addProperty("target_revision", target.revision());
         data.addProperty("protected_target_cells", target.cells().size());
@@ -403,10 +440,14 @@ public final class BuildSite {
         data.addProperty("checkpoints", checkpoints); data.addProperty("edit_attempts", edits);
         data.addProperty("round_limit", 0); data.addProperty("edit_limit", 0);
         data.addProperty("stopped", stopped);
-        var bounds = new JsonObject();
-        bounds.addProperty("x", scope.anchor().getX()); bounds.addProperty("y", scope.anchor().getY());
-        bounds.addProperty("z", scope.anchor().getZ()); bounds.addProperty("radius", scope.radius());
-        data.add("bounds", bounds);
+        data.addProperty("scope_limited", scope.anchor() != null);
+        data.addProperty("access_route_explicit", !route.isEmpty());
+        if (scope.anchor() != null) {
+            var bounds = new JsonObject();
+            bounds.addProperty("x", scope.anchor().getX()); bounds.addProperty("y", scope.anchor().getY());
+            bounds.addProperty("z", scope.anchor().getZ()); bounds.addProperty("radius", scope.radius());
+            data.add("bounds", bounds);
+        }
         data.addProperty("navigation_nodes", navigation.nodes()); data.addProperty("navigation_records", navigation.records());
         data.addProperty("navigation_nanos", navigation.nanos()); data.addProperty("navigation_replans", navigation.replans());
         var rows = new JsonArray();

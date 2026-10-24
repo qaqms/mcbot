@@ -64,7 +64,7 @@ public final class BuildWork extends TickTask {
         long start = clock.getAsLong();
         try {
             surveys++;
-            var survey = BuildSurvey.query(target, access.survey(), offset, 0, clock);
+            var survey = BuildSurvey.queryForWork(target, access.survey(), offset, clock);
             observed = survey.data();
             checks += observed.get("work_preflights").getAsInt();
             if (observed.get("budget_exhausted").getAsBoolean()

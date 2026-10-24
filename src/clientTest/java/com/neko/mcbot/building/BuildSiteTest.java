@@ -67,8 +67,24 @@ class BuildSiteTest {
                     p.getY()==89 ? Blocks.STONE.defaultBlockState() : Blocks.AIR.defaultBlockState());
         }
         @Override public boolean corridor(BlockPos p) {
-            return BuildSite.plainCube(state(p.below())) && state(p)!=null && state(p).isAir()
-                    && state(p.above())!=null && state(p.above()).isAir();
+            return geometry().standing(p.getX(), p.getY(), p.getZ(),
+                    com.neko.mcbot.path.TerrainEdits.EMPTY) != null;
+        }
+        com.neko.mcbot.server.StandingGeometry geometry() {
+            return new com.neko.mcbot.server.StandingGeometry(new com.neko.mcbot.server.StandingGeometry.Access() {
+                @Override public boolean known(BlockPos pos) { return state(pos) != null; }
+                @Override public List<net.minecraft.world.phys.AABB> boxes(BlockPos pos) {
+                    return com.neko.mcbot.server.StandingGeometry.collision(state(pos),
+                            net.minecraft.world.level.EmptyBlockGetter.INSTANCE, pos);
+                }
+            }, .6, 1.8, .6);
+        }
+        @Override public boolean corridorStep(BlockPos from, BlockPos to) {
+            return BuildSite.Access.super.corridorStep(from, to)
+                    && com.neko.mcbot.server.BuildSiteAccess.walkable(geometry(), from, to);
+        }
+        @Override public List<BlockPos> corridorBody(BlockPos feet) {
+            return com.neko.mcbot.server.BuildSiteAccess.corridorBody(geometry(),feet,1.8);
         }
         @Override public boolean facility(BlockPos p) {
             var state=state(p);
@@ -127,6 +143,7 @@ class BuildSiteTest {
         var w=new World(); var site=site(w); var budget=site.navigation();
         assertNull(site.charge()); assertNull(site.checkpoint(target().revision(),FEET,w));
         assertNull(site.begin(target(),ROUTE,FEET.east(),w));
+        assertNull(site.begin(target(),List.of(),FEET.east(),w));
         assertSame(budget,site.navigation()); assertEquals(1,site.report(w).get("edit_attempts").getAsInt());
         assertNotNull(site.begin(target(),List.of(FEET,FEET.north()),FEET,w));
         var other=new BuildTarget(target().anchor(),target().rotation(),target().cells(),"different");
@@ -256,25 +273,124 @@ class BuildSiteTest {
         site.bind("next",new Object()); assertFalse(site.active());
     }
     @Test void fixedScopeDoesNotMoveWithNewStancesOrAllowOutOfBoundsEdits() {
-        var w=new World(); var site=site(w);
+        var w=new World(); var site=new BuildSite(); site.bind("task",w);
+        assertNull(site.begin(target(),ROUTE,FEET,
+                new com.neko.mcbot.path.PathSpec(false,false,false,Integer.MAX_VALUE,FEET,64),w));
         assertEquals(FEET,site.scope().anchor());
         assertFalse(site.inScope(FEET.east(65)));
         assertNotNull(site.placementGuard(FEET.east(65),Blocks.STONE.defaultBlockState(),w));
         assertNotNull(site.miningGuard(FEET.east(65),null,false,w));
         assertSame(site.navigation(),site.navigation());
     }
-    @Test void actualPassedCellsCannotBeSealedOrReclaimedAndRecordingGapsStopFurtherWork() {
+    @Test void defaultSiteNeedsNoInventedCorridorOrDistanceCapAndRestoresItsOriginalAccounts() {
+        var w=new World(); var site=new BuildSite(); site.bind("task",w);
+        assertNull(site.begin(target(),List.of(),FEET,w));
+        assertNull(site.scope().anchor());
+        assertEquals(Integer.MAX_VALUE,site.scope().maxDigs());
+        assertTrue(site.inScope(FEET.east(256)));
+        assertFalse(site.report(w).has("bounds"));
+        assertFalse(site.report(w).get("scope_limited").getAsBoolean());
+        assertNull(site.checkpoint(target().revision(),FEET.east(256),w));
+        assertNull(site.charge());
+        var restored=new BuildSite(); restored.bind("resumed",w);
+        restored.restore(site.snapshot(),FEET.east(256),w);
+        assertEquals(site.scope(),restored.scope());
+        assertEquals(1,restored.report(w).get("edit_attempts").getAsInt());
+        assertEquals(0,restored.report(w).get("access_route_cells").getAsInt());
+        assertFalse(restored.report(w).get("return_guaranteed").getAsBoolean());
+        assertTrue(restored.protects(TARGET));
+    }
+    @Test void explicitCorridorsUseCollisionForGrassFlowersSlabsAndSlopesButRejectRealBlockers() {
+        var w=new World();
+        w.states.put(FEET,Blocks.SHORT_GRASS.defaultBlockState());
+        w.states.put(FEET.east(),Blocks.DANDELION.defaultBlockState());
+        var site=new BuildSite(); site.bind("task",w);
+        assertNull(site.begin(target(),ROUTE,FEET,w));
+        w.states.put(FEET.east(),Blocks.COBWEB.defaultBlockState());
+        assertNotNull(site.live(w));
+        w.states.clear();
+        w.states.put(FEET.east().below(),Blocks.OAK_SLAB.defaultBlockState());
+        var slope=new BuildSite(); slope.bind("slope",w);
+        assertNull(slope.begin(target(),List.of(FEET,FEET.east().below()),FEET,w));
+        assertTrue(slope.protects(FEET.east().above()),
+                "fractional feet can occupy a third cell; its headroom must also be protected");
+        w.states.put(FEET.east(),Blocks.STONE.defaultBlockState());
+        assertNotNull(slope.live(w));
+        w.states.clear(); w.states.put(FEET.east(),Blocks.STONE.defaultBlockState());
+        var step=new BuildSite(); step.bind("step",w);
+        assertNull(step.begin(target(),List.of(FEET,FEET.east().above()),FEET,w));
+        w.states.put(FEET.above(2),Blocks.STONE.defaultBlockState());
+        assertNotNull(step.begin(target(),List.of(FEET,FEET.east().above()),FEET,w));
+    }
+    @Test void plannedUnbuiltWallsAndSoftCoverDoNotPreventPreparingTheFoundation() {
+        var w=new World(); var site=new BuildSite(); site.bind("task",w);
+        var design=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":4,"y":90,"z":0},"cells":[
+                {"x":0,"y":0,"z":0,"block":"stone"},{"x":0,"y":1,"z":0,"block":"stone"}]}
+                """).getAsJsonObject());
+        assertNull(site.begin(design,List.of(),FEET,w));
+        w.states.put(TARGET,Blocks.DIRT.defaultBlockState());
+        w.states.put(TARGET.above(),Blocks.DANDELION.defaultBlockState());
+        assertNull(site.miningGuard(TARGET,design.revision(),false,w));
+        w.passage.add(TARGET);
+        assertNull(site.miningGuard(TARGET,design.revision(),false,w),
+                "a deliberate target edit can replace an old visited floor after the body moves away");
+        assertNotNull(site.miningGuard(TARGET,null,false,w));
+        w.occupied.add(TARGET);
+        assertNotNull(site.miningGuard(TARGET,design.revision(),false,w));
+        w.occupied.clear();
+        w.states.put(TARGET.above(),Blocks.STONE.defaultBlockState());
+        assertNotNull(site.miningGuard(TARGET,design.revision(),false,w),"finished wall support remains protected");
+        w.states.remove(TARGET.above()); w.states.put(TARGET,Blocks.AIR.defaultBlockState());
+        assertNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
+    }
+    @Test void softCoverDoesNotIncludeHazardsFluidsFacilitiesOrNonreplaceableObjects() {
+        for(var block:List.of(Blocks.SHORT_GRASS,Blocks.DANDELION,Blocks.POPPY))
+            assertTrue(BuildSite.softClearance(block.defaultBlockState()),block.toString());
+        for(var block:List.of(Blocks.AIR,Blocks.STONE,Blocks.WATER,Blocks.COBWEB,Blocks.WITHER_ROSE,
+                Blocks.SWEET_BERRY_BUSH,Blocks.CRAFTING_TABLE,Blocks.CHEST,Blocks.TORCH))
+            assertFalse(BuildSite.softClearance(block.defaultBlockState()),block.toString());
+        assertFalse(BuildSite.softClearance(null));
+    }
+    @Test void clearingAnAirTargetCanRemoveGrassInsideTheBodyOrAnExplicitPassageWithoutMovingItsFloor() {
+        var w=new World(); var site=new BuildSite(); site.bind("task",w);
+        var design=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"cells":[
+                {"x":0,"y":0,"z":0,"block":"air"}]}
+                """).getAsJsonObject());
+        w.states.put(FEET,Blocks.DANDELION.defaultBlockState());
+        assertNull(site.begin(design,ROUTE,FEET,w));
+        w.occupied.add(FEET); w.passage.add(FEET);
+        assertNull(site.miningGuard(FEET,design.revision(),false,w));
+        assertNotNull(site.miningGuard(FEET.below(),design.revision(),false,w));
+        w.states.put(FEET,Blocks.STONE.defaultBlockState());
+        assertNotNull(site.miningGuard(FEET,design.revision(),false,w));
+    }
+    @Test void observedPassagesRemainProtectedButOldRecordingGapsDoNotBanOrdinaryConstruction() {
         var w=new World(); var site=site(w);
         w.passage.add(TEMP);
         assertNotNull(site.placementGuard(TEMP,Blocks.STONE.defaultBlockState(),w));
         assertNotNull(site.temporaryGuard(TEMP,"support",w));
         assertNotNull(site.miningGuard(TEMP,null,false,w));
         w.passageComplete=false;
-        assertNotNull(site.live(w));
-        assertNotNull(site.checkpoint(target().revision(),FEET,w));
+        assertNull(site.live(w));
+        assertNull(site.checkpoint(target().revision(),FEET,w));
+        assertFalse(site.report(w).get("passage_observation_complete").getAsBoolean());
+        assertNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
         assertFalse(site.allowsStanding(TARGET));
         assertFalse(site.allowsStanding(TARGET.below()));
         assertTrue(site.allowsStanding(TARGET.east()));
+    }
+    @Test void missingHistoricalPassagesKeepTemporaryCleanupConservativeWithoutStoppingNormalEdits() {
+        var w=new World(); var site=site(w); temporary(site,w);
+        w.passageComplete=false;
+        assertNull(site.live(w));
+        assertNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
+        assertNotNull(site.miningGuard(TEMP,target().revision(),true,w));
+        var restored=new BuildSite(); restored.bind("restored",w);
+        restored.restore(site.snapshot(),FEET,w);
+        assertNull(restored.live(w));
+        assertNotNull(restored.miningGuard(TEMP,target().revision(),true,w));
     }
     @Test void aDeclaredCorridorInsideTheWholeFootprintDoesNotProveAnExit() {
         var w=new World(); var site=new BuildSite(); site.bind("task",w);

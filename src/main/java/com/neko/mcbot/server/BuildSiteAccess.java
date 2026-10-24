@@ -10,6 +10,7 @@ import net.minecraft.world.phys.AABB;
 public final class BuildSiteAccess implements BuildSite.Access {
     private final CompanionPlayer body;
     private MiningTools tools;
+    private StandingGeometry geometry;
     public BuildSiteAccess(CompanionPlayer body) { this.body = body; }
     @Override public BlockState state(BlockPos pos) {
         var level = body.level();
@@ -17,10 +18,31 @@ public final class BuildSiteAccess implements BuildSite.Access {
                 ? level.getBlockState(pos) : null;
     }
     @Override public boolean corridor(BlockPos feet) {
-        var floor = state(feet.below());
-        var lower = state(feet); var upper = state(feet.above());
-        return body.getBbWidth() <= 1 && body.getBbHeight() <= 2
-                && BuildSite.plainCube(floor) && lower != null && lower.isAir() && upper != null && upper.isAir();
+        if (geometry == null) geometry = StandingGeometry.forPlayer(body);
+        return geometry.standing(feet.getX(), feet.getY(), feet.getZ(),
+                com.neko.mcbot.path.TerrainEdits.EMPTY) != null;
+    }
+    @Override public boolean corridorStep(BlockPos from, BlockPos to) {
+        return BuildSite.Access.super.corridorStep(from, to) && walkable(geometry, from, to);
+    }
+    @Override public java.util.List<BlockPos> corridorBody(BlockPos feet) {
+        return corridorBody(geometry, feet, body.getBbHeight());
+    }
+    public static java.util.List<BlockPos> corridorBody(StandingGeometry geometry, BlockPos feet, double height) {
+        var foot = geometry.standing(feet.getX(), feet.getY(), feet.getZ(),
+                com.neko.mcbot.path.TerrainEdits.EMPTY);
+        if (foot == null) return java.util.List.of();
+        var cells = new java.util.ArrayList<BlockPos>();
+        for (int y = (int) Math.floor(foot.height()); y < (int) Math.ceil(foot.height() + height - 1e-7); y++)
+            cells.add(new BlockPos(feet.getX(), y, feet.getZ()));
+        return java.util.List.copyOf(cells);
+    }
+    public static boolean walkable(StandingGeometry geometry, BlockPos from, BlockPos to) {
+        var edits = com.neko.mcbot.path.TerrainEdits.EMPTY;
+        var a = geometry.standing(from.getX(), from.getY(), from.getZ(), edits);
+        var b = geometry.standing(to.getX(), to.getY(), to.getZ(), edits);
+        return a != null && b != null && geometry.motion(from.getX(), a.height(), from.getZ(),
+                to.getX(), b.height(), to.getZ(), edits) != com.neko.mcbot.path.NavigationGeometry.Motion.BLOCKED;
     }
     @Override public boolean facility(BlockPos pos) {
         var state = state(pos);

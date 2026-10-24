@@ -94,8 +94,22 @@ class ConstructionProgramTest {
         assertTrue(returned.get("goal_satisfied").getAsBoolean()); assertFalse(returned.get("outer_goal_verified").getAsBoolean());
         assertEquals("build_diff",w.calls.getLast().name());
         var move=w.calls.stream().filter(c->c.name().equals("move_to")).findFirst().orElseThrow().args();
-        assertTrue(move.get("walk_only").getAsBoolean()); assertEquals("work",move.get("arrival").getAsString());
+        assertFalse(move.has("walk_only")); assertEquals("work",move.get("arrival").getAsString());
         assertEquals(32,move.getAsJsonObject("bounds").get("radius").getAsInt());
+    }
+    @Test void defaultHelperRequiresNoHandwrittenExitAndDoesNotInventBoundsOrDisableTerrainWork() throws Exception {
+        var w=new World();
+        w.override=(name,args)->name.equals("build_site") ? actual(
+                "{\"active\":true,\"target_revision\":\""+REV+"\",\"temporary\":[]}") : null;
+        var result=run(w,CODE.replace("{access_route={{x=0,y=90,z=0},{x=1,y=90,z=0}},max_rounds=3,max_actions=2}","nil"),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        var begin=w.calls.stream().filter(c->c.name().equals("build_site")).findFirst().orElseThrow().args();
+        assertFalse(begin.has("access_route")); assertFalse(begin.has("bounds"));
+        var move=w.calls.stream().filter(c->c.name().equals("move_to")).findFirst().orElseThrow().args();
+        assertFalse(move.has("walk_only")); assertFalse(move.has("max_digs")); assertFalse(move.has("bounds"));
+        assertTrue(move.get("exact").getAsBoolean()); assertEquals("work",move.get("arrival").getAsString());
+        assertTrue(move.has("work_target")); assertEquals(2,w.placed);
     }
     @Test void pagesAreReadBeforeChoosingLaterPageWorkAndWorldChangesStopAllMutations() throws Exception {
         var w=new World(); w.pages=2;
@@ -117,15 +131,26 @@ class ConstructionProgramTest {
         assertEquals("minecraft:dirt",args.get("expected_block").getAsString());
         assertFalse(args.has("clear_obstructions"));
     }
-    @Test void localMoveFailureRequiresFreshBodyCheckAndHonorsExplicitRoundLimit() throws Exception {
+    @Test void localMoveFailureChecksFreshBodyAndReturnsItsObstacleWithoutRepeatingAnUnchangedRoute() throws Exception {
         var w=new World(); w.moveFailure="NO_PATH:local geometry"; w.repeat=true;
         var result=run(w,CODE,128);
         assertTrue(result.ok()); assertEquals(0,w.placed);
-        assertEquals("round_limit",result.data().getAsJsonObject("returned").get("blocked").getAsString());
+        assertEquals("placement_stance_unavailable",result.data().getAsJsonObject("returned").get("blocked").getAsString());
         int index=0; while(!w.calls.get(index).name().equals("move_to")) index++;
         assertEquals("status",w.calls.get(index+1).name());
         assertTrue(w.calls.get(index+1).args().get("details").getAsBoolean());
-        assertEquals(3,w.checkpoints); assertEquals(3,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        assertEquals(1,w.checkpoints); assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        w.moveFailure=null; w.repeat=false;
+        assertTrue(run(w,CODE,128).data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean(),
+                "a local failure is not a persistent ban on the owner's task or later dispatch");
+    }
+    @Test void explicitRoundLimitStillBoundsProductiveWorkWithoutChangingTheOuterTask() throws Exception {
+        var w=new World(); w.moved=1; w.repeat=true;
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals("round_limit",result.data().getAsJsonObject("returned").get("blocked").getAsString());
+        assertEquals(3,w.checkpoints);
+        assertEquals(3,w.calls.stream().filter(c->c.name().equals("build_nearby")).count());
     }
     @Test void defaultConstructionContinuesBeyondSixteenRoundsAndOldCallLimit() throws Exception {
         var w=new World(); w.remaining=40; w.moved=1;

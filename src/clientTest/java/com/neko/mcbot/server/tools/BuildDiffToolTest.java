@@ -12,6 +12,37 @@ class BuildDiffToolTest {
             {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
             "to":{"x":7,"y":0,"z":7},"block":"stone"}}
             """;
+    @Test void surfaceSeparatesGroundBlocksFeetAndFractionalCollisionAndNeverInventsUnknownSupport() {
+        var blocks=new java.util.HashMap<net.minecraft.core.BlockPos,net.minecraft.world.level.block.state.BlockState>();
+        var base=new net.minecraft.core.BlockPos(-1,69,2);
+        blocks.put(base,net.minecraft.world.level.block.Blocks.GRASS_BLOCK.defaultBlockState());
+        blocks.put(base.above(),net.minecraft.world.level.block.Blocks.DANDELION.defaultBlockState());
+        var unknown=new java.util.HashSet<net.minecraft.core.BlockPos>();
+        var geometry=new com.neko.mcbot.server.StandingGeometry(new com.neko.mcbot.server.StandingGeometry.Access() {
+            @Override public boolean known(net.minecraft.core.BlockPos p) { return !unknown.contains(p); }
+            @Override public java.util.List<net.minecraft.world.phys.AABB> boxes(net.minecraft.core.BlockPos p) {
+                assertFalse(unknown.contains(p),"unknown cells cannot be read");
+                return com.neko.mcbot.server.StandingGeometry.collision(blocks.getOrDefault(p,
+                        net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()),
+                        net.minecraft.world.level.EmptyBlockGetter.INSTANCE,p);
+            }
+        },.6,1.8,.6);
+        java.util.function.Function<net.minecraft.core.BlockPos,net.minecraft.world.level.block.state.BlockState> state=
+                p->blocks.getOrDefault(p,net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+        var surface=BuildDiffTool.observedSurface(geometry,base,state);
+        assertEquals(69,surface.getAsJsonObject("support").get("y").getAsInt());
+        assertEquals(70,surface.getAsJsonObject("feet").get("y").getAsInt());
+        assertEquals(70,surface.get("feet_y").getAsDouble());
+        assertEquals("minecraft:grass_block",surface.get("support_block").getAsString());
+        blocks.put(base,net.minecraft.world.level.block.Blocks.OAK_SLAB.defaultBlockState());
+        blocks.remove(base.above());
+        surface=BuildDiffTool.observedSurface(geometry,base,state);
+        assertEquals(69,surface.getAsJsonObject("feet").get("y").getAsInt());
+        assertEquals(69.5,surface.get("feet_y").getAsDouble());
+        unknown.add(base);
+        assertNull(BuildDiffTool.observedSurface(geometry,base,state));
+        assertEquals(1,blocks.size());
+    }
 
     @Test void invalidOrForgedModificationArgumentsAreRejectedBeforeAnyWorldAccess() {
         for (String extra : java.util.List.of(",\"execute\":true", ",\"offset\":1",

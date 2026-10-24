@@ -22,10 +22,13 @@ public final class BuildSiteTool implements ServerTool {
                 yield new Arguments(operation, null, null, List.of(), null);
             }
             case "begin" -> {
-                BuildTarget.keys(args, Set.of("operation", "target", "access_route", "bounds"));
+                BuildTarget.keys(args, Set.of("operation", "target", "access_route", "bounds", "expected_revision"));
                 var target = BuildTarget.parse(args.getAsJsonObject("target"));
-                var values = args.getAsJsonArray("access_route");
-                if (values.size() < 2 || values.size() > BuildSite.ROUTE_LIMIT) throw new IllegalArgumentException();
+                if (args.has("expected_revision")
+                        && !target.revision().equals(BuildTarget.string(args.get("expected_revision"), 64)))
+                    throw new IllegalArgumentException("revision");
+                var values = args.has("access_route") ? args.getAsJsonArray("access_route") : new com.google.gson.JsonArray();
+                if (values.size() == 1 || values.size() > BuildSite.ROUTE_LIMIT) throw new IllegalArgumentException();
                 var route = new ArrayList<BlockPos>();
                 for (var value : values) {
                     var p = value.getAsJsonObject();
@@ -58,7 +61,8 @@ public final class BuildSiteTool implements ServerTool {
         }
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
-                    "DENIED:build_site须query、begin(target/access_route)或checkpoint(expected_revision)，不接受额外字段。", null));
+                    "DENIED:build_site query仅需operation；begin需target，可选access_route/bounds/expected_revision；"
+                            + "checkpoint需expected_revision。无需猜写通道，其他字段不支持；target或修订须有效。", null));
         }
         if (!"query".equals(input.operation()) && (context == null
                 || !context.equals(permissions.current(context.owner(), body.getUUID(), context.dimension(), context.taskId(), body))
@@ -73,13 +77,14 @@ public final class BuildSiteTool implements ServerTool {
         Result failure = switch (input.operation()) {
             case "begin" -> site.begin(input.target(), input.route(), StandingGeometry.feetCell(body),
                     input.scope() != null ? input.scope() : site.active() ? site.scope()
-                    : new com.neko.mcbot.path.PathSpec(false, false, false, 128, StandingGeometry.feetCell(body), 64), access);
+                    : com.neko.mcbot.path.PathSpec.DEFAULT, access);
             case "checkpoint" -> site.checkpoint(input.revision(), StandingGeometry.feetCell(body), access);
             default -> null;
         };
         if (failure==null && instance!=null) site.attach(BuildRecordAccess.store(body),instance);
         return CompletableFuture.completedFuture(new Result(failure == null, failure == null
-                ? "工地事实已核对；登记不改世界、不授予挖放许可，通道仅覆盖声明格，不保证全局逃生。"
+                ? "工地事实已核对；登记不改世界。未声明通道时由正常导航选择真实工作站位；"
+                        + "out_of_reach只表示当前手够不着，应换站位继续，不等于整个设计不可达。"
                 : failure.feedback(), site.report(access)));
     }
 }

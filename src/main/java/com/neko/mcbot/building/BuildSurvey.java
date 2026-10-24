@@ -27,6 +27,7 @@ public final class BuildSurvey {
         BlockPlacement.Access placement();
         JsonObject terrain();
         default boolean clearable(BuildTarget.Cell cell) { return false; }
+        default JsonObject surface(BlockPos pos) { return null; }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -43,15 +44,19 @@ public final class BuildSurvey {
 
     public static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
                                            LongSupplier clock) {
-        return query(target, access, offset, materialOffset, clock, true);
+        return query(target, access, offset, materialOffset, clock, true, true);
+    }
+
+    public static ServerTool.Result queryForWork(BuildTarget target, Access access, int offset, LongSupplier clock) {
+        return query(target, access, offset, 0, clock, true, false);
     }
 
     public static ServerTool.Result verify(BuildTarget target, Access access, int offset, LongSupplier clock) {
-        return query(target, access, offset, 0, clock, false);
+        return query(target, access, offset, 0, clock, false, false);
     }
 
     private static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
-                                            LongSupplier clock, boolean assessWork) {
+                                            LongSupplier clock, boolean assessWork, boolean observeSurface) {
         if (offset < 0 || offset >= target.cells().size() || offset % PAGE != 0
                 || materialOffset < 0 || materialOffset > BuildTarget.LIMIT || materialOffset % PAGE != 0)
             throw new IllegalArgumentException("page");
@@ -125,6 +130,14 @@ public final class BuildSurvey {
         for (int index = offset; index < Math.min(rows.size(), offset + PAGE); index++) {
             if (!assessWork) break;
             Row row = rows.get(index);
+            if (observeSurface && clock.getAsLong() - start < MAX_NANOS) {
+                var surface = access.surface(row.cell().pos());
+                if (surface != null) row.data().add("surface", surface);
+            }
+            if (clock.getAsLong() - start >= MAX_NANOS) {
+                budgetExhausted = true;
+                break;
+            }
             if (!row.data().get("state").getAsString().equals("not_assessed")) continue;
             var bill = bills.get(BuiltInRegistries.ITEM.getKey(row.material().item()).toString());
             if (bill.available - bill.allocated < row.material().units()) {
@@ -230,6 +243,7 @@ public final class BuildSurvey {
         data.addProperty("consumed_count", 0);
         return new ServerTool.Result(true, "建筑只读核对：已满足" + satisfied + "/" + rows.size()
                 + "；分类=" + counts + "。查询未施工，材料分配只针对当前页且未预留；"
+                + "out_of_reach只是当前站位手够不着，使用工作导航换站位；surface为实际支撑/脚高，不是路线可达证明。"
                 + "未知、不支持、状态冲突及不稳定观察不能认定整项目标满足。明细和料单分别按next_offset/material_next_offset续页。", data);
     }
 

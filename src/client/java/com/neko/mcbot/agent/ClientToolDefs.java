@@ -72,7 +72,8 @@ public final class ClientToolDefs {
                     + "instance_id/instance_revision及target为原build_diff/build_site/build_nearby通用引用；"
                     + "records按16条分页，status为intact/absent/conflict/unknown，action_count为真实动作数。"
                     + "同块替换/重载后来源不可证为conflict，不授权拆除；automatic_resume=false。";
-            case "build_site" -> "data.active/task_scoped/target_revision/bounds为当前任务工地；"
+            case "build_site" -> "data.active/task_scoped/target_revision为当前任务工地；scope_limited=false时没有bounds，未限制总半径；"
+                    + "access_route_explicit表示是否显式声明通道，passage_observation_complete仅为历史通行记录完整性；"
                     + "checkpoints/edit_attempts及navigation_*累计不重开，temporary含实际来源与cleanup_allowed；"
                     + "登记不改世界或授予许可，return_guaranteed=false；只保护声明通道，不证明全局逃生。";
             case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
@@ -151,7 +152,9 @@ public final class ClientToolDefs {
                     + "not_assessed表示当前页外或工作预算未查，unknown表示现场不完整；"
                     + "ready仅近身状态预检，不证明实际放置。observation_complete/spatial_stable和预算字段必须核对。"
                     + "observation_key供跨页核同一次世界/材料事实；cells.item/material_available供选择有限工作，"
-                    + "clear_allowed仅已登记同修订工地的当前安全清障提示，真实挖掘仍重验。";
+                    + "clear_allowed仅已登记同修订工地的当前安全清障提示，真实挖掘仍重验。"
+                    + "out_of_reach只表示当前手够不着，应让mc.build或工作导航换站位，不是设计大小限制。"
+                    + "cells[].surface给真实feet/feet_y/support/support_block；支撑方块格与脚格不同，不自动改设计。";
             case "build_nearby" -> "ACCEPTED只表示受理，等真终态。action_attempts为本批尝试，placed_blocks/"
                     + "consumed_count为实际结果，placement_results含逐格效果；失败可能已改变世界或扣料。"
                     + "survey是收尾重查全目标，仍有cells/materials分页；final_verified=false不可验收。"
@@ -403,21 +406,23 @@ public final class ClientToolDefs {
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64},"verify_only":{"type":"boolean"}},
                     "required":["target"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
-            new ToolSpec("build_site", "登记任务内工地、完整目标与明确进出通道，供所有原挖放和路线共用保护。"
-                    + "operation=query只读；begin提供target和2-64格无重复水平相邻世界脚格access_route，必须包含当前脚格，"
-                    + "每格空气净空及完整整格地板，非空气目标不得封路，至少一个通道端点须伸出全目标水平包围范围。"
-                    + "实际经过格及地板也保护，原路线256条帽/观察缺口时停工。bounds可显式限原范围，默认首次脚格64半径，任务内冻结。"
+            new ToolSpec("build_site", "登记任务内完整施工目标，供原挖放和导航共用保护。"
+                    + "operation=query只读；begin提供target即可，expected_revision可选且须匹配；无需手写进出通道。"
+                    + "可选access_route为2-64格无重复相邻脚格，允许可通行坡地/半砖/草花，含当前脚格；"
+                    + "按真实碰撞/支撑逐段核对，非空气目标不得封住显式通道，至少一端伸出全目标水平包围范围。"
+                    + "bounds省略不设工地总半径，显式范围保留且任务内冻结。实际路线缺口仍不可冒充退路证明。"
                     + "同任务只选一份目标与通道，施工轮数和原生修改尝试只作累计诊断，不按次数或重复事实禁用；每批寻路4000节点/32768状态记录，无默认搜索总时间或累计重算次数帽。"
                     + "checkpoint带expected_revision复核整目标真实状态与站位；重复只作诊断，不停止后续派发，失败不重开许可。"
-                    + "run_program内mc.build(target,{access_route=...,bounds?,max_rounds?,max_actions?,temporary?})"
-                    + "组合原查询/只行走工作导航/清障/近身施工，max_rounds默认0不限，可显式指定正数；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
+                    + "run_program内mc.build(target)或mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})"
+                    + "组合差异/工作导航/清障/近身施工，导航按原权限自动挖放，max_rounds默认0不限，可显式指定正数；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
                     + "purpose为support/workstation。mc.cleanup_temporary(revision)另行有界回收，依赖未解除保留。"
-                    + "不自动找料、合成、生成支撑或解依赖；外层建筑目标验收仍另行执行。任务结束不自动清理或跨任务认领。",
+                    + "不自动找料合成，额外工位/脚手架由temporary指定；路线支撑可按真实库存与原权限放置。"
+                    + "外层建筑目标验收仍另行执行。任务结束不自动清理或跨任务认领。",
                     """
                     {"type":"object","properties":{"operation":{"type":"string","enum":["query","begin","checkpoint"]},
                     "target":%s,"access_route":{"type":"array","minItems":2,"maxItems":64,"items":%s},
                     "bounds":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},
-                    "radius":{"type":"integer","minimum":1,"maximum":64}},"required":["x","y","z","radius"],"additionalProperties":false},
+                    "radius":{"type":"integer","minimum":1,"maximum":2147483647}},"required":["x","y","z","radius"],"additionalProperties":false},
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
                     "required":["operation"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET, BUILD_ANCHOR)),

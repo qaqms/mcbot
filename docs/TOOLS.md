@@ -3,7 +3,19 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## 采掘工具与等待更新（2026-10-24）
+## 工地地形与清障更新（2026-10-24）
+
+详见[工地地形与清障](BUILD-SITE-TERRAIN-2026-10-24.md)。
+build_site begin只需target，可选expected_revision核同修订；不再必填access_route。
+可选明确通道以实际碰撞、脚高及相邻移动核验，允许普通草花、半砖和坡地，仍不可封路。
+bounds省略不限工地总半径；显式正半径上界与move_to一致为2147483647，任务内仍冻结。
+mc.build(target)组合工作导航、清障、施工，不强制walk_only，不自动改设计或刷新原账/许可。
+build_diff cells[].surface含feet/feet_y/support/support_block，限当前页/原查询预算，只作现场样本。
+out_of_reach表示当前手距，不是目标永久不可达或设计大小门。
+普通草花及尚未建出的设计不阻止地基准备；正常目标翻修与无关路线破坏分开。
+历史路线记录缺口不全局停工，临时回收继续要求完整来源和通行证据；工具总数仍31。
+
+## 采掘工具与等待更新（2026-10-24，前次检查点）
 
 详见[采掘工具与等待显示](TOOL-EFFICIENCY-AND-WAITING-2026-10-24.md)。
 采掘/开路从真实36槽背包选具备采收资格的最快工具，同速优先不磨损；只读观测不换手。
@@ -265,11 +277,11 @@ attack新增严格布尔approach，默认false保持原地；true在固定初始
 
 ## B2 近身施工（2026-10-17）
 
-新增B3 build_site，当前27项（18服务端+9本地）。query严格只读；begin提供B1 target、
-2-64格水平明确通道和可选bounds，完整目标/实际经过格与支撑贯通规划、执行保护。
-范围、16轮checkpoint/128次改动尝试、16条临时来源和原导航账不重开，登记不授予挖放许可。
-run_program内mc.build(target,{access_route=...,bounds?,max_rounds?,max_actions?,temporary?})
-有限组合原差异/只行走工作导航/清障/近身施工，最后独立核全目标；目标已满足不搭临时工程。
+B3 build_site与后续更新现属31工具集合。query严格只读；begin提供B1 target即可，
+access_route和bounds可选，默认不设工地总半径，详见本文顶部2026-10-24更新。
+显式范围、16条临时来源和原导航账不重开，checkpoint/改动次数仅诊断，登记不授予挖放许可。
+run_program内mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})
+组合原差异/工作导航/清障/近身施工，导航可按原权限挖放，最后独立核全目标；目标已满足不搭临时工程。
 原mc.try_call门不变，未知、权限、安全、预算与取消停止；failure_kind为桥回执的有限原因码。
 place_block及放置工作move_to可带temporary_purpose=support/workstation；
 工地路线实际垫块同源记录，须实际消费/落地后才有来源。只支持稳定无组件单格整块，

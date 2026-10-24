@@ -26,8 +26,9 @@ public final class BoundedProgram {
             "支持Lua变量/表/函数/条件/循环和assert/error/ipairs/pairs/next/tonumber/tostring/type/print；"
             + "不提供string/table/math库、pcall、require、元表或外部访问。"
             + "追加列表用t[#t+1]=v；查看表直接print(t)或return t，不用tostring(t)。"
-            + "mc.build(target,{access_route=世界脚格列表,bounds?,max_rounds?,max_actions?,temporary?})"
-            + "提供同预算有限多站位施工；mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
+            + "mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})或mc.build(target)"
+            + "组合清障和多站位施工，导航按原权限挖放，无需手写进出通道；"
+            + "mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
             if (json == null || bytes(json) > 20000) throw new IllegalArgumentException();
