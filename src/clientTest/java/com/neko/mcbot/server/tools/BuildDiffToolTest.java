@@ -71,4 +71,16 @@ class BuildDiffToolTest {
         assertFalse(result.ok());
         assertTrue(result.feedback().startsWith("TARGET_REVISION_CHANGED:"));
     }
+    @Test void missingPageRevisionNamesTheMissingFieldAndAcceptsLuaIntegralNumbersWithIt() {
+        var args=JsonParser.parseString("{\"target\":"+TARGET+",\"offset\":16.0}").getAsJsonObject();
+        var denied=BuildDiffTool.report(args, ignored->{ fail("must reject before world lookup"); return null; },()->0);
+        assertFalse(denied.ok());
+        assertTrue(denied.feedback().contains("expected_revision"),denied.feedback());
+        args.addProperty("expected_revision",BuildTarget.parse(args.getAsJsonObject("target")).revision());
+        var reached=new java.util.concurrent.atomic.AtomicBoolean();
+        assertThrows(IllegalStateException.class,()->BuildDiffTool.report(args, ignored->{
+            reached.set(true); throw new IllegalStateException("valid input reached world boundary");
+        },()->0));
+        assertTrue(reached.get(),"16.0 from Lua is a valid integral offset");
+    }
 }

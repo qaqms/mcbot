@@ -146,6 +146,9 @@ public final class ClientToolDefs {
                     + "goal_satisfied仅完整稳定现场且全部支持/满足才true，不直接登记或完成外层任务。"
                     + "verify_only=true仅重查全目标，略过当前页工作预检；goal_observation_key只含目标真实状态，用于阶段核对。"
                     + "cells是当前16格明细，next_offset=-1为末页；materials独立material_next_offset续页。"
+                    + "手动非零偏移必须带同target的expected_revision=首张data.target_revision；16.0等整数值合法。"
+                    + "Lua可用mc.build_diff(target)自动续完明细和料单，直接返回data对象；"
+                    + "page_counts/page_remaining/page_satisfied仅本页，counts/remaining是全目标，二者不是矛盾。"
                     + "料单required为全目标已知未满足格需求下界，available仅36储物槽的无额外组件材料，"
                     + "shortfall是差额；allocated仅当前明细页通过原版预检的份数，未预留，consumed始终0。"
                     + "material_bill_complete=false有未知或不支持缺口，不能把缺行当零需求。"
@@ -157,6 +160,8 @@ public final class ClientToolDefs {
                     + "cells[].surface给真实feet/feet_y/support/support_block；支撑方块格与脚格不同，不自动改设计。";
             case "build_nearby" -> "ACCEPTED只表示受理，等真终态。action_attempts为本批尝试，placed_blocks/"
                     + "consumed_count为实际结果，placement_results含逐格效果；失败可能已改变世界或扣料。"
+                    + "work_scope区分whole_target_nearby自动全目标近身选格/current_page显式页，whole_remaining为整目标剩余；"
+                    + "page_satisfied/no_work_here不等于整目标满足，当前站位无工作应换位或处理清障/材料。"
                     + "survey是收尾重查全目标，仍有cells/materials分页；final_verified=false不可验收。"
                     + "batch_finished只表示局部批次结束，goal_satisfied才是同修订全目标现场满足，仍不完成外层set_goal。";
             case "break_block" -> "data.removed表示真实移除；collected_count=0表示挖掘不直接塞包。"
@@ -392,6 +397,7 @@ public final class ClientToolDefs {
                     + "rotation默认0，允许0/90/180/270顺时针，坐标和作者状态一起旋转。"
                     + "properties可选[{name,value}]，只匹配明确要求的属性；不忽略已写的朝向/含水等，也不自动替代方块。"
                     + "target_revision按完整规范目标生成，任一非零偏移续页必须带expected_revision。改变目标不补任何任务预算。"
+                    + "run_program可直接local d=mc.build_diff(target)，自动固定修订查完所有页，无需手算offset。"
                     + "offset和material_offset独立16格/16种分页；counts及全目标剩余需求每次重新核对，不累加各页观察数。"
                     + "当前页最多96次原版放置预检，共用50ms协作时间帽；未查明/不支持/未知保留缺口，不能误报完成。"
                     + "支持已有普通单格及原版双格门；门须完整两半、明确half/facing/hinge且其余属性要求一致。"
@@ -416,6 +422,8 @@ public final class ClientToolDefs {
                     + "run_program内mc.build(target)或mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})"
                     + "组合差异/工作导航/清障/近身施工，先准备低层障碍，局部站位失败后按新鲜差异尝试其他工作格；导航按原权限自动挖放，max_rounds默认0不限，可显式指定正数；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
                     + "purpose为support/workstation。mc.cleanup_temporary(revision)另行有界回收，依赖未解除保留。"
+                    + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,consumed_count,remaining,blocked,counts,unresolved}，"
+                    + "不包在data里，并自动输出施工结果；脚本执行成功不代表建筑完成。默认批次12动作，不主动加短max_rounds拆断连续施工。"
                     + "不自动找料合成，额外工位/脚手架由temporary指定；路线支撑可按真实库存与原权限放置。"
                     + "外层建筑目标验收仍另行执行。任务结束不自动清理或跨任务认领。",
                     """
@@ -426,10 +434,10 @@ public final class ClientToolDefs {
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64}},
                     "required":["operation"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET, BUILD_ANCHOR)),
-            new ToolSpec("build_nearby", "在原地对build_diff同一target/expected_revision的指定16格页施工。"
+            new ToolSpec("build_nearby", "在原地对build_diff同一target/expected_revision施工；省略offset自动查全目标中的近身可做格，显式offset限定16格页。"
                     + "每刻最多一次原版放置，max_actions默认12/最多12；每格重新核材料、接触、目标状态、区域锁及任务控制权。"
                     + "不移动、不挖、不自动找料或补全依赖；支撑随实际放置重新评估，缺口单独报告。"
-                    + "400ms累计协作工作帽/每次查询50ms/最多1152次查询预检/200游戏刻，不中断单个原版回调。"
+                    + "400ms累计协作工作帽/每次查询50ms/200游戏刻；自动模式逐刻换页，扫描预算含全页，不中断单个原版回调。"
                     + "失败不重放，取消后不再动作；实际扣料与半成品保留，两个游戏刻后重新核全目标。"
                     + "已有满足格不消费；沿用36槽默认组件，同B1单格与完整双格门支持范围。门只发下半一次动作/消费一件，"
                     + "两半逐格记录；任一半未知/保护/占位不得动作。ACCEPTED等真终态；本批结束不是整栋完成。"

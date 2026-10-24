@@ -190,6 +190,12 @@ public final class BuildSurvey {
         int satisfied = counts.get("satisfied").getAsInt();
         var details = new JsonArray();
         rows.subList(offset, Math.min(rows.size(), offset + PAGE)).forEach(row -> details.add(row.data()));
+        var pageCounts = new JsonObject();
+        for (var entry : counts.entrySet()) pageCounts.addProperty(entry.getKey(), 0);
+        for (var entry : details) {
+            String state = entry.getAsJsonObject().get("state").getAsString();
+            pageCounts.addProperty(state, pageCounts.get(state).getAsInt() + 1);
+        }
         var materials = new JsonArray();
         var entries = new ArrayList<>(bills.entrySet());
         if (materialOffset >= entries.size() && materialOffset != 0) throw new IllegalArgumentException("material_page");
@@ -219,6 +225,10 @@ public final class BuildSurvey {
         data.addProperty("remaining", rows.size() - satisfied);
         data.add("counts", counts);
         data.add("cells", details);
+        data.add("page_counts", pageCounts);
+        data.addProperty("page_remaining", details.size() - pageCounts.get("satisfied").getAsInt());
+        data.addProperty("page_satisfied", stable && observationComplete
+                && pageCounts.get("satisfied").getAsInt() == details.size());
         data.addProperty("offset", offset);
         data.addProperty("next_offset", offset + PAGE < rows.size() ? offset + PAGE : -1);
         data.addProperty("details_complete", details.size() == rows.size());
@@ -247,7 +257,8 @@ public final class BuildSurvey {
         return new ServerTool.Result(true, "建筑只读核对：已满足" + satisfied + "/" + rows.size()
                 + "；分类=" + counts + "。查询未施工，材料分配只针对当前页且未预留；"
                 + "out_of_reach只是当前站位手够不着，使用工作导航换站位；surface为实际支撑/脚高，不是路线可达证明。"
-                + "未知、不支持、状态冲突及不稳定观察不能认定整项目标满足。明细和料单分别按next_offset/material_next_offset续页。", data);
+                + "page_counts仅本页，counts含全目标及页外未评估格；本页完成不等于整栋完成。"
+                + "明细和料单分别按next_offset/material_next_offset及同一expected_revision续页，Lua可用mc.build_diff(target)。", data);
     }
 
     private static String hash(String facts) {

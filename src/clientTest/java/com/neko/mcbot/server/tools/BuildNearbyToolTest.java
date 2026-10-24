@@ -30,6 +30,9 @@ class BuildNearbyToolTest {
         }
         input.addProperty("expected_revision", BuildTarget.parse(input.getAsJsonObject("target")).revision());
         assertEquals(12, BuildNearbyTool.arguments(input).maxActions());
+        assertEquals(-1, BuildNearbyTool.arguments(input).offset());
+        input.addProperty("offset",0);
+        assertEquals(0, BuildNearbyTool.arguments(input).offset());
         assertEquals(200, tool.capTicks(input));
     }
 }

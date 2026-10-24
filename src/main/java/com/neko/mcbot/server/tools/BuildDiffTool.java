@@ -117,7 +117,8 @@ public final class BuildDiffTool implements ServerTool {
             if (offset >= target.cells().size() || offset % BuildSurvey.PAGE != 0 || materialOffset % BuildSurvey.PAGE != 0)
                 throw new IllegalArgumentException("page");
             if ((offset != 0 || materialOffset != 0) && !args.has("expected_revision"))
-                throw new IllegalArgumentException("page_revision_required");
+                return new Result(false, "DENIED:非零offset/material_offset续页须携带首张回执的target_revision，"
+                        + "填入expected_revision，并保持同一target；Lua可用mc.build_diff(target)自动续页。", null);
             long types = target.cells().stream().map(BuildTarget.Cell::material).map(BuildTarget.Material::item)
                     .filter(java.util.Objects::nonNull).distinct().count();
             if (materialOffset >= types && materialOffset != 0) throw new IllegalArgumentException("material_page");

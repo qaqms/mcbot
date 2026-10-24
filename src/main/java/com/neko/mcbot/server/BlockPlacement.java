@@ -691,6 +691,7 @@ public final class BlockPlacement {
         var block = item.getBlock();
         if (!BuiltInRegistries.BLOCK.getKey(block).getNamespace().equals("minecraft")) return false;
         return block.getClass() == net.minecraft.world.level.block.Block.class
+                || block instanceof net.minecraft.world.level.block.TransparentBlock
                 || block instanceof net.minecraft.world.level.block.RotatedPillarBlock
                 || block instanceof net.minecraft.world.level.block.SlabBlock
                 || block instanceof net.minecraft.world.level.block.StairBlock

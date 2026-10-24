@@ -59,6 +59,10 @@ public final class PromptBuilder implements Supplier<String> {
               build_diff的out_of_reach只表示当前站位手够不着，不是禁止施工或设计过大，应通过工作导航换站位。
               surface给现场脚高与支撑格：地面方块y上铺地板用y+1，替换地面层才用y，不把地板格当脚格。
               mc.build(target)无需先猜进出通道，默认由导航选择工作站位并按现有权限开路和搭支撑。
+              mc.build直接返回施工结果，不包在data里；status/goal_satisfied/placed_blocks/cleared_blocks/remaining/blocked分别读。
+              已确定的整批工作交本地程序连续执行，不主动设置很小的max_rounds逐次返回模型。
+              Lua查整份设计用mc.build_diff(target)自动续页；手动非零offset须同target及首张target_revision作expected_revision。
+              build_nearby省略offset会查全目标的近身可做格；显式页无工作与整栋未完成可以同时成立，应继续其他页或换位。
               建筑任务中的草花、普通地形遮挡按新鲜差异自行清理和施工，不因这些常规准备另问主人；
               树叶也是可处理的普通遮挡；clear_allowed=false时查看clear_reason并处理实际条件，不把它自行解释为缺主人授权。
               只有服务端明确NEED_CONFIRM才按具体清单请求授权，真实材料、碰撞和世界规则仍须满足。

@@ -28,6 +28,8 @@ public final class BoundedProgram {
             + "追加列表用t[#t+1]=v；查看表直接print(t)或return t，不用tostring(t)。"
             + "mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})或mc.build(target)"
             + "组合清障和多站位施工，导航按原权限挖放，无需手写进出通道；"
+            + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,remaining,blocked}并自动输出结果，"
+            + "不包在data里；mc.build_diff(target)只读自动查完同修订所有明细和料单页。"
             + "mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
@@ -83,6 +85,8 @@ public final class BoundedProgram {
     private volatile long started;
     private int slice, cells, strings, outputBytes;
     private int queryCalls, expandedQueries, recoveredFailures;
+    private int constructionQueries;
+    private boolean constructing, lastQuerySuppressed;
     private boolean needsBodyCheck;
     private volatile int sourceLine, opcode = -1;
     private volatile boolean compiled;
@@ -154,6 +158,15 @@ public final class BoundedProgram {
                 if (text.length > 16384) throw new IllegalStateException("oversized construction helper");
                 globals.load(new String(text, StandardCharsets.UTF_8), "construction-helper").call();
             } catch (java.io.IOException unavailable) { throw new IllegalStateException(unavailable); }
+            var build = api.get("build");
+            api.set("build", new VarArgFunction() {
+                @Override public Varargs invoke(Varargs args) {
+                    boolean previous = constructing;
+                    constructing = true;
+                    try { return build.invoke(args); }
+                    finally { constructing = previous; }
+                }
+            });
             check();
             var chunk = globals.load(plan.code(), "task-program");
             compiled = true;
@@ -203,7 +216,8 @@ public final class BoundedProgram {
         programError.addProperty("kind", kind);
         programError.addProperty("line", line);
         // The query was useful to Lua, but a broken script may never have printed its blocking facts.
-        if (last != null && queryRefs.containsKey(last.feedback()) && !feedbackRefs.containsKey(last.feedback()))
+        if (last != null && (lastQuerySuppressed || queryRefs.containsKey(last.feedback()))
+                && !feedbackRefs.containsKey(last.feedback()))
             queryNote(last.feedback(), Math.min(2048, OUTPUT_BYTES - outputBytes - 128));
         String hint = "按tool_help的返回字段读取data，缺字段先检查nil；" + LANGUAGE_GUIDE;
         stop("PROGRAM_ERROR:" + kind + "，脚本行=" + line + "。" + hint + "未重试动作。");
@@ -315,6 +329,7 @@ public final class BoundedProgram {
         receipts.append('\n').append(line);
     }
     private synchronized void recordReceipt(String name, JsonObject args, ToolOutcome receipt) {
+        lastQuerySuppressed = false;
         if (receipt.ok() && TaskPolicy.observation(name, args)) {
             queryCalls++;
             if (name.equals("tool_help")) {
@@ -323,12 +338,19 @@ public final class BoundedProgram {
                 feedbackRefs.put(receipt.feedback(), completed);
                 return;
             }
+            if (constructing && (name.equals("build_diff") || name.equals("status"))) {
+                // The helper consumes full facts and emits a final result. Repeating every page can stop useful work.
+                constructionQueries++;
+                lastQuerySuppressed = true;
+                return;
+            }
             var signals = new JsonObject();
             for (String key : List.of("no_targets", "can_craft", "preflight_passed", "truncated",
                     "unknown", "unloaded", "scan_complete", "coverage_complete", "results_truncated",
                     "work_truncated", "next_offset", "in_water", "eyes_in_water", "in_lava", "water_recovery",
                     "goal_satisfied", "observation_complete", "spatial_stable", "material_bill_complete",
-                    "work_assessment_complete", "budget_exhausted", "material_next_offset",
+                    "work_assessment_complete", "budget_exhausted", "material_next_offset", "target_revision",
+                    "remaining", "page_remaining", "page_satisfied",
                     "defense_active", "defense_state", "threat_scan_complete",
                     "environment_active", "environment_state", "environment_work_safe", "air_supply", "max_air_supply",
                     "maintenance_active", "maintenance_state", "using_item", "saturation",
@@ -346,6 +368,42 @@ public final class BoundedProgram {
                         ? failure.getAsString() : receipt.feedback(), 1024);
             }
         } else {
+            boolean plainArrival = name.equals("move_to") && receipt.data().has("x") && receipt.data().has("y")
+                    && receipt.data().has("z") && receipt.data().has("removed_blocks")
+                    && receipt.data().get("removed_blocks").getAsInt() == 0 && receipt.data().has("placed_blocks")
+                    && receipt.data().get("placed_blocks").getAsInt() == 0;
+            if (constructing && receipt.ok() && (name.equals("break_block") && receipt.data().has("removed")
+                    || name.equals("build_nearby") && receipt.data().has("placed_blocks") || plainArrival)) {
+                var effect = new JsonObject();
+                for (String key : List.of("x", "y", "z")) if (args.has(key)) effect.add(key, args.get(key));
+                if (plainArrival) for (String key : List.of("x", "y", "z", "feet_y", "arrival", "removed_blocks"))
+                    if (receipt.data().has(key)) effect.add(key, receipt.data().get(key));
+                for (String key : List.of("removed", "changed", "placed_blocks", "consumed_count",
+                        "goal_satisfied", "final_verified", "placement_results_complete", "drop_accounting_known"))
+                    if (receipt.data().has(key)) effect.add(key, receipt.data().get(key));
+                var accounting = receipt.data().getAsJsonObject("drop_accounting");
+                if (accounting != null) {
+                    var drops = new JsonObject();
+                    for (String key : List.of("spawned_count", "live_count", "picked_up_self_count",
+                            "picked_up_other_count", "destroyed_count", "unresolved_count", "accounting_complete"))
+                        if (accounting.has(key)) drops.add(key, accounting.get(key));
+                    effect.add("drop_accounting", drops);
+                }
+                var placements = receipt.data().getAsJsonArray("placement_results");
+                if (placements != null) {
+                    var cells = new JsonArray();
+                    for (var placement : placements) {
+                        var cell = new JsonObject();
+                        for (String key : List.of("x", "y", "z", "block", "ok"))
+                            if (placement.getAsJsonObject().has(key))
+                                cell.add(key, placement.getAsJsonObject().get(key));
+                        cells.add(cell);
+                    }
+                    effect.add("placement_results", cells);
+                }
+                append("回执#" + completed + " " + name + " ok=true " + effect);
+                return;
+            }
             append("回执#" + completed + " " + name + " ok=" + receipt.ok() + "：" + receipt.feedback());
             feedbackRefs.put(receipt.feedback(), completed);
         }
@@ -412,6 +470,7 @@ public final class BoundedProgram {
         data.addProperty("terminal_calls", completed);
         data.addProperty("query_calls", queryCalls);
         data.addProperty("expanded_queries", expandedQueries);
+        data.addProperty("construction_query_calls", constructionQueries);
         data.addProperty("local_failures", recoveredFailures);
         data.addProperty("body_recheck_required", needsBodyCheck);
         data.addProperty("last_tool", lastTool);
@@ -423,6 +482,7 @@ public final class BoundedProgram {
         counts.forEach(data::addProperty);
         data.add("returned", returned);
         result.complete(new ToolOutcome(ok, reason + "\n实际终态=" + completed + "，子调用=" + calls
+                + (constructionQueries == 0 ? "" : "，施工内部查询已合并=" + constructionQueries)
                 + receipts + (returned.isJsonNull() ? "" : "\n返回值=" + display(returned)), data));
     }
 

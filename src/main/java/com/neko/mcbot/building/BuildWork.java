@@ -10,7 +10,7 @@ import net.minecraft.core.Direction;
 
 import java.util.function.LongSupplier;
 
-/** One selected page, one native action per tick, then an independent whole-target observation. */
+/** One native action per tick, with explicit-page or automatic whole-target selection. */
 public final class BuildWork extends TickTask {
     public static final int MAX_ACTIONS = 12, CAP_TICKS = 200;
     public static final int MAX_PREFLIGHTS = MAX_ACTIONS * BuildSurvey.MAX_PREFLIGHTS;
@@ -30,17 +30,19 @@ public final class BuildWork extends TickTask {
     private final JsonArray results = new JsonArray();
     private final java.util.Set<net.minecraft.core.BlockPos> attempted = new java.util.HashSet<>();
     private int attempts, placed, consumed, checks, surveys, settle;
+    private int pageOffset, emptyPages;
     private long nanos;
     private boolean changed, stopped, finishing;
     private ServerTool.Result failure, terminal;
     private JsonObject observed;
 
     public BuildWork(BuildTarget target, Access access, int offset, int limit, LongSupplier clock) {
-        if (offset < 0 || offset >= target.cells().size() || offset % BuildSurvey.PAGE != 0
+        if (offset < -1 || offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0
                 || limit < 1 || limit > MAX_ACTIONS) throw new IllegalArgumentException("bounded work");
         this.target = target;
         this.access = access;
         this.offset = offset;
+        this.pageOffset = Math.max(0, offset);
         this.limit = limit;
         this.clock = clock;
     }
@@ -53,10 +55,13 @@ public final class BuildWork extends TickTask {
         if (invalid != null) return done(invalid, false);
         if (finishing) {
             if (++settle < 2) return running();
-            observed = BuildSurvey.verify(target, access.survey(), offset, clock).data();
+            observed = BuildSurvey.verify(target, access.survey(), pageOffset, clock).data();
             return done(failure, true);
         }
-        if (nanos >= MAX_NANOS || surveys >= MAX_ACTIONS || checks >= MAX_PREFLIGHTS) {
+        int pages = (target.cells().size() + BuildSurvey.PAGE - 1) / BuildSurvey.PAGE;
+        int surveyLimit = offset < 0 ? (MAX_ACTIONS + 1) * pages : MAX_ACTIONS;
+        if (nanos >= MAX_NANOS || surveys >= surveyLimit
+                || checks >= surveyLimit * BuildSurvey.MAX_PREFLIGHTS) {
             failure = new ServerTool.Result(false, "ACTION_LIMIT:本批施工工作预算已到，未扩大预算或重试。", null);
             finishing = true;
             return running();
@@ -64,7 +69,7 @@ public final class BuildWork extends TickTask {
         long start = clock.getAsLong();
         try {
             surveys++;
-            var survey = BuildSurvey.queryForWork(target, access.survey(), offset, clock);
+            var survey = BuildSurvey.queryForWork(target, access.survey(), pageOffset, clock);
             observed = survey.data();
             checks += observed.get("work_preflights").getAsInt();
             if (observed.get("budget_exhausted").getAsBoolean()
@@ -79,6 +84,11 @@ public final class BuildWork extends TickTask {
                 var pos = new net.minecraft.core.BlockPos(cell.get("x").getAsInt(),
                         cell.get("y").getAsInt(), cell.get("z").getAsInt());
                 if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)) { ready = cell; break; }
+            }
+            if (ready == null && offset < 0 && ++emptyPages < pages && attempts < limit) {
+                pageOffset = pageOffset + BuildSurvey.PAGE < target.cells().size()
+                        ? pageOffset + BuildSurvey.PAGE : 0;
+                return running();
             }
             if (ready == null || attempts >= limit) {
                 finishing = true;
@@ -119,6 +129,7 @@ public final class BuildWork extends TickTask {
                 changed |= result.data().has("changed") && result.data().get("changed").getAsBoolean();
             }
             results.add(row);
+            emptyPages = 0;
             access.recorded(cell, result);
             if (result.ok()) placed++;
             else { failure = result; finishing = true; }
@@ -136,6 +147,10 @@ public final class BuildWork extends TickTask {
         data.addProperty("goal_satisfied", satisfied);
         data.addProperty("final_verified", verified && observed.get("observation_complete").getAsBoolean());
         data.addProperty("batch_finished", verified && reason == null);
+        data.addProperty("whole_remaining", observed == null ? target.cells().size()
+                : observed.get("remaining").getAsInt());
+        data.addProperty("page_satisfied", observed != null && observed.get("page_satisfied").getAsBoolean());
+        data.addProperty("no_work_here", placed == 0 && !satisfied);
         if (com.neko.mcbot.common.WireSize.utf8Bytes(data.toString()) > 20_000 && data.has("survey")) {
             var summary = data.getAsJsonObject("survey");
             summary.remove("cells");
@@ -148,15 +163,19 @@ public final class BuildWork extends TickTask {
         terminal = new ServerTool.Result(ok, reason != null ? reason.feedback()
                 : ok ? "近身施工本批结束：实际放置" + placed + "格，消耗" + consumed
                 + "个；整目标满足=" + satisfied + "。未施工页及剩余缺口须读同修订新鲜差异。"
-                : "TARGET_BLOCKED:当前页没有可施工格；查survey分类后由调用方选择阶段，不自动清障或找料。", data);
+                : "TARGET_BLOCKED:" + (offset < 0 ? "全目标在当前站位没有可施工格" : "指定页在当前站位没有可施工格")
+                + "；整目标仍缺" + data.get("whole_remaining").getAsInt()
+                + "格。本页/本批结束不代表整栋完成；按同修订差异换工作站位、清障或补材料。", data);
         return new Progress.Done(terminal);
     }
 
     @Override public JsonObject observation() {
         var data = new JsonObject();
         data.addProperty("target_revision", target.revision());
-        data.addProperty("offset", offset);
-        data.addProperty("next_offset", offset + BuildSurvey.PAGE < target.cells().size() ? offset + BuildSurvey.PAGE : -1);
+        data.addProperty("offset", pageOffset);
+        data.addProperty("work_scope", offset < 0 ? "whole_target_nearby" : "current_page");
+        data.addProperty("next_offset", pageOffset + BuildSurvey.PAGE < target.cells().size()
+                ? pageOffset + BuildSurvey.PAGE : -1);
         data.addProperty("max_actions", limit);
         data.addProperty("action_attempts", attempts);
         data.addProperty("placed_blocks", placed);

@@ -5,6 +5,18 @@
 
 ## 连续施工与搜索更新（2026-10-24）
 
+最新施工续修见[连续清土与分页](CONSTRUCTION-PROGRESS-2026-10-24.md)，仍31工具。
+Lua的mc.build_diff(target, revision?)自动续完同修订明细和料单，直接返回合并data；
+手动非零offset/material_offset须首张target_revision作expected_revision。
+mc.build默认12动作，同层连续清理且逐格重验，不因料单不完整停止其他可做格。
+它直接返回并自动输出status/goal_satisfied/placed_blocks/cleared_blocks/consumed_count/
+remaining/remaining_known/blocked/counts/unresolved及有限动作样本，不包在data里。
+施工内部成功查询合并显示，实际动作/失败保留，程序执行成功不等于建筑完成。
+build_nearby省略offset自动全目标近身选格，显式offset才限定页；原每批12动作/CPU/取消保持。
+work_scope/whole_remaining/page_satisfied/no_work_here说明局部范围；
+build_diff的page_counts/page_remaining/page_satisfied不与全目标counts/remaining混计。
+整块玻璃可经原版放置材料链，玻璃板及其他复杂组件边界不变；原生施工/模型设计待实测。
+
 详见[施工连续性](CONSTRUCTION-CONTINUITY-2026-10-24.md)，工具数仍31。
 move_to放置工作省略face自动比较六面；显式face保持精确要求，省略不再等同up。
 工地共享账户使用真实max_digs/walk_only，普通搜索按批次续推、记录按水位整理，

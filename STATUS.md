@@ -3,7 +3,59 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
-## 施工停顿、工作站位与建筑设计知识（2026-10-24，Asia/Shanghai）
+## 连续清土、施工分页与真实进度（2026-10-24，Asia/Shanghai）
+
+- 维护者反馈挖土/施工停顿、mc.build成功却无可见进度、Lua续页拒绝与当前页无工作；
+  要求继续学习参考机制和改善房屋设计。开工main为806c185，fetch后与origin/main一致。
+  仅改本体，宿主/连接器/参考/实例不改不抄，不安装包或启动游戏/服务器/真实模型。
+- 快照build/construction-progress-session-20261024.log为349012 bytes，原件末写21:58:21，
+  SHA256 `ac673fd10106223b0e6d2eb385bf2b1ec7b3b8e82e3b0a944417653cb5cb9e29`。
+  实例磁盘JAR与上一轮d4354156候选一致。本场46请求/45响应，request3为21:48:09主人取消。
+  43条首次派发中位8168ms、合计402455ms；24次近身施工合计6173ms、
+  9次单挖9052ms、167次build_diff合计63ms。统计可重叠，不作严格占比或修复省时量。
+- 日志485/683/908/1257行四次RESULT_LIMIT中断本地施工，重新等待模型；
+  非零分页拒绝未明确缺expected_revision，不能从日志推断16.0不是整数。
+  70格墙体3格unsupported使material_bill_complete=false，旧mc.build首张即返回；
+  普通玻璃类型确实漏入材料白名单，但原日志未含全部后页明细，不还原未知坐标。
+  21:52:57两批各放12格且各655ms；随后多轮纠错与首张查询，到21:56:51仍墙35/70、未建屋顶。
+- 参考施工Lua、BuildSurvey/BuildCompanionTask/BuildOrder、连续挖掘及建筑知识目录的机制：
+  统一判据、本地整批推进、先低层支撑、真变化后重评与明确剩余。没有复制/翻译参考文本或代码，
+  不引入其直接写世界/延迟更新分支，也没有新增并行模型。
+- mc.build默认原接口内12动作，同层清障共用全页观察但逐格现场重验；
+  不完整料单不挡其他可做格，未知/不支持/缺料仍留缺口。同观测候选不原样循环，
+  真实世界/库存改变可重评，无累计次数禁发。直接返回并自动输出真实放置/清理/消费、
+  新鲜或最后已知remaining、阻塞及有限坐标样本；脚本成功不等于建筑完成。
+  仅施工内部合并成功重复查询及动作显示，Lua完整data、原面板/事件、失败和实际效果保持；
+  原20KB结果保护不扩大。
+- 新mc.build_diff自动固定首张修订，分别续完明细和料单页；跨页不稳定仍停止。
+  build_nearby省略offset自动逐刻查全目标近身可做格，显式页保持；
+  work_scope/whole_remaining/page_satisfied/no_work_here与build_diff的page_counts/
+  page_remaining/page_satisfied区分局部/全目标，不用本页无活宣称整栋完成。
+  原单格动作、材料、CPU切片、许可、取消及128格目标载荷保持，工具仍31项。
+- 普通/染色/遮光整块玻璃沿原版预检/实际消费/全目标验收；
+  javap核对1.21.11的TransparentBlock/HalfTransparentBlock及StainedGlassBlock/TintedGlassBlock继承。
+  原创建筑知识增至7121 bytes，补屋面剖面/接合、窗墙框架、入口和材料角色、整体收尾，
+  仍经原tool_help按需分页，模型决定形式，无固定房型或复杂组件扩展。
+- 旧码专项先复现新增5失败；focused1/2分别29/37秒通过。final1强制全量1分3秒通过，
+  后补跨8页稀疏工作边界，最终
+  `./gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`：
+  build/construction-progress-final2-20261024.log第65至66行，
+  **57秒、20任务全执行；1881项/198 suites，failures/errors/skipped全0**。
+  核心426/46、根170/23、客户端1285/129；新增10项/1 suite，既有安全/取消/材料/效果断言保留。
+- ConstructionPipelineTest执行实际Lua/目标/差异/施工/原放置核与真实库存，在受控世界/动作回调
+  同程序清49格泥土、放49格地板、跨末页及最终独立验收，长回执仍在原容量内。
+  另验同修订整数分页、料单不完整继续、忽略返回仍输出、明细/材料续页、玻璃实际消费、
+  跨8页稀疏工作与报告成功但现场不变不重放；不当成真实ServerLevel或模型验收。
+- 最终JAR build/libs/mcbot-0.1.0.jar为**1,778,149 bytes**，末写22:19:49，
+  SHA256 `1c86e092e4e7851a26b37af2f04c3ac13c26837f7dbd044b0cb872b2d26d6e27`。
+  内嵌core与独立产物一致，SHA256
+  `95ed5ab5d1fd726f965747703d986856cbccf723433abb120c35ad71cfaef452`。
+  Lua14443 bytes、建筑知识、版本/入口、施工类、LuaJ及许可证已核，源码/资源未晚于JAR；
+  导入包build/mcbot-import-20261024-construction-progress.zip，旧包保留，提交/推送以Git为准。
+  构建后玩家MC进程111836仍在，未终止。真实画面连续性、模型自主备铲与建筑外观仍待新包复测。
+  详见[连续清土与施工分页](docs/CONSTRUCTION-PROGRESS-2026-10-24.md)。
+
+## 施工停顿、工作站位与建筑设计知识（2026-10-24，Asia/Shanghai，前次检查点）
 
 - 维护者要求复核边工作边规划、显示寻路但不动、树叶清理、施工站位及建筑外观；
   开工main为815968e，fetch后与origin/main一致。只改本体，宿主/连接器/参考只读。

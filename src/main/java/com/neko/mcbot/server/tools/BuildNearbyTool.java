@@ -22,8 +22,9 @@ public final class BuildNearbyTool implements ServerTool {
         var target = BuildTarget.parse(args.getAsJsonObject("target"));
         String expected = BuildTarget.string(args.get("expected_revision"), 64);
         if (!expected.equals(target.revision())) throw new IllegalArgumentException("revision");
-        int offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, 112) : 0;
-        if (offset >= target.cells().size() || offset % BuildSurvey.PAGE != 0) throw new IllegalArgumentException("page");
+        int offset = args.has("offset") ? BuildTarget.integer(args.get("offset"), 0, 112) : -1;
+        if (offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0)
+            throw new IllegalArgumentException("page");
         int limit = args.has("max_actions") ? BuildTarget.integer(args.get("max_actions"), 1, BuildWork.MAX_ACTIONS) : 12;
         return new Arguments(target, offset, limit);
     }
@@ -31,7 +32,7 @@ public final class BuildNearbyTool implements ServerTool {
     @Override public String name() { return "build_nearby"; }
     @Override public Acceptance acceptanceMode() { return Acceptance.ACCEPT; }
     @Override public int capTicks(JsonObject args) { return BuildWork.CAP_TICKS; }
-    @Override public String acceptSubject(JsonObject args) { return "当前页近身施工"; }
+    @Override public String acceptSubject(JsonObject args) { return args.has("offset") ? "指定页近身施工" : "全目标近身施工"; }
 
     @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer body, JsonObject args,
             CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {

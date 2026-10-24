@@ -125,6 +125,55 @@ class BuildWorkTest {
         assertEquals(16, page.data().get("next_offset").getAsInt());
         assertEquals(18, page.data().getAsJsonObject("survey").get("remaining").getAsInt());
     }
+    @Test void automaticPageSelectionFindsLaterWorkWhileExplicitPageKeepsItsScope() {
+        var w=world();
+        var design=target(32);
+        for(int i=0;i<16;i++) w.blocks.put(new BlockPos(i,90,0),Blocks.STONE.defaultBlockState());
+        var explicit=finish(new BuildWork(design,w,0,12,()->0));
+        assertFalse(explicit.ok());
+        assertEquals(0,w.actions);
+        assertEquals("current_page",explicit.data().get("work_scope").getAsString());
+        assertTrue(explicit.data().get("page_satisfied").getAsBoolean());
+        assertEquals(16,explicit.data().get("whole_remaining").getAsInt());
+        var automatic=finish(new BuildWork(design,w,-1,12,()->0));
+        assertTrue(automatic.ok(),automatic.feedback());
+        assertEquals(12,w.actions);
+        assertEquals("whole_target_nearby",automatic.data().get("work_scope").getAsString());
+        assertEquals(4,automatic.data().get("whole_remaining").getAsInt());
+        assertFalse(automatic.data().get("goal_satisfied").getAsBoolean());
+    }
+    @Test void glassWindowUsesNativePlacementMaterialAndWholeTargetVerification() {
+        for(String glass:java.util.List.of("glass","white_stained_glass","tinted_glass")) {
+            var design=BuildTarget.parse(JsonParser.parseString("""
+                    {"anchor":{"x":0,"y":90,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"%s"}]}
+                    """.formatted(glass)).getAsJsonObject());
+            var cell=design.cells().getFirst();
+            assertTrue(cell.material().supported(),glass);
+            var w=world();
+            w.inventory.clearContent();
+            w.inventory.setItem(0,new ItemStack(cell.material().item(),3));
+            var result=finish(new BuildWork(design,w,-1,12,()->0));
+            assertTrue(result.ok(),result.feedback());
+            assertEquals(1,w.actions);
+            assertEquals(cell.authored(),w.blocks.get(cell.pos()));
+            assertEquals(2,w.inventory.getItem(0).getCount());
+            assertTrue(result.data().get("goal_satisfied").getAsBoolean());
+        }
+    }
+    @Test void automaticSelectionCanFinishOneRemainingCellOnEveryPageWithoutAnAccidentalScanQuota() {
+        var design=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
+                "to":{"x":15,"y":0,"z":7},"block":"stone"}}
+                """).getAsJsonObject());
+        var w=world();
+        for(int i=0;i<design.cells().size();i++)
+            if(i%16!=0) w.blocks.put(design.cells().get(i).pos(),Blocks.STONE.defaultBlockState());
+        var result=finish(new BuildWork(design,w,-1,12,()->0));
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(8,w.actions);
+        assertTrue(result.data().get("goal_satisfied").getAsBoolean());
+        assertEquals(0,result.data().get("whole_remaining").getAsInt());
+    }
 
     @Test void supportIsReassessedAfterRealLowerWorkWithoutASeparateDependencyPlanner() {
         var w = world();

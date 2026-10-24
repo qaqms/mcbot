@@ -120,6 +120,68 @@ class ConstructionProgramTest {
         assertTrue(result.ok()); assertFalse(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
         assertEquals(0,unstable.moved); assertEquals(0,unstable.placed);
     }
+    @Test void incompleteMaterialBillDoesNotHideSupportedWorkOrItsFinalUnresolvedCells() throws Exception {
+        var w=new World(); w.pages=2;
+        w.override=(name,args)->name.equals("build_diff") ? actual("""
+                {"target_revision":"%s","goal_satisfied":false,"total":3,"remaining":%d,
+                "observation_complete":true,"spatial_stable":true,"material_bill_complete":false,
+                "budget_exhausted":false,"observation_key":"%s","offset":%d,"next_offset":%d,
+                "cells":[{"x":4,"y":90,"z":0,"state":"%s","item":"minecraft:stone",
+                "material_available":true,"unsupported_reason":"fixture_special_block"}]}
+                """.formatted(REV,w.remaining+1,w.remaining,args.get("offset").getAsInt(),
+                args.get("offset").getAsInt()==0?16:-1,args.get("offset").getAsInt()==0
+                        ? "unsupported" : w.remaining==0 ? "satisfied" : w.moved>0?"ready":"out_of_reach")) : null;
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(2,w.placed,"supported cells must still be constructed");
+        var returned=result.data().getAsJsonObject("returned");
+        assertFalse(returned.get("goal_satisfied").getAsBoolean());
+        assertEquals(1,returned.get("remaining").getAsInt());
+        assertEquals(2,returned.get("placed_blocks").getAsInt());
+        assertTrue(result.feedback().contains("unsupported"),"blocked facts must reach the model");
+    }
+    @Test void wholeDiffHelperPinsRevisionAndReturnsEveryPageWithoutManualOffsets() throws Exception {
+        var w=new World(); w.pages=3;
+        var result=run(w,"return mc.build_diff({anchor={x=4,y=90,z=0},cells={{x=0,y=0,z=0,block='stone'}}})",128);
+        assertTrue(result.ok(),result.feedback());
+        var calls=w.calls.stream().filter(c->c.name().equals("build_diff")).toList();
+        assertEquals(List.of(0,16,32),calls.stream().map(c->c.args().get("offset").getAsInt()).toList());
+        assertEquals(REV,calls.get(1).args().get("expected_revision").getAsString());
+        assertEquals(3,result.data().getAsJsonObject("returned").getAsJsonArray("cells").size());
+        assertTrue(w.calls.stream().noneMatch(c->c.name().equals("move_to")));
+        var complete=new World(); complete.pages=3; complete.remaining=0;
+        var observed=run(complete,"return mc.build_diff({})",128);
+        assertTrue(observed.ok(),observed.feedback());
+        assertEquals(3,observed.data().getAsJsonObject("returned").getAsJsonArray("cells").size(),
+                "whole-target success must not truncate the returned details to the first page");
+    }
+    @Test void wholeDiffReadsMaterialContinuationSeparatelyWithoutMixingDifferentObservations() throws Exception {
+        var w=new World();
+        w.override=(name,args)->{
+            if(!name.equals("build_diff")) return null;
+            int offset=args.has("material_offset")?args.get("material_offset").getAsInt():0;
+            return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":1,"offset":0,"next_offset":-1,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "material_bill_complete":false,"observation_key":"same","cells":[{"state":"unsupported"}],
+                    "materials":[{"item":"fixture:%d"}],"material_next_offset":%d}
+                    """.formatted(REV,offset,offset==0?16:-1));
+        };
+        var result=run(w,"return mc.build_diff({})",128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(2,w.calls.size());
+        assertEquals(16,w.calls.getLast().args().get("material_offset").getAsInt());
+        assertEquals(REV,w.calls.getLast().args().get("expected_revision").getAsString());
+        assertEquals(2,result.data().getAsJsonObject("returned").getAsJsonArray("materials").size());
+    }
+    @Test void helperReportsBlockedFactsEvenWhenCallerDiscardsItsReturnValue() throws Exception {
+        var w=new World(); w.material=false;
+        var result=run(w,CODE.replace("return mc.build","mc.build"),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.feedback().contains("\"status\":\"blocked\""),result.feedback());
+        assertTrue(result.feedback().contains("\"placed_blocks\":0"),result.feedback());
+        assertEquals(0,w.placed);
+    }
     @Test void clearingUsesFreshSameCellObservationAndOriginalMiningEntryWithNoImplicitObstructionWork() throws Exception {
         var w=new World(); w.clearing=true;
         assertTrue(run(w,CODE,128).ok()); assertEquals(1,w.breaks);
@@ -183,12 +245,27 @@ class ConstructionProgramTest {
         assertEquals(List.of("break_block","build_nearby"),actions);
     }
     @Test void explicitRoundLimitStillBoundsProductiveWorkWithoutChangingTheOuterTask() throws Exception {
-        var w=new World(); w.moved=1; w.repeat=true;
+        var w=new World(); w.moved=1; w.remaining=5;
+        w.override=(name,args)->{
+            if(!name.equals("build_nearby")) return null;
+            w.remaining--; w.placed++;
+            return actual("{\"placed_blocks\":1,\"goal_satisfied\":false}");
+        };
         var result=run(w,CODE,128);
         assertTrue(result.ok(),result.feedback());
         assertEquals("round_limit",result.data().getAsJsonObject("returned").get("blocked").getAsString());
         assertEquals(3,w.checkpoints);
         assertEquals(3,w.calls.stream().filter(c->c.name().equals("build_nearby")).count());
+        assertEquals(2,w.remaining);
+    }
+    @Test void unchangedFreshWorldAfterReportedSuccessDoesNotReplayTheSamePlacementBatch() throws Exception {
+        var w=new World(); w.moved=1; w.repeat=true;
+        var result=run(w,CODE.replace("max_rounds=3,",""),0);
+        assertTrue(result.ok(),result.feedback());
+        assertFalse(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("build_nearby")).count());
+        assertEquals(2,w.remaining);
+        assertEquals(0,w.placed);
     }
     @Test void defaultConstructionContinuesBeyondSixteenRoundsAndOldCallLimit() throws Exception {
         var w=new World(); w.remaining=40; w.moved=1;

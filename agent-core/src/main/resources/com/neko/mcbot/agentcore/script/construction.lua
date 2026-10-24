@@ -1,9 +1,5 @@
 local call, attempt = mc.call, mc.try_call
 
-local function blocked(reason, revision)
-    return {goal_satisfied=false, blocked=reason, target_revision=revision}
-end
-
 local function move(cell, item, bounds)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
@@ -18,21 +14,53 @@ local function move(cell, item, bounds)
     return result.ok, result
 end
 
-local function checked(target, revision)
+local function checked(target, revision, all)
     local pages, offset, stamp = {}, 0, nil
     while true do
         local d=call("build_diff",{target=target,expected_revision=revision,offset=offset}).data
+        revision=revision or d.target_revision
         if d.target_revision~=revision or not d.observation_complete or not d.spatial_stable
-            or d.budget_exhausted or not d.material_bill_complete then
+            or d.budget_exhausted then
             return nil,"incomplete_or_unstable_observation"
         end
         if stamp and stamp~=d.observation_key then return nil,"world_or_material_changed_between_pages" end
         stamp=d.observation_key
-        if d.goal_satisfied then return {d} end
+        if d.goal_satisfied and not all then return {d} end
         pages[#pages+1]=d
         if d.next_offset==-1 then return pages end
         offset=d.next_offset
     end
+end
+
+-- Pin the first revision for every continuation; incomplete material support is a gap, not a lost page.
+function mc.build_diff(target, revision)
+    local pages,reason=checked(target,revision,true)
+    if not pages then return {status="blocked",blocked=reason,goal_satisfied=false} end
+    local d=pages[1]
+    local cells,counts={},{}
+    for _,page in ipairs(pages) do
+        for _,cell in ipairs(page.cells) do
+            cells[#cells+1]=cell
+            counts[cell.state]=(counts[cell.state] or 0)+1
+        end
+    end
+    local material_offset=d.material_next_offset
+    while material_offset and material_offset~=-1 do
+        local nextpage=call("build_diff",{target=target,expected_revision=d.target_revision,
+            offset=0,material_offset=material_offset}).data
+        if not nextpage.observation_complete or not nextpage.spatial_stable or nextpage.budget_exhausted
+            or nextpage.target_revision~=d.target_revision or nextpage.observation_key~=d.observation_key then
+            return {status="blocked",blocked="world_or_material_changed_between_pages",goal_satisfied=false}
+        end
+        for _,item in ipairs(nextpage.materials) do d.materials[#d.materials+1]=item end
+        material_offset=nextpage.material_next_offset
+    end
+    d.cells,d.counts=cells,counts
+    d.details_complete,d.next_offset,d.material_next_offset=true,-1,-1
+    d.page_counts,d.page_remaining,d.page_satisfied=nil,nil,nil
+    d.details_scope="whole_target"
+    d.work_assessment_complete=not counts.not_assessed and not counts.unknown
+    return d
 end
 
 local function workkey(cell, kind, stamp)
@@ -45,7 +73,7 @@ end
 
 function mc.build(target, options)
     local o=options or {}
-    local rounds, actions=o.max_rounds or 0,o.max_actions or 4
+    local rounds, actions=o.max_rounds or 0,o.max_actions or 12
     assert(type(rounds)=="number" and rounds>=0 and rounds<=2147483647 and rounds%1==0)
     assert(type(actions)=="number" and actions>=1 and actions<=12 and actions%1==0)
     assert(o.access_route==nil or type(o.access_route)=="table")
@@ -56,14 +84,55 @@ function mc.build(target, options)
     local site=call("build_site",{operation="begin",target=target,
         access_route=o.access_route,bounds=o.bounds}).data
     local revision=site.target_revision
+    local placed,cleared,consumed=0,0,0
+    local effects,omitted={},0
+    local last_pages,initial_remaining=nil,nil
+    local function effect(cell,kind)
+        if #effects<16 then
+            effects[#effects+1]={x=cell.x,y=cell.y,z=cell.z,block=cell.block,kind=kind}
+        else omitted=omitted+1 end
+    end
+    local function report(reason,round,pages)
+        local current=pages~=nil
+        pages=pages or last_pages
+        local first=pages and pages[1]
+        local satisfied=current and first and first.goal_satisfied==true or false
+        local result={ok=satisfied,status=satisfied and "completed" or "blocked",
+            goal_satisfied=satisfied,blocked=not satisfied and reason or nil,
+            target_revision=revision,rounds=round or 0,placed_blocks=placed,
+            cleared_blocks=cleared,consumed_count=consumed,changed=placed+cleared>0,
+            initial_remaining=initial_remaining,total=first and first.total,remaining=first and first.remaining,
+            remaining_known=current,outer_goal_verified=false,
+            effects=effects,effects_omitted=omitted}
+        if satisfied then result.evidence="fresh_whole_target_diff" end
+        if pages then
+            local counts,unresolved={},{}
+            for _,page in ipairs(pages) do
+                for _,cell in ipairs(page.cells) do
+                    counts[cell.state]=(counts[cell.state] or 0)+1
+                    if cell.state~="satisfied" and #unresolved<8 then
+                        unresolved[#unresolved+1]={x=cell.x,y=cell.y,z=cell.z,state=cell.state,
+                            actual_block=cell.actual_block,block=cell.block,
+                            unsupported_reason=cell.unsupported_reason,clear_reason=cell.clear_reason,
+                            placement_failure=cell.placement_failure}
+                    end
+                end
+            end
+            result.counts,result.unresolved=satisfied and first.counts or counts,unresolved
+            result.unresolved_omitted=first.remaining and first.remaining-#unresolved
+            result.material_bill_complete=first.material_bill_complete
+        end
+        -- A caller may ignore the return value; the model must still see the actual outcome.
+        print("mc.build",result)
+        return result
+    end
     local temporary=o.temporary or {}
     assert(type(temporary)=="table" and #temporary<=16)
     if #temporary>0 then
         local pages,reason=checked(target,revision)
-        if not pages then return blocked(reason,revision) end
+        if not pages then return report(reason) end
         if pages[1].goal_satisfied then
-            return {goal_satisfied=true,target_revision=revision,rounds=0,
-                evidence="fresh_whole_target_diff",outer_goal_verified=false}
+            return report(nil,0,pages)
         end
     end
     for _,cell in ipairs(temporary) do
@@ -73,9 +142,9 @@ function mc.build(target, options)
             if record.x==cell.x and record.y==cell.y and record.z==cell.z then existing=record end
         end
         if existing then
-            if not existing.provenance_intact then return blocked("temporary_provenance_conflict",revision) end
+            if not existing.provenance_intact then return report("temporary_provenance_conflict") end
         else
-            if not move(cell,cell.item,site.bounds) then return blocked("temporary_stance_unavailable",revision) end
+            if not move(cell,cell.item,site.bounds) then return report("temporary_stance_unavailable") end
             call("place_block",{x=cell.x,y=cell.y,z=cell.z,item=cell.item,
                 face=cell.face or "up",temporary_purpose=cell.purpose})
             site=call("build_site",{operation="query"}).data
@@ -86,12 +155,13 @@ function mc.build(target, options)
         round=round+1
         call("status",{details=true})
         local pages,reason=checked(target,revision)
-        if not pages then return blocked(reason,revision) end
+        if not pages then return report(reason,round) end
+        last_pages=pages
+        initial_remaining=initial_remaining or pages[1].remaining
         if pages[1].goal_satisfied then
-            return {goal_satisfied=true,target_revision=revision,rounds=round-1,
-                evidence="fresh_whole_target_diff",outer_goal_verified=false}
+            return report(nil,round-1,pages)
         end
-        local ready,clear,far=nil,nil,nil
+        local ready,clear,far,clears=nil,nil,nil,{}
         for _,page in ipairs(pages) do
             for _,cell in ipairs(page.cells) do
                 local kind=nil
@@ -104,7 +174,10 @@ function mc.build(target, options)
                     local candidate={cell=cell,offset=page.offset,key=key}
                     if not failed[key] then
                         if kind=="ready" and lower(candidate,ready) then ready=candidate end
-                        if kind=="clear" and lower(candidate,clear) then clear=candidate end
+                        if kind=="clear" then
+                            clears[#clears+1]=candidate
+                            if lower(candidate,clear) then clear=candidate end
+                        end
                         if kind=="place" and lower(candidate,far) then far=candidate end
                     end
                 end
@@ -113,50 +186,79 @@ function mc.build(target, options)
         if ready or clear or far then call("build_site",{operation="checkpoint",expected_revision=revision}) end
         -- Prepare the floor before walls can hide it, and try other cells after a local route failure.
         if clear and (not ready or clear.cell.y<=ready.cell.y) then
-            local cell=clear.cell
-            local ok,result=move(cell,nil,site.bounds)
-            if not ok then
-                failed[clear.key]=true
-                last_reason,last_failure="clearing_stance_unavailable",result.feedback
-            else
-                -- Arrival does not authorize clearing a replacement or a newly completed cell.
-                local fresh=call("build_diff",{target=target,expected_revision=revision,offset=clear.offset}).data
-                if not fresh.observation_complete or not fresh.spatial_stable or fresh.budget_exhausted then
-                    return blocked("clear_observation_incomplete",revision)
-                end
-                for _,c in ipairs(fresh.cells) do
-                    if c.x==cell.x and c.y==cell.y and c.z==cell.z and c.state=="needs_clear"
-                        and c.clear_allowed and c.actual_block==cell.actual_block then
-                        call("break_block",{x=c.x,y=c.y,z=c.z,expected_block=c.actual_block,site_revision=revision})
+            local worked=0
+            for _,candidate in ipairs(clears) do
+                if worked>=actions then break end
+                if candidate.cell.y==clear.cell.y then
+                    worked=worked+1
+                    local cell=candidate.cell
+                    local ok,result=move(cell,nil,site.bounds)
+                    if not ok then
+                        failed[candidate.key]=true
+                        last_reason,last_failure="clearing_stance_unavailable",result.feedback
+                    else
+                        failed[candidate.key]=true
+                        local fresh=call("build_diff",{target=target,expected_revision=revision,offset=candidate.offset}).data
+                        if not fresh.observation_complete or not fresh.spatial_stable or fresh.budget_exhausted then
+                            return report("clear_observation_incomplete",round)
+                        end
+                        for _,c in ipairs(fresh.cells) do
+                            if c.x==cell.x and c.y==cell.y and c.z==cell.z and c.state=="needs_clear"
+                                and c.clear_allowed and c.actual_block==cell.actual_block then
+                                local dug=call("break_block",{x=c.x,y=c.y,z=c.z,
+                                    expected_block=c.actual_block,site_revision=revision}).data
+                                if dug.removed then cleared=cleared+1; effect(c,"cleared")
+                                else failed[candidate.key]=true end
+                            end
+                        end
                     end
                 end
             end
         elseif ready then
             local result=attempt("build_nearby",{target=target,expected_revision=revision,
                 offset=ready.offset,max_actions=actions})
+            for _,page in ipairs(pages) do
+                if page.offset==ready.offset then
+                    for _,cell in ipairs(page.cells) do
+                        if cell.state=="ready" then failed[workkey(cell,"ready",page.observation_key)]=true end
+                    end
+                end
+            end
+            placed=placed+(result.data.placed_blocks or 0)
+            consumed=consumed+(result.data.consumed_count or 0)
+            if result.data.placement_results then
+                for _,cell in ipairs(result.data.placement_results) do
+                    if cell.ok then effect(cell,"placed") end
+                end
+            end
             if not result.ok then
                 call("status",{details=true})
                 failed[ready.key]=true
                 last_reason,last_failure="nearby_work_unavailable",result.feedback
+            elseif (result.data.placed_blocks or 0)==0 then
+                failed[ready.key]=true
+                last_reason="nearby_no_actual_progress"
             end
         elseif far then
             local ok,result=move(far.cell,far.cell.item,site.bounds)
             if not ok then
                 failed[far.key]=true
                 last_reason,last_failure="placement_stance_unavailable",result.feedback
+            else
+                -- If arrival leaves this candidate unchanged, try another rather than walk here again.
+                failed[far.key]=true
             end
         else
-            local result=blocked(last_reason or "no_feasible_work_material_support_state_or_protection",revision)
+            local result=report(last_reason or "no_feasible_work_material_support_state_or_protection",round,pages)
             result.last_failure=last_failure
             return result
         end
     end
     local pages,reason=checked(target,revision)
     if pages and pages[1].goal_satisfied then
-        return {goal_satisfied=true,target_revision=revision,rounds=rounds,
-            evidence="fresh_whole_target_diff",outer_goal_verified=false}
+        return report(nil,rounds,pages)
     end
-    return blocked(reason or "round_limit",revision)
+    return report(reason or "round_limit",rounds,pages)
 end
 
 function mc.cleanup_temporary(revision)
