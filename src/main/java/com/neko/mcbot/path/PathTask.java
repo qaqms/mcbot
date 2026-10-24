@@ -350,8 +350,12 @@ public final class PathTask extends TickTask {
     private Progress updatePickup(CompanionPlayer c) {
         var entity = level.getEntity(pickupTarget);
         if (!(entity instanceof net.minecraft.world.entity.item.ItemEntity item)
-                || !item.isAlive() || !level.isLoaded(item.blockPosition()))
-            return terminal(new Result(false, "TARGET_LOST:掉落实体已离场或未加载；请核对新鲜背包及掉落。", null));
+                || !item.isAlive() || !level.isLoaded(item.blockPosition())) {
+            var data = new JsonObject();
+            data.addProperty("pickup_target_missing", true);
+            data.addProperty("target_uuid", pickupTarget.toString());
+            return terminal(new Result(false, "TARGET_LOST:掉落实体已离场或未加载；请核对新鲜背包及掉落。", data));
+        }
         var owner = ((com.neko.mcbot.mixin.ItemTargetAccess) item).mcbot$getPickupTarget();
         if (owner != null && !owner.equals(c.getUUID()))
             return terminal(new Result(false, "TARGET_LOST:该掉落当前不允许本身体拾取。", null));

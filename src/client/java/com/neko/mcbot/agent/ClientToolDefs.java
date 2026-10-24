@@ -159,9 +159,10 @@ public final class ClientToolDefs {
                     + "drops仅源格当前可归源物，related_drops为连带/来源不明物；"
                     + "drop_spawns是源格生成样本，须drop_spawns_complete=true才可据未出现判断。"
                     + "clearing_results/clearing_drop_summary与目标分开。拾取累计不替代新鲜背包或最终目标。";
-            case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position或work，"
+            case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position/work/pickup，"
                     + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
                     + "拾取用scan_area.item_targets[].target_uuid填pickup_target_uuid；工作用arrival=work。"
+                    + "TARGET_LOST且pickup_target_missing=true、target_uuid匹配时，仅表示原掉落不在场；先核新鲜背包再重扫，不据消失算入包。"
                     + "放置工作可加place_item和face，can_work_here仅当前放置预检，到站未执行放置。"
                     + "remaining_items是开路来源当前在地量，picked_up_self_items/picked_up_other_items/"
                     + "destroyed_drop_items/unresolved_drop_items分别结算，未知不冒充入包。"
@@ -174,7 +175,7 @@ public final class ClientToolDefs {
                     + "approach仅显式接近时存在，moving/search_nodes/search_records/search_nanos/replans是原累计导航账，"
                     + "walk_only=true，anchor为固定脚格{x,y,z}、radius为本次接近范围；路线到达或停步不代表出手/击杀。";
             case "gather" -> "data.goal_satisfied、actual_progress、scope、mined_blocks、cleared_blocks、"
-                    + "primitive_calls、skipped_blocks/skipped_items及last_observation。"
+                    + "primitive_calls、skipped_blocks/skipped_items、pickup_reobservations及last_observation。"
                     + "成果是实际背包增量/总量，mined_blocks或source_observations不是入包数。"
                     + "SOURCE_MISMATCH带mismatched_source实际来源/物品/inventory_counts及新鲜last_observation，交回调整。"
                     + "失败回执保留实际效果与原因，材料subtask默认total，不改变最终目标。";

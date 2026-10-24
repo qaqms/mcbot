@@ -179,6 +179,51 @@ class AgentRunnerGatherTest {
         assertEquals(2, client.engine().responses.size());
     }
 
+    @Test void disappearingPickupKeepsTheModelParkedUntilFreshInventoryAndContinuesLocally() {
+        disappearingPickup(false);
+    }
+
+    @Test void disappearingPickupCanSatisfyTheGoalOnlyAfterIndependentInventoryVerification() {
+        disappearingPickup(true);
+    }
+
+    private void disappearingPickup(boolean pickedUp) {
+        start();
+        reply(BoundedGatherTest.state(0));
+        reply(JsonParser.parseString("{\"item_targets\":[{\"x\":2,\"y\":90,\"z\":0,"
+                + "\"item\":\"minecraft:dirt\",\"target_uuid\":\"cbe003b9-481c-454e-8656-d4532d88a5ab\","
+                + "\"pickup_allowed\":true,\"can_touch_here\":false,\"stand_positions\":[]}]}").getAsJsonObject());
+        assertEquals("move_to", client.lastTool().str("tool"));
+        int turns = client.engine().responses.size();
+        long seq = client.lastTool().num("seq", -1);
+        var ack = new JsonObject();
+        ack.addProperty("seq", seq); ack.addProperty("job_id", "pickup");
+        ack.addProperty("cap_ticks", -1); ack.addProperty("tool", "move_to");
+        runner.handleS2c(new Envelope("job_ack", ack)); client.drain();
+        assertEquals("move_to", client.lastTool().str("tool"));
+        assertEquals(turns, client.engine().responses.size());
+        var terminal = new JsonObject();
+        terminal.addProperty("seq", seq); terminal.addProperty("job_id", "pickup");
+        terminal.addProperty("phase", "failed"); terminal.addProperty("text", "TARGET_LOST:drop is gone");
+        terminal.add("data", JsonParser.parseString("{\"pickup_target_missing\":true,"
+                + "\"target_uuid\":\"cbe003b9-481c-454e-8656-d4532d88a5ab\",\"removed_blocks\":0}"));
+        runner.handleS2c(new Envelope("job_event", terminal)); client.drain();
+        assertEquals("status", client.lastTool().str("tool"));
+        assertEquals(turns, client.engine().responses.size(), "disappearance is reconciled within this gather");
+        if (pickedUp) {
+            reply(BoundedGatherTest.state(1));
+            assertEquals("status", client.lastTool().str("tool"), "outer task independently verifies its goal");
+            reply(BoundedGatherTest.state(1));
+            assertEquals(turns + 1, client.engine().responses.size());
+        } else {
+            reply(BoundedGatherTest.state(0));
+            assertEquals("scan_area", client.lastTool().str("tool"));
+            reply(JsonParser.parseString("{\"item_targets\":[]}").getAsJsonObject());
+            assertEquals("find_resource", client.lastTool().str("tool"));
+            assertEquals(turns, client.engine().responses.size());
+        }
+    }
+
     @Test void independentExplorationKeepsTaskBudgetAndCancellationDiscardsLateMovement() {
         runner.start();
         runner.submitTask("寻找新的观察区域");

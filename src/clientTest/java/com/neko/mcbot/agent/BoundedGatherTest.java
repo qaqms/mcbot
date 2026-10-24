@@ -44,6 +44,8 @@ class BoundedGatherTest {
         int[] dropStances = {1};
         int[] dropApproaches = {};
         boolean pickupOnFailedMove, leaveScopeOnFailedMove;
+        boolean removeDropOnFailedMove;
+        String replacementDropId;
         int missedPickupMoves;
         int hiddenDropScans;
         int[] dropStancesAfterFailedMove;
@@ -122,7 +124,8 @@ class BoundedGatherTest {
                         var item = withStances(false, dropStances);
                         item.add("approach_positions", withStances(false, dropApproaches).get("stand_positions"));
                         item.addProperty("item", "minecraft:dirt");
-                        item.addProperty("target_uuid", stableDropIdentity ? "drop" : "drop-" + dug);
+                        item.addProperty("target_uuid", replacementDropId != null && moved > 0
+                                ? replacementDropId : stableDropIdentity ? "drop" : "drop-" + dug);
                         item.addProperty("count", 1);
                         item.addProperty("can_touch_here", touching);
                         item.addProperty("pickup_allowed", true);
@@ -198,6 +201,7 @@ class BoundedGatherTest {
                     if (movement != null) return movement;
                     if (!moveFailures.isEmpty()) {
                         if (pickupOnFailedMove) automaticPickup(true);
+                        if (removeDropOnFailedMove) ground = false;
                         if (leaveScopeOnFailedMove) stateX = 999;
                         if (dropStancesAfterFailedMove != null) dropStances = dropStancesAfterFailedMove;
                         return CompletableFuture.completedFuture(
@@ -449,6 +453,130 @@ class BoundedGatherTest {
             assertEquals("scan_area", f.calls.get(firstMove + 2));
             assertEquals("find_resource", f.calls.get(firstMove + 3));
         }
+    }
+
+    private static JsonObject missingDrop(String id) {
+        var data = new JsonObject();
+        data.addProperty("pickup_target_missing", true);
+        data.addProperty("target_uuid", id);
+        return data;
+    }
+
+    @Test void aDropTakenDuringMovementCompletesOnlyAfterFreshInventoryWithoutAnotherModelTurn() {
+        var f = new Fixture(1, 0);
+        f.ground = f.pickupOnFailedMove = true;
+        f.movementEffects = missingDrop("drop-0");
+        f.moveFailures.add("TARGET_LOST:drop is gone");
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(1, result.data().get("actual_progress").getAsInt());
+        assertEquals(1, result.data().get("pickup_reobservations").getAsInt());
+        assertEquals(List.of("status", "scan_area", "move_to", "status"), f.calls);
+        assertEquals(0, f.dug);
+    }
+
+    @Test void anotherPlayersPickupIsNotCountedAndLocalWorkContinuesFromFreshGround() {
+        var f = new Fixture(1, 0);
+        f.ground = f.removeDropOnFailedMove = true;
+        f.pickupDuringMining = true;
+        f.movementEffects = missingDrop("drop-0");
+        f.moveFailures.add("TARGET_LOST:drop is gone");
+        var result = f.run();
+        assertTrue(result.ok(), result.feedback());
+        assertEquals(1, f.dug, "disappearance alone cannot satisfy the inventory goal");
+        assertEquals(1, f.count);
+        assertEquals(1, f.moved);
+        assertEquals(List.of("status", "scan_area", "move_to", "status", "scan_area", "find_resource",
+                "break_block", "status"), f.calls);
+    }
+
+    @Test void mergedDropsAreRescannedButAnUnchangedStaleIdentityCannotRestartItsRoute() {
+        for (boolean merged : List.of(false, true)) {
+            var f = new Fixture(1, 0);
+            f.ground = true;
+            f.pickupDuringMining = true;
+            if (merged) f.replacementDropId = "merged-drop";
+            f.movementEffects = missingDrop("drop-0");
+            f.moveFailures.add("TARGET_LOST:drop is gone");
+            var result = f.run();
+            assertTrue(result.ok(), result.feedback());
+            assertEquals(merged ? 2 : 1, f.moved);
+            assertEquals(merged ? 0 : 1, f.dug);
+            if (merged) assertEquals("merged-drop", f.moves.getLast().get("pickup_target_uuid").getAsString());
+        }
+    }
+
+    @Test void pickupDisappearanceRetainsRouteEditsAndChecksFreshScopeAndEnvironment() {
+        for (String boundary : List.of("budget", "scope", "environment")) {
+            var f = new Fixture(100, 0);
+            f.ground = true;
+            f.pickupOnFailedMove = true;
+            f.movementEffects = missingDrop("drop-0");
+            f.movementEffects.addProperty("removed_blocks", 128);
+            f.movementEffects.addProperty("placed_blocks", 2);
+            f.moveFailures.add("TARGET_LOST:drop is gone");
+            f.leaveScopeOnFailedMove = boundary.equals("scope");
+            if (boundary.equals("environment")) {
+                f.movement = new CompletableFuture<>();
+                var result = f.gather.start();
+                f.drain();
+                f.environmentSafe = false;
+                f.movement.complete(new ToolOutcome(false, "TARGET_LOST:drop is gone", f.movementEffects));
+                f.drain();
+                assertTrue(result.join().feedback().startsWith("ENVIRONMENT_UNSAFE:"));
+                assertEquals(128, result.join().data().get("cleared_blocks").getAsInt());
+            } else {
+                var result = f.run();
+                assertTrue(result.feedback().startsWith(boundary.equals("scope") ? "SCOPE_CHANGED:" : "BLOCK_LIMIT:"),
+                        result.feedback());
+                assertEquals(128, result.data().get("cleared_blocks").getAsInt());
+                assertEquals(0, f.dug);
+                assertEquals(1, f.moved);
+            }
+        }
+    }
+
+    @Test void missingDropRecoveryRequiresTheSpecificFailureAndMatchingIdentity() {
+        for (String kind : List.of("no-marker", "false-marker", "wrong-id", "body", "permission", "cancelled")) {
+            var f = new Fixture(1, 0);
+            f.ground = true;
+            var data = missingDrop(kind.equals("wrong-id") ? "other" : "drop-0");
+            if (kind.equals("no-marker") || kind.equals("body")) data.remove("pickup_target_missing");
+            if (kind.equals("false-marker")) data.addProperty("pickup_target_missing", false);
+            String failure = switch (kind) {
+                case "permission" -> "DENIED:owner changed";
+                case "cancelled" -> "CANCELLED:owner";
+                default -> "TARGET_LOST:unavailable";
+            };
+            f.movementEffects = data;
+            f.moveFailures.add(failure);
+            var result = f.run();
+            assertFalse(result.ok(), kind);
+            assertTrue(result.feedback().startsWith(failure), result.feedback());
+            assertEquals(List.of("status", "scan_area", "move_to"), f.calls);
+        }
+    }
+
+    @Test void cancellingDuringPickupReobservationDiscardsTheQueuedStatusAndPreservesEffects() {
+        var f = new Fixture(1, 0);
+        f.ground = true;
+        f.movement = new CompletableFuture<>();
+        var result = f.gather.start();
+        f.drain();
+        var missing = missingDrop("drop-0");
+        missing.addProperty("removed_blocks", 2);
+        f.movement.complete(new ToolOutcome(false, "TARGET_LOST:drop is gone", missing));
+        f.queue.removeFirst().run();
+        assertEquals("status", f.calls.getLast());
+        assertFalse(result.isDone());
+        f.gather.stop("CANCELLED:owner");
+        int calls = f.calls.size();
+        f.drain();
+        assertTrue(result.join().feedback().startsWith("CANCELLED:"));
+        assertEquals(2, result.join().data().get("cleared_blocks").getAsInt());
+        assertEquals(0, result.join().data().get("actual_progress").getAsInt());
+        assertEquals(calls, f.calls.size());
+        assertEquals(1, f.cancelled);
     }
 
     @Test void failedPickupRouteUsesTheItemsNewStancesRatherThanItsOldObservation() {

@@ -11,6 +11,10 @@ move_to增加可选pickup_target_uuid（标准UUID），x/y/z填新鲜掉落物�
 不与work_target/arrival/place_item/return_waypoint组合；walk_only=true仍不挖放。
 拾取目标不使用普通坐标的exact脚格到达条件，附近下降物品可先等落稳。
 实体离场/归属/范围变化会停止或重新评估，触碰不等于入包，必须核新鲜背包。
+拾取途中原掉落消失时，失败仍为TARGET_LOST，data额外给pickup_target_missing=true及target_uuid。
+仅这一同UUID的结构化原因允许gather留在原组合内先核新鲜背包，再扫描剩余掉落并续采；
+不将消失当入包，不捕获身体失效、归属变化、权限或未知失败。
+途中实际挖放计入原账，同一旧观测仍不重发；pickup_reobservations统计此类现场复核次数。
 gather自动使用实体目标，同观测失败不逐个重试六个样本，真实现场变化可再评。
 终态navigation_goal可为pickup/work/position；失败诊断增加partial_candidate_checks，
 后台完成记录末尾goal区分目标。工具数仍31，无新增模型次数门。

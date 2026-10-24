@@ -117,6 +117,7 @@ final class BoundedGather {
     private int batchDigs, batchLimit, batchContinuations;
     private boolean dropSettlePending;
     private int dropSettleWaits;
+    private int pickupReobservations;
     private String lastProblem = "";
     private JsonObject lastData = new JsonObject();
     private JsonObject mismatchedSource;
@@ -723,9 +724,14 @@ final class BoundedGather {
         point.addProperty("max_digs", Math.max(0, plan.maxBlocks() - dug - cleared));
         call("move_to", point, receipt -> {
             if (receipt.ok()) { afterMovement(receipt, null); return; }
-            if (localRouteFailure(receipt.feedback())) {
+            boolean missing = receipt.feedback().startsWith("TARGET_LOST:")
+                    && receipt.data().has("pickup_target_missing") && flag(receipt.data(), "pickup_target_missing")
+                    && receipt.data().has("target_uuid") && itemKey(item).equals(itemKey(receipt.data()));
+            if (missing || localRouteFailure(receipt.feedback())) {
                 lastProblem = receipt.feedback();
-                // A failed route can displace the item too; select again from a fresh entity observation.
+                if (missing) pickupReobservations++;
+                // Pickup, merging and removal can retire an entity while walking. Reconcile inventory first.
+                // The tried observation remains recorded, so an unchanged stale scan cannot replay this route.
                 afterMovement(receipt, null);
             } else {
                 // Permission, cancellation and unknown failures retain their terminal meaning.
@@ -817,6 +823,7 @@ final class BoundedGather {
         data.addProperty("work_position_attempts", workPositionAttempts);
         data.addProperty("batch_continuations", batchContinuations);
         data.addProperty("drop_settle_waits", dropSettleWaits);
+        data.addProperty("pickup_reobservations", pickupReobservations);
         data.addProperty("exploration_enabled", plan.exploreSteps() > 0);
         data.addProperty("exploration_attempts", exploration.attempts());
         data.addProperty("exploration_max_steps", exploration.maxSteps);

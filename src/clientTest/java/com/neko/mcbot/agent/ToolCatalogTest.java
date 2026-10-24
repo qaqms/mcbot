@@ -18,6 +18,7 @@ class ToolCatalogTest {
         var help = ToolCatalog.read("{\"names\":[\"move_to\",\"scan_area\"]}");
         assertTrue(help.ok(), help.feedback());
         assertTrue(help.feedback().contains("pickup_target_uuid"));
+        assertTrue(help.feedback().contains("pickup_target_missing"));
     }
     @Test void actualWireToolSchemasHaveObjectRootsWithoutTopLevelCombinators() {
         var provider = new OpenAiCompatProvider("offline", "http://127.0.0.1", "synthetic", "fixture");
