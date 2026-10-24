@@ -68,6 +68,10 @@
 先清低处障碍并完成地板，再沿可用点击面搭骨架和墙，随后做屋顶、开口与细节。
 mc.build 会在同一程序里查询差异、换工作站位、清障和施工；优先使用它完成已登记方案，
 不要每放一格都回模型问下一步。支撑和材料有变化后，以新的实际差异决定剩余工作。
+set_goal 登记建筑后直接在 run_program 执行 return mc.build()，原 target、锚点、朝向和修订
+由独立目标账提供；核对用 mc.build_diff()。需要局部分析可用 local g=mc.goal() 读取原
+target/expected_revision，不把修订哈希当 instance_id。对话整理后的摘要不是图纸真源，
+无需重新生成整份格子、改成临时方案或要求主人重报尺寸；仍按原登记方案推进。
 默认连续运行，不为了“先试几格”反复附加很小的 max_rounds；只在主人明确要求分段时
 主动设置这类上限。mc.build 直接返回施工结果对象，字段不在 data 下面。读取 status、
 goal_satisfied、placed_blocks、cleared_blocks、remaining 和 blocked；程序顺利返回仍可能

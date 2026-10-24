@@ -1550,7 +1550,7 @@ public final class AgentRunner implements ToolExecutor {
                 emit("progress", taskId, event);
                 return receipt;
             });
-        }, client::executeOnClient, () -> cancelCompositionChildren(taskId));
+        }, client::executeOnClient, () -> cancelCompositionChildren(taskId), owner.registeredGoal());
         programTask = taskId;
         programPrimitives = 0;
         programPrimitiveLimit = plan.maxCalls();

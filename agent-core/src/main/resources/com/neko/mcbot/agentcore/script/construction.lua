@@ -1,5 +1,13 @@
 local call, attempt = mc.call, mc.try_call
 
+local function target_or_goal(target, revision)
+    if target then return target,revision end
+    local goal=mc.goal()
+    assert(goal and goal.type=="building" and goal.target and goal.expected_revision)
+    if revision then assert(revision==goal.expected_revision) end
+    return goal.target,goal.expected_revision
+end
+
 local function move(cell, item, bounds)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
@@ -34,6 +42,7 @@ end
 
 -- Pin the first revision for every continuation; incomplete material support is a gap, not a lost page.
 function mc.build_diff(target, revision)
+    target,revision=target_or_goal(target,revision)
     local pages,reason=checked(target,revision,true)
     if not pages then return {status="blocked",blocked=reason,goal_satisfied=false} end
     local d=pages[1]
@@ -72,6 +81,8 @@ local function lower(candidate, current)
 end
 
 function mc.build(target, options)
+    local revision
+    target,revision=target_or_goal(target)
     local o=options or {}
     local rounds, actions=o.max_rounds or 0,o.max_actions or 12
     assert(type(rounds)=="number" and rounds>=0 and rounds<=2147483647 and rounds%1==0)
@@ -82,8 +93,9 @@ function mc.build(target, options)
             or key=="max_actions" or key=="temporary")
     end
     local site=call("build_site",{operation="begin",target=target,
-        access_route=o.access_route,bounds=o.bounds}).data
-    local revision=site.target_revision
+        access_route=o.access_route,bounds=o.bounds,expected_revision=revision}).data
+    revision=revision or site.target_revision
+    assert(site.target_revision==revision)
     local placed,cleared,consumed=0,0,0
     local effects,omitted={},0
     local last_pages,initial_remaining=nil,nil
@@ -216,7 +228,7 @@ function mc.build(target, options)
             end
         elseif ready then
             local result=attempt("build_nearby",{target=target,expected_revision=revision,
-                offset=ready.offset,max_actions=actions})
+                max_actions=actions})
             for _,page in ipairs(pages) do
                 if page.offset==ready.offset then
                     for _,cell in ipairs(page.cells) do

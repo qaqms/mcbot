@@ -125,6 +125,30 @@ class AgentLoopWorldGoalTest {
         assertTrue(f.endings.getLast().contains("步数超限"));
         assertTrue(f.checkpoints.getFirst().contains(WorldGoalTest.REVISION));
     }
+    @Test void originalConditionRemainsQueryableAfterHistoryIsLostAndCannotBeMutatedOrReRegisteredByQuery() {
+        var f=new Fixture(); f.goal(true);
+        var original=WorldGoalTest.building();
+        for(int i=0;i<12;i++) f.loop.conversation().add(new Msg.Assistant("unrelated observation ".repeat(200),List.of()));
+        f.loop.conversation().compact((system,history,tools)->CompletableFuture.completedFuture(
+                new AssistantTurn("only the revision was summarized",List.of(),0,0,-1,"stop"))).join();
+        assertEquals("only the revision was summarized",f.loop.conversation().summary());
+        assertEquals(original,f.loop.registeredGoal(),"the summary is not the retained design's source");
+        f.loop.conversation().clear();
+        var snapshot=f.loop.registeredGoal();
+        assertEquals(original,snapshot);
+        snapshot.getAsJsonObject("target").remove("fill");
+        assertEquals(original,f.loop.registeredGoal());
+        f.tool("set_goal",WorldGoalTest.json("{\"operation\":\"query\"}"));
+        assertTrue(f.receipt().ok(),f.receipt().content());
+        assertTrue(f.receipt().content().contains(original.toString()));
+        assertTrue(f.receipt().content().contains("mc.build()"));
+        assertTrue(f.executed.isEmpty(),"the query does not dispatch a game action or another registration");
+        f.tool("set_goal",WorldGoalTest.json("{\"operation\":\"query\",\"target\":{}}"));
+        assertFalse(f.receipt().ok());
+        assertEquals(original,f.loop.registeredGoal());
+        f.loop.cancelTask(81);
+        assertNull(f.loop.registeredGoal(),"a finished task must not expose the previous task's target");
+    }
     @Test void deliveryCanPrepareMaterialsOutOfReachAndMustReturnForRealCompletion() {
         var f=new Fixture(); f.state=WorldGoalTest.deliveryState(0,0);
         var request=WorldGoalTest.delivery("additional"); request.addProperty("lifecycle","long_term");

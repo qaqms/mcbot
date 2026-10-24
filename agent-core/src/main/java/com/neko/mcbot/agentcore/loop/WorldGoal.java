@@ -144,7 +144,9 @@ public final class WorldGoal {
         return (available ? "上次独立核验：" : "本次目标现场超距，尚不可验收；登记条件保持：")
                 + (type.equals("building") ? "建筑目标修订=" + text(request, "expected_revision")
                 + "，完整现场已满足=" + progress + "/" + total
-                + "；局部批次、放置次数和跳过格不替代全目标核验。"
+                + "；原登记图纸仍在独立目标账中，run_program可直接return mc.build()续建、"
+                + "mc.build_diff()核对、mc.goal()取原target和expected_revision；"
+                + "修订哈希不是instance_id，不重拼图纸或询问主人重报设计。局部批次不替代全目标核验。"
                 : "容器交付目标=" + delivery.item() + "@" + request.get("container")
                 + "，口径=" + (delivery.additional() ? "登记后本任务已核实净存入且容器净新增" : "当前容器总量")
                 + "，登记基线=" + baseline + "，当前总量=" + current + "，实际进度=" + progress + "/" + total

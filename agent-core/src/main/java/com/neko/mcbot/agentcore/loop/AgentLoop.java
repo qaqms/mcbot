@@ -245,6 +245,19 @@ public final class AgentLoop {
         return activeDirective == null || itemGoal == null ? null : itemGoal.snapshot();
     }
 
+    /** The retained condition is independent of lossy conversation summaries and never grants action permission. */
+    public synchronized com.google.gson.JsonObject registeredGoal() {
+        if (activeDirective == null || !hasGoal()) return null;
+        var goal = worldGoal == null ? new com.google.gson.JsonObject() : worldGoal.request();
+        if (itemGoal != null) {
+            goal.addProperty("type", "item");
+            goal.addProperty("item", itemGoal.target().item());
+            goal.addProperty("count", itemGoal.target().count());
+            goal.addProperty("mode", itemGoal.target().additional() ? "additional" : "total");
+        }
+        return goal;
+    }
+
     public synchronized com.google.gson.JsonObject goalCheckpoint() {
         if (activeDirective == null || goalContinuation == null || !hasGoal()) return null;
         if (activeDirective.text().length() > 4000) throw new IllegalArgumentException("Directive too large");
@@ -1035,6 +1048,16 @@ public final class AgentLoop {
             if (json == null || json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 20000)
                 throw new IllegalArgumentException();
             var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            if (args.has("operation")) {
+                if (!args.keySet().equals(Set.of("operation")) || !"query".equals(WorldGoal.text(args, "operation")))
+                    throw new IllegalArgumentException();
+                var goal = registeredGoal();
+                var data = new com.google.gson.JsonObject();
+                data.addProperty("registered", goal != null);
+                if (goal != null) data.add("goal", goal);
+                return CompletableFuture.completedFuture(new ToolOutcome(true,
+                        "当前任务登记条件，只读查询，不重设目标或预算；Lua可用mc.goal()，建筑可直接mc.build()。\n" + data, data));
+            }
             String type = args.has("type") ? WorldGoal.text(args, "type") : "item";
             if (type.equals("item")) {
                 args.remove("type");

@@ -5,6 +5,15 @@
 
 ## 连续施工与搜索更新（2026-10-24）
 
+最新开工与目标复用见[原登记设计复用](GOAL-DESIGN-AND-STARTUP-2026-10-24.md)。
+建筑set_goal后run_program直接return mc.build()，mc.build_diff()核对原图；
+mc.goal()返回当前登记条件副本，含原target/expected_revision，不必重写格集。
+set_goal单独operation=query只读取回registered/goal，不能夹带改图。
+目标来自独立账，整理后仍可读；内容哈希不是instance_id，实例引用只认原记录返回值。
+内置施工只转换所用字段，公共mc.call/mc.build_diff仍完整；成功动作按计数和有限样本显示，
+原面板/事件、失败全文和真实成果保持。原输出/计算保护不扩大，近身批次跨页选格。
+drop_accounting的方法字符串和单格来源对象分开读取，不再在移动成功后触发Lua类型错误。
+
 最新施工续修见[连续清土与分页](CONSTRUCTION-PROGRESS-2026-10-24.md)，仍31工具。
 Lua的mc.build_diff(target, revision?)自动续完同修订明细和料单，直接返回合并data；
 手动非零offset/material_offset须首张target_revision作expected_revision。

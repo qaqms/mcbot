@@ -117,6 +117,37 @@ class AgentRunnerMultiGoalTest {
         assertEquals("completed",runner.panelHistory().tasks().getFirst().status());
         assertEquals(1,client.sent.stream().filter(e->e.kind().equals("task_end")).count());
     }
+    @Test void programGetsRegisteredTargetFromTheLoopAndNeedsNoModelReconstructionOrRecordLookup() {
+        register(buildingGoal(),buildEvidence(0),"build_diff");
+        var args=new JsonObject();
+        args.addProperty("code","return mc.build()");
+        long before=client.toolCount();
+        client.engine().tools(1,new ToolCall("resume-build","run_program",args.toString())); client.drain();
+        until(()->client.toolCount()>before);
+        assertEquals("build_site",client.lastTool().str("tool"));
+        assertEquals(json(TARGET),client.lastTool().obj("args").getAsJsonObject("target"));
+        assertEquals(REVISION,client.lastTool().obj("args").get("expected_revision").getAsString());
+        reply(json("{\"active\":true,\"target_revision\":\""+REVISION+"\",\"temporary\":[]}"));
+        until(()->client.toolCount()>before+1);
+        status();
+        until(()->client.toolCount()>before+2);
+        assertEquals("build_diff",client.lastTool().str("tool"));
+        assertEquals(json(TARGET),client.lastTool().obj("args").getAsJsonObject("target"));
+        var evidence=buildEvidence(20);
+        evidence.add("cells",new com.google.gson.JsonArray());
+        evidence.addProperty("next_offset",-1);
+        reply(evidence);
+        until(()->client.toolCount()>before+3);
+        status();
+        assertEquals(3,client.engine().responses.size());
+        assertTrue(client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .anyMatch(t->t.callId().equals("resume-build") && t.ok() && t.content().contains("\"goal_satisfied\":true")));
+        assertNotEquals(0,runner.currentTaskId(),"local completion does not bypass the independent final goal check");
+        assertTrue(client.sent.stream().filter(e->e.kind().equals("tool_call"))
+                .noneMatch(e->e.str("tool").equals("build_record")));
+    }
     @Test void luaTransfersUseTheSameActualLedgerAndExistingContainerContentsDoNotCountAsNewDelivery() {
         registerDelivery(5);
         var code="local r=mc.call('transfer',{x=2,y=90,z=0,dir='in',item='diamond'}); return r.data";

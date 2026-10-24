@@ -656,6 +656,33 @@ class BoundedProgramTest {
             }
         }
     }
+    @Test void discardedObservationTablesCanBeReclaimedWhileRetainedTablesAndClosureCapturesStillCount() throws Exception {
+        var data = new JsonObject();
+        var page = new JsonArray();
+        for (int i = 0; i < 1400; i++) page.add(i);
+        data.add("page", page);
+        try (var f = new Fixture("""
+                local total=0
+                for i=1,70 do
+                    local page=mc.call("inventory",{}).data.page
+                    total=total+#page
+                end
+                return total
+                """)) {
+            f.host=(name,args)->CompletableFuture.completedFuture(new ToolOutcome(true,"observed",data));
+            assertTrue(f.outcome().ok(),f.outcome().feedback());
+            assertEquals(98000,f.outcome().data().get("returned").getAsInt());
+            assertEquals(70,f.calls.size());
+        }
+        for (String retain : List.of("saved[#saved+1]=page", "saved[#saved+1]=function() return page end")) {
+            try (var f = new Fixture("local saved={} for i=1,70 do "
+                    + "local page=mc.call('inventory',{}).data.page " + retain + " end return 1")) {
+                f.host=(name,args)->CompletableFuture.completedFuture(new ToolOutcome(true,"observed",data));
+                assertTrue(f.outcome().feedback().startsWith("VALUE_LIMIT:"),f.outcome().feedback());
+                assertTrue(f.calls.size()<70,"keeping old pages must not bypass the original live-state bound");
+            }
+        }
+    }
 
     @Test void environmentDoesNotExposeExternalOrUnboundedLibraries() throws Exception {
         try (var f = new Fixture("""

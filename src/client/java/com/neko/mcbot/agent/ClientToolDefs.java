@@ -126,6 +126,8 @@ public final class ClientToolDefs {
                     + "find_resource续页看next_offset及scan_center；search_resource给scan_complete/coverage_complete/"
                     + "search_pages。局部空结果不等于没有资源；目标发现不等于可采或入包。";
             case "set_goal" -> "type省略/item保持背包物品目标；building固定target与expected_revision，"
+                    + "operation=query单独传入，只读返回registered及原goal（含完整target/expected_revision），不更换条件。"
+                    + "Lua的mc.goal()不经远端；已登记建筑直接mc.build()/mc.build_diff()，不重写原图或伪造实例引用。"
                     + "delivery固定container/item/count/mode。世界目标登记须先完整现场读取，失败不登记。"
                     + "additional交付从登记时计，只认本任务显式item过滤的已核实净存入与同容器净增量两者较小值；"
                     + "total只验容器当前总量，不证明由谁存入。取出会扣账，超时/未知搬运不授予交付信用。"
@@ -303,6 +305,7 @@ public final class ClientToolDefs {
                             + "\"max_blocks\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647}},"
                             + "\"required\":[\"count\"],\"additionalProperties\":false}"),
             new ToolSpec("set_goal", "登记本任务不可降低的最终条件，type省略或item保持物品接口。"
+                    + "单独传operation=query只读取回当前原登记条件，不重设；建筑登记后run_program直接return mc.build()，无需再生成target。"
                     + "item是物品ID，count是目标件数；mode=additional指相对任务开始背包净新增，total指背包总量。"
                     + "type=building须target和build_diff读到的expected_revision，完整目标同修订独立验收。"
                     + "type=delivery须container={x,y,z}及item/count/mode，先靠近登记完整容器基线；"
@@ -313,7 +316,8 @@ public final class ClientToolDefs {
                     + "重复事实不按次数终止；阶段不重置背包基线、权限或探索记录。"
                     + "生命周期和阶段上限首次固定，省略沿用；仅当前任务会话内，不跨退出恢复。"
                     + "建筑局部批次/持续跟随结束不等于整项完成；无法继续用report_blocked",
-                    "{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"item\",\"building\",\"delivery\"]},"
+                    "{\"type\":\"object\",\"properties\":{\"operation\":{\"type\":\"string\",\"enum\":[\"query\"]},"
+                            + "\"type\":{\"type\":\"string\",\"enum\":[\"item\",\"building\",\"delivery\"]},"
                             + "\"item\":{\"type\":\"string\",\"maxLength\":128},"
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4096},"
                             + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]},"

@@ -69,10 +69,13 @@ class ConstructionProgramTest {
     }
     static ToolOutcome actual(String json) { return new ToolOutcome(true,"observed",JsonParser.parseString(json).getAsJsonObject()); }
     static ToolOutcome run(World world,String code,int maxCalls) throws Exception {
+        return run(world,code,maxCalls,null);
+    }
+    static ToolOutcome run(World world,String code,int maxCalls,JsonObject goal) throws Exception {
         var queue=new ConcurrentLinkedQueue<Runnable>();
         var p=new BoundedProgram(new BoundedProgram.Plan(code,3,maxCalls),()->0L,
                 (name,args)->CompletableFuture.completedFuture(world.call(name,JsonParser.parseString(args).getAsJsonObject())),
-                queue::add,()->world.cancelled=true);
+                queue::add,()->world.cancelled=true,goal);
         var future=p.start();
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);
         try {
@@ -192,6 +195,82 @@ class ConstructionProgramTest {
         assertEquals(REV,args.get("site_revision").getAsString());
         assertEquals("minecraft:dirt",args.get("expected_block").getAsString());
         assertFalse(args.has("clear_obstructions"));
+    }
+    @Test void nativeNavigationDropAccountingLabelDoesNotStopConstructionAfterArrival() throws Exception {
+        for (String accounting : List.of("native_origin_events", "bounded_identity_observation")) {
+            var w=new World(); w.clearing=true;
+            w.override=(name,args)-> {
+                if (!name.equals("move_to")) return null;
+                w.moved++;
+                return actual("""
+                        {"x":-29,"y":68,"z":-387,"arrival":"work","feet_y":68,
+                        "removed_blocks":0,"placed_blocks":0,"drop_accounting":"%s",
+                        "spawned_count":0,"live_count":0}
+                        """.formatted(accounting));
+            };
+            var result=run(w,CODE,128);
+            assertTrue(result.ok(),result.feedback());
+            assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+            assertEquals(1,w.breaks,"successful native arrival must proceed to actual clearing");
+            assertEquals(2,w.placed);
+            assertTrue(result.feedback().contains(accounting),"the accounting method remains visible");
+        }
+    }
+    @Test void registeredTargetCanBuildAndReadWholeDiffWithoutRecreatingItsCellsOrInstanceIdentity() throws Exception {
+        var goal=JsonParser.parseString("""
+                {"type":"building","target":{"anchor":{"x":-31,"y":67,"z":-389},"rotation":90,
+                "cells":[{"x":0,"y":0,"z":0,"block":"stone"}]},"expected_revision":"%s"}
+                """.formatted(REV)).getAsJsonObject();
+        var saved=goal.deepCopy();
+        var w=new World(); w.clearing=true;
+        w.override=(name,args)-> {
+            if (args.has("target")) assertEquals(saved.get("target"),args.get("target"));
+            if (name.equals("build_site") && args.get("operation").getAsString().equals("begin"))
+                assertEquals(REV,args.get("expected_revision").getAsString());
+            return null;
+        };
+        var result=run(w,"local g=mc.goal(); g.target.anchor.x=999; return mc.build()",128,goal);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.breaks);
+        assertEquals(saved,goal,"the script cannot mutate the independent condition");
+        var diff=run(new World(),"return mc.build_diff()",128,saved);
+        assertTrue(diff.ok(),diff.feedback());
+        assertEquals(REV,diff.data().getAsJsonObject("returned").get("target_revision").getAsString());
+    }
+    @Test void constructionSamplingPreservesLaterFailuresAndRawQueriesStillExposeTheirCompleteData() throws Exception {
+        var w=new World(); w.moved=1; w.remaining=20;
+        w.override=(name,args)-> {
+            if (!name.equals("build_nearby")) return null;
+            if (w.placed==8) return new ToolOutcome(false,"ENVIRONMENT_UNSAFE:fixture water arrived");
+            w.remaining--; w.placed++;
+            return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),0);
+        assertFalse(result.ok());
+        assertTrue(result.feedback().contains("ENVIRONMENT_UNSAFE:fixture water arrived"));
+        assertEquals(8,w.placed);
+        assertTrue(result.data().get("construction_effects_omitted").getAsInt()>0);
+        assertEquals(8,result.data().getAsJsonObject("construction_action_calls").get("build_nearby").getAsInt());
+        var raw=new World();
+        raw.override=(name,args)->actual("{\"surface\":{\"feet_y\":67.5},\"arbitrary_full_fact\":\"retained\"}");
+        var query=run(raw,"return mc.call('build_diff',{}).data",0);
+        assertTrue(query.ok(),query.feedback());
+        assertEquals(67.5,query.data().getAsJsonObject("returned").getAsJsonObject("surface").get("feet_y").getAsDouble());
+        assertEquals("retained",query.data().getAsJsonObject("returned").get("arbitrary_full_fact").getAsString());
+    }
+    @Test void omittedTargetRequiresAnActualRegisteredBuildingBeforeAnyRemoteCall() throws Exception {
+        for (JsonObject goal : Arrays.asList(null,JsonParser.parseString(
+                "{\"type\":\"item\",\"item\":\"minecraft:stone\",\"count\":3}").getAsJsonObject())) {
+            var w=new World();
+            var result=run(w,"return mc.build()",128,goal);
+            assertFalse(result.ok());
+            assertTrue(w.calls.isEmpty(),"no goal or an item goal is not a construction instruction");
+        }
+        var w=new World();
+        var result=run(w,"assert(mc.goal()==nil); return 1",128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(w.calls.isEmpty());
     }
     @Test void localMoveFailureChecksFreshBodyAndReturnsItsObstacleWithoutRepeatingAnUnchangedRoute() throws Exception {
         var w=new World(); w.moveFailure="NO_PATH:local geometry"; w.repeat=true;

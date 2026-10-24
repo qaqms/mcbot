@@ -44,6 +44,7 @@ public final class ToolCatalog {
                     + "任意木材等可替换材料用material_for查询真实配方来源，勿固定oak_log再挖spruce_log；不自动转换。"
                     + "完整实际掉落不匹配时SOURCE_MISMATCH交回调整；explore_steps=0只在当前工区采集，原探索账不重置。";
             case "set_goal" -> "固定最终条件：type省略/item验背包数量，building验target/expected_revision全目标，"
+                    + "单独operation=query取原登记条件；已登记建筑直接run_program执行return mc.build()，mc.goal()取原图，不重拼。"
                     + "delivery验container/item/count，additional须登记后本任务净存入及同容器净增量，transfer须item过滤。"
                     + "多阶段首次lifecycle=long_term，默认不限模型轮数和阶段数；结束前新鲜核验，持续跟随结束不替代目标完成。";
             case "workflow" -> "串行执行已知参数的1-12步，整份先验证；失败或放置负预检即停，保留已完成效果。"

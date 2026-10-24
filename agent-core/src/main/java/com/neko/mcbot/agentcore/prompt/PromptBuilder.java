@@ -56,6 +56,10 @@ public final class PromptBuilder implements Supplier<String> {
               规划建筑前按技能目录读取建筑设计笔记，按用途选择体量、材料层次、屋顶与门窗细节；
               主人未要求极简时不要默认平顶方盒。方向按世界坐标及旋转核对，方案登记前确定入口。
               已有同修订的build_diff及材料账就直接用；多站位施工按tool_help使用mc.build，避免反复完整重写方案、只查不建。
+              建筑登记后直接run_program执行return mc.build()，使用系统保留的原图、锚点、朝向及修订；
+              mc.goal()返回原登记条件，mc.build_diff()核对原图。历史整理不丢原图，不从摘要猜图或让主人重新提供尺寸。
+              expected_revision是内容哈希，不能填成instance_id；只有build_record实际返回的实例引用才是实例。
+              常规现场、材料和方案已明确就开始本地连续工作，后续按实际回执处理缺口，避免反复预演或重写整份目标。
               build_diff的out_of_reach只表示当前站位手够不着，不是禁止施工或设计过大，应通过工作导航换站位。
               surface给现场脚高与支撑格：地面方块y上铺地板用y+1，替换地面层才用y，不把地板格当脚格。
               mc.build(target)无需先猜进出通道，默认由导航选择工作站位并按现有权限开路和搭支撑。

@@ -22,7 +22,9 @@ public final class BuildDiffTool implements ServerTool {
     @Override public Result run(CompanionPlayer body, JsonObject args) {
         try { return report(com.neko.mcbot.server.BuildRecordAccess.expanded(body,args),
                 target -> access(body, target), System::nanoTime); }
-        catch (RuntimeException invalid) { return new Result(false,"DENIED:实例身份或修订不符，未查询另一实例。",null); }
+        catch (RuntimeException invalid) { return new Result(false,"DENIED:目标格式、实例身份或修订不符，未查询另一实例。"
+                + "expected_revision是内容哈希，不是instance_id；已登记建筑用run_program执行return mc.build()，"
+                + "或set_goal单独operation=query取回原条件，不从摘要猜写实例或重建图纸。",null); }
     }
 
     public static BuildSurvey.Access access(CompanionPlayer body, BuildTarget target) {

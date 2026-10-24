@@ -30,6 +30,8 @@ public final class BoundedProgram {
             + "组合清障和多站位施工，导航按原权限挖放，无需手写进出通道；"
             + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,remaining,blocked}并自动输出结果，"
             + "不包在data里；mc.build_diff(target)只读自动查完同修订所有明细和料单页。"
+            + "已登记建筑可直接mc.build()或mc.build_diff()，mc.goal()返回当前登记条件副本；"
+            + "无需重新生成原图或把内容修订号当instance_id。"
             + "mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
@@ -67,6 +69,7 @@ public final class BoundedProgram {
     private final BiFunction<String, String, CompletableFuture<ToolOutcome>> execute;
     private final Consumer<Runnable> dispatch;
     private final Runnable abort;
+    private final JsonObject registeredGoal;
     private final CompletableFuture<ToolOutcome> result = new CompletableFuture<>();
     private final CompletableFuture<Void> terminated = new CompletableFuture<>();
     private final StringBuilder receipts = new StringBuilder();
@@ -86,20 +89,31 @@ public final class BoundedProgram {
     private int slice, cells, strings, outputBytes;
     private int queryCalls, expandedQueries, recoveredFailures;
     private int constructionQueries;
+    private final Map<String, Integer> constructionActions = new LinkedHashMap<>();
+    private int constructionReceiptBytes, constructionEffectsOmitted;
     private boolean constructing, lastQuerySuppressed;
     private boolean needsBodyCheck;
     private volatile int sourceLine, opcode = -1;
     private volatile boolean compiled;
     private JsonObject programError;
+    private Globals runtimeGlobals;
+    private final Budget budget = new Budget();
 
     public BoundedProgram(Plan plan, LongSupplier clock,
                           BiFunction<String, String, CompletableFuture<ToolOutcome>> execute,
                           Consumer<Runnable> dispatch, Runnable abort) {
+        this(plan, clock, execute, dispatch, abort, null);
+    }
+
+    public BoundedProgram(Plan plan, LongSupplier clock,
+                          BiFunction<String, String, CompletableFuture<ToolOutcome>> execute,
+                          Consumer<Runnable> dispatch, Runnable abort, JsonObject registeredGoal) {
         this.plan = plan;
         this.clock = clock;
         this.execute = execute;
         this.dispatch = dispatch;
         this.abort = abort;
+        this.registeredGoal = registeredGoal == null ? null : registeredGoal.deepCopy();
     }
 
     public synchronized CompletableFuture<ToolOutcome> start() {
@@ -133,14 +147,23 @@ public final class BoundedProgram {
     private void run() {
         try {
             var globals = new Globals();
+            runtimeGlobals = globals;
             globals.load(new BaseLib());
             // Keep only bounded pure helpers; no loaders, metatables, protected calls or external libraries.
             for (LuaValue key : globals.keys()) if (!GLOBALS.contains(key.tojstring())) globals.set(key, LuaValue.NIL);
             LuaC.install(globals);
-            globals.debuglib = new Budget();
+            globals.debuglib = budget;
             var api = new LuaTable();
             api.set("call", bridge(false));
             api.set("try_call", bridge(true));
+            api.set("goal", new VarArgFunction() {
+                @Override public Varargs invoke(Varargs args) {
+                    check();
+                    if (args.narg() != 0) throw new Halt("DENIED:mc.goal()不接受参数。");
+                    reclaimTransientValues();
+                    return registeredGoal == null ? LuaValue.NIL : fromJson(registeredGoal, 0);
+                }
+            });
             globals.set("mc", api);
             globals.set("print", new VarArgFunction() {
                 @Override public Varargs invoke(Varargs args) {
@@ -229,6 +252,7 @@ public final class BoundedProgram {
                 check();
                 if (args.narg() != 2 || args.arg(1).type() != LuaValue.TSTRING || !args.arg(2).istable())
                     throw new Halt("DENIED:mc.call/try_call须为工具名字符串与参数表。");
+                reclaimTransientValues();
                 String name = args.arg(1).tojstring();
                 if (name.length() > 32) throw new Halt("DENIED:工具名无效。");
                 JsonElement json = toJson(args.arg(2), 0, new IdentityHashMap<>(), new int[]{0});
@@ -240,11 +264,53 @@ public final class BoundedProgram {
                 value.addProperty("feedback", receipt.feedback());
                 String kind = receipt.feedback().split(":", 2)[0];
                 value.addProperty("failure_kind", receipt.ok() || !kind.matches("[A-Z_]{1,32}") ? "" : kind);
-                value.add("data", receipt.data());
+                value.add("data", helperData(name, receipt));
                 slice = 0;
                 return fromJson(value, 0);
             }
         };
+    }
+
+    private JsonObject helperData(String name, ToolOutcome receipt) {
+        var data = receipt.data();
+        if (!constructing || !receipt.ok()) return data;
+        if (name.equals("status") || name.equals("move_to")) return new JsonObject();
+        if (name.equals("break_block") || name.equals("build_nearby")) {
+            var view = new JsonObject();
+            for (String key : List.of("removed", "placed_blocks", "consumed_count", "placement_results"))
+                if (data.has(key)) view.add(key, data.get(key));
+            return view;
+        }
+        if (!name.equals("build_diff")) return data;
+        // Only mc.build's private calls use this view; raw mc.call and mc.build_diff retain the complete response.
+        var view = new JsonObject();
+        for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
+                "observation_key", "goal_satisfied", "offset", "next_offset", "total", "remaining",
+                "material_bill_complete"))
+            if (data.has(key)) view.add(key, data.get(key));
+        if (data.has("goal_satisfied") && data.get("goal_satisfied").getAsBoolean())
+            view.add("counts", data.get("counts"));
+        var cells = new JsonArray();
+        for (var value : data.getAsJsonArray("cells")) {
+            var cell = value.getAsJsonObject();
+            var selected = new JsonObject();
+            selected.add("state", cell.get("state"));
+            if ("satisfied".equals(cell.get("state").getAsString())) {
+                cells.add(selected);
+                continue;
+            }
+            for (String key : List.of("x", "y", "z", "block", "actual_block",
+                    "clear_allowed", "clear_reason", "unsupported_reason", "placement_failure"))
+                if (cell.has(key)) selected.add(key, cell.get(key));
+            if ("out_of_reach".equals(cell.get("state").getAsString())
+                    || "blocked".equals(cell.get("state").getAsString())) {
+                for (String key : List.of("item", "material_available"))
+                    if (cell.has(key)) selected.add(key, cell.get(key));
+            }
+            cells.add(selected);
+        }
+        view.add("cells", cells);
+        return view;
     }
 
     private ToolOutcome call(String name, String args, boolean allowLocalFailure) {
@@ -330,6 +396,11 @@ public final class BoundedProgram {
     }
     private synchronized void recordReceipt(String name, JsonObject args, ToolOutcome receipt) {
         lastQuerySuppressed = false;
+        if (constructing && receipt.ok() && name.equals("build_site")
+                && "checkpoint".equals(args.get("operation").getAsString())) {
+            constructionReceipt(name, new JsonObject());
+            return;
+        }
         if (receipt.ok() && TaskPolicy.observation(name, args)) {
             queryCalls++;
             if (name.equals("tool_help")) {
@@ -381,13 +452,21 @@ public final class BoundedProgram {
                 for (String key : List.of("removed", "changed", "placed_blocks", "consumed_count",
                         "goal_satisfied", "final_verified", "placement_results_complete", "drop_accounting_known"))
                     if (receipt.data().has(key)) effect.add(key, receipt.data().get(key));
-                var accounting = receipt.data().getAsJsonObject("drop_accounting");
-                if (accounting != null) {
+                var accounting = receipt.data().get("drop_accounting");
+                if (accounting != null && accounting.isJsonObject()) {
                     var drops = new JsonObject();
                     for (String key : List.of("spawned_count", "live_count", "picked_up_self_count",
                             "picked_up_other_count", "destroyed_count", "unresolved_count", "accounting_complete"))
-                        if (accounting.has(key)) drops.add(key, accounting.get(key));
+                        if (accounting.getAsJsonObject().has(key)) drops.add(key, accounting.getAsJsonObject().get(key));
                     effect.add("drop_accounting", drops);
+                } else if (accounting != null && accounting.isJsonPrimitive()
+                        && accounting.getAsJsonPrimitive().isString()) {
+                    // Navigation reports its accounting method; single-block mining reports a source object.
+                    effect.add("drop_accounting", accounting);
+                    for (String key : List.of("observed_drop_items", "remaining_items", "picked_up_self_items",
+                            "picked_up_other_items", "destroyed_drop_items", "unresolved_drop_items",
+                            "remaining_items_complete", "remaining_drops_truncated", "drop_origins_truncated"))
+                        if (receipt.data().has(key)) effect.add(key, receipt.data().get(key));
                 }
                 var placements = receipt.data().getAsJsonArray("placement_results");
                 if (placements != null) {
@@ -401,12 +480,23 @@ public final class BoundedProgram {
                     }
                     effect.add("placement_results", cells);
                 }
-                append("回执#" + completed + " " + name + " ok=true " + effect);
+                constructionReceipt(name, effect);
                 return;
             }
             append("回执#" + completed + " " + name + " ok=" + receipt.ok() + "：" + receipt.feedback());
             feedbackRefs.put(receipt.feedback(), completed);
         }
+    }
+
+    private void constructionReceipt(String name, JsonObject effect) {
+        int seen = constructionActions.merge(name, 1, Integer::sum);
+        String line = "回执#" + completed + " " + name + " ok=true " + effect;
+        int size = bytes(line) + 1;
+        // Full receipts remain in the host's panel/events. Leave room for failures and the final world diff.
+        if (seen <= 4 && constructionReceiptBytes + size <= 6000) {
+            append(line);
+            constructionReceiptBytes += size;
+        } else constructionEffectsOmitted++;
     }
 
     private static boolean falseFlag(JsonObject data, String name) {
@@ -471,6 +561,10 @@ public final class BoundedProgram {
         data.addProperty("query_calls", queryCalls);
         data.addProperty("expanded_queries", expandedQueries);
         data.addProperty("construction_query_calls", constructionQueries);
+        var construction = new JsonObject();
+        constructionActions.forEach(construction::addProperty);
+        data.add("construction_action_calls", construction);
+        data.addProperty("construction_effects_omitted", constructionEffectsOmitted);
         data.addProperty("local_failures", recoveredFailures);
         data.addProperty("body_recheck_required", needsBodyCheck);
         data.addProperty("last_tool", lastTool);
@@ -483,6 +577,8 @@ public final class BoundedProgram {
         data.add("returned", returned);
         result.complete(new ToolOutcome(ok, reason + "\n实际终态=" + completed + "，子调用=" + calls
                 + (constructionQueries == 0 ? "" : "，施工内部查询已合并=" + constructionQueries)
+                + (construction.isEmpty() ? "" : "\n施工成功子调用=" + construction
+                + "，动作回执样本省略=" + constructionEffectsOmitted + "；完整子回执保留在面板/事件，实际施工量见mc.build结果。")
                 + receipts + (returned.isJsonNull() ? "" : "\n返回值=" + display(returned)), data));
     }
 
@@ -552,13 +648,50 @@ public final class BoundedProgram {
         if (size > VALUE_BYTES || (strings += size) > STRING_BYTES)
             throw new Halt("VALUE_LIMIT:字符串分配预算已到。");
     }
+    private void reclaimTransientValues() {
+        if (cells < CELLS / 2 && strings < STRING_BYTES / 2) return;
+        var queue = new ArrayDeque<LuaValue>();
+        queue.add(runtimeGlobals);
+        for (var frame : budget.frames) {
+            queue.add(frame.closure());
+            for (var value : frame.registers()) if (value != null) queue.add(value);
+            for (int i = 1; i <= frame.arguments().narg(); i++) queue.add(frame.arguments().arg(i));
+        }
+        var seen = new IdentityHashMap<LuaValue, Boolean>();
+        int retainedCells = 0, retainedStrings = 0;
+        while (!queue.isEmpty()) {
+            check();
+            var value = queue.removeFirst();
+            if (seen.put(value, Boolean.TRUE) != null) continue;
+            if (++retainedCells > CELLS) throw new Halt("VALUE_LIMIT:保留的状态表预算已到。");
+            if (value.type() == LuaValue.TSTRING) {
+                retainedStrings += value.checkstring().m_length;
+                if (retainedStrings > STRING_BYTES) throw new Halt("VALUE_LIMIT:保留的字符串预算已到。");
+            } else if (value.istable()) {
+                var table = value.checktable();
+                for (var key : table.keys()) {
+                    // Charge occupied slots even when several tables share the same value.
+                    retainedCells += 2;
+                    if (retainedCells > CELLS) throw new Halt("VALUE_LIMIT:保留的状态表预算已到。");
+                    queue.add(key);
+                    queue.add(table.rawget(key));
+                }
+            } else if (value instanceof LuaClosure closure) {
+                for (var captured : closure.upValues) if (captured != null) queue.add(captured.getValue());
+            }
+        }
+        // Old observations no longer reachable from the VM may be reclaimed; retained pages and closures still count.
+        cells = retainedCells;
+        strings = retainedStrings;
+    }
+
     private final class Budget extends DebugLib {
-        private record Frame(LuaClosure closure, LuaValue[] registers) { }
+        private record Frame(LuaClosure closure, LuaValue[] registers, Varargs arguments) { }
         private final ArrayDeque<Frame> frames = new ArrayDeque<>();
         @Override public void onCall(LuaClosure closure, Varargs args, LuaValue[] stack) {
             check();
             if (frames.size() >= 48) throw new Halt("VALUE_LIMIT:脚本调用深度超限。");
-            frames.push(new Frame(closure, stack));
+            frames.push(new Frame(closure, stack, args));
         }
         @Override public void onReturn() { if (!frames.isEmpty()) frames.pop(); }
         @Override public String traceback(int level) { return ""; }

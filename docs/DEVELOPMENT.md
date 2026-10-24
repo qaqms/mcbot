@@ -4,6 +4,12 @@
 
 ## 当前验证安排（2026-10-14）
 
+2026-10-24开工与原目标复用见GOAL-DESIGN-AND-STARTUP-2026-10-24及STATUS顶部。
+旧码精确复现移动成功后FUNCTION_CALL行8；修复账务方法字符串被当来源对象读取。
+mc.goal和set_goal operation=query只读原独立条件，mc.build()/mc.build_diff()省略target复用原修订。
+仅内置施工压缩成功显示及读取字段，公共Lua数据、失败和新鲜验收保持，原保护不扩大。
+仍31工具、无新增并行模型；最终验证与候选以STATUS为准，不安装或启动游戏/模型。
+
 2026-10-24连续清土/施工分页见CONSTRUCTION-PROGRESS-2026-10-24和STATUS顶部。
 mc.build在原接口内默认12动作并合并施工内部查询显示，保留实际动作/失败及最终剩余。
 同层清障共观察，逐格重验；不完整料单不阻止可做格。mc.build_diff自动同修订续页，
