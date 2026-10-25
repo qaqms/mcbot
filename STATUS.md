@@ -47,6 +47,7 @@
   仅含mods/mcbot-0.1.0.jar、START-HERE.txt、SHA256SUMS.txt，包内JAR已验同指纹，历史包保留。
   构建后仅既有玩家PID154888，无Gradle残留，未修改活世界。
   本轮fetch约21秒后仍因github.com:443连接失败，未改代理或凭据；远端同步待网络恢复。
+  业务源码本地提交15a1e22；随后push同样约21秒因github.com:443连接失败，尚未推送。
   新图轴向/基础决策及同现场屋檐续接、屋面离开仍待新包实机复测；旧图不自动重画。
 
 ## 目标登记STATE_UNAVAILABLE与反馈衔接（2026-10-25，Asia/Shanghai）
