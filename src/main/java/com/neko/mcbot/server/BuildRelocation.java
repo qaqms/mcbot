@@ -24,25 +24,27 @@ public final class BuildRelocation {
         var geometry = StandingGeometry.forPlayer(body, site::inScope);
         var next = WorkRelocation.choose(terrain, feet.getX(), feet.getY(), feet.getZ(), site.scope().maxDigs(),
                 step -> !site.obstructs(geometry.body(step.x(), step.feetY(), step.z())));
-        JsonObject plan = null;
-        if (next != null) {
+        JsonObject plan = onTemporary ? lower(body, feet.below(), access) : null;
+        if (plan == null && next != null) {
             plan = BuildTarget.coordinates(new net.minecraft.core.BlockPos(next.x(), next.y(), next.z()));
             plan.addProperty("operation", "move");
             plan.addProperty("walk_only", next.dig().isEmpty() && next.place().isEmpty());
             plan.addProperty("planned_digs", next.dig().size());
             plan.addProperty("planned_places", next.place().size());
-        } else {
-            var support = feet.below();
-            boolean cleanup = site.temporary(support);
-            if (access.canLowerThrough(support) && access.canMine(access.state(support))
-                    && site.miningGuard(support, site.target().revision(), cleanup, access) == null) {
-                plan = BuildTarget.coordinates(support);
-                plan.addProperty("operation", "lower");
-                plan.addProperty("expected_block", net.minecraft.core.registries.BuiltInRegistries.BLOCK
-                        .getKey(access.state(support).getBlock()).toString());
-                plan.addProperty("temporary_cleanup", cleanup);
-            }
-        }
+        } else if (plan == null) plan = lower(body, feet.below(), access);
         if (plan != null) data.add("relocation", plan);
+    }
+
+    private static JsonObject lower(CompanionPlayer body, net.minecraft.core.BlockPos support, BuildSiteAccess access) {
+        var site = body.buildSite();
+        boolean cleanup = site.temporary(support);
+        if (!access.canLowerThrough(support) || !access.canMine(access.state(support))
+                || site.miningGuard(support, site.target().revision(), cleanup, access) != null) return null;
+        var plan = BuildTarget.coordinates(support);
+        plan.addProperty("operation", "lower");
+        plan.addProperty("expected_block", net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                .getKey(access.state(support).getBlock()).toString());
+        plan.addProperty("temporary_cleanup", cleanup);
+        return plan;
     }
 }

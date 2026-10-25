@@ -245,6 +245,16 @@ public final class BuildSite {
         return above!=null && !above.authored().isAir() && above.matches(access.state(above.pos()))
                 && !plainCube(above.desired());
     }
+    private boolean cleanupDependent(BlockPos pos, Access access) {
+        var independent = new HashSet<BlockPos>();
+        for (Direction side : Direction.values()) {
+            var near = pos.relative(side);
+            var selected = cell(near);
+            if (selected != null && plainCube(selected.desired()) && selected.matches(access.state(near))
+                    && !access.facility(near)) independent.add(near);
+        }
+        return dependent(pos, access, independent);
+    }
     public static boolean plainCube(BlockState state) {
         return state != null && !state.hasBlockEntity() && state.getFluidState().isEmpty()
                 && !(state.getBlock() instanceof FallingBlock)
@@ -260,7 +270,7 @@ public final class BuildSite {
         if (failure != null) return failure;
         if (!inScope(pos)) return failed("SCOPE_CHANGED:改动超出冻结工地范围。");
         var selected = cell(pos);
-        if (accessCell(pos) || selected == null && access.passage(pos) || temporary.containsKey(pos))
+        if (accessCell(pos) || selected == null && access.passage(pos) && !temporaryPlacement || temporary.containsKey(pos))
             return failed("DENIED:不覆盖工地通道、地板或已记录临时工程。");
         if (selected != null) {
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
@@ -299,8 +309,10 @@ public final class BuildSite {
             if (record == null || record.witness == null || !record.witness.intact()
                     || record.chunk != access.chunk(pos) || record.state != access.state(pos))
                 return failed("DENIED:临时工程来源未知、已被修改或区块已重载，不认领相同方块替换物。");
-            if (cell(pos) != null || target.cells().stream().anyMatch(c -> !c.authored().isAir() && c.pos().below().equals(pos))
-                    || dependent(pos, access)) return failed("DENIED:临时工程仍有目标、承重、贴附或工位依赖，未回收。");
+            if (cell(pos) != null || target.cells().stream().anyMatch(c -> !c.authored().isAir()
+                    && !plainCube(c.desired()) && c.pos().below().equals(pos))
+                    || cleanupDependent(pos, access))
+                return failed("DENIED:临时工程仍有目标、承重、贴附或工位依赖，未回收。");
         } else {
             var actual = access.state(pos);
             boolean reopening = selected != null && selected.matches(actual) && plainCube(actual)
@@ -345,7 +357,8 @@ public final class BuildSite {
         var failure = live(access);
         if (failure != null) return failure;
         if (!inScope(pos) || !Set.of("support", "workstation").contains(purpose)
-                || cell(pos) != null || accessCell(pos) || access.passage(pos) || temporary.containsKey(pos)
+                || cell(pos) != null || accessCell(pos) || access.passage(pos) && !"support".equals(purpose)
+                || temporary.containsKey(pos)
                 || temporary.size() >= TEMP_LIMIT || access.state(pos) != Blocks.AIR.defaultBlockState())
             return failed("DENIED:临时用途须support/workstation、原格须空气且不占目标/通道，最多16条不淘汰。");
         return null;

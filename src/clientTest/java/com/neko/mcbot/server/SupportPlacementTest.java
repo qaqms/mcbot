@@ -16,6 +16,70 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SupportPlacementTest {
+    @Test void aHighPlacementGoalCanBuildItsOwnColumnUsingCumulativeNativeContacts() {
+        var target = new BlockPos(1,9,0);
+        var terrain = new Terrain(target,8) {
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x==0 && z==0 && y>=-1 && y<=12;
+            }
+            @Override public boolean canPlaceFrom(int x,int y,int z,long cell,TerrainEdits edits) {
+                var foot=geometry.foot(x,y,z,edits);
+                if (foot==null) return false;
+                double feet=cell==DigAStar.pack(x,y,z) ? y+1.02 : foot.height();
+                return SupportPlacement.canPlan(world,world,
+                        new BlockPos(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell)),
+                        new Vec3(x+.5,feet+1.62,z+.5),geometry.body(x,feet,z),inventory.getItem(0),4.5,
+                        edits,p->true,f->true,b->true);
+            }
+        };
+        terrain.world.blocks.remove(target);
+        terrain.world.blocks.put(target.below(),Blocks.STONE.defaultBlockState());
+        terrain.world.blocks.put(new BlockPos(0,-1,0),Blocks.STONE.defaultBlockState());
+        var material=new ItemStack(Items.OAK_PLANKS,1);
+        var goal=PlacementWork.goal(target,terrain.geometry,1.62,.6,1.8,4.5,(eye,body,edits)->
+                SupportPlacement.canPlanBlock(terrain.world,terrain.world,target,eye,body,material,4.5,
+                        edits,p->true,f->true,b->true) ? null
+                        : new ServerTool.Result(false,"TARGET_BLOCKED:no contact",null));
+        var search=new DigAStar(new MemoDigSampler(terrain),0,0,0,1,9,0,4000,0,goal);
+        while(!search.advance(100)) { }
+        assertNull(search.failure(),()->search.failure()+" "+search.rejections());
+        assertTrue(search.placedCount()>=7, "the top face must actually be visible from the elevated stance");
+        assertTrue(search.path().subList(1,search.path().size()).stream()
+                .allMatch(step->step.action()==DigAStar.ACT_PILLAR));
+        assertTrue(terrain.world.getBlockState(target).isAir());
+        assertEquals(8,terrain.inventory.getItem(0).getCount());
+        assertEquals(1,material.getCount());
+    }
+
+    @Test void successivePillarSupportsUseTheRealTopFaceOnlyAfterTheBodyHasJumpedClear() {
+        var world = new BlockAimTest.Grid();
+        world.blocks.clear();
+        world.blocks.put(new BlockPos(0,-1,0),Blocks.STONE.defaultBlockState());
+        var material = new ItemStack(Items.COBBLESTONE,4);
+        var geometry = new StandingGeometry(new StandingGeometry.Access() {
+            @Override public boolean known(BlockPos pos) { return world.loaded(pos); }
+            @Override public List<AABB> boxes(BlockPos pos) {
+                return StandingGeometry.collision(world.getBlockState(pos),world,pos);
+            }
+        },.6,1.8,.6);
+        var edits = TerrainEdits.EMPTY;
+        for (int y=0; y<4; y++) {
+            var target = new BlockPos(0,y,0);
+            var body = geometry.body(0,y,0);
+            assertFalse(SupportPlacement.canPlan(world,world,target,new Vec3(.5,y+1.62,.5),
+                    body,material,4.5,edits,p->true,f->true,b->true));
+            var raised = geometry.body(0,y+1.02,0);
+            var eye = new Vec3(.5,y+2.64,.5);
+            assertTrue(SupportPlacement.canPlan(world,world,target,eye,raised,material,4.5,
+                    edits,p->true,f->true,b->true));
+            assertFalse(SupportPlacement.canPlan(world,world,target,eye,raised,material,4.5,
+                    edits,p->true,f->true,b->false));
+            edits=edits.after(List.of(),List.of(DigAStar.pack(0,y,0)));
+        }
+        assertEquals(1,world.blocks.size());
+        assertEquals(4,material.getCount());
+    }
+
     @Test void aPlankWorkStanceCanUseActualRouteClearingAndSupportsWithoutWritingTheWorld() {
         var world=new BlockAimTest.Grid();
         world.blocks.clear();
@@ -49,7 +113,7 @@ class SupportPlacementTest {
     }
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
 
-    private static final class Terrain implements DigSampler {
+    private static class Terrain implements DigSampler {
         final BlockAimTest.Grid world = new BlockAimTest.Grid();
         final net.minecraft.world.entity.player.Inventory inventory = BlockActionFixtures.inventory();
         final StandingGeometry geometry;

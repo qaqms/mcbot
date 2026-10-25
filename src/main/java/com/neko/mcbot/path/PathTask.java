@@ -1271,7 +1271,8 @@ public final class PathTask extends TickTask {
             return arrived(c);
         }
         // 执行期复核节拍
-        if (executed > 0 && executed % RECHECK_EVERY == 0 && !validateAhead(c)) {
+        if (executed > 0 && executed % RECHECK_EVERY == 0
+                && (steering == null || path.get(cursor).action() != DigAStar.ACT_PILLAR) && !validateAhead(c)) {
             beginReplan(c);
             executed = 0;
             return running();
@@ -1296,14 +1297,17 @@ public final class PathTask extends TickTask {
         if (!next.place().isEmpty()) {
             timing.phase(PathTiming.Phase.PLACE);
             if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不放置。", null));
-            if (next.x() == c.blockPosition().getX() && next.z() == c.blockPosition().getZ()
-                    && next.y() > c.getY() + .02) {
+            if (next.action() == DigAStar.ACT_PILLAR && !sampler.support(next.x(), next.y() - 1, next.z())) {
                 if (steering == null) steering = new PathSteering(next.x(), next.feetY(), next.z(), next.jump());
-                var command = steering.tick(bodyState(c));
+                var command = steering.tickPillar(bodyState(c));
                 if (command.stuck()) return stuck(c, next);
-                timing.input(0, 0, c.onGround());
-                c.walkForTick(0, 0, c.onGround());
-                return running();
+                if (!steering.canPlaceUnder(bodyState(c), c.getBbWidth())) {
+                    var permission = checkChange("place", new BlockPos(next.x(), next.y() - 1, next.z()));
+                    if (permission != null) return permission;
+                    timing.input(command.x(), command.z(), command.jump());
+                    c.walkForTick(command.x(), command.z(), command.jump());
+                    return running();
+                }
             }
             long cell = next.place().get(0);
             Progress p = placeOne(c, cell);
@@ -1325,7 +1329,9 @@ public final class PathTask extends TickTask {
         if (sampler.geometry() != null) {
             var before = path.get(Math.max(0, cursor - 1));
             if (next.action() == DigAStar.ACT_START) shapeChanged = !standingStart(next, sampler);
-            else {
+            else if (next.action() == DigAStar.ACT_PILLAR) {
+                shapeChanged = !pillarLanding(sampler.geometry(), next, c.getY());
+            } else {
                 var check = PathTransition.check(sampler, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),
                         next.x(), next.y(), next.z(), 0, 0);
                 shapeChanged = check.plan() == null || Math.abs(check.plan().feetY() - next.feetY()) > 1e-5;
@@ -1375,6 +1381,14 @@ public final class PathTask extends TickTask {
         cursor++;
         executed++;
         return running();
+    }
+
+    static boolean pillarLanding(NavigationGeometry geometry, DigAStar.Step next, double measuredY) {
+        var foot = geometry.foot(next.x(), next.y(), next.z(), TerrainEdits.EMPTY);
+        var room = geometry.clearance(next.x(), measuredY, next.z(),
+                next.x(), next.feetY(), next.z(), TerrainEdits.EMPTY);
+        return foot != null && Math.abs(foot.height() - next.feetY()) <= 1e-5
+                && room.known() && room.blockers().isEmpty();
     }
 
     private boolean canPassThrough() {

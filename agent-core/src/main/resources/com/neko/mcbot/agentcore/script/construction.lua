@@ -8,10 +8,10 @@ local function target_or_goal(target, revision)
     return goal.target,goal.expected_revision
 end
 
-local function move(cell, item, bounds)
+local function move(cell, item, bounds, walk_only)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
-        arrival="work",bounds=bounds}
+        arrival="work",bounds=bounds,walk_only=walk_only}
     if item then args.place_item=item; args.face=cell.face; args.temporary_purpose=cell.purpose end
     local result = attempt("move_to", args)
     if not result.ok then
@@ -96,6 +96,14 @@ local function relocate(site, revision, stamp, seen)
     elseif plan.operation=="lower" then
         result=attempt("break_block",{x=plan.x,y=plan.y,z=plan.z,expected_block=plan.expected_block,
             site_revision=revision,temporary_cleanup=plan.temporary_cleanup})
+        if result.ok then
+            local settled=attempt("move_to",{x=plan.x,y=plan.y,z=plan.z,exact=true,
+                walk_only=true,bounds=site.bounds})
+            if not settled.ok then
+                settled.data.removed=result.data.removed
+                result=settled
+            end
+        end
     else return false end
     if not result.ok then call("status",{details=true}) end
     return result.ok,result
@@ -373,16 +381,44 @@ end
 function mc.cleanup_temporary(revision)
     local site=call("build_site",{operation="query"}).data
     assert(site.active and site.target_revision==revision)
-    if site.body_on_temporary then
-        relocate(site,revision,"cleanup",{})
-        site=call("build_site",{operation="query"}).data
+    local removed,attempted,recovery=0,{},{}
+    local function finish(blocked)
+        local retained=0
+        for _,record in ipairs(site.temporary) do
+            if not record.present_known or record.present~=false then retained=retained+1 end
+        end
+        return {removed=removed,retained=retained,blocked=blocked or nil,goal_satisfied=false}
     end
-    local removed,retained=0,0
-    for _,record in ipairs(site.temporary) do
-        if record.present_known and record.present==false then
-            -- A consumed provenance slot is retained, but a missing block is not retained world material.
-        elseif record.cleanup_allowed then
-            if not move(record,nil,site.bounds) then return {removed=removed,retained=retained,blocked=true} end
+    while true do
+        local moved=false
+        if site.body_on_temporary then
+            local plan=site.relocation
+            local ok,result=relocate(site,revision,"cleanup",recovery)
+            moved=ok
+            if plan and plan.operation=="lower" and plan.temporary_cleanup
+                and result and result.data.removed then
+                removed=removed+1
+                if not ok then
+                    site=call("build_site",{operation="query"}).data
+                    return finish(true)
+                end
+            end
+        end
+        if not moved then
+            local record=nil
+            for _,candidate in ipairs(site.temporary) do
+                local key=candidate.x..":"..candidate.y..":"..candidate.z
+                if candidate.cleanup_allowed and not attempted[key]
+                    and not (candidate.present_known and candidate.present==false)
+                    and (not record or candidate.y>record.y) then record=candidate end
+            end
+            if not record then return finish() end
+            attempted[record.x..":"..record.y..":"..record.z]=true
+            -- Dismantling must not create another scaffold just to reach the previous one.
+            if not move(record,nil,site.bounds,true) then
+                site=call("build_site",{operation="query"}).data
+                return finish(true)
+            end
             local fresh=call("build_site",{operation="query"}).data
             local allowed=false
             for _,r in ipairs(fresh.temporary) do
@@ -392,8 +428,8 @@ function mc.cleanup_temporary(revision)
                 local result=call("break_block",{x=record.x,y=record.y,z=record.z,expected_block=record.block,
                     site_revision=revision,temporary_cleanup=true})
                 if result.data.removed then removed=removed+1 end
-            else retained=retained+1 end
-        else retained=retained+1 end
+            end
+        end
+        site=call("build_site",{operation="query"}).data
     end
-    return {removed=removed,retained=retained,goal_satisfied=false}
 end

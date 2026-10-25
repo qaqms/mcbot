@@ -447,8 +447,8 @@ public final class ClientToolDefs {
                     + "不包在data里，并自动输出施工结果；脚本执行成功不代表建筑完成。默认批次12动作，不主动加短max_rounds拆断连续施工。"
                     + "身体挡格时先按只读relocation换位，出口受阻时可按原动作临时开路、搭支撑或确认安全落点后逐格下落。"
                     + "同修订普通施工格可在有补料、无占位/设施/依赖时暂拆，repair_pending保留原图缺口，其他工作之后再补回。"
-                    + "不自动找料合成，额外工位/脚手架由temporary指定；路线支撑可按真实库存与原权限放置。"
-                    + "完成后尝试回收本任务临时工程，temporary_retained仍有缺口，不跨任务认领；外层完整目标另验。",
+                    + "不自动找料合成；需要升高才能够到目标时，导航可按真实库存、头顶净空和点击面连续起跳垫柱，不必逐格手写脚手架。额外工位用temporary指定。"
+                    + "完成后从高到低重查并回收本任务临时工程，站在临时柱上可安全逐格拆降并等待落稳；temporary_retained仍有缺口，不跨任务认领；外层完整目标另验。",
                     """
                     {"type":"object","properties":{"operation":{"type":"string","enum":["query","begin","checkpoint"]},
                     "target":%s,"access_route":{"type":"array","minItems":2,"maxItems":64,"items":%s},
@@ -627,6 +627,7 @@ public final class ClientToolDefs {
                     + "work_target={x,y,z}且exact=true保留工作对象；arrival='work'让寻路选择实际够得着/看得见或可有限清理的工作终点，x/y/z此时填工作对象坐标。"
                     + "放置站位另填place_item=物品ID，face省略自动比较真实可点击的六面，显式face只用该面；须exact=true、arrival=work且x/y/z与work_target相同；"
                     + "从当前材料/真实点击面和原版精确落位选目标格外站位，到站不放置。普通方块/原木/半砖/楼梯/工作台/炉可用，特殊/多格/状态组件待扩展。"
+                    + "普通导航可在已知整块支撑上连续起跳垫柱，身体完全离开放置格后才放块，落稳再续行；手距和实际点击面仍须同时满足。"
                     + "省略arrival仍精确走指定脚格；两者终态都复核工作条件。underground=true走相邻横向阶梯，可用真实材料和点击面补支撑，不原地直挖或垫柱，避流体/重力块。"
                     + "拾取填pickup_target_uuid及该物品的取整坐标，以身体实际可触碰的任意落点到达；"
                     + "物品移位复核，消失不当作入包，仍核对背包。不能与work_target/arrival/place_item/return_waypoint组合。"

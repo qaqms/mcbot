@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class WorkRelocationTest {
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
 
-    static final class Terrain implements DigSampler, StandingGeometry.Access {
+    static class Terrain implements DigSampler, StandingGeometry.Access {
         final Map<BlockPos, BlockState> blocks = new HashMap<>();
         boolean sight = true, attachment = true;
         int stock;

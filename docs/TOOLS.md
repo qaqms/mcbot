@@ -3,6 +3,17 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 辅助施工登高与清理更新（2026-10-25）
+
+普通move_to工作导航可按真实垫路料、完整跳跃净空、原权限与点击面连续起跳垫柱。
+先居中停稳、等整身离开放置格才调用原版放置；新支撑真实存在且身体落稳后继续。
+walk_only和underground原语义保持。高处目标进入手距不等于可点击，不能放宽距离或强行写方块。
+历史走过的空气格允许作为临时support；显式access_route、冻结图纸和设施仍不能覆盖。
+完工自动清理最高可拆格，每次动作后重查依赖；清理接近只行走，不再搭新工程。
+站在本任务临时柱上时优先安全逐格拆降，并用原move_to确认落稳后再拆下一格。
+同图普通整块屋面不因临时块在其旁边或下面就永远阻止回收；真实附着/重力/设施/来源仍保留。
+temporary_removed计实际拆除，temporary_retained计新鲜仍在或未知部分，取消与原图验收保持。
+
 ## 施工让位与恢复更新（2026-10-25）
 
 build_site query/begin增加body_obstructs_target、body_on_temporary、repairs_pending及可选relocation。

@@ -66,6 +66,22 @@ public final class PathSteering {
                 && Math.abs(y - body.y()) <= .08 && Math.hypot(body.vx(), body.vz()) <= .04;
     }
 
+    /** A vertical support needs a centered, braked takeoff before the normal jump input. */
+    public Command tickPillar(Body body) {
+        var command = tick(body);
+        boolean centered = Math.hypot(x - body.x(), z - body.z()) <= .08
+                && Math.hypot(body.vx(), body.vz()) <= .02;
+        return new Command(command.x(), command.z(), command.jump() && centered,
+                command.arrived(), command.stuck());
+    }
+
+    public boolean canPlaceUnder(Body body, double width) {
+        double half = width / 2;
+        return !body.grounded() && body.y() >= y + .02
+                && Math.abs(x - body.x()) + half <= .5 - 1e-5
+                && Math.abs(z - body.z()) + half <= .5 - 1e-5;
+    }
+
     /** Braking and tiny landing corrections must not reverse the work/movement heading. */
     public Facing facing(Body body) {
         double dx = x - body.x(), dz = z - body.z();

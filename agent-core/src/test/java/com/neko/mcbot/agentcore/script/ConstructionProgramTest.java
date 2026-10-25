@@ -11,6 +11,117 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void failedLandingRetainsTheRealRemovalAndDoesNotContinueDismantling() throws Exception {
+        var w = new World();
+        boolean[] removed = {false};
+        w.override = (name,args) -> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","body_on_temporary":true,
+                    "relocation":{"operation":"lower","x":8,"y":91,"z":0,
+                    "expected_block":"minecraft:stone","temporary_cleanup":true},"temporary":[
+                    {"x":8,"y":91,"z":0,"block":"minecraft:stone","present_known":true,
+                    "present":%s,"cleanup_allowed":true},
+                    {"x":8,"y":90,"z":0,"block":"minecraft:stone","present_known":true,
+                    "present":true,"cleanup_allowed":false}]}
+                    """.formatted(REV,!removed[0]));
+            if (name.equals("break_block")) {
+                assertFalse(removed[0]);
+                removed[0]=true;
+                return actual("{\"removed\":true}");
+            }
+            if (name.equals("move_to")) return new ToolOutcome(false,"NO_PATH:landing changed");
+            return null;
+        };
+        var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+        assertTrue(result.ok(),result.feedback());
+        var report=result.data().getAsJsonObject("returned");
+        assertTrue(report.get("blocked").getAsBoolean());
+        assertEquals(1,report.get("removed").getAsInt());
+        assertEquals(1,report.get("retained").getAsInt());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("break_block")).count());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+    }
+
+    @Test void cleanupDescendsAnOccupiedScaffoldOneBlockAtATimeAndWaitsForEachLanding() throws Exception {
+        var w = new World();
+        int[] feet = {92};
+        boolean[] falling = {false};
+        var removed = new HashSet<Integer>();
+        w.override = (name,args) -> {
+            if (name.equals("build_site")) {
+                assertFalse(falling[0], "confirm the landing before querying another descent");
+                var data = JsonParser.parseString("""
+                        {"active":true,"target_revision":"%s","body_on_temporary":%s,"temporary":[]}
+                        """.formatted(REV,feet[0]>90)).getAsJsonObject();
+                if (feet[0]>90) data.add("relocation",JsonParser.parseString("""
+                        {"operation":"lower","x":8,"y":%d,"z":0,"expected_block":"minecraft:stone",
+                        "temporary_cleanup":true}
+                        """.formatted(feet[0]-1)));
+                for (int y=90; y<=91; y++) data.getAsJsonArray("temporary").add(JsonParser.parseString("""
+                        {"x":8,"y":%d,"z":0,"block":"minecraft:stone","present_known":true,
+                        "present":%s,"cleanup_allowed":false}
+                        """.formatted(y,!removed.contains(y))));
+                return new ToolOutcome(true,"fresh body and supports",data);
+            }
+            if (name.equals("break_block")) {
+                assertEquals(feet[0]-1,args.get("y").getAsInt());
+                assertTrue(args.get("temporary_cleanup").getAsBoolean());
+                assertTrue(removed.add(feet[0]-1));
+                falling[0]=true;
+                return actual("{\"removed\":true}");
+            }
+            if (name.equals("move_to")) {
+                assertTrue(falling[0]);
+                assertTrue(args.get("walk_only").getAsBoolean());
+                assertTrue(args.get("exact").getAsBoolean());
+                assertFalse(args.has("work_target"));
+                feet[0]=args.get("y").getAsInt();
+                falling[0]=false;
+                return actual("{\"placed_blocks\":0}");
+            }
+            return null;
+        };
+        var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(90,feet[0]);
+        assertEquals(2,result.data().getAsJsonObject("returned").get("removed").getAsInt());
+        assertEquals(0,result.data().getAsJsonObject("returned").get("retained").getAsInt());
+    }
+
+    @Test void cleanupRechecksDependenciesAndRemovesAColumnFromTheTopDown() throws Exception {
+        var w = new World();
+        var removed = new HashSet<Integer>();
+        var order = new ArrayList<Integer>();
+        w.override = (name,args) -> {
+            if (name.equals("build_site")) {
+                var data = JsonParser.parseString("""
+                        {"active":true,"target_revision":"%s","temporary":[]}
+                        """.formatted(REV)).getAsJsonObject();
+                for (int y = 90; y <= 92; y++) {
+                    var row = JsonParser.parseString("""
+                            {"x":8,"y":%d,"z":0,"block":"minecraft:stone",
+                            "present_known":true,"present":%s,"cleanup_allowed":%s}
+                            """.formatted(y,!removed.contains(y),y==92 || removed.contains(y+1))).getAsJsonObject();
+                    data.getAsJsonArray("temporary").add(row);
+                }
+                return new ToolOutcome(true,"fresh scaffold",data);
+            }
+            if (name.equals("break_block")) {
+                int y = args.get("y").getAsInt();
+                assertTrue(y==92 || removed.contains(y+1), "never remove a lower block before its dependent");
+                assertTrue(removed.add(y));
+                order.add(y);
+                return actual("{\"removed\":true}");
+            }
+            return null;
+        };
+        var result = run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(List.of(92,91,90),order);
+        assertEquals(3,result.data().getAsJsonObject("returned").get("removed").getAsInt());
+        assertEquals(0,result.data().getAsJsonObject("returned").get("retained").getAsInt());
+    }
+
     @Test void freshWholeTargetBodyEvidenceTriggersRelocationEvenIfTheInitialSiteWasClear() throws Exception {
         var w=new World();
         w.override=(name,args)-> {
@@ -657,14 +768,18 @@ class ConstructionProgramTest {
         var w=new World();
         w.override=(name,args)->name.equals("build_site") ? actual("""
                 {"active":true,"target_revision":"%s","bounds":{"x":0,"y":90,"z":0,"radius":32},
-                "temporary":[{"x":8,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":true},
-                {"x":9,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":false}]}
-                """.formatted(REV)):null;
+                "temporary":[{"x":8,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":true,
+                "present_known":true,"present":%s},
+                {"x":9,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":false,
+                "present_known":true,"present":true}]}
+                """.formatted(REV,w.breaks==0)):null;
         var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
         assertTrue(result.ok(),result.feedback());
         assertEquals(1,w.breaks);
         var mining=w.calls.stream().filter(c->c.name().equals("break_block")).findFirst().orElseThrow();
         assertTrue(mining.args().get("temporary_cleanup").getAsBoolean());
+        assertTrue(w.calls.stream().filter(c->c.name().equals("move_to"))
+                .allMatch(c->c.args().get("walk_only").getAsBoolean()));
         assertEquals(1,result.data().getAsJsonObject("returned").get("retained").getAsInt());
         assertFalse(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
     }

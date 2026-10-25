@@ -90,6 +90,8 @@ final class PathTransition {
         var geometry = base.geometry();
         var from = geometry.foot(fx, fy, fz, edits);
         if (from == null) return Check.refused("DEPARTURE_FOOTING", DigAStar.pack(fx, fy, fz));
+        if (x == fx && z == fz && y == fy + 1)
+            return pillar(base, edits, x, fy, z, from, remainingDigs, remainingPlaces);
         var dest = geometry.foot(x, y, z, edits);
         if (dest != null && from.height() - dest.height() > 1 + 1e-5) {
             if (Math.abs(x-fx) + Math.abs(z-fz) != 1)
@@ -141,5 +143,41 @@ final class PathTransition {
         var motion = geometry.motion(fx, from.height(), fz, x, dest.height(), z, after);
         if (motion == NavigationGeometry.Motion.BLOCKED) return Check.refused("MOVEMENT_GEOMETRY", null);
         return new Check(new Plan(dig, place, after, dest.height(), motion == NavigationGeometry.Motion.JUMP), null, null);
+    }
+
+    private static Check pillar(DigSampler base, TerrainEdits edits, int x, int y, int z,
+                                NavigationGeometry.Foot from, int remainingDigs, int remainingPlaces) {
+        long support = DigAStar.pack(x, y, z);
+        if (Math.abs(from.height() - y) > 1e-5 || from.support() != DigAStar.pack(x, y - 1, z))
+            return Check.refused("DEPARTURE_FOOTING", support);
+        if (remainingPlaces < 1) return Check.refused("PLACE_LIMIT", support);
+        var terrain = edits.view(base);
+        if (!terrain.known(x, y, z)) return Check.refused("UNKNOWN_TERRAIN", support);
+        if (!terrain.placeable(x, y, z)) return Check.refused("NO_SUPPORT", support);
+        var geometry = base.geometry();
+        // The support is absent while rising and appears only after the sole clears its top.
+        var clear = geometry.clearance(x, y, z, x, y + 1.25, z, edits);
+        if (!clear.known()) return Check.refused(clear.failure(), clear.cell());
+        var dig = clear.blockers();
+        for (long cell : dig) {
+            int cx = DigAStar.unpackX(cell), cy = DigAStar.unpackY(cell), cz = DigAStar.unpackZ(cell);
+            if (cell == from.support() || cy <= y) return Check.refused("DEPARTURE_SUPPORT", cell);
+            if (!base.inBounds(cx, cy, cz)) return Check.refused("OUT_OF_BOUNDS", cell);
+            if (!DigSampler.feasibleDig(terrain.digSeconds(cx, cy, cz)))
+                return Check.refused("DIG_UNAVAILABLE", cell);
+        }
+        if (dig.size() > remainingDigs) return Check.refused("DIG_LIMIT", null);
+        if (!dig.isEmpty() && !terrain.canClear(x, y, z, dig)) return Check.refused("WORK_SIGHT", null);
+        var opened = edits.after(dig, List.of());
+        if (!base.canPlaceFrom(x, y, z, support, opened))
+            return Check.refused("PLACEMENT_PRECONDITION", support);
+        var place = List.of(support);
+        var after = opened.after(List.of(), place);
+        var landing = geometry.foot(x, y + 1, z, after);
+        var room = geometry.clearance(x, y + 1, z, x, y + 1, z, after);
+        if (landing == null || Math.abs(landing.height() - y - 1) > 1e-5
+                || !room.known() || !room.blockers().isEmpty())
+            return Check.refused("MOVEMENT_GEOMETRY", support);
+        return new Check(new Plan(dig, place, after, landing.height(), true), null, null);
     }
 }

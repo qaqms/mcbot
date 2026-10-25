@@ -34,7 +34,8 @@ public final class BoundedProgram {
             + "已登记建筑可直接mc.build()或mc.build_diff()，mc.goal()返回当前登记条件副本；"
             + "无需重新生成原图或把内容修订号当instance_id。"
             + "身体挡格或出口受阻时mc.build先按工地事实换位、临时开路或安全下落，原图待补格延后恢复；"
-            + "完成后自动尝试mc.cleanup_temporary(revision)，回收仍受依赖和来源检查。";
+            + "高处工作可由导航按真实材料与点击面连续起跳垫柱，不必逐格手写支撑。"
+            + "完成后自动尝试mc.cleanup_temporary(revision)，从高到低重查依赖，临时柱逐格拆降并等待落稳。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
             if (json == null || bytes(json) > 20000) throw new IllegalArgumentException();

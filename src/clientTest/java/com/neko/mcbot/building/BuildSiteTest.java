@@ -12,6 +12,22 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void aScaffoldUnderFinishedPlainRoofBlocksCanBeRemovedWithoutChangingTheDrawing() {
+        for (String block : List.of("stone","oak_planks","sand","crafting_table")) {
+            var w = new World();
+            var design = BuildTarget.parse(JsonParser.parseString("""
+                    {"anchor":{"x":8,"y":91,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"%s"}]}
+                    """.formatted(block)).getAsJsonObject());
+            var site = new BuildSite(); site.bind("task",w);
+            assertNull(site.begin(design,List.of(),FEET,w));
+            temporary(site,w);
+            w.states.put(TEMP.above(),design.cells().getFirst().desired());
+            boolean allowed = block.equals("stone") || block.equals("oak_planks");
+            assertEquals(allowed,site.miningGuard(TEMP,design.revision(),true,w)==null,block);
+            assertEquals(design.revision(),site.target().revision());
+        }
+    }
+
     @Test void finishedPlainWorkCanBeReopenedAndTheSameFrozenCellRemainsDueUntilRestored() {
         var w = new World(); var site = site(w);
         w.states.put(TARGET,Blocks.STONE.defaultBlockState());
@@ -422,7 +438,10 @@ class BuildSiteTest {
         var w=new World(); var site=site(w);
         w.passage.add(TEMP);
         assertNotNull(site.placementGuard(TEMP,Blocks.STONE.defaultBlockState(),w));
-        assertNotNull(site.temporaryGuard(TEMP,"support",w));
+        assertNull(site.temporaryGuard(TEMP,"support",w));
+        assertNull(site.placementGuard(TEMP,Blocks.STONE.defaultBlockState(),w,true));
+        assertNotNull(site.temporaryGuard(TEMP,"workstation",w));
+        assertNotNull(site.temporaryGuard(FEET,"support",w), "the explicit corridor remains frozen");
         assertNotNull(site.miningGuard(TEMP,null,false,w));
         w.passageComplete=false;
         assertNull(site.live(w));

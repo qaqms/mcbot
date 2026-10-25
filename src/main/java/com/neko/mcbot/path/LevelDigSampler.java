@@ -160,20 +160,17 @@ public final class LevelDigSampler implements DigSampler {
             return false;
         }
         BlockPos p = new BlockPos(x, y, z);
-        if (protectedTerrain(p)) return false;
         if (!level.isLoaded(p)) {
             return false; // 同上：不在未加载区动放置规划
         }
+        if (com.neko.mcbot.server.WorksiteProtection.protectedCell(p,
+                pos -> level.isInWorldBounds(pos) && level.isLoaded(pos), level::getBlockState,
+                pos -> level.getBlockEntity(pos) != null, this::protectedPlacement)) return false;
         var st = level.getBlockState(p);
         if (!st.isAir() || !st.getFluidState().isEmpty()) {
             return false; // 只往干净空气格里放
         }
-        // 不在同伴自己身体所占的格子里放（起点=当前身位时防卡模）
-        BlockPos mine = companion.blockPosition();
-        if (x == mine.getX() && z == mine.getZ()
-                && (y == mine.getY() || y == mine.getY() + 1)) {
-            return false;
-        }
+        // Planning can leave the current body cell before placing; the actual preflight owns occupancy.
         return !lavaAdjacent(p);
     }
 
@@ -195,13 +192,18 @@ public final class LevelDigSampler implements DigSampler {
         if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body) || geometry == null) return false;
         var foot = geometry.foot(x, y, z, edits);
         if (foot == null) return false;
+        double height = placementHeight(x, y, z, target, foot.height());
         var bounds = body.getBoundingBox().move(x + .5 - body.getX(),
-                foot.height() - body.getY(), z + .5 - body.getZ());
+                height - body.getY(), z + .5 - body.getZ());
         return com.neko.mcbot.server.BlockPlacement.attachedSupportAt(body,
                 new BlockPos(DigAStar.unpackX(target), DigAStar.unpackY(target), DigAStar.unpackZ(target)),
                 PathMaterials.find(body.getInventory()),
-                new net.minecraft.world.phys.Vec3(x + .5, foot.height() + body.getEyeHeight(), z + .5),
+                new net.minecraft.world.phys.Vec3(x + .5, height + body.getEyeHeight(), z + .5),
                 bounds, edits, body.buildSite().active() ? "support" : null);
+    }
+
+    static double placementHeight(int x, int y, int z, long target, double feet) {
+        return target == DigAStar.pack(x, y, z) ? y + 1.02 : feet;
     }
 
     @Override
@@ -266,6 +268,15 @@ public final class LevelDigSampler implements DigSampler {
         return com.neko.mcbot.server.WorksiteProtection.protectedCell(cell,
                 pos -> level.isInWorldBounds(pos) && level.isLoaded(pos), level::getBlockState,
                 pos -> level.getBlockEntity(pos) != null, this::protectedWork);
+    }
+
+    private boolean protectedPlacement(BlockPos cell) {
+        if (preserved(workTarget, cell)) return true;
+        if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)) return false;
+        return body.workTargets().protects(cell)
+                || body.buildSite().active() && body.buildSite().temporaryGuard(cell, "support",
+                new com.neko.mcbot.server.BuildSiteAccess(body)) != null
+                || com.neko.mcbot.server.BuildRecordAccess.guard(body, cell, false, null) != null;
     }
 
     public static boolean protectedFacility(BlockState state) { return isSacred(state); }
