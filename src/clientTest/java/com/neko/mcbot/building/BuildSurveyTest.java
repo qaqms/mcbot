@@ -28,6 +28,45 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSurveyTest {
+    @Test void clearingToolAdviceCountsTheWholeSiteAndRefreshesAfterAUsefulToolIsMade() {
+        int[] observations = {0};
+        boolean[] efficient = {false};
+        var world = new World() {
+            @Override public JsonObject miningTool(BlockPos pos, BlockState state) {
+                observations[0]++;
+                var tool = new JsonObject();
+                tool.addProperty("preferred_kind", "shovel");
+                tool.addProperty("preparation_recommended", !efficient[0]);
+                tool.addProperty("estimated_seconds", efficient[0] ? .125 : .75);
+                return tool;
+            }
+        };
+        var target = BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
+                "to":{"x":6,"y":0,"z":6},"block":"stone"}}
+                """).getAsJsonObject());
+        target.cells().forEach(c -> world.blocks.put(c.pos(), Blocks.DIRT.defaultBlockState()));
+        var before = world.query(target);
+        var work = before.getAsJsonObject("clearing_work");
+        assertEquals(49, work.get("observed_cells").getAsInt());
+        assertTrue(work.get("assessment_complete").getAsBoolean());
+        assertTrue(work.get("preparation_recommended").getAsBoolean());
+        var shovel = work.getAsJsonArray("tools").get(0).getAsJsonObject();
+        assertEquals(49, shovel.get("cells").getAsInt(), "the current 16-cell detail page is not the workload");
+        assertEquals(36.75, shovel.get("estimated_seconds").getAsDouble());
+        assertEquals(1, observations[0], "price one state once, not every target cell");
+        efficient[0] = true;
+        var after = world.query(target);
+        assertFalse(after.getAsJsonObject("clearing_work").get("preparation_recommended").getAsBoolean());
+        assertEquals(6.125, after.getAsJsonObject("clearing_work").getAsJsonArray("tools")
+                .get(0).getAsJsonObject().get("estimated_seconds").getAsDouble());
+        assertEquals(before.get("goal_observation_key"), after.get("goal_observation_key"),
+                "tool readiness does not create construction progress");
+        assertEquals(49, world.blocks.size());
+        world.unknown.add(target.cells().getFirst().pos());
+        assertFalse(world.query(target).getAsJsonObject("clearing_work").get("assessment_complete").getAsBoolean());
+    }
+
     @Test void wrongNativeOrientationAtAnEmptyCellIsAWorkStanceProblemRatherThanAProtectedTarget() {
         var target=BuildTarget.parse(JsonParser.parseString("""
                 {"anchor":{"x":4,"y":90,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"oak_stairs",

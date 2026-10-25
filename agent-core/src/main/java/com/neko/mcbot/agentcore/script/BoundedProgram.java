@@ -287,7 +287,7 @@ public final class BoundedProgram {
         }
         if (name.equals("break_block") || name.equals("build_nearby")) {
             var view = new JsonObject();
-            for (String key : List.of("removed", "placed_blocks", "consumed_count", "placement_results"))
+            for (String key : List.of("removed", "cleared_blocks", "placed_blocks", "consumed_count", "placement_results"))
                 if (data.has(key)) view.add(key, data.get(key));
             return view;
         }
@@ -295,7 +295,7 @@ public final class BoundedProgram {
         // Only mc.build's private calls use this view; raw mc.call and mc.build_diff retain the complete response.
         var view = new JsonObject();
         for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
-                "observation_key", "work_observation_key", "design_components", "goal_satisfied", "offset", "next_offset", "total", "remaining",
+                "observation_key", "work_observation_key", "design_components", "clearing_work", "goal_satisfied", "offset", "next_offset", "total", "remaining",
                 "material_bill_complete", "work_scan", "work_next_cursor", "counts", "body_obstructs_target"))
             if (data.has(key)) view.add(key, data.get(key));
         var cells = new JsonArray();

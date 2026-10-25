@@ -9,6 +9,24 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldGoalTest {
+    @Test void registrationExposesMissingEfficientToolsWithoutChangingOrBlockingTheGoal() {
+        var state = buildState(0);
+        state.getAsJsonObject("goal_evidence").add("clearing_work", json("""
+                {"preparation_recommended":true,"tools":[
+                {"preferred_kind":"shovel","cells":49,"preparation_recommended":true}]}
+                """));
+        var goal = new WorldGoal(building(),state);
+        assertTrue(goal.facts().contains("shovel对应49格"));
+        assertTrue(goal.facts().contains("真实配方"));
+        assertFalse(goal.satisfied());
+        String original = goal.fingerprint();
+        state.getAsJsonObject("goal_evidence").getAsJsonObject("clearing_work").getAsJsonArray("tools")
+                .get(0).getAsJsonObject().addProperty("preparation_recommended",false);
+        goal.observe(state);
+        assertFalse(goal.facts().contains("shovel对应49格"));
+        assertEquals(original, goal.fingerprint());
+        assertEquals(building(),goal.request());
+    }
     @Test void fullSizeBuildingEvidenceRetainsWholeGoalCountsAndNeverAcceptsTheLastMissingCell() {
         var state=buildState(20);
         var evidence=state.getAsJsonObject("goal_evidence");

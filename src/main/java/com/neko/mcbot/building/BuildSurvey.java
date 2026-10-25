@@ -32,6 +32,7 @@ public final class BuildSurvey {
         default String workContext() { return ""; }
         default boolean repairPending(BlockPos pos) { return false; }
         default boolean bodyObstructsTarget() { return false; }
+        default JsonObject miningTool(BlockPos pos, BlockState state) { return null; }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -146,6 +147,7 @@ public final class BuildSurvey {
             rows.add(new Row(cell, material, actual, rowIndex++, state));
         }
         String goalKey = hash(goalObservation.toString());
+        var clearingWork = clearingWork(rows, access, clock, start, observationComplete);
         for (var bill : bills.values()) {
             bill.available = BuildInventory.available(access.placement().inventory(), bill.item);
             observation.append('|').append(BuiltInRegistries.ITEM.getKey(bill.item)).append(':').append(bill.available);
@@ -322,6 +324,7 @@ public final class BuildSurvey {
         data.addProperty("goal_observation_key", goalKey);
         data.addProperty("work_observation_key",hash(observation + "|" + access.workContext()));
         data.add("design_components",designComponents(target));
+        data.add("clearing_work", clearingWork);
         if (after != null) data.add("spatial_facts", after);
         observation.append('|').append(after);
         data.addProperty("observation_key", hash(observation.toString()));
@@ -337,7 +340,58 @@ public final class BuildSurvey {
                 + "；分类=" + counts + "。查询未施工，材料分配只针对当前页且未预留；"
                 + "out_of_reach只是当前站位手够不着，使用工作导航换站位；surface为实际支撑/脚高，不是路线可达证明。"
                 + "page_counts仅本页，counts含全目标及页外未评估格；本页完成不等于整栋完成。"
-                + "明细和料单分别按next_offset/material_next_offset及同一expected_revision续页，Lua可用mc.build_diff(target)。", data);
+                + "明细和料单分别按next_offset/material_next_offset及同一expected_revision续页，Lua可用mc.build_diff(target)。"
+                + (clearingWork.get("preparation_recommended").getAsBoolean()
+                ? " 清障工具准备见clearing_work：批量清理前按真实配方考虑补做合适工具，材料和工具不由施工程序自动制作。" : ""), data);
+    }
+
+    private static JsonObject clearingWork(List<Row> rows, Access access, LongSupplier clock, long start,
+                                           boolean observationComplete) {
+        var states = new java.util.LinkedHashMap<BlockState, List<Row>>();
+        int cells = 0;
+        for (var row : rows) if (row.state.equals("needs_clear") && row.actual != null && !row.actual.isAir()) {
+            cells++;
+            states.computeIfAbsent(row.actual, ignored -> new ArrayList<>()).add(row);
+        }
+        var kinds = new TreeMap<String, JsonObject>();
+        boolean complete = observationComplete, recommended = false;
+        for (var entry : states.entrySet()) {
+            if (clock.getAsLong() - start >= MAX_NANOS) { complete = false; break; }
+            var tool = access.miningTool(entry.getValue().getFirst().cell.pos(), entry.getKey());
+            if (tool == null) { complete = false; continue; }
+            if (!tool.has("preferred_kind")) continue;
+            String kind = tool.get("preferred_kind").getAsString();
+            if (!List.of("axe", "pickaxe", "shovel", "hoe").contains(kind)) continue;
+            var group = kinds.computeIfAbsent(kind, ignored -> {
+                var data = new JsonObject();
+                data.addProperty("preferred_kind", kind);
+                data.addProperty("cells", 0);
+                data.addProperty("estimated_seconds", 0.0);
+                data.addProperty("estimate_complete", true);
+                data.addProperty("preparation_recommended", false);
+                data.addProperty("sample_block", BuiltInRegistries.BLOCK.getKey(entry.getKey().getBlock()).toString());
+                data.add("sample_tool", tool.deepCopy());
+                return data;
+            });
+            int count = entry.getValue().size();
+            group.addProperty("cells", group.get("cells").getAsInt() + count);
+            if (tool.has("estimated_seconds"))
+                group.addProperty("estimated_seconds", group.get("estimated_seconds").getAsDouble()
+                        + tool.get("estimated_seconds").getAsDouble() * count);
+            else group.addProperty("estimate_complete", false);
+            boolean prepare = tool.has("preparation_recommended") && tool.get("preparation_recommended").getAsBoolean();
+            if (prepare) group.add("sample_tool", tool.deepCopy());
+            group.addProperty("preparation_recommended", group.get("preparation_recommended").getAsBoolean() || prepare);
+            recommended |= prepare;
+        }
+        var groups = new JsonArray();
+        kinds.values().forEach(groups::add);
+        var data = new JsonObject();
+        data.addProperty("observed_cells", cells);
+        data.addProperty("assessment_complete", complete);
+        data.addProperty("preparation_recommended", recommended);
+        data.add("tools", groups);
+        return data;
     }
 
     private static JsonObject designComponents(BuildTarget target) {

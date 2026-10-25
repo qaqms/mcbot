@@ -56,11 +56,10 @@ public final class BreakBlockTool implements ServerTool {
             siteRevision = args.has("site_revision") ? com.neko.mcbot.building.BuildTarget.string(args.get("site_revision"), 64) : null;
             if (siteRevision != null && !siteRevision.matches("[0-9a-f]{64}")) throw new IllegalArgumentException();
             cleanup = args.has("temporary_cleanup") && strictBoolean(args, "temporary_cleanup");
-            if (cleanup && siteRevision == null || siteRevision != null && (expectedBlock == null || clearObstructions(args)))
-                throw new IllegalArgumentException();
+            validateSiteMining(expectedBlock, siteRevision, cleanup, clearObstructions(args));
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
-                    "DENIED:工地清理须site_revision/expected_block，不与清遮挡组合；temporary_cleanup须布尔且有工地修订。", null));
+                    "DENIED:工地清理须site_revision/expected_block；temporary_cleanup须有工地修订且不与清遮挡组合。", null));
         }
         boolean clear;
         String id;
@@ -95,8 +94,11 @@ public final class BreakBlockTool implements ServerTool {
                     return MiningWork.safe(c, sampler, c.blockPosition(), cell);
                 }
                 @Override public BlockMining mining(BlockPos cell) {
+                    boolean target = cell.equals(pos);
+                    String revision = target ? siteRevision : c.buildSite().navigationRevision(cell,
+                            new com.neko.mcbot.server.BuildSiteAccess(c));
                     return BlockMining.forPlayer(c, cell, cell.equals(pos) ? expectedBlock : null,
-                            cell.equals(pos) ? "target" : "clearing");
+                            target ? "target" : "clearing", revision, !target && c.buildSite().temporary(cell));
                 }
                 @Override public boolean reserve(java.util.Map<String, ActionPermissions.Change> changes) {
                     return context != null && sched.reserve(c.getUUID(), changes.values().stream().map(change -> {
@@ -116,7 +118,7 @@ public final class BreakBlockTool implements ServerTool {
                     hand[0] = new HandSnapshot(c.getInventory().getSelectedSlot(), c.getMainHandItem(), c.handPickups());
                 }
                 @Override public Result targetGuard() {
-                    return BlockMining.forPlayer(c, pos, expectedBlock).preflight(5.5);
+                    return BlockMining.forPlayer(c, pos, expectedBlock, "target", siteRevision, false).preflight(5.5);
                 }
             }, pos, expectedBlock, permissions, context, permissions.take(context, id, pos.asLong()), clearLimit);
             var failure = sequence.prepare();
@@ -135,6 +137,11 @@ public final class BreakBlockTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false, "BUSY:身体任务槽已占用，先等待或取消。", null));
         }
         return future;
+    }
+
+    static void validateSiteMining(String expected, String revision, boolean cleanup, boolean clear) {
+        if (revision != null && (!revision.matches("[0-9a-f]{64}") || expected == null)
+                || cleanup && (revision == null || clear)) throw new IllegalArgumentException();
     }
 
     static Result withWorkHint(Result result, JsonObject args) {

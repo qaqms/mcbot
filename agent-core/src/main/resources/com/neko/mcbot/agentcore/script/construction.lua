@@ -11,7 +11,8 @@ end
 local function move(cell, item, bounds, walk_only)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
-        arrival="work",bounds=bounds,walk_only=walk_only}
+        arrival="work",bounds=bounds,walk_only=walk_only,
+        clear_obstructions=not item and walk_only~=true or nil}
     if item then args.place_item=item; args.face=cell.face; args.temporary_purpose=cell.purpose end
     local result = attempt("move_to", args)
     if not result.ok then
@@ -173,6 +174,7 @@ function mc.build(target, options)
             result.unresolved_omitted=first.remaining and first.remaining-#unresolved
             result.material_bill_complete=first.material_bill_complete
             result.design_components=first.design_components
+            result.clearing_work=first.clearing_work
         end
         print("mc.build",result)
         return result
@@ -312,7 +314,8 @@ function mc.build(target, options)
                             if c.x==cell.x and c.y==cell.y and c.z==cell.z and c.state=="needs_clear"
                                 and c.clear_allowed and c.actual_block==cell.actual_block then
                                 local dug=call("break_block",{x=c.x,y=c.y,z=c.z,
-                                    expected_block=c.actual_block,site_revision=revision}).data
+                                    expected_block=c.actual_block,site_revision=revision,clear_obstructions=true}).data
+                                cleared=cleared+(dug.cleared_blocks or 0)
                                 if dug.removed then cleared=cleared+1; effect(c,"cleared")
                                 else failed[candidate.key]=true end
                             end

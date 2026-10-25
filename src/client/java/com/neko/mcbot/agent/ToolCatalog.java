@@ -72,10 +72,12 @@ public final class ToolCatalog {
                     + "query只读，登记不授予许可，不自动找料，不保证全局返程。";
             case "build_diff" -> "只读建筑格集或fill/regions差异与材料，最多16384格；大图用紧凑区域或实例引用，锚点/旋转/属性固定。"
                     + "Lua的mc.build_diff(target)给全目标统计及有限明细；按next_offset与原修订续页，施工用mc.build。"
+                    + "clearing_work给整图已观察清障量及工具准备建议，成片清土按真实配方先备铲。"
                     + "门与床保留两格验收，仅主格动作/一件料；支持空单箱/木桶、工位与常用建筑装饰，细节tool_help。"
                     + "未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
             case "move_to" -> "规划行走/挖穿/搭路；默认搜索按切片续推，无整趟节点/记录停止额度；walk_only=true不挖放，exact=true指定脚格，"
                     + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
+                    + "采掘目标已为空会结束无效寻路，核对原图后继续；目标消失不算本身体挖除。"
                     + "place_item工作导航省略face时自动检查可点击面，显式face保持原要求。"
                     + "拾取用新鲜掉落UUID填pickup_target_uuid及物品取整坐标，统一搜索实际触碰落点；到达后核背包。"
                     + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";

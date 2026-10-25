@@ -3,6 +3,27 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 野花簇、清土工具与失效目标更新（2026-10-25）
+
+野花簇和粉红花瓣各原版数量/朝向可按普通软覆盖清理，不为地基制造虚假承重依赖；
+仍须原工地、原动作权限及实际安全条件。break_block允许site_revision/expected_block
+与clear_obstructions=true组合，目标和每个遮挡分别核原守卫。
+temporary_cleanup=true仍不得与clear_obstructions组合。
+mc.build显式开启采掘工作射线清障，cleared_blocks计入实际额外移除，取消保留已发生效果。
+
+build_diff新增clearing_work：observed_cells为整图已观察待清格，assessment_complete声明完整性，
+tools按preferred_kind汇总cells、estimated_seconds、estimate_complete、preparation_recommended
+和sample_tool。估时基于当刻身体、库存与采掘条件，不是实测总工期。
+建议在目标登记回执与内置施工报告保留；成片清土先按真实配方备铲，已有工具自动选用，
+执行层不自动制作工具，也不因缺高效工具禁止空手。工具变化不计为图纸完成进度。
+
+move_to采掘工作在受理或途中发现目标空气即返回TARGET_BLOCKED，带target_already_clear=true、
+can_work_here=false、removed=false；重查原图后续其他工作，不将目标消失记为本身体移除。
+未加载仍为TARGET_LOST。此判断只用于采掘工作，不拒绝空气中的放置目标或普通位置导航。
+进度新增work_target/work_kind及search_expanded/search_batches，续批日志记录实际方块与放置失败原因。
+原木可按计划支撑及真实点击面选择满足图纸轴向的工作位，到位后的原版动作仍重验。
+没有新增工具或默认整趟搜索上限；日志现场与验证边界见FLOWERS-TOOLS-AND-PATH-2026-10-25及STATUS。
+
 ## 辅助施工登高与清理更新（2026-10-25）
 
 普通move_to工作导航可按真实垫路料、完整跳跃净空、原权限与点击面连续起跳垫柱。

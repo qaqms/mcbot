@@ -218,6 +218,24 @@ class PathClearanceTest {
         assertEquals(top, over.cell());
     }
 
+    @Test void workObservationsKeepWorldCoordinatesAndDistinguishMiningFromPlacement() {
+        var target = new net.minecraft.core.BlockPos(-284, 137, -892);
+        for (boolean placing : new boolean[]{false, true}) {
+            var intent = placing ? new com.neko.mcbot.server.PlacementWork(
+                    (net.minecraft.world.item.BlockItem) net.minecraft.world.item.Items.OAK_LOG, null) : null;
+            var task = new PathTask(null, target, null, null, null, null, true, false, target,
+                    PathSpec.DEFAULT, intent);
+            var observed = task.observation();
+            var work = observed.getAsJsonObject("work_target");
+            assertEquals(-284, work.get("x").getAsInt());
+            assertEquals(137, work.get("y").getAsInt());
+            assertEquals(-892, work.get("z").getAsInt());
+            assertEquals(placing ? "place" : "mine", observed.get("work_kind").getAsString());
+            assertEquals(0, observed.get("removed_blocks").getAsInt());
+            assertEquals(0, observed.get("placed_blocks").getAsInt());
+        }
+    }
+
     @Test void interruptedReceiptsKeepActualEffectsAndStructuredDiagnosticsWithoutNewSearches() throws Exception {
         var cells = new Cells();
         var route = PathTask.searchFor(cells, net.minecraft.core.BlockPos.ZERO,

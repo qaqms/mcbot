@@ -129,7 +129,7 @@ public final class BlockPlacement {
         return preflight(access, pos, slot, face);
     }
 
-    /** Only state-free cubes can be predicted through pending edits; all actual placements use the native preflight. */
+    /** Neighbor-independent cubes use native state prediction through pending edits, then live preflight on arrival. */
     public static ServerTool.Result assessPlannedAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
                                                     Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
         if (edits.equals(TerrainEdits.EMPTY)) return assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose);
@@ -138,8 +138,7 @@ public final class BlockPlacement {
         var material = player.getInventory().getItem(slot);
         if (!(material.getItem() instanceof BlockItem item)
                 || item.getClass() != BlockItem.class
-                || item.getBlock().getClass() != net.minecraft.world.level.block.Block.class
-                || !item.getBlock().defaultBlockState().getValues().isEmpty())
+                || !SupportPlacement.predictable(item))
             return assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose);
         if (!player.gameMode.isSurvival() || !player.getAbilities().mayBuild)
             return failed("DENIED:当前模式不允许生存放置。", false, 0);
@@ -147,20 +146,22 @@ public final class BlockPlacement {
         var site = new BuildSiteAccess(player);
         if (failure == null && temporaryPurpose != null)
             failure = player.buildSite().temporaryGuard(pos, temporaryPurpose, site);
-        if (failure == null)
-            failure = player.buildSite().placementGuard(pos, item.getBlock().defaultBlockState(), site, temporaryPurpose != null);
         if (failure != null) return failure;
         if (temporaryPurpose != null && !temporaryPurpose.equals("support"))
             return failed("TARGET_BLOCKED:特殊临时工位须在实际现场核对。", false, 0);
         var level = player.level();
+        var projected = new PlayerAccess(player, eye, body, edits);
         boolean planned = SupportPlacement.canPlanBlock(level, BlockAim.forPlayer(player), pos, eye, body,
                 material, Math.min(6.5, player.blockInteractionRange()), edits,
                 near -> level.isInWorldBounds(near) && level.getWorldBorder().isWithinBounds(near)
                         && level.isLoaded(near) && level.mayInteract(player, near),
                 candidate -> candidate == face && player.mayUseItemAt(pos, candidate, material),
-                bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)));
-        return planned ? constructionExit(player,pos,item.getBlock().defaultBlockState(),body,edits)
-                : failed("TARGET_BLOCKED:计划改动后的碰撞、点击面、材料或放置条件尚未满足。", false, 0);
+                bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)),
+                hit -> item.getBlock().getStateForPlacement(projected.placementContext(material, hit)),
+                state -> player.buildSite().placementGuard(pos, state, site, temporaryPurpose != null) == null
+                        && constructionExit(player, pos, state, body, edits) == null);
+        return planned ? null : failed(
+                "TARGET_BLOCKED:计划改动后的碰撞、点击面、材料、目标状态或放置条件尚未满足。", false, 0);
     }
 
     private static ServerTool.Result constructionExit(CompanionPlayer player, BlockPos pos, BlockState state,

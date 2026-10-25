@@ -3,6 +3,62 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 野花簇、清土工具与长时间寻路（2026-10-25，Asia/Shanghai）
+
+- 维护者反馈不能清野花簇、有材料却空手清土、持续显示寻路。开工main为3b57a72，
+  工作树干净，比origin/main领先上一轮一提交。仅修改本体；
+  宿主、连接器、参考和玩家实例只读，不安装包，不启动游戏/服务器/真实模型。
+  完整判读与边界见docs/FLOWERS-TOOLS-AND-PATH-2026-10-25.md。
+- 冻结build/flowers-tools-path-session-20261025.log，349530 bytes、末写11:55:42，
+  SHA256 `ce453e1dc41bceee44794cabc39dbe9cd09c755fbde35c6cde485b36239c297f`。
+  实例JAR与上轮903c0816候选一致。11:53:05受理j179/route84，
+  11:53:27起持续续批，快照末expanded=64000，活日志只读至12:01:38为212000。
+  这是本地搜索，不全是模型思考。冻结区域副本SHA256
+  `c57cc32d4f600dd53d64e8e2d04f0404eee120a05e74319fc90d5408778eb66a`，
+  只读解析表明目标(-284,137,-892)为空气、下方原木，附近有墙/玻璃/野花簇。
+  日志没有最后move_to完整参数，不能认定该请求必为采掘或放置，也不由较晚存档证明受理时状态。
+- 只读学习参考BuildCellRules的实际判据、BuildCompanionTask收遍/换位及ToolChoice的
+  全背包工具估价/选择。参考1.21.1不含本轮野花簇类型，实际类/形状由本地1.21.11
+  javap和真实注册表核对；未复制/翻译参考代码、注释、知识或资产，未迁移直接写世界施工。
+- BuildSite.softClearance增加FlowerBedBlock，覆盖野花簇和粉红花瓣所有原版数量/朝向，
+  不再把薄覆盖当地基承重依赖；危险、真实附着、设施、身体地板和原来源条件仍有效。
+  施工采掘站位与break_block显式clear_obstructions；
+  site_revision/expected_block可与普通射线清障组合，目标及遮挡各自核原图补料/占位/依赖/来源/许可。
+  临时回收仍禁止与附带清障组合，Lua计实际额外移除，取消不抹已发生效果。
+- BuildSurvey增加全目标已观察clearing_work，按实际待清状态汇总工具类别、格数及估时，
+  同状态只估一次，未知/时间不足声明不完整。原目标回执、工具帮助与原创知识保留缺工具建议，
+  成片清土由模型根据真实配方和库存先备铲；原动作只选已有工具，不新增合成链或空手禁令。
+  工具准备不改变冻结目标，也不计为建筑完成进度。
+- 缓存的采掘候选可能因先清下方支撑而自然消失；空气没有可挖轮廓，旧工作到达永不能命中。
+  MiningWork在MoveToTool受理前及PathTask每刻共用检查，空气即返回target_already_clear=true、
+  removed=false，停止无效采掘站位搜索，施工重查原图续其他格；未知仍为TARGET_LOST。
+  放置及普通坐标导航不套用此判断，终态保留已有路线挖放/掉落账，没有新增默认总搜索门。
+  高处原木累计地形预检按原版点击面预测轴向，再核冻结图纸和出口，到位后仍重验原版动作。
+  工作诊断增加种类、真实坐标、实际方块、展开/批次和当前放置失败原因。
+- before在旧码精确复现2项野花簇失败。focused1/2分别修测试不可访问类型和错误字段；
+  focused3修与新显式清障契约冲突的旧断言及高处支撑位置错误假设，修正后独立及串行定向通过。
+  本轮不能将早期失败归因为已证实缓存竞争。最终复核修诊断误用坐标编码，并补原始高度回归。
+  final1唯一失败是BuildSiteToolTest仍将普通工地射线清障当非法参数；
+  改为验证仍禁止的临时回收+清障，已有新回归单独验证合法组合，未削弱原预算/取消/材料断言。
+- 最终build/flowers-tools-final2-20261025.log第65至66行：
+  **1分25秒、20任务强制全执行；1968项/204 suites，failures/errors/skipped全0**。
+  核心451/46、根173/24、客户端1344/134，本轮新增14项。
+  覆盖真实软覆盖、整图工具汇总/刷新、库存铲选择、同修订射线清障及取消部分效果、
+  空气/未知工作目标、原图重评、原木轴向/计划支撑和工作坐标；
+  原49/105/128/400格施工、runner调用预算及取消回归保持。
+  真实注册表/形状、Lua与动作核参与，世界/身体运动/动作回调/模型仍受控，不冒充原生现场已验。
+- JAR build/libs/mcbot-0.1.0.jar为1818391 bytes、末写12:39:20，SHA256
+  `460a6ead9e5c5d7c503120aca2669bbbe5a2fc04708e6a3e42d82ae96e9c46eb`；
+  内嵌core与独立产物一致，270563 bytes，SHA256
+  `066b7092ce2604aae0a8b9870310286c43220410566b73eef4b17fee9d73f142`。
+  施工Lua21482 bytes、建筑知识13117 bytes与源码逐字节一致，版本/入口及LuaJ已核。
+  导入包build/mcbot-import-20261025-flowers-tools.zip为1763518 bytes，SHA256
+  `84e26cde113fda744d1e0bc821b23550e5426ab46f279f7bc4c5170984c5ddf5`，
+  仅含mods内JAR、START-HERE.txt和SHA256SUMS.txt，包内JAR按构建指纹校验；
+  历史包保留。构建后仅见既有玩家Java进程，无Gradle残留。Git提交/推送按实际结果执行，
+  本轮fetch在约21秒后因github.com:443连接失败，未确认远端是否有新更新，未改代理/凭据。
+  保留既有玩家进程，未修改活世界；真实备铲决策、野花簇动作及同现场寻路耗时仍待新包实测。
+
 ## 辅助施工登高与临时工程清理（2026-10-25，Asia/Shanghai）
 
 - 维护者追加要求对够不到的施工位置主动挖放辅助、完工清理或恢复原图。开工main为5cbbdcd，
@@ -6941,6 +6997,16 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-25野花簇/原木本地官方映射javap、字节码及真实注册表回归，未运行游戏：
+`FlowerBedBlock extends VegetationBlock implements BonemealableBlock,SegmentableBlock`，
+公开`FACING`和`AMOUNT`；Blocks.PINK_PETALS及WILDFLOWERS共相同构造工厂，
+原版注册均为noCollision，数量/朝向全状态按真实碰撞回归为空。
+`RotatedPillarBlock.getStateForPlacement(BlockPlaceContext):BlockState`公开，
+字节码用`context.getClickedFace().getAxis()`写`AXIS`，不依赖邻居状态。
+本体只对精确该原版类预测轴向，实际到位后仍执行原版预检/放置。
+`DigAStar.pack`的y存储有+1024偏置，不能用它解BlockPos.asLong；
+工作目标诊断直接输出世界坐标，避免错报高度。
 
 2026-10-25施工指纹/构件本地官方映射javap与编译确认，未运行游戏：
 `BlockBehaviour.BlockStateBase.getLightEmission():int`可读取目标声明状态光照。

@@ -19,6 +19,7 @@ public final class WorldGoal {
     private boolean satisfied;
     private boolean available = true;
     private String fingerprint;
+    private String clearingAdvice = "";
 
     public static JsonObject request(JsonObject args) {
         String type = text(args, "type");
@@ -119,6 +120,7 @@ public final class WorldGoal {
             satisfied = flag(data, "goal_satisfied") && progress == total && integer(counts, "unsupported") == 0;
             fingerprint = text(data, "goal_observation_key");
             if (!fingerprint.matches("[0-9a-f]{64}")) throw new IllegalArgumentException();
+            clearingAdvice = clearingAdvice(data);
         } else {
             if (!dimension.equals(text(data, "dimension")) || !containerId.equals(text(data, "container_id"))
                     || !flag(data, "container") || !flag(data, "container_identity_known")
@@ -148,10 +150,31 @@ public final class WorldGoal {
                 + "；原登记图纸仍在独立目标账中，run_program可直接return mc.build()续建、"
                 + "mc.build_diff()核对、mc.goal()取原target和expected_revision；"
                 + "修订哈希不是instance_id，不重拼图纸或询问主人重报设计。局部批次不替代全目标核验。"
+                + clearingAdvice
                 : "容器交付目标=" + delivery.item() + "@" + request.get("container")
                 + "，口径=" + (delivery.additional() ? "登记后本任务已核实净存入且容器净新增" : "当前容器总量")
                 + "，登记基线=" + baseline + "，当前总量=" + current + "，实际进度=" + progress + "/" + total
                 + "；只验同一已知本体容器，不证明双箱整体、接收者或物品独占来源。");
+    }
+
+    private static String clearingAdvice(JsonObject data) {
+        if (!data.has("clearing_work") || !data.get("clearing_work").isJsonObject()) return "";
+        var work = data.getAsJsonObject("clearing_work");
+        if (!work.has("tools") || !work.get("tools").isJsonArray()) return "";
+        var recommendations = new java.util.ArrayList<String>();
+        for (var value : work.getAsJsonArray("tools")) {
+            if (recommendations.size() == 4 || !value.isJsonObject()) break;
+            var tool = value.getAsJsonObject();
+            if (!tool.has("preferred_kind") || !tool.has("cells") || !tool.has("preparation_recommended")) continue;
+            String kind = text(tool, "preferred_kind");
+            int cells = integer(tool, "cells");
+            if (List.of("axe", "pickaxe", "shovel", "hoe").contains(kind) && cells > 0
+                    && cells <= BUILD_CELL_LIMIT && flag(tool, "preparation_recommended"))
+                recommendations.add(kind + "对应" + cells + "格");
+        }
+        return recommendations.isEmpty() ? "" : " 上次清障工具观测："
+                + String.join("、", recommendations) + "尚缺高效工具；批量施工前查询真实配方，"
+                + "利用已有材料制作够用的工具，再沿原图续建。建议不改变目标，也不禁止空手工作。";
     }
 
     static String text(JsonObject data, String name) {

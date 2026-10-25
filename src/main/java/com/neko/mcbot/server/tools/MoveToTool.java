@@ -149,6 +149,10 @@ public final class MoveToTool implements ServerTool {
         if (placement != null) {
             var failure = placement.ready(c);
             if (failure != null) return CompletableFuture.completedFuture(failure);
+        } else if (spec.workArrival() && workTarget != null) {
+            var failure = MiningWork.targetFailure(workTarget,
+                    level.isLoaded(workTarget) ? level.getBlockState(workTarget) : null);
+            if (failure != null) return CompletableFuture.completedFuture(failure);
         }
         var endpoint = walkEndpoint(to, walkOnly, args.has("exact") && args.get("exact").getAsBoolean(),
                 workTarget != null || pickup != null, com.neko.mcbot.server.StandingGeometry.forPlayer(c),

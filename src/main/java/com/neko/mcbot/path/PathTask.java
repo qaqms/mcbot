@@ -252,6 +252,14 @@ public final class PathTask extends TickTask {
         data.addProperty("walk_only", walkOnly);
         data.addProperty("phase", phase.name());
         data.addProperty("search_mode", searchMode());
+        if (workTarget != null) {
+            data.add("work_target", com.neko.mcbot.building.BuildTarget.coordinates(workTarget));
+            data.addProperty("work_kind", placement == null ? "mine" : "place");
+        }
+        if (search != null) {
+            data.addProperty("search_expanded", search.expanded());
+            data.addProperty("search_batches", search.batches());
+        }
         if (pickupTarget != null) data.addProperty("pickup_target_uuid", pickupTarget.toString());
         data.addProperty("committed_nodes", executed);
         data.addProperty("removed_blocks", actualDigs);
@@ -321,6 +329,11 @@ public final class PathTask extends TickTask {
         if (!spec.contains(current.getX(), current.getY(), current.getZ())
                 || !outerScope.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
+        if (spec.workArrival() && placement == null && workTarget != null) {
+            var failure = com.neko.mcbot.server.MiningWork.targetFailure(workTarget,
+                    level.isLoaded(workTarget) ? level.getBlockState(workTarget) : null);
+            if (failure != null) return terminal(failure);
+        }
         if (pickupTarget != null) {
             var contact = updatePickup(c);
             if (contact != null) return contact;
@@ -611,8 +624,8 @@ public final class PathTask extends TickTask {
             if (continueSearch(search, allowance, sharedBudget)) {
                 // The completed worker has released ownership; subsequent work uses normal slices.
                 detachedSearch = false;
-                McbotMod.LOG.info("[path] 保留搜索边界继续下一批 expanded={} nodes={}/{} route={}",
-                        search.expanded(), allowance.used(), allowance.limit(), timing.id());
+                McbotMod.LOG.info("[path] 保留搜索边界继续下一批 expanded={} nodes={}/{} route={} work={}",
+                        search.expanded(), allowance.used(), allowance.limit(), timing.id(), workDiagnostic(c));
                 return running();
             }
             McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {} route={}", c.blockPosition().toShortString(),
@@ -641,6 +654,21 @@ public final class PathTask extends TickTask {
         // 搜索成功≠清单真值：用裸 sampler 按当前世界重建挖/放清单，再出确认/执行/计数
         segmentTail = search.segmentEnd();
         return afterPlanReady(c, liveify(search.path()));
+    }
+
+    private JsonObject workDiagnostic(CompanionPlayer body) {
+        var data = new JsonObject();
+        if (workTarget == null) return data;
+        data.add("target", com.neko.mcbot.building.BuildTarget.coordinates(workTarget));
+        data.addProperty("kind", placement == null ? "mine" : "place");
+        if (level.isLoaded(workTarget)) data.addProperty("actual", level.getBlockState(workTarget).toString());
+        var check = placement == null ? null : placement.assess(body, workTarget);
+        if (check != null && !check.ok()) {
+            if (check.data() != null && check.data().has("placement_failure"))
+                data.add("placement_failure", check.data().get("placement_failure"));
+            data.addProperty("current_failure", check.feedback());
+        }
+        return data;
     }
 
     private Progress alignDeparture(CompanionPlayer c) {

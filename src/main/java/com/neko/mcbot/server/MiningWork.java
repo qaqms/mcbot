@@ -4,11 +4,27 @@ import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.path.DigSampler;
 import com.neko.mcbot.path.LevelDigSampler;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 /** Shared clearing geometry for observations, stance arrival and bounded execution. */
 public final class MiningWork {
     private MiningWork() { }
+
+    /** A vanished plant has no mining stance. It is a fresh observation, not a failed route. */
+    public static ServerTool.Result targetFailure(BlockPos target, BlockState state) {
+        if (state == null) return new ServerTool.Result(false,
+                "TARGET_LOST:采掘工作目标未加载，未搜索未知目标的工作站位。", null);
+        if (!state.isAir()) return null;
+        var data = new com.google.gson.JsonObject();
+        data.add("work_target", com.neko.mcbot.building.BuildTarget.coordinates(target));
+        data.addProperty("target_already_clear", true);
+        data.addProperty("can_work_here", false);
+        data.addProperty("removed", false);
+        return new ServerTool.Result(false,
+                "TARGET_BLOCKED:采掘工作目标已经为空，已停止寻找挖掘站位；重新核对原图，"
+                        + "继续其他清理或放置。目标消失不证明由本身体挖除。", data);
+    }
 
     public static BlockAim.MiningPlan plan(CompanionPlayer body, BlockPos target) {
         return plan(body, target, body.getEyePosition(), StandingGeometry.feetCell(body));

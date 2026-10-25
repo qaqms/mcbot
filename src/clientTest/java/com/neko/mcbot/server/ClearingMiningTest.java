@@ -30,6 +30,7 @@ class ClearingMiningTest {
         float gain = 1;
         boolean emitDrops;
         boolean selectTools;
+        java.util.function.Function<BlockPos,ServerTool.Result> siteGuard = p -> null;
         final Map<BlockPos, BlockActionFixtures.Mining> actions = new HashMap<>();
         Fixture(boolean autonomous) {
             context = new ActionPermissions.Context(UUID.randomUUID(), UUID.randomUUID(), "world", 1,
@@ -51,6 +52,8 @@ class ClearingMiningTest {
         @Override public boolean sameHand() { return hand; }
         @Override public void selectedTool() { hand = true; }
         @Override public ServerTool.Result targetGuard() {
+            var refused = siteGuard.apply(TARGET);
+            if (refused != null) return refused;
             var nativeAction = new BlockActionFixtures.Mining();
             nativeAction.state = state(TARGET);
             nativeAction.correct = correctTarget;
@@ -59,6 +62,10 @@ class ClearingMiningTest {
         }
         @Override public BlockMining mining(BlockPos pos) {
             var nativeAction = new BlockActionFixtures.Mining() {
+                @Override public ServerTool.Result guard(double reach) {
+                    var refused = siteGuard.apply(pos);
+                    return refused == null ? super.guard(reach) : refused;
+                }
                 private com.google.gson.JsonObject selection;
                 @Override public ServerTool.Result selectTool(BlockState state) {
                     if (!selectTools) return null;
@@ -85,6 +92,46 @@ class ClearingMiningTest {
                                 ? net.minecraft.world.item.Items.COBBLESTONE : net.minecraft.world.item.Items.LEAF_LITTER)));
             };
             return new BlockMining(nativeAction);
+        }
+    }
+
+    @Test void flowerBedAndFoundationClearingShareTheOriginalSiteGuardsAndKeepPartialEffectsOnCancel() {
+        for (int scenario = 0; scenario < 3; scenario++) {
+            var f = new Fixture(true);
+            f.cells.put(TARGET, Blocks.DIRT.defaultBlockState());
+            f.cells.put(COVER, Blocks.WILDFLOWERS.defaultBlockState());
+            var target = com.neko.mcbot.building.BuildTarget.parse(com.google.gson.JsonParser.parseString("""
+                    {"anchor":{"x":2,"y":0,"z":0},"cells":[
+                    {"x":0,"y":0,"z":0,"block":"oak_planks"},{"x":0,"y":1,"z":0,"block":"air"}]}
+                    """).getAsJsonObject());
+            var access = new com.neko.mcbot.building.BuildSite.Access() {
+                @Override public BlockState state(BlockPos p) { return f.state(p); }
+                @Override public boolean corridor(BlockPos p) { return true; }
+                @Override public boolean facility(BlockPos p) { return WorksiteProtection.facility(state(p),state(p).hasBlockEntity()); }
+                @Override public boolean occupied(BlockPos p) { return false; }
+                @Override public boolean material(com.neko.mcbot.building.BuildTarget.Cell c) { return true; }
+                @Override public Object chunk(BlockPos p) { return f; }
+                @Override public com.neko.mcbot.building.CellWitness watch(BlockPos p) { return null; }
+            };
+            var site = new com.neko.mcbot.building.BuildSite();
+            site.bind(f, f);
+            assertNull(site.begin(target,List.of(),new BlockPos(-1,0,0),access));
+            f.siteGuard = p -> site.miningGuard(p,target.revision(),false,access);
+            if (scenario == 2) f.cells.put(TARGET.east(),Blocks.TORCH.defaultBlockState());
+            var work = new ClearingMining(f,TARGET,"minecraft:dirt",f.permissions,f.context,null,
+                    BlockAim.DEFAULT_CLEAR_LIMIT);
+            if (scenario == 2) {
+                assertFalse(work.prepare().ok());
+                assertTrue(f.removed.isEmpty(), "a real attachment cannot be waived as soft cover");
+                continue;
+            }
+            assertNull(work.prepare());
+            assertNull(work.tick());
+            var result = scenario == 1 ? work.interrupted("CANCELLED:owner") : work.tick();
+            assertEquals(1,result.data().get("cleared_blocks").getAsInt());
+            assertEquals(scenario == 0,result.data().get("removed").getAsBoolean());
+            assertEquals(scenario == 0 ? List.of(COVER,TARGET) : List.of(COVER),f.removed);
+            assertEquals(target.revision(),site.target().revision());
         }
     }
 

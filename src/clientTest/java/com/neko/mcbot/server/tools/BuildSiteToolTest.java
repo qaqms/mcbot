@@ -37,7 +37,7 @@ class BuildSiteToolTest {
         assertNull(PlaceBlockTool.arguments(bad));
         for(String text:java.util.List.of("{\"x\":1,\"y\":90,\"z\":0,\"temporary_cleanup\":true}",
                 "{\"x\":1,\"y\":90,\"z\":0,\"site_revision\":\"bad\"}",
-                "{\"x\":1,\"y\":90,\"z\":0,\"site_revision\":\""+"a".repeat(64)+"\",\"expected_block\":\"minecraft:dirt\",\"clear_obstructions\":true}")) {
+                "{\"x\":1,\"y\":90,\"z\":0,\"site_revision\":\""+"a".repeat(64)+"\",\"expected_block\":\"minecraft:dirt\",\"temporary_cleanup\":true,\"clear_obstructions\":true}")) {
             assertFalse(new BreakBlockTool().runAuthorized(null,JsonParser.parseString(text).getAsJsonObject(),null,null,null).join().ok());
         }
     }

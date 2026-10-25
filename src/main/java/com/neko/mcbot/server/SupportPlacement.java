@@ -7,14 +7,17 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Function;
 
-/** Shared read-only contact and collision planning for state-free cubes through earlier route edits. */
+/** Read-only contact and collision planning for predictable full blocks through earlier route edits. */
 public final class SupportPlacement {
     private SupportPlacement() { }
 
@@ -31,6 +34,18 @@ public final class SupportPlacement {
                                       Vec3 eye, AABB body, ItemStack material, double reach, TerrainEdits edits,
                                       Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
                                       Predicate<AABB> entityClear) {
+        if (!(material.getItem() instanceof BlockItem item) || !item.getBlock().defaultBlockState().getValues().isEmpty())
+            return false;
+        return canPlanBlock(world, sight, target, eye, body, material, reach, edits, permitted, mayUse,
+                entityClear, hit -> ((BlockItem) material.getItem()).getBlock().defaultBlockState(), state -> true);
+    }
+
+    /** The native predictor may select a pillar axis; the caller still checks the frozen drawing. */
+    public static boolean canPlanBlock(BlockGetter world, BlockAim.Access sight, BlockPos target,
+                                      Vec3 eye, AABB body, ItemStack material, double reach, TerrainEdits edits,
+                                      Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
+                                      Predicate<AABB> entityClear, Function<BlockHitResult, BlockState> prediction,
+                                      Predicate<BlockState> admissible) {
         if (material.isEmpty() || !ItemStack.isSameItemSameComponents(material, new ItemStack(material.getItem()))
                 || !(material.getItem() instanceof BlockItem item)
                 || item.getClass() != BlockItem.class || body.intersects(new AABB(target))) return false;
@@ -41,10 +56,7 @@ public final class SupportPlacement {
         var view = BlockAim.editedWorld(world, removed, placed);
         var current = view.getBlockState(target);
         if (!current.isAir() || !current.getFluidState().isEmpty()) return false;
-        // All admitted materials are ordinary, state-free full cubes; special/native contexts stay on assessAt.
-        var state = item.getBlock().defaultBlockState();
-        if (state.getBlock().getClass() != net.minecraft.world.level.block.Block.class
-                || !state.getValues().isEmpty() || !state.isCollisionShapeFullBlock(view, target)) return false;
+        if (!predictable(item)) return false;
         for (var near : BlockPos.betweenClosed(BlockPos.containing(body.minX, body.minY, body.minZ).offset(-1, -1, -1),
                 BlockPos.containing(body.maxX, body.maxY, body.maxZ).offset(1, 1, 1)))
             if (!sight.loaded(near)) return false;
@@ -58,9 +70,23 @@ public final class SupportPlacement {
         for (var face : Direction.values()) {
             var clicked = target.relative(face.getOpposite());
             if (!view.getBlockState(clicked).getFluidState().isEmpty()) continue;
-            if (mayUse.test(face) && BlockAim.placementContact(aimed, clicked, face, reach).ok()) return true;
+            if (!mayUse.test(face)) continue;
+            var contact = BlockAim.placementContact(aimed, clicked, face, reach);
+            if (!contact.ok()) continue;
+            var state = prediction.apply(contact.hit());
+            if (state != null && state.getBlock() == item.getBlock()
+                    && state.isCollisionShapeFullBlock(view, target) && admissible.test(state)) return true;
         }
         return false;
+    }
+
+    public static boolean predictable(BlockItem item) {
+        var block = item.getBlock();
+        return block.getClass() == net.minecraft.world.level.block.Block.class
+                && block.defaultBlockState().getValues().isEmpty()
+                || block.getClass() == net.minecraft.world.level.block.RotatedPillarBlock.class
+                || block.getClass() == net.minecraft.world.level.block.TransparentBlock.class
+                && block.defaultBlockState().getValues().isEmpty();
     }
 
     private static Set<BlockPos> positions(Set<Long> cells) {

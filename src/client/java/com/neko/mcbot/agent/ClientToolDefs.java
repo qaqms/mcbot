@@ -166,6 +166,9 @@ public final class ClientToolDefs {
                     + "ready仅近身状态预检，不证明实际放置。observation_complete/spatial_stable和预算字段必须核对。"
                     + "observation_key供跨页核同一次世界/材料事实；cells.item/material_available供选择有限工作，"
                     + "clear_allowed仅已登记同修订工地的当前安全清障提示，真实挖掘仍重验。"
+                    + "clearing_work汇总全目标已观察待清格，tools按preferred_kind分组给cells、estimated_seconds、"
+                    + "estimate_complete、preparation_recommended和sample_tool；assessment_complete=false表示建议有缺口。"
+                    + "耗时按当前身体与库存估计，不是实际完工时间；建议备工具不改变施工目标或禁止空手。"
                     + "out_of_reach只表示当前手够不着，应让mc.build或工作导航换站位，不是设计大小限制。"
                     + "cells[].surface给真实feet/feet_y/support/support_block；支撑方块格与脚格不同，不自动改设计。";
             case "build_nearby" -> "ACCEPTED只表示受理，等真终态。action_attempts为本批尝试，placed_blocks/"
@@ -183,6 +186,8 @@ public final class ClientToolDefs {
                     + "drop_spawns是源格生成样本，须drop_spawns_complete=true才可据未出现判断。"
                     + "clearing_results/clearing_drop_summary与目标分开。拾取累计不替代新鲜背包或最终目标。";
             case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position/work/pickup，"
+                    + "采掘工作目标在受理或途中已为空时，TARGET_BLOCKED且target_already_clear=true；"
+                    + "重新核对目标再续其他工作，不把目标消失算作本身体移除。放置工作目标不套用此判断。"
                     + "tool_changes为最多16次实际开路换手，tool_changes_truncated为是否截短；已有工具可自动切换，制作仍由模型安排。"
                     + "removed_blocks/placed_blocks为本段实际改动。默认相邻到达不保证触碰拾取，"
                     + "拾取用scan_area.item_targets[].target_uuid填pickup_target_uuid；工作用arrival=work。"
@@ -553,7 +558,8 @@ public final class ClientToolDefs {
                             + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("break_block", "挖一格干燥方块，执行时从真实背包选有采收资格的最快工具，同速优先不消耗耐久；不自动制作工具。"
                     + "expected_block可填写最新观测的完整方块ID，目标被替换则停止；gather自动携带。"
-                    + "工地障碍显式site_revision并带expected_block，只清非成品且有替换材料、无支撑依赖的目标；"
+                    + "工地障碍显式site_revision并带expected_block，可同时clear_obstructions；"
+                    + "目标与每个遮挡分别核原图补料、占位、设施、依赖和来源，普通施工格可临时开路后恢复；"
                     + "temporary_cleanup=true回收实际来源仍有效且依赖解除的临时格，不与clear_obstructions组合。"
                     + "clear_obstructions=true按具体清单清理工作射线上的安全遮挡，默认无清理格数上限；"
                     + "需要主动限制时填写非负clear_limit，0禁止清理。射线计算资源、实际距离及原权限仍受保护；"

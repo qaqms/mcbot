@@ -31,6 +31,12 @@ public final class BuildDiffTool implements ServerTool {
             var placement = BlockPlacement.forPlayer(body);
             var geometry = com.neko.mcbot.server.StandingGeometry.forPlayer(body);
             return new BuildSurvey.Access() {
+                private com.neko.mcbot.server.MiningTools miningTools;
+                @Override public JsonObject miningTool(BlockPos pos, BlockState state) {
+                    if (miningTools == null) miningTools = com.neko.mcbot.server.MiningTools.forPlayer(body);
+                    return com.neko.mcbot.server.MiningTools.describe(miningTools.best(state), state,
+                            state.getDestroySpeed(body.level(), pos));
+                }
                 @Override public BlockState state(BlockPos pos) {
                     return inBounds(pos) && body.level().isLoaded(pos) ? body.level().getBlockState(pos) : null;
                 }

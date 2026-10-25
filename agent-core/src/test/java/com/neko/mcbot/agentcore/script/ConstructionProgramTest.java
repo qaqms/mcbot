@@ -11,6 +11,44 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void aPlantLostBeforeArrivalIsReobservedAndReplacedWithoutMiningAirOrStoppingOtherWork() throws Exception {
+        var world = new World(); world.clearing = true;
+        boolean[] vanished = {false};
+        world.override = (name,args) -> {
+            if (!name.equals("move_to") || vanished[0]) return null;
+            vanished[0] = true;
+            world.clearing = false;
+            return new ToolOutcome(false,"TARGET_BLOCKED:target became air",
+                    JsonParser.parseString("{\"target_already_clear\":true,\"removed\":false}").getAsJsonObject());
+        };
+        var result = run(world,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(0,world.breaks);
+        assertEquals(0,result.data().getAsJsonObject("returned").get("cleared_blocks").getAsInt());
+        assertEquals(2,world.placed);
+        assertEquals(2,world.calls.stream().filter(c->c.name().equals("move_to")).count());
+    }
+
+    @Test void constructionClearsTheWorkRayUnderTheSameRevisionAndCountsTheActualCoverRemoval() throws Exception {
+        var world = new World(); world.clearing = true;
+        world.override = (name,args) -> {
+            if (!name.equals("break_block")) return null;
+            assertEquals(REV,args.get("site_revision").getAsString());
+            assertEquals("minecraft:dirt",args.get("expected_block").getAsString());
+            assertTrue(args.get("clear_obstructions").getAsBoolean());
+            world.clearing = false; world.breaks++;
+            return actual("{\"removed\":true,\"cleared_blocks\":2}");
+        };
+        var result = run(world,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(3,result.data().getAsJsonObject("returned").get("cleared_blocks").getAsInt());
+        var workMove = world.calls.stream().filter(c -> c.name().equals("move_to")).findFirst().orElseThrow().args();
+        assertTrue(workMove.get("clear_obstructions").getAsBoolean(),
+                "a clearing goal must admit the same safe sight clearing as the subsequent action");
+        assertFalse(workMove.has("place_item"));
+    }
+
     @Test void failedLandingRetainsTheRealRemovalAndDoesNotContinueDismantling() throws Exception {
         var w = new World();
         boolean[] removed = {false};
@@ -511,7 +549,7 @@ class ConstructionProgramTest {
         assertTrue(result.feedback().contains("\"placed_blocks\":0"),result.feedback());
         assertEquals(0,w.placed);
     }
-    @Test void clearingUsesFreshSameCellObservationAndOriginalMiningEntryWithNoImplicitObstructionWork() throws Exception {
+    @Test void clearingUsesFreshSameCellObservationAndTheOriginalMiningEntryWithExplicitSightClearing() throws Exception {
         var w=new World(); w.clearing=true;
         assertTrue(run(w,CODE,128).ok()); assertEquals(1,w.breaks);
         int index=0;
@@ -520,7 +558,7 @@ class ConstructionProgramTest {
         var args=w.calls.get(index).args();
         assertEquals(REV,args.get("site_revision").getAsString());
         assertEquals("minecraft:dirt",args.get("expected_block").getAsString());
-        assertFalse(args.has("clear_obstructions"));
+        assertTrue(args.get("clear_obstructions").getAsBoolean());
     }
     @Test void nativeNavigationDropAccountingLabelDoesNotStopConstructionAfterArrival() throws Exception {
         for (String accounting : List.of("native_origin_events", "bounded_identity_observation")) {

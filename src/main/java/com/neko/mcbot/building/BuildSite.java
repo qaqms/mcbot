@@ -231,11 +231,12 @@ public final class BuildSite {
         }
         return false;
     }
-    /** Ordinary flowers may lack the replaceable flag but still have no structural collision. */
+    /** Ordinary flowers and segmented flower beds need not carry the replaceable flag. */
     public static boolean softClearance(BlockState state) {
         if (state == null || state.isAir() || state.hasBlockEntity()
                 || !(state.canBeReplaced() || state.getBlock() instanceof net.minecraft.world.level.block.FlowerBlock
-                || state.getBlock() instanceof net.minecraft.world.level.block.TallFlowerBlock)
+                || state.getBlock() instanceof net.minecraft.world.level.block.TallFlowerBlock
+                || state.getBlock() instanceof net.minecraft.world.level.block.FlowerBedBlock)
                 || state.getBlock().hasDynamicShape()) return false;
         var boxes = com.neko.mcbot.server.StandingGeometry.collision(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
         return boxes != null && boxes.isEmpty();

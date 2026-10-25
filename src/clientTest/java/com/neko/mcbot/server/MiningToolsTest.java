@@ -33,6 +33,20 @@ class MiningToolsTest {
     private static MiningTools choices(net.minecraft.world.entity.player.Inventory inventory) {
         return new MiningTools(inventory, stack -> 0, stack -> 1);
     }
+    @Test void constructionDirtUsesANewlyAvailableStoredShovelRatherThanTheOldBareHandChoice() {
+        var inventory = BlockActionFixtures.inventory();
+        inventory.setItem(0, new ItemStack(Items.COBBLESTONE,64));
+        var dirt = Blocks.DIRT.defaultBlockState();
+        assertTrue(choices(inventory).best(dirt).stack().isEmpty());
+        var shovel = tool(Items.STONE_SHOVEL, Blocks.DIRT, 4);
+        inventory.setItem(25, shovel);
+        var pick = choices(inventory).best(dirt);
+        assertEquals(25, pick.slot());
+        assertTrue(pick.seconds(.5f) < choices(BlockActionFixtures.inventory()).best(dirt).seconds(.5f));
+        assertTrue(MiningTools.take(inventory,pick).ok());
+        assertSame(shovel,inventory.getSelectedItem());
+        assertEquals(64, inventory.getItem(25).getCount(), "holding the shovel preserves the previous stack");
+    }
     @Test void fasterNearBrokenToolCannotSpendAnotherToolsDurabilityReserve() {
         var inventory = BlockActionFixtures.inventory();
         var fast = tool(Items.DIAMOND_PICKAXE, Blocks.DIAMOND_ORE, 8);

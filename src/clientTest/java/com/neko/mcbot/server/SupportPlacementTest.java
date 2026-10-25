@@ -16,6 +16,73 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SupportPlacementTest {
+    @Test void anAuthoredPillarAxisCanUseNearbyPlannedScaffoldingAndStillRequiresTheRightFace() {
+        var target = new BlockPos(1, 9, 0);
+        var terrain = new Terrain(target, 8) {
+            @Override public boolean inBounds(int x, int y, int z) {
+                return x == 0 && z == 0 && y >= -1 && y <= 12;
+            }
+            @Override public boolean canPlaceFrom(int x, int y, int z, long cell, TerrainEdits edits) {
+                var foot = geometry.foot(x,y,z,edits);
+                if (foot == null) return false;
+                double height = cell == DigAStar.pack(x,y,z) ? y+1.02 : foot.height();
+                return SupportPlacement.canPlan(world, world,
+                        new BlockPos(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell)),
+                        new Vec3(x+.5,height+1.62,z+.5), geometry.body(x,height,z), inventory.getItem(0),
+                        4.5, edits, p->true, f->true, b->true);
+            }
+        };
+        terrain.world.blocks.remove(target);
+        terrain.world.blocks.put(target.below(), Blocks.OAK_LOG.defaultBlockState());
+        terrain.world.blocks.put(new BlockPos(0,-1,0), Blocks.STONE.defaultBlockState());
+        var material = new ItemStack(Items.OAK_LOG);
+        var desired = Blocks.OAK_LOG.defaultBlockState();
+        java.util.function.Function<net.minecraft.world.phys.BlockHitResult,
+                net.minecraft.world.level.block.state.BlockState> prediction = hit -> desired.setValue(
+                net.minecraft.world.level.block.RotatedPillarBlock.AXIS, hit.getDirection().getAxis());
+        var goal = PlacementWork.goal(target, terrain.geometry, 1.62,.6,1.8,4.5, (eye,body,edits) ->
+                SupportPlacement.canPlanBlock(terrain.world,terrain.world,target,eye,body,material,4.5,
+                        edits,p->true,f->true,b->true,prediction,desired::equals)
+                        ? null : new ServerTool.Result(false,"TARGET_BLOCKED:state or contact",null));
+        var route = new DigAStar(new MemoDigSampler(terrain),0,0,0,1,9,0,4000,0,goal).segments();
+        while (!route.advance(100)) { }
+        assertNull(route.failure(), () -> route.failure()+" "+route.rejections());
+        assertTrue(route.placedCount() >= 7);
+        assertTrue(route.expanded() < 1000, "a feasible pillar must not flood the reach plateau");
+        var end = route.path().getLast();
+        var edits = TerrainEdits.EMPTY;
+        for (var step : route.path()) edits = edits.after(step.dig(),step.place());
+        var foot = terrain.geometry.foot(end.x(),end.y(),end.z(),edits);
+        var eye = new Vec3(end.x()+.5,foot.height()+1.62,end.z()+.5);
+        var body = terrain.geometry.body(end.x(),foot.height(),end.z());
+        assertFalse(SupportPlacement.canPlanBlock(terrain.world,terrain.world,target,eye,body,material,4.5,
+                edits,p->true,f->f==Direction.EAST,b->true,prediction,desired::equals));
+        assertFalse(SupportPlacement.canPlanBlock(terrain.world,terrain.world,target,eye,body,material,4.5,
+                edits,p->true,f->true,b->true,prediction,state->false), "the frozen drawing still decides");
+        assertTrue(terrain.world.getBlockState(target).isAir());
+        assertEquals(8,terrain.inventory.getItem(0).getCount());
+        assertEquals(1,material.getCount());
+        assertFalse(SupportPlacement.predictable((net.minecraft.world.item.BlockItem)Items.OAK_STAIRS));
+        assertFalse(SupportPlacement.predictable((net.minecraft.world.item.BlockItem)Items.CHEST));
+    }
+
+    @Test void aNativeAxisPredictionUsesTheNewSupportInsteadOfRejectingItsWholeNeighborhood() {
+        var world = new BlockAimTest.Grid(); world.blocks.clear();
+        var target = new BlockPos(2,1,0);
+        var material = new ItemStack(Items.OAK_LOG);
+        var edits = TerrainEdits.EMPTY.after(List.of(),List.of(DigAStar.pack(2,0,0)));
+        var desired = Blocks.OAK_LOG.defaultBlockState();
+        var eye = new Vec3(.5,2.62,.5);
+        var body = new AABB(.2,1,.2,.8,2.8,.8);
+        assertTrue(BlockPlacement.pendingNativeTerrain(target,edits));
+        assertTrue(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                edits,p->true,f->true,b->true,hit -> desired.setValue(
+                        net.minecraft.world.level.block.RotatedPillarBlock.AXIS,hit.getDirection().getAxis()),
+                desired::equals));
+        assertTrue(world.getBlockState(target.below()).isAir());
+        assertEquals(1,material.getCount());
+    }
+
     @Test void aHighPlacementGoalCanBuildItsOwnColumnUsingCumulativeNativeContacts() {
         var target = new BlockPos(1,9,0);
         var terrain = new Terrain(target,8) {

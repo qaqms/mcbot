@@ -420,6 +420,34 @@ class BuildSiteTest {
             assertFalse(BuildSite.softClearance(block.defaultBlockState()),block.toString());
         assertFalse(BuildSite.softClearance(null));
     }
+    @Test void flowerBedsAreSoftCoverAtEveryNativeAmountAndDoNotPinTheirFoundation() {
+        for (var block : List.of(Blocks.WILDFLOWERS, Blocks.PINK_PETALS)) {
+            for (var state : block.getStateDefinition().getPossibleStates()) {
+                assertTrue(BuildSite.softClearance(state), state.toString());
+                var world = new World();
+                var site = site(world);
+                world.states.put(TARGET, Blocks.DIRT.defaultBlockState());
+                world.states.put(TARGET.above(), state);
+                assertNull(site.miningGuard(TARGET, target().revision(), false, world), state.toString());
+                assertEquals(state, world.state(TARGET.above()), "a read-only guard does not destroy cover");
+            }
+        }
+    }
+    @Test void flowerBedsInsideTheBodyCanBeClearedWithoutClaimingTheirFloorOrAnotherStructure() {
+        var world = new World();
+        var site = new BuildSite(); site.bind("flowers", world);
+        var design = BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"air"}]}
+                """).getAsJsonObject());
+        world.states.put(FEET, Blocks.WILDFLOWERS.defaultBlockState());
+        assertNull(site.begin(design, ROUTE, FEET, world));
+        world.occupied.add(FEET); world.passage.add(FEET);
+        assertNull(site.miningGuard(FEET, design.revision(), false, world));
+        assertNotNull(site.miningGuard(FEET.below(), design.revision(), false, world));
+        world.states.put(FEET.above(), Blocks.TORCH.defaultBlockState());
+        assertNotNull(site.miningGuard(FEET, design.revision(), false, world),
+                "soft cover does not waive a real attachment dependency");
+    }
     @Test void clearingAnAirTargetCanRemoveGrassInsideTheBodyOrAnExplicitPassageWithoutMovingItsFloor() {
         var w=new World(); var site=new BuildSite(); site.bind("task",w);
         var design=BuildTarget.parse(JsonParser.parseString("""

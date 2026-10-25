@@ -18,6 +18,17 @@ import static com.neko.mcbot.server.BlockActionFixtures.bootstrap;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BlockToolOperationsTest {
+    @Test void siteClearingCanUseTheCommonSightClearingSequenceButCleanupKeepsItsNarrowContract() {
+        String revision = "a".repeat(64);
+        assertDoesNotThrow(() -> BreakBlockTool.validateSiteMining("minecraft:dirt",revision,false,true));
+        assertDoesNotThrow(() -> BreakBlockTool.validateSiteMining("minecraft:dirt",revision,true,false));
+        assertDoesNotThrow(() -> BreakBlockTool.validateSiteMining(null,null,false,true));
+        assertThrows(RuntimeException.class,() -> BreakBlockTool.validateSiteMining(null,revision,false,true));
+        assertThrows(RuntimeException.class,() -> BreakBlockTool.validateSiteMining("minecraft:dirt","other",false,true));
+        assertThrows(RuntimeException.class,() -> BreakBlockTool.validateSiteMining("minecraft:dirt",revision,true,true));
+        assertThrows(RuntimeException.class,() -> BreakBlockTool.validateSiteMining("minecraft:dirt",null,true,false));
+    }
+
     @BeforeAll static void registriesOnly() { bootstrap(); }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
     private static JsonObject placeArgs() {

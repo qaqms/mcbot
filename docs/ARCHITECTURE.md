@@ -3,6 +3,32 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 野花簇、工具准备与失效工作目标（2026-10-25）
+
+BuildSite.softClearance包含原版FlowerBedBlock，按真实空碰撞判野花簇和粉红花瓣；
+这类覆盖不把下方地基固定成承重格，也不因身体在其格内就禁止清理。设施、危险、
+真实贴附物和身体地板继续由原守卫检查。
+
+BuildSurvey.clearing_work按整图已知needs_clear状态汇总工具种类、格数、估时和准备建议；
+相同状态只调用MiningTools一次，未知或查询时间不足声明assessment_complete=false。
+工具变化不构成建筑进度；WorldGoal把上次缺工具观测带入原目标事实，模型用真实配方准备，
+清障和原子挖掘仍只从当前库存选工具，不引入自动配方链或空手禁令。
+
+mc.build采掘工作导航及随后break_block显式clear_obstructions；
+同修订目标及射线遮挡分别核原图、补料、占位、依赖、活来源与原许可，
+临时回收继续排除附带清障。实际额外清理计入cleared_blocks，不与目标移除混为一格。
+
+MiningWork.targetFailure由MoveToTool受理前及PathTask每刻复用：未加载为TARGET_LOST，
+已为空气为TARGET_BLOCKED并给target_already_clear=true、removed=false。
+原终态保留已有路线挖放与掉落账，施工核新鲜状态后继续原图其他工作，
+不对空气无限寻找采掘站位；放置工作及普通坐标导航保持原行为。
+PathTask进度含work_target/work_kind和search_expanded/search_batches，续批日志含实际目标状态，
+放置时另给当前预检原因。普通搜索仍按原批次延续，没有新增默认总节点或总时间门。
+
+SupportPlacement为精确原版普通整块、玻璃与RotatedPillarBlock提供累计地形的接触预测，
+原木调用原版getStateForPlacement并用预测轴向核冻结图纸与出口；复杂状态继续现场预检。
+只是寻找可行工作位，到位后材料、点击面、状态与原版放置仍须重新核验。
+
 ## 辅助施工登高与清理（2026-10-25）
 
 PathTransition把同列上升单独分为垫柱的两个地形时刻：起跳时原支撑仍在、新块尚未放，
