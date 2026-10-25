@@ -3,6 +3,41 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 目标登记STATE_UNAVAILABLE与反馈衔接（2026-10-25，Asia/Shanghai）
+
+- 维护者反馈目标登记缺完整现场即停。开工HEAD为b261218，工作树干净，仅改本体；
+  宿主/参考/连接器/玩家实例只读，不安装包或启动游戏/服务器/真实模型。
+  冻结build/goal-registration-session-20261025.log，39531 bytes、末写13:40:18，SHA256
+  `f99ced36af1b01b88633ffd511a04148791dc1236a95932863dc11cd089e83ae`。
+  实例磁盘JAR匹配上一轮b0e50bcf；磁盘哈希不独立证明进程加载来源。
+- 13:39:56普通build_diff查287格成功，0格满足、unsupported为0；
+  13:40:04首次set_goal中的build_diff失败后被覆盖成STATE_UNAVAILABLE，尚未开始施工。
+  原失败反馈46字符与TARGET_REVISION_CHANGED分支吻合；旧日志缺该参数和失败正文，
+  不能单凭长度证明具体目标如何变化，也没有换身体/容器的正证。
+  确认AgentLoop对话只存feedback，普通build_diff原反馈未含实际target_revision或设计诊断。
+- 只读学习参考BuildApi/BuildOps结构化查询、设计真源及GoalSteward有限任务结束契约，
+  不复制或翻译代码/技能/注释/资产。AgentRunner对直接build_diff投影实际修订、续页、
+  全局完成/稳定及设计/工具建议；不复制完整格表或任意data，Lua/内部观测数据不变。
+  目标观测保留原工具失败及同次身体事实，核心登记先核同身体/维度/存活。
+- 登记前明确TARGET_REVISION_CHANGED可交回模型纠正，不冻结错误草稿或自动重试。
+  待登记标记防纯文字完成和换物品条件绕过；正确登记后按原WorldGoal/GoalContinuation固定。
+  已登记后的修订变动、其他不可核实现场仍失败并保留原因；取消/身体失败/新任务隔离保持。
+  31工具、原Schema/权限/完整验收保持，无新增默认次数门、并行模型或另一建筑存储。
+- 五项新增回归在旧码分别失败；修复后专项15秒通过。最终
+  build/goal-registration-final1-20261025.log第65至66行：**1分31秒、20任务强制全执行**。
+  三根XML为核心456/46、根173/24、客户端1358/137，共**1987项/207 suites，
+  failures/errors/skipped全0**。实际loop/runner/对话历史与异步信封参与，
+  身体/世界/模型回执受控，真实模型是否正确登记和现场续建仍待新包复测。
+- JAR build/libs/mcbot-0.1.0.jar，1827714 bytes，SHA256
+  `1bc7dcc0827a44d63260a4db744febbfe14481c5397efd558f6758cfb21c1c3b`。
+  内嵌core与独立产物一致，272769 bytes，SHA256
+  `b678113312e61ab73c32cd19f767e3c441671ac62aecca9c9440f8ea2a50e8e4`。
+  导入包build/mcbot-import-20261025-goal-registration.zip，1772191 bytes，SHA256
+  `fa82f57518728a2f96ed421032a0830c2036cbefc9d69bf9de6b4c2d81bc7a53`。
+  仅含mods/mcbot-0.1.0.jar、START-HERE.txt、SHA256SUMS.txt，包内JAR已验同指纹。
+  构建后仅保留既有玩家PID140608，无Gradle残留；未修改活世界，源码提交/推送按Git最终状态。
+  完整机制、证据边界及重测要点见docs/GOAL-REGISTRATION-2026-10-25.md。
+
 ## 屋面往返、楼梯方向与施工下地（2026-10-25，Asia/Shanghai）
 
 - 维护者反馈反复寻路来回走、屋顶楼梯方向难看、房屋简单及屋顶下不来。开工main为57bf5f5，

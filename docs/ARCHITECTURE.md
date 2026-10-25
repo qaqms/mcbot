@@ -3,6 +3,16 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 目标登记与直接查询反馈（2026-10-25）
+
+详见GOAL-REGISTRATION-2026-10-25。AgentLoop对话工具消息保存feedback，不自动携带ToolOutcome.data。
+AgentRunner仅对直接build_diff成功回执投影实际修订、续页、全局完成/稳定字段及设计/工具建议，
+不把完整格明细、库存或任意data字段复制进历史；公共Lua和内部目标观测沿原数据。
+目标观测不再吞掉原build_diff/inspect_block失败原因。登记前只有新鲜、同身体且存活时的
+TARGET_REVISION_CHANGED交回模型纠正；unregisteredGoalReason防止未登记时纯文字完成或换物品条件。
+纠正成功才固定WorldGoal/GoalContinuation，后续修订冲突仍沿原完整验收失败。
+新任务、恢复和身体失败清理待登记状态；没有自动重发、另存建筑或放宽实际完成判据。
+
 ## 屋面工作、拆降与设计诊断（2026-10-25）
 
 详见ROOF-WORK-AND-DESIGN-2026-10-25。BuildSurvey.progress_observation_key包含全部目标实际

@@ -198,6 +198,7 @@ public final class AgentLoop {
     private com.google.gson.JsonObject latestObservation;
     private ItemGoal itemGoal;
     private WorldGoal worldGoal;
+    private String unregisteredGoalReason;
     private GoalContinuation goalContinuation;
     private String durableGoalId;
     private int rejectedFinishes;
@@ -333,6 +334,7 @@ public final class AgentLoop {
         latestObservation = null;
         itemGoal = item;
         worldGoal = null;
+        unregisteredGoalReason = null;
         goalContinuation = continuation;
         durableGoalId = goalId;
         searchPages.reset();
@@ -508,6 +510,7 @@ public final class AgentLoop {
         stopActive(TaskStatus.FAILED, reason, false);
         itemGoal = null;
         worldGoal = null;
+        unregisteredGoalReason = null;
         goalContinuation = null;
         running = false;
     }
@@ -656,6 +659,7 @@ public final class AgentLoop {
         latestObservation = null;
         itemGoal = null;
         worldGoal = null;
+        unregisteredGoalReason = null;
         goalContinuation = null;
         durableGoalId = null;
         rejectedFinishes = 0;
@@ -829,6 +833,11 @@ public final class AgentLoop {
         convo.add(new Msg.Assistant(turn.text(), turn.toolCalls()));
         if (!turn.hasToolCalls()) {
             if (stuckAbort) { step(); return; }
+            if (unregisteredGoalReason != null) {
+                finishCurrent(TaskStatus.FAILED, "GOAL_NOT_REGISTERED:建筑目标尚未通过登记核验，未判完成。\n"
+                        + unregisteredGoalReason);
+                return;
+            }
             if (!hasGoal()) finishCurrent(TaskStatus.COMPLETED, turn.text());
             else verifyFinish(stepGeneration, reactor, turn.text());
             return;
@@ -1084,16 +1093,33 @@ public final class AgentLoop {
             return observation.handle((state, failure) -> {
                 synchronized (AgentLoop.this) {
                     if (!isCurrent(expectedGeneration)) return ToolOutcome.synthetic("CANCELLED:目标登记所属任务已停止。");
+                    String detail = failure == null && state != null && !state.ok()
+                            ? state.feedback() : "GOAL_EVIDENCE_INCOMPLETE:完整目标事实不可用。";
                     try {
-                        if (failure != null || state == null || !state.ok() || state.accepted())
+                        if (failure != null || state == null || state.accepted())
                             throw new IllegalArgumentException();
                         var data = state.data();
                         if (initial == null || !WorldGoal.text(initial, "body_id").equals(WorldGoal.text(data, "body_id"))
-                                || !WorldGoal.text(initial, "dimension").equals(WorldGoal.text(data, "dimension")))
+                                || !WorldGoal.text(initial, "dimension").equals(WorldGoal.text(data, "dimension"))) {
+                            detail = "BODY_IDENTITY_CHANGED:任务开始与本次观测的身体或维度不一致。";
                             throw new IllegalArgumentException();
+                        }
+                        if (!WorldGoal.flag(data, "alive"))
+                            throw new IllegalArgumentException();
+                        if (!state.ok()) {
+                            if ("building".equals(type) && state.feedback().startsWith("TARGET_REVISION_CHANGED:")) {
+                                // A rejected draft is still editable, but cannot fall back to plain-text completion.
+                                unregisteredGoalReason = state.feedback();
+                                return new ToolOutcome(false, state.feedback()
+                                        + "\n尚未登记建筑目标。用build_diff重新核对最终target，读取实际target_revision；"
+                                        + "set_goal须原样使用同一target及该expected_revision，不猜哈希或重新拼图。", data);
+                            }
+                            throw new IllegalArgumentException();
+                        }
                         var candidate = new WorldGoal(spec, data);
                         var continuation = longTerm ? new GoalContinuation(maxRuns, initial, candidate.fingerprint()) : null;
                         worldGoal = candidate;
+                        unregisteredGoalReason = null;
                         goalContinuation = continuation;
                         latestObservation = data;
                         if (!persistGoal(false)) return new ToolOutcome(false, blockReason);
@@ -1101,7 +1127,9 @@ public final class AgentLoop {
                                 + (continuation == null ? "" : "\n" + continuation.facts()));
                     } catch (RuntimeException unavailable) {
                         stuckAbort = true;
-                        blockReason = "STATE_UNAVAILABLE:登记前未取得同身体、同修订或同容器的完整现场事实；未判目标完成。";
+                        blockReason = "STATE_UNAVAILABLE:登记前未取得同身体、同修订或同容器的完整现场事实；未判目标完成。"
+                                + "\n现场核验原因：" + (detail == null ? "OBSERVATION_FAILED"
+                                : detail.substring(0, Math.min(512, detail.length())));
                         return new ToolOutcome(false, blockReason);
                     }
                 }
@@ -1114,6 +1142,8 @@ public final class AgentLoop {
 
     private ToolOutcome setItemGoal(String json) {
         try {
+            if (unregisteredGoalReason != null)
+                return new ToolOutcome(false, "DENIED:建筑目标登记尚未核实；先纠正原target与修订，不能用物品子任务代替最终条件。");
             if (worldGoal != null) return new ToolOutcome(false, "DENIED:已固定世界目标；材料采集须用scope=subtask。");
             var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
             if (!Set.of("item", "count", "mode", "lifecycle", "max_runs").containsAll(args.keySet()))

@@ -107,6 +107,40 @@ class AgentLoopWorldGoalTest {
         assertEquals(1,f.responses.size());
         assertTrue(f.endings.getLast().startsWith("STATE_UNAVAILABLE:"));
     }
+    @Test void rejectedRevisionCannotFallBackToUnverifiedCompletionOrAnItemGoal() {
+        var f=new Fixture();
+        f.pending=CompletableFuture.completedFuture(new ToolOutcome(false,
+                "TARGET_REVISION_CHANGED:recheck the drawing",WorldGoalTest.body()));
+        f.goal(false);
+        assertTrue(f.finishes.isEmpty());
+        assertFalse(f.receipt().ok());
+        assertTrue(f.receipt().content().startsWith("TARGET_REVISION_CHANGED:"));
+        assertNull(f.loop.registeredGoal());
+        f.tool("set_goal",WorldGoalTest.json("{\"item\":\"dirt\",\"count\":1}"));
+        assertFalse(f.receipt().ok(),"an item subtask cannot replace the rejected building condition");
+        assertNull(f.loop.registeredGoal());
+        f.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED),f.finishes);
+        assertTrue(f.endings.getLast().startsWith("GOAL_NOT_REGISTERED:"),f.endings.toString());
+    }
+    @Test void revisionRetryStillRejectsChangedBodiesAndDoesNotLeakIntoTheNextTask() {
+        var f=new Fixture();
+        var other=WorldGoalTest.body(); other.addProperty("body_id","other-body");
+        f.pending=CompletableFuture.completedFuture(new ToolOutcome(false,
+                "TARGET_REVISION_CHANGED:recheck the drawing",other));
+        f.goal(false);
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED),f.finishes);
+        assertTrue(f.endings.getLast().contains("BODY_IDENTITY_CHANGED"),f.endings.toString());
+        f.loop.close();
+        var next=new Fixture();
+        next.pending=CompletableFuture.completedFuture(new ToolOutcome(false,
+                "TARGET_REVISION_CHANGED:recheck the drawing",WorldGoalTest.body()));
+        next.goal(false);
+        next.loop.cancelTask(81);
+        next.loop.submit(82,"ordinary answer");
+        next.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.CANCELLED,AgentLoop.TaskStatus.COMPLETED),next.finishes);
+    }
     @Test void stageBudgetCannotBeChangedAndCompletionStillPrecedesTheLastStageLimit() {
         var f=new Fixture();
         var request=WorldGoalTest.building(); request.addProperty("lifecycle","long_term"); request.addProperty("max_runs",1);

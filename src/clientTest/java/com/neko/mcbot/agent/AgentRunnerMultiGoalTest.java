@@ -117,6 +117,65 @@ class AgentRunnerMultiGoalTest {
         assertEquals("completed",runner.panelHistory().tasks().getFirst().status());
         assertEquals(1,client.sent.stream().filter(e->e.kind().equals("task_end")).count());
     }
+    @Test void directSurveyShowsTheActualRevisionAndDesignFactsInTheNextModelRequest() {
+        begin();
+        client.engine().tools(0,new ToolCall("survey","build_diff","{\"target\":"+TARGET+"}"));
+        client.drain();
+        assertEquals("build_diff",client.lastTool().str("tool"));
+        var evidence=buildEvidence(0);
+        evidence.addProperty("next_offset",16);
+        evidence.addProperty("material_next_offset",-1);
+        evidence.add("design_components",json("{\"doors\":0,\"beds\":0}"));
+        evidence.add("design_review",json("{\"stairs_missing_orientation\":2,\"stairs_rising_behind_back\":4}"));
+        evidence.add("cells",json("{\"private_fixture_field\":\"not-for-direct-feedback\"}"));
+        reply(true,"只读核对，尚未施工。",evidence);
+        status();
+        var receipt=client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .filter(t->t.callId().equals("survey")).findFirst().orElseThrow();
+        assertTrue(receipt.ok());
+        assertTrue(receipt.content().contains("\"target_revision\":\""+REVISION+"\""),receipt.content());
+        assertTrue(receipt.content().contains("\"next_offset\":16"),receipt.content());
+        assertTrue(receipt.content().contains("\"stairs_rising_behind_back\":4"),receipt.content());
+        assertTrue(receipt.content().contains("\"doors\":0"),receipt.content());
+        assertFalse(receipt.content().contains("private_fixture_field"));
+        assertNotEquals(0,runner.currentTaskId());
+    }
+    @Test void registrationRevisionConflictKeepsItsCauseAndCanBeCorrectedBeforeFreezingTheGoal() {
+        begin();
+        var wrong=json(buildingGoal()); wrong.addProperty("expected_revision","b".repeat(64));
+        client.engine().tools(0,new ToolCall("wrong-goal","set_goal",wrong.toString()));
+        client.drain(); status();
+        assertEquals("build_diff",client.lastTool().str("tool"));
+        reply(false,"TARGET_REVISION_CHANGED:输入目标已变化。",new JsonObject());
+        assertNotEquals(0,runner.currentTaskId(),"a rejected drawing has not fixed a final goal yet");
+        status();
+        var receipt=client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .filter(t->t.callId().equals("wrong-goal")).findFirst().orElseThrow();
+        assertFalse(receipt.ok());
+        assertTrue(receipt.content().startsWith("TARGET_REVISION_CHANGED:"),receipt.content());
+        assertTrue(receipt.content().contains("build_diff"),receipt.content());
+        client.engine().tools(1,new ToolCall("corrected-goal","set_goal",buildingGoal()));
+        client.drain(); status(); reply(buildEvidence(0)); status();
+        assertEquals(3,client.engine().responses.size());
+        assertEquals(1,client.sent.stream().filter(e->e.kind().equals("task_begin")).count());
+        assertEquals(0,client.sent.stream().filter(e->e.kind().equals("task_end")).count());
+        finishCheck(buildEvidence(20),"build_diff");
+        assertEquals(0,runner.currentTaskId());
+        assertEquals("completed",runner.panelHistory().tasks().getFirst().status());
+    }
+    @Test void failedTargetReadPreservesTheServerCauseInTheFinalDiagnostic() {
+        begin();
+        client.engine().tools(0,new ToolCall("goal","set_goal",buildingGoal()));
+        client.drain(); status();
+        reply(false,"TARGET_LOST:unloaded",new JsonObject());
+        assertEquals(0,runner.currentTaskId());
+        assertTrue(client.chat.stream().anyMatch(t->t.contains("TARGET_LOST:unloaded")),client.chat.toString());
+        assertEquals("failed",runner.panelHistory().tasks().getFirst().status());
+    }
     @Test void programGetsRegisteredTargetFromTheLoopAndNeedsNoModelReconstructionOrRecordLookup() {
         register(buildingGoal(),buildEvidence(0),"build_diff");
         var args=new JsonObject();

@@ -131,6 +131,8 @@ public final class ClientToolDefs {
                     + "find_resource续页看next_offset及scan_center；search_resource给scan_complete/coverage_complete/"
                     + "search_pages。局部空结果不等于没有资源；目标发现不等于可采或入包。";
             case "set_goal" -> "type省略/item保持背包物品目标；building固定target与expected_revision，"
+                    + "登记前TARGET_REVISION_CHANGED可先build_diff核对最终target后纠正重试，尚未登记不表示完成；"
+                    + "登记成功后仍不可替换修订。"
                     + "operation=query单独传入，只读返回registered及原goal（含完整target/expected_revision），不更换条件。"
                     + "Lua的mc.goal()不经远端；已登记建筑直接mc.build()/mc.build_diff()，不重写原图或伪造实例引用。"
                     + "delivery固定container/item/count/mode。世界目标登记须先完整现场读取，失败不登记。"
@@ -150,6 +152,7 @@ public final class ClientToolDefs {
                     + "native_validation_pending表示原版尚待执行，changed=false/consumed_count=0不是已放置。"
                     + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
             case "build_diff" -> "data.target_revision由完整目标内容生成；counts对全部目标分类，remaining不含已满足格。"
+                    + "直接调用回执附实际target_revision、续页和设计核对字段；set_goal原样使用该target与修订，不猜哈希。"
                     + "goal_satisfied仅完整稳定现场且全部支持/满足才true，不直接登记或完成外层任务。"
                     + "verify_only=true仅重查全目标，略过当前页工作预检；goal_observation_key只含目标真实状态，用于阶段核对。"
                     + "cells是当前16格明细，next_offset=-1为末页；materials独立material_next_offset续页。"

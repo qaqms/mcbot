@@ -1270,7 +1270,9 @@ public final class AgentRunner implements ToolExecutor {
                                     data.addProperty("goal_evidence_reason", "OUT_OF_REACH");
                                     return new ToolOutcome(true, "目标现场超距；未判完成，原条件与预算保持。", data);
                                 }
-                                return new ToolOutcome(false, "STATE_UNAVAILABLE:目标现场读取失败；未判完成。");
+                                return new ToolOutcome(false, result.accepted()
+                                        ? "STATE_UNAVAILABLE:目标现场读取没有有效终态；未判完成。"
+                                        : result.feedback(), data);
                             }
                             var evidence = result.data();
                             if (!building) {
@@ -1334,7 +1336,18 @@ public final class AgentRunner implements ToolExecutor {
         if ("search_resource".equals(name)) return executeSearch(argsJson, false);
         if ("explore".equals(name)) return executeExplore(argsJson, false);
         if ("run_program".equals(name)) return executeProgram(argsJson);
-        return executeRemote(name, argsJson, currentTask, loop);
+        return executeRemote(name, argsJson, currentTask, loop).thenApply(result -> {
+            if (!"build_diff".equals(name) || !result.ok() || result.accepted()) return result;
+            // Direct tool history contains feedback only; Lua already receives the full structured data.
+            var data = result.data();
+            var fields = new JsonObject();
+            for (String key : List.of("target_revision", "total", "remaining", "observation_complete",
+                    "spatial_stable", "budget_exhausted", "goal_satisfied", "next_offset", "material_next_offset",
+                    "work_next_cursor", "design_components", "design_review", "clearing_work"))
+                if (data.has(key)) fields.add(key, data.get(key));
+            return new ToolOutcome(true, result.feedback()
+                    + "\n建筑核对字段（登记时保持同一target，expected_revision取实际target_revision）：\n" + fields, data);
+        });
     }
 
     @Override

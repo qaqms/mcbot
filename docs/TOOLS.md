@@ -3,6 +3,15 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 目标登记反馈更新（2026-10-25）
+
+直接build_diff成功反馈附实际target_revision、next_offset/material_next_offset、完整/稳定标记、
+design_components/design_review与clearing_work；有限明细仍用原Lua数据读取。
+set_goal登记建筑须原样使用该最终target和实际修订；登记前同身体的TARGET_REVISION_CHANGED
+不会直接结束任务，可只读复核后纠正重试。此时registered仍为false，不能声称完成或改物品条件替代。
+成功登记后原冻结条件及完整目标验收保持，其他不可核实现场仍失败，并保留现场工具的具体原因。
+详见GOAL-REGISTRATION-2026-10-25，原Schema、31工具、任务身份与实际动作许可保持。
+
 ## 屋面工作与设计更新（2026-10-25）
 
 build_diff增加progress_observation_key，跟踪整图实际状态和目标料量；身体移动、手持变化或
