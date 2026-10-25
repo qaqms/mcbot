@@ -48,12 +48,21 @@ public final class ClientToolDefs {
             "required":["anchor","regions"],"additionalProperties":false},
             {"type":"object","properties":{"instance_id":{"type":"string","minLength":36,"maxLength":36},
             "instance_revision":{"type":"integer","minimum":1,"maximum":1024}},
-            "required":["instance_id","instance_revision"],"additionalProperties":false}]}
+            "required":["instance_id","instance_revision"],"additionalProperties":false},
+            {"type":"object","properties":{"draft_revision":{"type":"string","pattern":"^[0-9a-f]{64}$"}},
+            "required":["draft_revision"],"additionalProperties":false}]}
             """.formatted(BUILD_ANCHOR, BUILD_CELL, BUILD_ANCHOR, BUILD_FILL, BUILD_ANCHOR, BUILD_FILL);
 
     /** Result fields alongside the input registry; optional mode-specific fields must be checked before use. */
     static String resultGuide(String name) {
         return switch (name) {
+            case "report_milestone" -> "condition支持item、position、building，先按新鲜身体及完整事实核实，"
+                    + "未满足返回MILESTONE_UNVERIFIED，不汇报。item.count/mode与最终物品条件同义；"
+                    + "position须dimension/x/y/z，radius默认2最多4格且须接地，只证明到达坐标。"
+                    + "building复用target/expected_revision，可单独核实地基、墙或屋顶格集，须全部已知且满足。"
+                    + "成功返回milestone{id,kind,verified,facts,evidence}；同条件already_reported=true时不重复播报，"
+                    + "也不代表重新核实了当前状态。goal_satisfied=false，原最终目标及执行继续。"
+                    + "可在run_program内mc.call('report_milestone',{condition=...})，不需退出脚本或重开任务。";
             case "consume" -> "ACCEPTED只受理，等一次原生用物真正终态；consumed_count为实际库存观测差额，"
                     + "须ok且observation_known=true并为1才确认一次消费。food/hp及food_before/hp_before为实际读数，"
                     + "不作独占归因。source_after保留原版返还物；hand_restored=false须重查主手。"
@@ -62,6 +71,8 @@ public final class ClientToolDefs {
                     + "不替换已有装备。changed/equipped及source_after/worn为实际结果，consumed_count=0；"
                     + "不支持副手或自动升级。";
             case "follow" -> "ACCEPTED只受理，到位休眠仍未终态，等原期限结束或失败；goal_satisfied=false。"
+                    + "protect_owner=true时同一行为持续护卫主人，follow.protection含实际engagements/strikes/last_combat，protecting为正在战斗；"
+                    + "local_clear只说明本次有限观察，不保证持续安全或独占击杀。"
                     + "data.behavior_ended及follow.phase/target_uuid/owner_target为行为事实；in_band仅in_band_known=true时可用，"
                     + "target_present为原目标当前在场，position为实际身体位置。"
                     + "elapsed_ticks含休眠与避险，duration_ticks固定，wake_count/owner_absent_ticks是实际计数。"
@@ -71,11 +82,15 @@ public final class ClientToolDefs {
                     + "invalid_cells/invalid_palette_entries/unsupported_cells/payload_cells/entity_count，importable=false不能导入。"
                     + "materials仅设计全量需求，完整现场材料走实例build_diff。import须同source_revision，返回design_id/design_revision；"
                     + "不产生实例或世界动作，goal_satisfied=false；不支持部分不得忽略。";
-            case "build_record" -> "data.design_id/design_revision及content_revision是设计修订；设计修改不更新实例。"
+            case "build_record" -> "draft_list列本任务核对过的完整草稿引用；draft_query(target,offset?)按16格查原图，"
+                    + "design_capture(design_id,target)将同一草稿存成持久设计；草稿不会出现在design_list/instance_list。"
+                    + "data.design_id/design_revision及content_revision是设计修订；设计修改不更新实例。"
                     + "instance_id/instance_revision及target为原build_diff/build_site/build_nearby通用引用；"
                     + "records按16条分页，status为intact/absent/conflict/unknown，action_count为真实动作数。"
                     + "同块替换/重载后来源不可证为conflict，不授权拆除；automatic_resume=false。";
             case "build_site" -> "data.active/task_scoped/target_revision为当前任务工地；scope_limited=false时没有bounds，未限制总半径；"
+                    + "target为可复用引用，target_edits为目标格实际改动数，draft_revision_allowed仅服务端未施工草稿条件，仍须未登记最终目标。"
+                    + "revise须target及expected_revision=旧工地修订；只纠正同落点/旋转/格集的材料或属性，保留临时工程和累计账。"
                     + "access_route_explicit表示是否显式声明通道，passage_observation_complete仅为历史通行记录完整性；"
                     + "checkpoints/edit_attempts及navigation_*累计不重开，temporary含实际来源与cleanup_allowed；"
                     + "body_obstructs_target/body_on_temporary为实际身体状态，relocation是只读局部换位或安全下落建议，"
@@ -152,6 +167,8 @@ public final class ClientToolDefs {
                     + "native_validation_pending表示原版尚待执行，changed=false/consumed_count=0不是已放置。"
                     + "执行后看changed/consumed_count/placed/x/y/z及placement_contact?，失败可能已有实际效果。";
             case "build_diff" -> "data.target_revision由完整目标内容生成；counts对全部目标分类，remaining不含已满足格。"
+                    + "draft_retained=true时data.target为已核对原图的短引用，set_goal/工地/施工直接复用；"
+                    + "worksite_revision是当前工地修订，若与候选不同须在正式登记前显式revise，不能直接施工旧图。"
                     + "直接调用回执附实际target_revision、续页和设计核对字段；set_goal原样使用该target与修订，不猜哈希。"
                     + "goal_satisfied仅完整稳定现场且全部支持/满足才true，不直接登记或完成外层任务。"
                     + "verify_only=true仅重查全目标，略过当前页工作预检；goal_observation_key只含目标真实状态，用于阶段核对。"
@@ -194,6 +211,8 @@ public final class ClientToolDefs {
                     + "drop_spawns是源格生成样本，须drop_spawns_complete=true才可据未出现判断。"
                     + "clearing_results/clearing_drop_summary与目标分开。拾取累计不替代新鲜背包或最终目标。";
             case "move_to" -> "真正终态data.x/y/z为实际脚格，feet_y为碰撞脚高，arrival为position/work/pickup，"
+                    + "NAVIGATION_STALLED表示约30秒有效搜索无实际进展，navigation_stalled/model_reassessment_required=true，"
+                    + "search_idle_ms/search_idle_limit_ms给出等待时间；当前路线已停止，先核对现场再选新方案，不原样重试。"
                     + "采掘工作目标在受理或途中已为空时，TARGET_BLOCKED且target_already_clear=true；"
                     + "重新核对目标再续其他工作，不把目标消失算作本身体移除。放置工作目标不套用此判断。"
                     + "tool_changes为最多16次实际开路换手，tool_changes_truncated为是否截短；已有工具可自动切换，制作仍由模型安排。"
@@ -349,6 +368,27 @@ public final class ClientToolDefs {
                             + "\"lifecycle\":{\"type\":\"string\",\"enum\":[\"task\",\"long_term\"]},"
                             + "\"max_runs\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2147483647}},"
                             + "\"additionalProperties\":false}"),
+            new ToolSpec("report_milestone", "完成有意义的关键节点后主动汇报一次；只读核实新鲜事实，再通知主人，原任务继续。"
+                    + "condition.type=item核背包数量，position核已到达真实坐标，building核完整阶段格集。"
+                    + "不要每次查询、木板/木棍或单格动作都汇报；工具能力提升、关键资源到手、阶段施工完成才选择。"
+                    + "不接受未经验证的自由文字完成声明；不更换最终目标，脚本内也可调用，同条件去重。",
+                    "{\"type\":\"object\",\"properties\":{\"condition\":{\"oneOf\":["
+                            + "{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"item\"]},"
+                            + "\"item\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":128},"
+                            + "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4096},"
+                            + "\"mode\":{\"type\":\"string\",\"enum\":[\"additional\",\"total\"]}},"
+                            + "\"required\":[\"type\",\"item\",\"count\"],\"additionalProperties\":false},"
+                            + "{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"position\"]},"
+                            + "\"dimension\":{\"type\":\"string\",\"minLength\":3,\"maxLength\":128},"
+                            + "\"x\":{\"type\":\"integer\",\"minimum\":-29999984,\"maximum\":29999984},"
+                            + "\"y\":{\"type\":\"integer\",\"minimum\":-2048,\"maximum\":2047},"
+                            + "\"z\":{\"type\":\"integer\",\"minimum\":-29999984,\"maximum\":29999984},"
+                            + "\"radius\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":4}},"
+                            + "\"required\":[\"type\",\"dimension\",\"x\",\"y\",\"z\"],\"additionalProperties\":false},"
+                            + "{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"enum\":[\"building\"]},\"target\":" + BUILD_TARGET
+                            + ",\"expected_revision\":{\"type\":\"string\",\"pattern\":\"^[0-9a-f]{64}$\"}},"
+                            + "\"required\":[\"type\",\"target\",\"expected_revision\"],\"additionalProperties\":false}]}},"
+                            + "\"required\":[\"condition\"],\"additionalProperties\":false}"),
             new ToolSpec("report_blocked", "确实无法继续时停止当前任务并报告实际障碍，保留已完成动作与物品。"
                     + "缺工具/耐久/材料先核对真实配方、备用工具、补给及原路返回等替代途径，自主补缺后继续原目标；一次局部NO_PATH不证明整体受阻。"
                     + "不用于临时思考或让主人逐步操作；取消后不会续跑。目标未满足按失败/受阻结束，不能写成完成",
@@ -377,7 +417,7 @@ public final class ClientToolDefs {
                     + "只支持size、palette、blocks与空entities的结构；调色板Name/Properties逐项进B1注册表/作者状态，不忽略属性。"
                     + "显式air是清空要求，缺省格不碰；非法/不支持格、方块实体载荷或任何实体使整份不可导入，不导入部分图假完成。"
                     + "不接容器内容、战利品、命令、点击文本、可执行载荷或物品组件。原版双格门须完整两半，"
-                    + "两半明确half/facing/hinge且其他属性要求一致；床须完整part/facing两格，其他家具/装饰范围同build_diff。"
+                    + "两半明确half/facing，hinge可省略由原版选择，明确属性不得冲突；床须完整part/facing两格，其他家具/装饰范围同build_diff。"
                     + "两格对象均保留验收，仅主格动作/一件料。此文件格式仍有独立128显式格与字节限制，不等于内联regions容量。"
                     + "压缩64KiB/解压128KiB/NBT计费256KiB/深16/解析200ms协作帽，目录至多128项、调色板64项，"
                     + "各轴1-33/体积4096/显式格1-128；保留原施工/模型/探索/范围/许可与取消预算。",
@@ -390,6 +430,9 @@ public final class ClientToolDefs {
                     "required":["operation"],"additionalProperties":false}
                     """),
             new ToolSpec("build_record", "保存可复用设计与世界内建筑实例，只有数据、不含脚本；不执行世界动作或自动恢复目标。"
+                    + "draft_list列当前任务所有成功核对的草稿，draft_query(target,offset?)查同图16格页；"
+                    + "target={draft_revision}由build_diff实际返回，独立于摘要，任务/世界改变后失效；不作为instance_id。"
+                    + "design_capture(design_id,target)把该草稿原样存成持久设计，再instance_create并登记实例目标。"
                     + "design_create(design_id,definition)创建；definition为cells/fill/regions之一，相对±32、最多16384格。"
                     + "regions为最多128个fill区域，后写覆盖前写同格；用区域表达墙面、开口、屋面和室内，避免展开列表超出传输载荷。"
                     + "design_patch(design_id,design_revision,edits)逐步修改最多16格，remove=true删除，其他项为完整cell；同坐标不能重复。"
@@ -403,8 +446,10 @@ public final class ClientToolDefs {
                     + "每世界最多32设计/32实例、32MiB实际记录；每实例最多16384来源格，逐格事件容量为max(256,目标格数×4)。双格对象一次动作预留两条记录，"
                     + "主格记消费、次格记0，不重复计价；无淘汰换额，读写失败停修改。",
                     """
-                    {"type":"object","properties":{"operation":{"type":"string","enum":["design_create","design_patch","design_query","design_list",
+                    {"type":"object","properties":{"operation":{"type":"string","enum":["draft_list","draft_query","design_capture","design_create","design_patch","design_query","design_list",
                     "instance_create","instance_query","instance_revise","instance_list"]},
+                    "target":{"type":"object","properties":{"draft_revision":{"type":"string","pattern":"^[0-9a-f]{64}$"}},
+                    "required":["draft_revision"],"additionalProperties":false},
                     "design_id":{"type":"string","minLength":1,"maxLength":48,"pattern":"^[a-z0-9][a-z0-9_-]{0,47}$"},
                     "design_revision":{"type":"integer","minimum":1,"maximum":1024},
                     "definition":{"oneOf":[{"type":"object","properties":{"cells":{"type":"array","minItems":1,"maxItems":16384,"items":%s}},
@@ -423,6 +468,8 @@ public final class ClientToolDefs {
                     "required":["operation"],"additionalProperties":false}
                     """.formatted(BUILD_CELL,BUILD_FILL,BUILD_FILL,BUILD_CELL,BUILD_ANCHOR)),
             new ToolSpec("build_diff", "只读核对有限建筑目标及材料；不施工、不挖掘、不移动或自动找料。"
+                    + "成功核对的内联目标在本任务保留完整草稿，data.target给短引用供set_goal/施工，"
+                    + "丢失上下文用build_record draft_list/draft_query，不从哈希猜图；不自动选新图替换旧工地。"
                     + "target.anchor为世界锚点，cells的x/y/z为相对坐标；或用fill闭区间、regions区域列表，三者仅选其一。"
                     + "最多16384唯一格、相对各轴±32；cells不许重复，regions后写覆盖前写，最多128区域及65536次展开写入。"
                     + "大设计用紧凑regions或实例引用；传输大小仍受原保护。未指定格不动，air为明确清空要求。"
@@ -435,7 +482,7 @@ public final class ClientToolDefs {
                     + "offset和material_offset独立16格/16种分页；counts及全目标剩余需求每次重新核对，不累加各页观察数。"
                     + "当前页最多96次原版放置预检，共用50ms协作时间帽；未查明/不支持/未知保留缺口，不能误报完成。"
                     + "支持普通单格、玻璃、楼梯/半砖、工作台、空单箱/木桶、灯笼/火把、活板门、栅栏/墙及地毯；属性须原版可放出。"
-                    + "双格门明确half/facing/hinge；床明确part/facing且含完整foot/head，其他属性要求一致；"
+                    + "双格门明确half/facing，hinge可省略由原版选择；床明确part/facing且含完整foot/head，明确属性不得冲突；"
                     + "只从门下半或床foot动作/一件料，次格paired_pending仍验收。不能覆盖另一半或合并邻箱，不搬家具内容。"
                     + "其他多格、流体、双层半砖多次动作及复杂组件仍不支持，绝不直接写状态。"
                     + "需求/可用/本页分配/实际消费分开，已满足格不再要料，只有36槽无额外组件材料可分配。"
@@ -450,6 +497,9 @@ public final class ClientToolDefs {
                     """.formatted(BUILD_TARGET)),
             new ToolSpec("build_site", "登记任务内完整施工目标，供原挖放和导航共用保护。"
                     + "operation=query只读；begin提供target即可，expected_revision可选且须匹配；无需手写进出通道。"
+                    + "revise提供target及expected_revision=旧工地修订，只允许尚未登记最终目标且目标格从未改动的内联工地，"
+                    + "修正同落点、旋转、格集的材料/属性；临时工程、通道、范围、来源、修改/寻路账全部保留。"
+                    + "实例工地、已施工格或正式目标不允许此纠正；不清空工地或重开任务。"
                     + "可选access_route为2-64格无重复相邻脚格，允许可通行坡地/半砖/草花，含当前脚格；"
                     + "按真实碰撞/支撑逐段核对，非空气目标不得封住显式通道，至少一端伸出全目标水平包围范围。"
                     + "bounds省略不设工地总半径，显式范围保留且任务内冻结。实际路线缺口仍不可冒充退路证明。"
@@ -457,7 +507,8 @@ public final class ClientToolDefs {
                     + "checkpoint带expected_revision复核整目标真实状态与站位；重复只作诊断，不停止后续派发，失败不重开许可。"
                     + "run_program内mc.build(target)或mc.build(target,{access_route?,bounds?,max_rounds?,max_actions?,temporary?})"
                     + "组合差异/工作导航/清障/近身施工，先准备低层障碍，局部站位失败后按新鲜差异尝试其他工作格；导航按原权限自动挖放，max_rounds默认0不限，可显式指定正数；temporary为最多16个明确{x,y,z,item,face?,purpose}工程，"
-                    + "purpose为support/workstation。mc.cleanup_temporary(revision)另行有界回收，依赖未解除保留。"
+                    + "purpose为support/workstation。mc.cleanup_temporary(revision)按活动工地修订回收，"
+                    + "修订不符返回blocked=worksite_revision_mismatch，不换图或拆除；依赖未解除保留，temporary.cleanup_reason给出原因。"
                     + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,consumed_count,remaining,blocked,counts,unresolved}，"
                     + "不包在data里，并自动输出施工结果；脚本执行成功不代表建筑完成。默认批次12动作，不主动加短max_rounds拆断连续施工。"
                     + "身体挡格时先按只读relocation换位，出口受阻时可按原动作临时开路、搭支撑或确认安全落点后逐格下落。"
@@ -465,7 +516,7 @@ public final class ClientToolDefs {
                     + "不自动找料合成；需要升高才能够到目标时，导航可按真实库存、头顶净空和点击面连续起跳垫柱，不必逐格手写脚手架。额外工位用temporary指定。"
                     + "完成后从高到低重查并回收本任务临时工程，站在临时柱上可安全逐格拆降并等待落稳；temporary_retained仍有缺口，不跨任务认领；外层完整目标另验。",
                     """
-                    {"type":"object","properties":{"operation":{"type":"string","enum":["query","begin","checkpoint"]},
+                    {"type":"object","properties":{"operation":{"type":"string","enum":["query","begin","revise","checkpoint"]},
                     "target":%s,"access_route":{"type":"array","minItems":2,"maxItems":64,"items":%s},
                     "bounds":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},
                     "radius":{"type":"integer","minimum":1,"maximum":2147483647}},"required":["x","y","z","radius"],"additionalProperties":false},
@@ -584,7 +635,12 @@ public final class ClientToolDefs {
                             + "\"authorization_id\":{\"type\":\"string\",\"maxLength\":64}},\"required\":[\"x\",\"y\",\"z\"]}"),
             new ToolSpec("follow", "有界持续步行跟随，省略target_uuid跟主人；指定时用scan_area的标准小写UUID，不跟自身或自动换目标。"
                     + "distance=2-6默认3，seconds=1-60默认30；到位休眠不结束、不惊动模型，距离超过distance+2才唤醒。"
-                    + "只用原PathTask走路，不挖放/传送/攻击/自动换工具；起始脚格32格固定球，工地内收为原范围的保守内接球。"
+                    + "主人要求跟随并保护时必须protect_owner=true，默认false仅跟随；此模式只用于主人。"
+                    + "护卫持续观察主人12格内未命名且未受保护的敌对生物，优先正在攻击主人的来源；中立生物未敌对时不挑衅。"
+                    + "同一任务锁定一只敌人走路接近并普通近战，解决后重新观察并恢复跟随，主人走远或敌人离开12格即脱离；到位休眠也监测。"
+                    + "不挖放/传送；当前主手作战，不自动制作或换工具，先inventory/equip准备武器，主人贴近敌人时宜用斧避免剑横扫误伤。"
+                    + "近战无路、横扫旁及、正在引爆或观察不完整等会给真实失败，不声称已保护；不支持远程战斗。"
+                    + "起始脚格32格固定球，工地内收为原范围的保守内接球。"
                     + "搜索按4000节点批次续搜，状态记录增量整理，没有默认整趟节点、记录或总时间额度；换路/醒来/避险没有默认累计重规划次数帽，已有工地沿用其导航账户。"
                     + "主人暂离休眠等至原期限，指定实体死亡/卸载/离维度立即TARGET_LOST；无路/未知/范围/许可失败立即交回。"
                     + "原期限包含休眠/避险，期限结束仅持续行为结束，goal_satisfied=false，当前距离另查in_band。"
@@ -592,7 +648,8 @@ public final class ClientToolDefs {
                     + "ACCEPTED等真终态，取消不恢复，不以重发补范围/探索/模型或许可预算。",
                     "{\"type\":\"object\",\"properties\":{\"target_uuid\":{\"type\":\"string\",\"minLength\":36,\"maxLength\":36},"
                             + "\"distance\":{\"type\":\"integer\",\"minimum\":2,\"maximum\":6},"
-                            + "\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60}},\"additionalProperties\":false}"),
+                            + "\"seconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":60},"
+                            + "\"protect_owner\":{\"type\":\"boolean\"}},\"additionalProperties\":false}"),
             new ToolSpec("attack", "普通近战锁定一个目标；默认原地不追击。approach=true允许在初始脚格锚点64格范围内只行走接近，"
                     + "不挖放、不换目标、不自动换工具；不主动拾取掉落，身体原版触碰拾取仍运行。"
                     + "entity_id用scan_area的正整数编号并带target_uuid；或hostile_nearby一次选择原范围内未命名敌对生物。"
@@ -652,6 +709,7 @@ public final class ClientToolDefs {
                     + "物品移位复核，消失不当作入包，仍核对背包。不能与work_target/arrival/place_item/return_waypoint组合。"
                     + "单批节点用完保留边界续搜或执行可返回的安全前缀，状态记录按水位整理；默认没有整趟节点或记录停止额度。"
                     + "默认无总时长及累计挖掘次数上限；仅需限制开路时填写非负max_digs，0禁止挖掘。"
+                    + "约30秒有效搜索无实际位移或挖放成果会以NAVIGATION_STALLED交回模型；先核对现场再换站位或补条件，不原样重试。"
                     + "reserve_durability默认0，0-1024；规划与每格实际选工具均保留该耐久，不能借无采收资格的备用工具续挖。"
                     + "bounds={x,y,z,radius}限制所有路径节点和改动；逐次搜索资源及实际卡住保护保留。"
                     + "clear_obstructions=true时可按有界安全清理评估工作站位，移动本身不会额外清理目标射线。"

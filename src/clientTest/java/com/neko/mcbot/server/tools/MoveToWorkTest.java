@@ -58,6 +58,21 @@ class MoveToWorkTest {
         }
     }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
+    @Test void reorderedWorkMembersCannotEvadeTheSameStalledSearchWhileRealConstraintsRemainDistinct() {
+        var a = new com.neko.mcbot.server.PlacementWorkSet.Member(new BlockPos(2,6,0),
+                new com.neko.mcbot.server.PlacementWork((net.minecraft.world.item.BlockItem)net.minecraft.world.item.Items.OAK_PLANKS,null));
+        var b = new com.neko.mcbot.server.PlacementWorkSet.Member(new BlockPos(3,6,0),a.work());
+        String revision = "a".repeat(64);
+        var forward = new com.neko.mcbot.server.PlacementWorkSet(java.util.List.of(a,b),revision);
+        var reverse = new com.neko.mcbot.server.PlacementWorkSet(java.util.List.of(b,a),revision);
+        var spec = com.neko.mcbot.path.PathSpec.DEFAULT;
+        var key = MoveToTool.searchIntent(a.target(),null,null,forward,revision,spec,false);
+        assertEquals(key,MoveToTool.searchIntent(b.target(),null,null,reverse,revision,spec,false));
+        assertNotEquals(key,MoveToTool.searchIntent(a.target(),null,null,forward,revision,spec,true));
+        assertNotEquals(key,MoveToTool.searchIntent(a.target(),null,null,forward,"b".repeat(64),spec,false));
+        assertNotEquals(key,MoveToTool.searchIntent(a.target(),null,null,
+                new com.neko.mcbot.server.PlacementWorkSet(java.util.List.of(a),revision),revision,spec,false));
+    }
     @Test void multiTargetParsingKeepsMemberMaterialsFacesAndRejectsConflictingModesBeforeWorldAccess() {
         var valid = json("""
                 {"x":2,"y":0,"z":0,"exact":true,"arrival":"work","expected_revision":"%s",

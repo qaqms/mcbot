@@ -353,7 +353,13 @@ final class BoundedGather {
             String center = (int) Math.floor(x) + ":" + (int) Math.floor(y) + ":" + (int) Math.floor(z);
             if (!center.equals(pageCenter)) { pageCenter = center; sampleOffset = 0; targetGroup = 0; }
             progress.accept(goal.facts() + " 本段已挖=" + dug + "，已探索区域=" + exploration.regions());
-            if (goal.satisfied()) { finish(true, "采集目标经实际背包核对满足。"); return; }
+            if (goal.satisfied()) {
+                lastData = new JsonObject();
+                for (String key : List.of("body_id", "alive", "dimension", "x", "y", "z", "inventory"))
+                    if (state.has(key)) lastData.add(key, state.get(key).deepCopy());
+                finish(true, "采集目标经实际背包核对满足。");
+                return;
+            }
             if (mismatchedSource != null) {
                 lastData = state.deepCopy();
                 var counts = new JsonObject();
@@ -843,6 +849,7 @@ final class BoundedGather {
         var data = new JsonObject();
         data.addProperty("goal_satisfied", ok && goal != null && goal.satisfied());
         data.addProperty("scope", plan.scope() == ItemGoal.Scope.TASK ? "task" : "subtask");
+        if (goal != null) data.add("collection_goal", goal.evidence());
         if (materialEvidence != null) data.add("material", materialEvidence);
         data.addProperty("mined_blocks", dug);
         data.addProperty("cleared_blocks", cleared);

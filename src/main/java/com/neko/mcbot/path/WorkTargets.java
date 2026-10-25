@@ -10,6 +10,12 @@ public final class WorkTargets {
     private Object task, world;
     private final Set<BlockPos> cells = new HashSet<>();
 
+    public boolean boundTo(Object expected, Object expectedWorld) { return task == expected && world == expectedWorld; }
+    public void continueTask(Object expected, Object next, Object nextWorld) {
+        if (!boundTo(expected, nextWorld)) throw new IllegalArgumentException("work_session_changed");
+        task = next;
+    }
+
     public void bind(Object next) {
         bind(next, null);
     }

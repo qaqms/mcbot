@@ -28,9 +28,9 @@ public final class TaskPolicy {
                     && "query".equals(args.get("operation").getAsString());
             case "build_record" -> args.has("operation") && args.get("operation").isJsonPrimitive()
                     && args.getAsJsonPrimitive("operation").isString()
-                    && java.util.Set.of("design_list","design_query","instance_list","instance_query")
+                    && java.util.Set.of("design_list","design_query","instance_list","instance_query","draft_list","draft_query")
                     .contains(args.get("operation").getAsString())
-                    && java.util.Set.of("operation","design_id","design_revision","instance_id","instance_revision","offset","layer")
+                    && java.util.Set.of("operation","design_id","design_revision","instance_id","instance_revision","offset","layer","target")
                     .containsAll(args.keySet());
             case "build_blueprint" -> args.has("operation") && args.get("operation").isJsonPrimitive()
                     && args.getAsJsonPrimitive("operation").isString()

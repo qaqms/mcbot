@@ -41,7 +41,8 @@ public abstract class TickTask {
 
     public enum Activity {
         SEARCH("正在寻路"), MOVE("正在移动"), DIG("正在挖掘"),
-        PLACE("正在放置"), WAIT("正在等待落稳"), SUSPENDED("正在避险");
+        PLACE("正在放置"), WAIT("正在等待落稳"), SUSPENDED("正在避险"),
+        FOLLOW("正在跟随"), GUARD("正在护卫"), ATTACK("正在战斗");
         private final String label;
         Activity(String label) { this.label = label; }
         public String label() { return label; }

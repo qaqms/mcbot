@@ -16,6 +16,12 @@ public final class NavigationTrail {
     private long sequence;
     private boolean truncated, gap;
 
+    public boolean boundTo(Object expected, Object expectedWorld) { return task == expected && world == expectedWorld; }
+    public void continueTask(Object expected, Object next, Object nextWorld) {
+        if (!boundTo(expected, nextWorld)) throw new IllegalArgumentException("trail_session_changed");
+        task = next;
+    }
+
     public void bind(Object nextTask, Object nextWorld) {
         if (task != nextTask || world != nextWorld) {
             points.clear(); edits.clear(); passage.clear(); truncated = gap = false;

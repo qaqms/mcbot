@@ -20,6 +20,76 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlacementWorkTest {
+    @Test void roofRepairSearchUsesActualVisibleWorkStancesAcrossAnEnclosedHouse() {
+        var grid = new StandingGeometryTest.Grid(); grid.blocks.clear();
+        var sight = new BlockAimTest.Grid(); sight.blocks.clear();
+        for (int x=-8;x<=18;x++) for (int z=-8;z<=18;z++)
+            grid.blocks.put(new BlockPos(x,-1,z),Blocks.STONE.defaultBlockState());
+        for (int x=0;x<=10;x++) for (int z=0;z<=10;z++) {
+            grid.blocks.put(new BlockPos(x,0,z),Blocks.OAK_PLANKS.defaultBlockState());
+            grid.blocks.put(new BlockPos(x,4,z),Blocks.OAK_PLANKS.defaultBlockState());
+            if (x==0 || x==10 || z==0 || z==10)
+                for (int y=1;y<4;y++) grid.blocks.put(new BlockPos(x,y,z),Blocks.OAK_PLANKS.defaultBlockState());
+        }
+        grid.blocks.remove(new BlockPos(5,1,0)); grid.blocks.remove(new BlockPos(5,2,0));
+        var target = new BlockPos(2,4,9); grid.blocks.remove(target);
+        sight.blocks.putAll(grid.blocks);
+        var geometry = grid.geometry();
+        var material = new ItemStack(Items.OAK_PLANKS,3);
+        var goal = PlacementWork.goal(target,geometry,1.62,.6,1.8,4.5,(eye,bounds,edits) ->
+                SupportPlacement.canPlanWorkBlock(sight,sight,target,eye,bounds,material,4.5,edits,
+                        p->true,f->true,b->true,hit->Blocks.OAK_PLANKS.defaultBlockState(),s->true)
+                        ? null : new ServerTool.Result(false,"TARGET_BLOCKED:no actual contact",null));
+        DigSampler terrain = new DigSampler() {
+            @Override public NavigationGeometry geometry() { return geometry; }
+            @Override public boolean inBounds(int x,int y,int z) {
+                return x>=-8 && x<=18 && z>=-8 && z<=18 && y>=-2 && y<=8;
+            }
+            @Override public boolean passable(int x,int y,int z) {
+                return sight.getBlockState(new BlockPos(x,y,z)).isAir();
+            }
+            @Override public boolean support(int x,int y,int z) { return !passable(x,y,z); }
+            @Override public double digSeconds(int x,int y,int z) {
+                return y>=1 && !new BlockPos(x,y,z).equals(target) ? .5 : INFEASIBLE;
+            }
+            @Override public boolean placeable(int x,int y,int z) {
+                return y>=0 && !new BlockPos(x,y,z).equals(target);
+            }
+            @Override public double placeCost(int x,int y,int z) { return 1; }
+            @Override public int maxPlaces() { return 16; }
+            @Override public boolean canPlaceFrom(int x,int y,int z,long cell,TerrainEdits edits) {
+                var foot=geometry.foot(x,y,z,edits);
+                if (foot==null) return false;
+                double height=cell==DigAStar.pack(x,y,z) ? y+1.02 : foot.height();
+                return SupportPlacement.canPlan(sight,sight,
+                        new BlockPos(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell)),
+                        new Vec3(x+.5,height+1.62,z+.5),new net.minecraft.world.phys.AABB(
+                                x+.2,height,z+.2,x+.8,height+1.8,z+.8),new ItemStack(Items.COBBLESTONE),4.5,
+                        edits,p->true,f->true,b->true);
+            }
+        };
+        var route = new DigAStar(terrain,-3,0,9,2,4,9,4000,64,goal).segments();
+        while (!route.advance(100)) { }
+        assertNull(route.failure(),()->route.failure()+" expanded="+route.expanded());
+        assertTrue(route.expanded()<1000,"visible interior stances guide the short repair: "+route.expanded());
+        var edits=TerrainEdits.EMPTY;
+        for (var step:route.path()) edits=edits.after(step.dig(),step.place());
+        var end=route.path().getLast();
+        assertTrue(goal.reached(end.x(),end.y(),end.z(),edits));
+        assertTrue(sight.getBlockState(target).isAir()); assertEquals(3,material.getCount());
+        var reachSeeds = new com.neko.mcbot.path.NavigationGoal() {
+            @Override public boolean reached(int x,int y,int z) { return goal.reached(x,y,z); }
+            @Override public boolean reached(int x,int y,int z,TerrainEdits changed) { return goal.reached(x,y,z,changed); }
+            @Override public double remaining(int x,int y,int z) { return goal.remaining(x,y,z); }
+            @Override public double approach(int x,int y,int z) { return goal.approach(x,y,z); }
+            @Override public Bounds estimateBounds() { return goal.estimateBounds(); }
+        };
+        var baseline = new DigAStar(terrain,-3,0,9,2,4,9,4000,64,reachSeeds).segments();
+        while (!baseline.advance(100)) { }
+        System.out.println("roof repair expanded: work stances="+route.expanded()+", geometric seeds="+baseline.expanded());
+        assertTrue(baseline.expanded()>route.expanded(),"compare identical admission rules and different guidance");
+    }
+
     @Test void aChangedPlacementPremiseEndsTheOldSearchWithoutClaimingAnActionOrChangingTheDrawing() {
         var drawing = com.neko.mcbot.building.BuildTarget.parse(com.google.gson.JsonParser.parseString("""
                 {"anchor":{"x":2,"y":2,"z":0},"cells":[

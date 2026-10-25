@@ -127,6 +127,8 @@ class AgentRunnerMultiGoalTest {
         evidence.addProperty("material_next_offset",-1);
         evidence.add("design_components",json("{\"doors\":0,\"beds\":0}"));
         evidence.add("design_review",json("{\"stairs_missing_orientation\":2,\"stairs_rising_behind_back\":4}"));
+        evidence.add("target",json("{\"draft_revision\":\""+REVISION+"\"}"));
+        evidence.addProperty("draft_retained",true);
         evidence.add("cells",json("{\"private_fixture_field\":\"not-for-direct-feedback\"}"));
         reply(true,"只读核对，尚未施工。",evidence);
         status();
@@ -139,8 +141,72 @@ class AgentRunnerMultiGoalTest {
         assertTrue(receipt.content().contains("\"next_offset\":16"),receipt.content());
         assertTrue(receipt.content().contains("\"stairs_rising_behind_back\":4"),receipt.content());
         assertTrue(receipt.content().contains("\"doors\":0"),receipt.content());
+        assertTrue(receipt.content().contains("\"draft_revision\":\""+REVISION+"\""),receipt.content());
         assertFalse(receipt.content().contains("private_fixture_field"));
         assertNotEquals(0,runner.currentTaskId());
+    }
+    @Test void directDraftListAndQueriesExposeActualEntriesAndPagesInsteadOfOnlyGenericSuccessText() {
+        begin();
+        var target=json("{\"draft_revision\":\""+REVISION+"\"}");
+        for (String operation : java.util.List.of("draft_list","draft_query")) {
+            int turn=client.engine().responses.size()-1;
+            var args=json("{\"operation\":\""+operation+"\"}");
+            if (operation.equals("draft_query")) args.add("target",target);
+            client.engine().tools(turn,new ToolCall(operation,"build_record",args.toString())); client.drain();
+            assertEquals("build_record",client.lastTool().str("tool"));
+            var data=json("{\"next_offset\":-1,\"task_scoped\":true,\"persistent\":false}");
+            if (operation.equals("draft_list")) {
+                var entries=new com.google.gson.JsonArray();
+                var row=json("{\"target_revision\":\""+REVISION+"\",\"cell_count\":598}"); row.add("target",target);
+                entries.add(row); data.add("entries",entries);
+            } else {
+                data.add("target",target);
+                data.add("cells",com.google.gson.JsonParser.parseString("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"oak_stairs\"}]"));
+            }
+            reply(data); status();
+            var receipt=client.engine().histories.getLast().stream()
+                    .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                    .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                    .filter(t->t.callId().equals(operation)).findFirst().orElseThrow();
+            assertTrue(receipt.content().contains(REVISION),receipt.content());
+            assertTrue(receipt.content().contains(operation.equals("draft_list") ? "\"entries\"" : "oak_stairs"),receipt.content());
+        }
+    }
+    @Test void finalGoalRegistrationRejectsAStaleWorksiteAndAllowsCorrectionBeforeFreezing() {
+        begin();
+        var target=json("{\"draft_revision\":\""+REVISION+"\"}");
+        var goal=json(buildingGoal()); goal.add("target",target);
+        client.engine().tools(0,new ToolCall("select","set_goal",goal.toString())); client.drain(); status();
+        var evidence=buildEvidence(0); evidence.addProperty("worksite_revision","b".repeat(64));
+        reply(evidence); status();
+        var rejected=client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .filter(t->t.callId().equals("select")).findFirst().orElseThrow();
+        assertFalse(rejected.ok()); assertTrue(rejected.content().contains("TARGET_REVISION_CHANGED"));
+        var correction=json("{\"operation\":\"revise\",\"expected_revision\":\""+"b".repeat(64)+"\"}");
+        correction.add("target",target);
+        client.engine().tools(1,new ToolCall("correct","build_site",correction.toString())); client.drain();
+        assertEquals("build_site",client.lastTool().str("tool"));
+        reply(json("{\"active\":true,\"target_revision\":\""+REVISION+"\"}")); status();
+        client.engine().tools(2,new ToolCall("select-corrected","set_goal",goal.toString())); client.drain(); status();
+        evidence.addProperty("worksite_revision",REVISION); reply(evidence); status();
+        long before=client.toolCount();
+        client.engine().tools(3,new ToolCall("late-correction","build_site",correction.toString())); client.drain();
+        assertEquals(before+1,client.toolCount(),"only fresh status may be sent after rejecting the correction locally");
+        assertEquals("status",client.lastTool().str("tool")); status();
+        var receipt=client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .filter(t->t.callId().equals("late-correction")).findFirst().orElseThrow();
+        assertFalse(receipt.ok()); assertTrue(receipt.content().contains("最终目标已登记"));
+        var code=new JsonObject();
+        code.addProperty("code","return mc.call('build_site',{operation='revise',target={draft_revision='"+REVISION
+                +"'},expected_revision='"+"b".repeat(64)+"'})");
+        long beforeProgram=client.toolCount();
+        client.engine().tools(4,new ToolCall("late-lua","run_program",code.toString())); client.drain();
+        until(()->client.toolCount()>beforeProgram); status();
+        assertEquals(beforeProgram+1,client.toolCount(),"Lua shares the same final-goal guard");
     }
     @Test void registrationRevisionConflictKeepsItsCauseAndCanBeCorrectedBeforeFreezingTheGoal() {
         begin();
@@ -292,6 +358,38 @@ class AgentRunnerMultiGoalTest {
         finishCheck(buildEvidence(0),"build_diff");
         assertNotEquals(0,runner.currentTaskId());
         assertEquals("running",runner.panelHistory().tasks().getFirst().status());
+    }
+    @Test void aStalledRouteUnparksTheModelWithoutCancellingTheRegisteredBuilding() {
+        register(buildingGoal(),buildEvidence(0),"build_diff");
+        long task=runner.currentTaskId();
+        client.engine().tools(1,new ToolCall("route","move_to","{\"x\":2,\"y\":90,\"z\":0}"));
+        client.drain();
+        long seq=client.lastTool().num("seq",-1);
+        var ack=json("{\"job_id\":\"stalled-route\",\"cap_ticks\":-1}");
+        ack.addProperty("seq",seq);
+        runner.handleS2c(new Envelope("job_ack",ack)); client.drain();
+        assertEquals(2,client.engine().responses.size(),"the model waits for the real route terminal");
+        var terminal=json("""
+                {"job_id":"stalled-route","phase":"failed","text":"NAVIGATION_STALLED:核对现场再换工作位。",
+                "data":{"navigation_stalled":true,"model_reassessment_required":true,"search_idle_ms":30000,
+                "goal_satisfied":false,"removed_blocks":1,"placed_blocks":2}}
+                """);
+        terminal.addProperty("seq",seq);
+        runner.handleS2c(new Envelope("job_event",terminal)); client.drain();
+        status();
+        assertEquals(3,client.engine().responses.size(),"the existing loop requests a new model decision");
+        var receipt=client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .filter(t->t.callId().equals("route")).findFirst().orElseThrow();
+        assertFalse(receipt.ok());
+        assertTrue(receipt.content().contains("NAVIGATION_STALLED:"));
+        assertTrue(receipt.content().contains("核对现场再换工作位"),
+                "the model receives the action feedback; structured flags remain available to programs and the UI");
+        assertEquals(task,runner.currentTaskId());
+        assertEquals("running",runner.panelHistory().tasks().getFirst().status());
+        assertEquals(1,client.sent.stream().filter(e->e.kind().equals("task_begin")).count());
+        assertEquals(0,client.sent.stream().filter(e->e.kind().equals("task_end")).count());
     }
     @Test void unavailableRegistrationEndsAsFailureInsteadOfFallingBackToUnverifiedTextCompletion() {
         begin();

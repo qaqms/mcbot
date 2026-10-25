@@ -20,8 +20,22 @@ public final class BuildDiffTool implements ServerTool {
     @Override public String name() { return "build_diff"; }
 
     @Override public Result run(CompanionPlayer body, JsonObject args) {
-        try { return report(args,input -> com.neko.mcbot.server.BuildRecordAccess.resolve(body,input),
-                target -> access(body, target), System::nanoTime); }
+        try {
+            var selected = new BuildTarget[1];
+            var result = report(args,input -> selected[0] = com.neko.mcbot.server.BuildRecordAccess.resolve(body,input),
+                    target -> access(body, target), System::nanoTime);
+            if (result.ok() && selected[0] != null && !args.getAsJsonObject("target").has("instance_id")) {
+                boolean retained = body.buildSite().drafts().remember(selected[0]);
+                result.data().addProperty("draft_retained", retained);
+                if (retained) result.data().add("target", com.neko.mcbot.building.BuildDrafts.reference(selected[0]));
+                if (retained && args.getAsJsonObject("target").has("draft_revision")
+                        && args.has("verify_only") && args.get("verify_only").getAsBoolean())
+                    body.buildSite().retainVerifiedDraft(selected[0]);
+            }
+            if (result.ok() && body.buildSite().active())
+                result.data().addProperty("worksite_revision", body.buildSite().target().revision());
+            return result;
+        }
         catch (RuntimeException invalid) { return new Result(false,"DENIED:目标格式、实例身份或修订不符，未查询另一实例。"
                 + "expected_revision是内容哈希，不是instance_id；已登记建筑用run_program执行return mc.build()，"
                 + "或set_goal单独operation=query取回原条件，不从摘要猜写实例或重建图纸。",null); }
@@ -168,6 +182,7 @@ public final class BuildDiffTool implements ServerTool {
             }
         } catch (RuntimeException invalid) {
             return new Result(false, "DENIED:建筑目标须为anchor/rotation及cells、fill或regions之一，最多16384格；"
+                    + "也可用本任务实际返回的draft_revision引用或有效实例引用；草稿失效先build_record draft_list，跨任务用持久实例。"
                     + "相对坐标±32，cells无重复格、regions按次序覆盖；状态名/值须在真实注册表中，"
                     + "offset/material_offset须为16的倍数，work_cursor须配work_scan且沿原修订。", null);
         }

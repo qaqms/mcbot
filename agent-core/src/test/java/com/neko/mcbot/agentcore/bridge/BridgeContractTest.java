@@ -104,6 +104,25 @@ class BridgeContractTest {
     }
 
     @Test
+    void verifiedMilestoneRemainsProgressAndCannotFinishTheTaskWindow() {
+        var backend = new Backend();
+        var ring = new EventRing(200);
+        var service = new BridgeService(backend, ring);
+        backend.submitted = id -> service.recordEvent("progress", json(
+                "{\"task_id\":" + id + ",\"text\":\"Verified inventory milestone\","
+                        + "\"milestone\":{\"id\":\"" + "a".repeat(64) + "\",\"kind\":\"item\","
+                        + "\"verified\":true,\"facts\":\"Inventory now contains a pickaxe\","
+                        + "\"evidence\":{\"item\":\"minecraft:wooden_pickaxe\",\"current\":1}}}"));
+        var result = json(service.handle("POST", "/v1/task", "{\"text\":\"long task\",\"wait_s\":0}").body());
+        assertFalse(result.get("done").getAsBoolean());
+        assertFalse(result.has("status"));
+        var event = json(ring.since(0).getFirst().dataJson());
+        assertEquals("progress", event.get("ev").getAsString());
+        assertTrue(event.getAsJsonObject("milestone").get("verified").getAsBoolean());
+        assertEquals(1, event.get("task_id").getAsInt());
+    }
+
+    @Test
     void sessionIsSharedByStatusMcpAndEventsButChangesWithANewBridge() {
         var backend = new Backend();
         var service = new BridgeService(backend, new EventRing(200));

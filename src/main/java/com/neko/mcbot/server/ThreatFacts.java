@@ -9,7 +9,10 @@ import com.neko.mcbot.server.tools.AttackTool;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.NeutralMob;
 import net.minecraft.world.entity.monster.Creeper;
+import net.minecraft.world.entity.monster.spider.Spider;
+import net.minecraft.world.entity.monster.piglin.Piglin;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -42,6 +45,12 @@ public final class ThreatFacts {
     public record Snapshot(List<Threat> threats, boolean complete) {
         public Snapshot { threats = List.copyOf(threats); }
         public JsonObject report(AABB body) {
+            return report(body, "targeting_body");
+        }
+        public JsonObject reportGuard(AABB owner) {
+            return report(owner, "targeting_owner");
+        }
+        private JsonObject report(AABB body, String targetingKey) {
             var data = new JsonObject();
             var samples = new JsonArray();
             for (var threat : threats.stream().limit(8).toList()) {
@@ -51,7 +60,7 @@ public final class ThreatFacts {
                 sample.addProperty("dangerous", threat.dangerous(body, .75));
                 sample.addProperty("explosive", threat.explosive());
                 sample.addProperty("automatic_attack_allowed", threat.attackAllowed());
-                sample.addProperty("targeting_body", threat.targeting());
+                sample.addProperty(targetingKey, threat.targeting());
                 sample.addProperty("recent_attacker", threat.recentAttacker());
                 samples.add(sample);
             }
@@ -85,19 +94,41 @@ public final class ThreatFacts {
     }
 
     public static Snapshot scan(CompanionPlayer body) {
+        return scan(body, body, false);
+    }
+
+    public static Snapshot guardScan(CompanionPlayer body, LivingEntity owner) {
+        return scan(body, owner, true);
+    }
+
+    public static boolean guardCandidate(boolean hostile, boolean neutral, boolean targeting, boolean recent) {
+        return hostile && (!neutral || targeting || recent);
+    }
+
+    private static Snapshot scan(CompanionPlayer body, LivingEntity subject, boolean guarding) {
         var nearby = new ArrayList<LivingEntity>();
-        body.level().getEntities(EntityTypeTest.forClass(LivingEntity.class), body.getBoundingBox().inflate(RADIUS),
+        body.level().getEntities(EntityTypeTest.forClass(LivingEntity.class), subject.getBoundingBox().inflate(RADIUS),
                 entity -> entity != body && entity.isAlive() && !entity.isRemoved(), nearby, LIMIT + 1);
         boolean complete = nearby.size() <= LIMIT;
+        if (guarding) {
+            var area = subject.getBoundingBox().inflate(RADIUS);
+            for (int x = ((int) Math.floor(area.minX)) >> 4; x <= ((int) Math.floor(area.maxX)) >> 4; x++)
+                for (int z = ((int) Math.floor(area.minZ)) >> 4; z <= ((int) Math.floor(area.maxZ)) >> 4; z++)
+                    if (body.level().getChunkSource().getChunkNow(x, z) == null) complete = false;
+        }
         var threats = new ArrayList<Threat>();
         for (var mob : nearby.stream().limit(LIMIT).toList()) {
             if (body.level().getEntity(mob.getId()) != mob) continue;
-            boolean recent = body.getLastHurtByMob() == mob
-                    && body.tickCount >= body.getLastHurtByMobTimestamp()
-                    && body.tickCount - body.getLastHurtByMobTimestamp() <= 60;
+            if (guarding && subject.distanceToSqr(mob) > RADIUS * RADIUS) continue;
+            boolean recent = subject.getLastHurtByMob() == mob
+                    && subject.tickCount >= subject.getLastHurtByMobTimestamp()
+                    && subject.tickCount - subject.getLastHurtByMobTimestamp() <= 60;
             boolean armed = mob instanceof Creeper c && (c.isIgnited() || c.getSwellDir() > 0);
-            boolean targeting = mob instanceof Mob source && source.getTarget() == body;
-            if (!credible(targeting, recent, armed)) continue;
+            boolean targeting = mob instanceof Mob source && source.getTarget() == subject;
+            var described = AttackTool.describe(body, mob);
+            if (guarding ? !guardCandidate(described.hostile(),
+                    mob instanceof NeutralMob || mob instanceof Spider || mob instanceof Piglin, targeting, recent)
+                    : !credible(targeting, recent, armed)) continue;
             var active = mob.getActiveItem().get(DataComponents.ATTACK_RANGE);
             double reach = mob instanceof Mob
                     ? active == null ? MobThreatAccess.mcbot$defaultReach() : active.effectiveMaxRange(mob)
@@ -107,7 +138,6 @@ public final class ThreatFacts {
                 complete = false;
                 continue;
             }
-            var described = AttackTool.describe(body, mob);
             boolean allowed = described.hostile() && !described.named() && !described.protectedTarget();
             AABB attackBox = mob instanceof Mob ? ((MobThreatAccess) mob).mcbot$attackBox(reach)
                     : new AABB(mob.getEyePosition(), mob.getEyePosition()).inflate(reach);

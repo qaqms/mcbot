@@ -184,6 +184,29 @@ public final class MoveToTool implements ServerTool {
                 workTarget != null || pickup != null || workSet != null, com.neko.mcbot.server.StandingGeometry.forPlayer(c),
                 pos -> spec.contains(pos.getX(), pos.getY(), pos.getZ()) && c.buildSite().inScope(pos));
         if (endpoint != null) return CompletableFuture.completedFuture(endpoint);
+        var site = c.buildSite();
+        boolean rememberSearch = site.active() && (workSet != null || workTarget != null && spec.workArrival());
+        var searchTask = site.boundTask();
+        var searchRevision = site.active() ? site.target().revision() : "";
+        final String intent = searchIntent(to, workTarget, placement, workSet, searchRevision, spec, walkOnly);
+        var workCells = workSet != null ? workSet.members().stream().map(
+                com.neko.mcbot.server.PlacementWorkSet.Member::target).toList()
+                : java.util.List.of(workTarget == null ? to : workTarget);
+        java.util.function.Supplier<com.neko.mcbot.building.BuildSearchMemory.Facts> searchFacts = () -> {
+            if (site.boundTask() != searchTask || !site.same(searchRevision)) return null;
+            var inventory = new StringBuilder();
+            for (int slot = 0; slot < c.getInventory().getContainerSize(); slot++) {
+                var stack = c.getInventory().getItem(slot);
+                inventory.append(stack.getCount()).append(':')
+                        .append(net.minecraft.world.item.ItemStack.hashItemAndComponents(stack)).append('|');
+            }
+            return com.neko.mcbot.building.BuildSearchMemory.observe(c.position(), inventory.toString(),
+                    site.targetEdits(), workCells, pos -> level.isLoaded(pos) ? level.getBlockState(pos) : null);
+        };
+        if (rememberSearch) {
+            var previous = site.searches().check(intent, searchFacts);
+            if (previous != null) return CompletableFuture.completedFuture(previous);
+        }
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         var path = new PathTask(level, to, permissions, context, scope, sched,
                 args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement);
@@ -194,10 +217,23 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
-        return f.thenApply(moved -> workSet != null ? workSet.finish(moved, c) : placement != null
-                ? com.neko.mcbot.server.PlacementWork.finish(moved, () -> placement.assess(c, workTarget))
-                : finishWork(moved, workTarget == null ? null
-                : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget)));
+        return f.thenApply(moved -> {
+            if (rememberSearch && site.boundTask() == searchTask && site.same(searchRevision))
+                site.searches().terminal(intent, moved, searchFacts);
+            return workSet != null ? workSet.finish(moved, c) : placement != null
+                    ? com.neko.mcbot.server.PlacementWork.finish(moved, () -> placement.assess(c, workTarget))
+                    : finishWork(moved, workTarget == null ? null
+                    : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget));
+        });
+    }
+
+    static String searchIntent(BlockPos to, BlockPos workTarget, com.neko.mcbot.server.PlacementWork placement,
+                               com.neko.mcbot.server.PlacementWorkSet workSet, String revision,
+                               com.neko.mcbot.path.PathSpec spec, boolean walkOnly) {
+        String work = workSet != null ? workSet.members().stream().map(member ->
+                member.target() + ":" + member.work()).sorted().collect(java.util.stream.Collectors.joining("|"))
+                : to + ":" + workTarget + ":" + placement;
+        return work + "|" + revision + "|" + spec + "|" + walkOnly;
     }
 
     static com.neko.mcbot.server.PlacementWorkSet workTargets(JsonObject args) {

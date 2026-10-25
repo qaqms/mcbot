@@ -11,11 +11,13 @@ import com.neko.mcbot.server.ActionPermissions;
 import com.neko.mcbot.server.FollowWork;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.server.StandingGeometry;
+import com.neko.mcbot.server.ThreatFacts;
 import com.neko.mcbot.task.CompanionScheduler;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
@@ -24,11 +26,11 @@ import java.util.concurrent.CompletableFuture;
 
 /** Bounded dry-land following; native input and search stay in the shared path implementation. */
 public final class FollowTool implements ServerTool {
-    public record Input(UUID target, int distance, int seconds) { }
+    public record Input(UUID target, int distance, int seconds, boolean protectOwner) { }
 
     public static Input arguments(JsonObject args) {
         try {
-            if (args == null || !java.util.Set.of("target_uuid", "distance", "seconds").containsAll(args.keySet()))
+            if (args == null || !java.util.Set.of("target_uuid", "distance", "seconds", "protect_owner").containsAll(args.keySet()))
                 return null;
             UUID target = null;
             if (args.has("target_uuid")) {
@@ -38,8 +40,11 @@ public final class FollowTool implements ServerTool {
                 if (raw.length() != 36 || !(target = UUID.fromString(raw)).toString().equals(raw)) return null;
             }
             int distance = integer(args, "distance", 3), seconds = integer(args, "seconds", 30);
+            if (args.has("protect_owner") && (!args.get("protect_owner").isJsonPrimitive()
+                    || !args.getAsJsonPrimitive("protect_owner").isBoolean())) return null;
+            boolean protect = args.has("protect_owner") && args.get("protect_owner").getAsBoolean();
             return distance >= 2 && distance <= 6 && seconds >= 1 && seconds <= 60
-                    ? new Input(target, distance, seconds) : null;
+                    ? new Input(target, distance, seconds, protect) : null;
         } catch (RuntimeException invalid) { return null; }
     }
 
@@ -65,14 +70,17 @@ public final class FollowTool implements ServerTool {
     @Override public CompletableFuture<Result> runAuthorized(CompanionPlayer body, JsonObject args,
             CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context) {
         var input = arguments(args);
-        if (input == null) return completed("DENIED:follow仅接受可选标准小写target_uuid、整数distance=2-6、seconds=1-60；默认主人/3格/30秒。");
+        if (input == null) return completed("DENIED:follow仅接受可选标准小写target_uuid、整数distance=2-6、seconds=1-60及布尔protect_owner；默认主人/3格/30秒/不主动护卫。");
         UUID id = input.target() == null ? body.ownerUuid() : input.target();
         if (id == null || id.equals(body.getUUID())) return completed("DENIED:跟随目标须为主人或其他扫描所得实体，不能跟随自身。");
+        if (input.protectOwner() && !id.equals(body.ownerUuid()))
+            return completed("DENIED:protect_owner只能用于跟随本身体的主人，不能将其他实体当作主人授权攻击。");
         body.bindSpatialTask(context);
         var outer = body.buildSite().active() ? body.buildSite().scope() : PathSpec.DEFAULT;
         var scope = scope(StandingGeometry.feetCell(body), outer);
         if (scope == null) return completed("SCOPE_LIMIT:原工地边界没有可用的跟随范围，未扩大原范围。");
-        var access = new PlayerAccess(body, id, input.target() == null, scope, outer, permissions, context, scheduler);
+        var access = new PlayerAccess(body, id, input.target() == null, input.protectOwner(),
+                scope, outer, permissions, context, scheduler);
         var failure = access.guard();
         if (failure != null) return CompletableFuture.completedFuture(failure);
         var target = access.target();
@@ -80,7 +88,8 @@ public final class FollowTool implements ServerTool {
         if (target != null && (failure = access.guard(target)) != null)
             return CompletableFuture.completedFuture(failure);
         NavigationBudget budget = body.buildSite().active() ? body.buildSite().navigation() : new NavigationBudget();
-        var work = new FollowWork(access, id, input.target() == null, input.distance(), capTicks(args), budget);
+        var work = new FollowWork(access, id, input.target() == null, input.distance(), capTicks(args), budget,
+                input.protectOwner());
         var future = new CompletableFuture<Result>();
         if (!scheduler.submit(body, work, future, capTicks(args))) return completed("BUSY:原身体任务槽仍被占用，先等终态或取消。");
         return future;
@@ -99,15 +108,16 @@ public final class FollowTool implements ServerTool {
         private final ServerLevel level;
         private final UUID id;
         private final boolean owner;
+        private final boolean protect;
         private final PathSpec scope, outer;
         private final ActionPermissions permissions;
         private final ActionPermissions.Context context;
         private final CompanionScheduler scheduler;
         private Entity selected;
 
-        PlayerAccess(CompanionPlayer body, UUID id, boolean owner, PathSpec scope, PathSpec outer,
+        PlayerAccess(CompanionPlayer body, UUID id, boolean owner, boolean protect, PathSpec scope, PathSpec outer,
                      ActionPermissions permissions, ActionPermissions.Context context, CompanionScheduler scheduler) {
-            this.body = body; this.level = body.level(); this.id = id; this.owner = owner;
+            this.body = body; this.level = body.level(); this.id = id; this.owner = owner; this.protect = protect;
             this.scope = scope; this.outer = outer; this.permissions = permissions;
             this.context = context; this.scheduler = scheduler;
         }
@@ -115,7 +125,8 @@ public final class FollowTool implements ServerTool {
             if (permissions == null || context == null || !context.equals(permissions.current(context.owner(),
                     body.getUUID(), context.dimension(), context.taskId(), body))
                     || !ActionPermissions.allowed(context, "follow", new JsonObject())
-                    || !ActionPermissions.allowed(context, "move_to", new JsonObject()))
+                    || !ActionPermissions.allowed(context, "move_to", new JsonObject())
+                    || protect && !ActionPermissions.allowed(context, "attack", new JsonObject()))
                 return failed("DENIED:原任务、身体或跟随/移动许可已失效，未自动续接。");
             if (body.level() != level || !body.isAlive() || body.isRemoved())
                 return failed("TARGET_LOST:原身体已死亡、离场或换维度。");
@@ -166,11 +177,41 @@ public final class FollowTool implements ServerTool {
                         return foot != null && level.noCollision(body, geometry.body(to.getX(), foot.height(), to.getZ()));
                     });
         }
+        @Override public boolean routeUseful(TickTask route, FollowWork.Target target, int distance) {
+            return route instanceof PathTask path && path.usefulFor(FollowWork.goal(StandingGeometry.forPlayer(body), target, distance));
+        }
+        @Override public boolean retarget(TickTask route, FollowWork.Target target, int distance) {
+            if (!(route instanceof PathTask path)) return false;
+            path.retarget(BlockPos.containing(target.position()), FollowWork.goal(StandingGeometry.forPlayer(body), target, distance));
+            return true;
+        }
         @Override public TickTask.Progress advance(TickTask route) { return route.tickSafe(body); }
         @Override public void stopInput() {
             if (body.bodyControl().owner() != BodyControl.Owner.REFLEX) body.releaseMovement();
         }
         @Override public PathSpec scope() { return scope; }
+        @Override public ThreatFacts.Snapshot threats(FollowWork.Target ownerTarget) {
+            return selected instanceof LivingEntity living && id.equals(body.ownerUuid())
+                    ? ThreatFacts.guardScan(body, living) : new ThreatFacts.Snapshot(List.of(), false);
+        }
+        @Override public TickTask attack(ThreatFacts.Threat enemy, NavigationBudget budget) {
+            if (!(enemy.identity() instanceof LivingEntity living)) throw new IllegalArgumentException("enemy");
+            return AttackTool.escort(body, living, scheduler, permissions, context, scope, budget, () -> {
+                var failure = guard();
+                if (failure != null) return failure;
+                var ownerTarget = target();
+                if (ownerTarget == null) return failed("TARGET_LOST:护卫主人已离场。");
+                if ((failure = guard(ownerTarget)) != null) return failure;
+                var described = AttackTool.describe(body, living);
+                if (!described.hostile() || described.named() || described.protectedTarget())
+                    return failed("DENIED:护卫不能攻击中立、命名或受保护目标。");
+                if (!inside(living.position()) || living.position().distanceToSqr(ownerTarget.position())
+                        > ThreatFacts.RADIUS * ThreatFacts.RADIUS
+                        || body.position().distanceToSqr(ownerTarget.position()) > ThreatFacts.RADIUS * ThreatFacts.RADIUS)
+                    return failed("SCOPE_LIMIT:原敌人或身体超出主人护卫范围。");
+                return null;
+            });
+        }
     }
     private static Result failed(String message) { return new Result(false, message, null); }
     private static CompletableFuture<Result> completed(String message) {

@@ -56,7 +56,8 @@ mc.build_diff(target,revision,offset)续查。小目标保留原合并方式。
 
 ## 家具与设计
 
-门与床共用两格足迹。门要求half/facing/hinge，床要求part/facing及完整foot/head。
+门与床共用两格足迹。门要求half/facing，hinge可省略并由原版落位上下文决定；
+床要求part/facing及完整foot/head。
 床头在床尾沿facing方向一格，旋转后两格与朝向一起变换；
 仅门下半或床foot发一次原版动作、消费一件，两格都核实际结果并记录。
 床头排在床尾前或跨页均不能单独施工。任一格未知/保护/占位仍拒绝，

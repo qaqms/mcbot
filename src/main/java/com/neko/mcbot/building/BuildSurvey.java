@@ -115,6 +115,8 @@ public final class BuildSurvey {
         var materialsByState = new java.util.HashMap<MaterialKey, BuildTarget.Material>();
         var stateDescriptions = new java.util.HashMap<BlockState,String>();
         boolean observationComplete = true, billComplete = true, budgetExhausted = false;
+        int lowestSolidY = target.cells().stream().filter(c -> !c.authored().isAir())
+                .mapToInt(c -> c.pos().getY()).min().orElse(Integer.MIN_VALUE);
         for (var cell : target.cells()) {
             boolean inTime = clock.getAsLong() - start < MAX_NANOS;
             budgetExhausted |= !inTime;
@@ -148,7 +150,8 @@ public final class BuildSurvey {
                     if (bill != null) bill.unresolved++;
                 }
             }
-            String state = cellState(target, cell, access, actual, actuals::get, material.supported(), assessWork);
+            String state = cellState(target, cell, access, actual, actuals::get, material.supported(),
+                    assessWork, lowestSolidY);
             if (!material.supported()) billComplete = false;
             rows.add(new Row(cell, material, actual, rowIndex++, state));
         }
@@ -501,14 +504,20 @@ public final class BuildSurvey {
     }
 
     public static String cellState(BuildTarget target, BuildTarget.Cell cell, Access access, BlockState actual) {
-        return cellState(target, cell, access, actual, access::state,target.material(cell).supported(),true);
+        int lowestSolidY = target.cells().stream().filter(c -> !c.authored().isAir())
+                .mapToInt(c -> c.pos().getY()).min().orElse(Integer.MIN_VALUE);
+        return cellState(target, cell, access, actual, access::state,target.material(cell).supported(),true,
+                lowestSolidY);
     }
 
     private static String cellState(BuildTarget target, BuildTarget.Cell cell, Access access, BlockState actual,
                                     java.util.function.Function<BlockPos, BlockState> states, boolean supported,
-                                    boolean assessWork) {
+                                    boolean assessWork, int lowestSolidY) {
         if (!supported) return "unsupported";
-        if (!BuildObjects.paired(cell.authored())) return cellState(cell, access, actual, true,assessWork);
+        if (!BuildObjects.paired(cell.authored())) {
+            if (cell.pos().getY() == lowestSolidY && foundationCover(actual)) return "needs_clear";
+            return cellState(cell, access, actual, true,assessWork);
+        }
         var partner = BuildObjects.at(target, BuildObjects.other(cell.pos(), cell.desired()));
         if (!access.inBounds(cell.pos()) || !access.inBounds(partner.pos())) return "out_of_scope";
         var other = states.apply(partner.pos());
@@ -518,9 +527,19 @@ public final class BuildSurvey {
         if (!actual.isAir() || !other.isAir())
             return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (BuildObjects.secondary(cell.authored())) return "paired_pending";
+        if (cell.pos().getY() == lowestSolidY && foundationCover(actual))
+            return "needs_clear";
         String prerequisite = assessWork ? placementPrerequisite(access, cell) : null;
         if (prerequisite != null) return prerequisite;
         return access.near(cell.pos()) ? "not_assessed" : "out_of_reach";
+    }
+
+    private static boolean foundationCover(BlockState actual) {
+        return actual != null && (actual.is(net.minecraft.world.level.block.Blocks.SHORT_GRASS)
+                || actual.is(net.minecraft.world.level.block.Blocks.TALL_GRASS)
+                || actual.getBlock() instanceof net.minecraft.world.level.block.FlowerBlock
+                || actual.getBlock() instanceof net.minecraft.world.level.block.TallFlowerBlock
+                || actual.getBlock() instanceof net.minecraft.world.level.block.FlowerBedBlock);
     }
 
     private static String placementPrerequisite(Access access, BuildTarget.Cell cell) {

@@ -3,6 +3,115 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 同工地超时后复核（2026-10-26）
+
+工作move_to发生真实NAVIGATION_STALLED后，同意图、修订及规格的重发先核有限局部现场。
+身体/库存/真实目标编辑及附近方块均未变时立即返回NAVIGATION_STALLED，
+data含unchanged_stalled_search=true、search_started=false，不再等待又一个30秒窗口。
+组成员换序、重新包装run_program、status查询或再次mc.build都不能充当新事实。
+应实际换位、选择其他工作或补齐条件；没有可执行替代时report_blocked说明具体缺口。
+真实变化允许重评，未知不冒充不变；原图/成果/权限/材料与账户保持。记录仅在原工地会话，
+不证明无路，不增加健康路线总时限。详见UPPER-WORK-AND-STALE-DRAWINGS-2026-10-26。
+
+## 施工已有通路偏好（2026-10-26）
+
+严格放置工作目标和活动工地的move_to优先检查不新增挖放的可行路线，
+包括清障工作接近、让位及后段预搜；原walk_only、工作面、目标修订、范围与权限不变。
+偏好检查只占原搜索节点额度八分之一且最多256节点，没有结果就回原可挖放搜索，
+不要求模型先发一次walk_only再重发，也不证明较远处没有绕路。普通地下采掘策略保持。
+活动观察和失败诊断含existing_path_expanded/existing_path_selected，日志含
+existing_expanded/existing_path；它们是规划事实，不表示实际执行或目标完成。
+原NAVIGATION_STALLED仍按实际无进展中断；偏好阶段切换不重新计时或刷新原任务账。
+完整参考对照与离线边界见EXISTING-CONSTRUCTION-PATHS-2026-10-26及STATUS顶部。
+
+## 无进展搜索中断（2026-10-26）
+
+所有PathTask路线共用约30秒的无进展搜索窗口，包含世界线程搜索和等待后台结果/接续。
+单调时钟按相邻搜索采样累计，每段未调度间隔最多计1秒，避免游戏暂停或机器休眠直接耗尽额度；
+服务器刻加速不虚增秒数。实际移动至少0.25格或本路线实际挖放数量增加才重开窗口。
+小抖动、搜索节点增加、续批、重规划和动态目标移动不续期；正常移动、挖放、落稳不计空搜时间，
+避险suspend冻结采样且保留此前等待。有实际进展的长路线没有因本机制新增整趟总时限。
+
+终态失败前缀为NAVIGATION_STALLED，data含navigation_stalled/model_reassessment_required=true、
+search_idle_ms/search_idle_limit_ms、search_idle_seconds、stalled_search_mode、当前位置、
+requested_target及已知原工作目标/集合身份；原诊断、实际挖放与来源账继续附带。
+该终态不证明无路、主人取消或整项目标完成。原set_goal、建筑修订和实际成果保持。
+已有异步job_event唤醒模型，模型应先status details=true核对，再选新站位、其他可执行工作或补齐缺口，
+没有新事实不原样重试。Lua try_call只允许原局部失败白名单，本前缀不在其中；
+施工/普通程序/gather都会退出到模型，不在内部自行换候选继续搜索。
+没有新增模型分类器、主线程网络等待或自动重派；真实模型是否遵循重试提示仍需联调。
+
+## 通用关键节点汇报（2026-10-25）
+
+客户端工具目录现为32项。新增本地 `report_milestone`，不向服务端增加动作工具。
+自动阶段补充：gather已满足的材料子目标、craft真实制作入包的工具或耐久装备，
+会复用现有事实自动发出相同milestone事件，不依赖模型调用；可在Lua脚本未结束时发出。
+同资源集合或同工具每任务自动一次，回执milestone_reported=true时不用再显式报告。
+craft新增output_inventory_count为原提交后36存储槽的成品总数，查询/失败不返回该完成证明；
+按物品实际TOOL/耐久属性判断，不写木镐到钻石镐升级清单，中间木板/木棍不自动播报。
+此自动判断不增加查询、模型请求、动作预算或主线程网络等待，缺证据时原动作回执照常返回。
+模型在工具能力提升、关键资源入包、重要位置到达或施工阶段完成后选择汇报，
+执行层只读取得新鲜身体及证据，成功才沿原progress发出结构化milestone；原最终目标不变。
+常驻提示要求长任务主动使用，但不为查询、木板木棍或每格挖放逐步播报，不内置成品升级链。
+
+```json
+{"condition":{"type":"item","item":"minecraft:iron_pickaxe","count":1,"mode":"total"}}
+```
+
+`condition`支持三类：item使用item/count/mode，additional相对原任务开始的完整背包基线，
+total只证明现有库存；position使用dimension/x/y/z/radius，默认半径2、允许0至4，
+须同维度接地且实际脚格在球形范围内；building复用target/expected_revision，
+按原build_diff verify_only核实该格集完整已知、稳定且全部满足，可表达地基或屋顶等阶段。
+阶段格集可小于原工地，独立核验不改变工地、冻结整图或外层最终验收。
+到达坐标不单独证明矿洞安全，库存数量也不单独证明制作或采收因果。
+
+成功返回data.milestone={id,kind,verified,facts,evidence}；goal_satisfied保持false。
+同规范条件以内容ID去重，重复返回already_reported=true，不再发通知，也不声称重核当前事实。
+不可核实返回MILESTONE_UNVERIFIED；不能用自由文本自证完成，失败不更改最终条件。
+Lua可在真实操作之后直接 `mc.call('report_milestone',{condition=...})`，成功后继续同一程序。
+每任务最多保留1024个节点ID作为存储保护，满时拒绝新报告但不终止原任务；不淘汰旧ID。
+去重账随原长期目标检查点及同会话建筑继续资料保留，不回放历史汇报。
+工具选择与口播效果仍需实际模型联调；这不是自动依赖规划或每种物品的固定流程。
+
+## 住宅净高建议（2026-10-25）
+
+常驻提示和按需建筑知识将普通住宅主要活动区净高默认设为4至5格，不含地板和屋顶实体，
+按实际顶、梁及吊灯下方的空间核对；门本身仍为两格高，门廊和边缘储物区按用途处理。
+整块地板y=0时，四格净空为y=1至4，顶或梁从y=5开始；五格净空的顶或梁从y=6开始。
+build_diff.design_review的volume_height仍仅为整图非空气包围盒高度；住宅小于6层时给
+low_residential_volume建议。高地基或高屋脊可能掩盖低室内，未出现此警告不证明净高达标，
+仍须登记前核对实际剖面。诊断不自动抬高屋顶或更改已登记图纸及修订。
+
+## 建筑叫停接续与工作位估价（2026-10-25）
+
+已登记长期建筑在本会话叫停时保留一份数据资料，仍立即取消全部执行并清除持久执行记录。
+主人明确发送“继续”“继续建造”“继续施工”或“恢复目标”后，客户端先核新鲜同身体身份；
+服务端只在原权限已撤、同世界原工地修订与旧任务仍匹配时接续原空间会话。
+保留完整草稿、原临时见证、待补、通道、范围及导航累计账，重新核整图并建立新权限。
+旧动作、路径、Lua和批准不重放。目标状态只读展示保留资料；放弃目标、新普通任务、
+重载/关闭会话和身体生命周期变化清除它。不支持凭旧哈希补造已经丢失的图纸。
+跨重启仍沿原持久检查点；此入口不把在途资料写成可跨重启的安全检查点。
+
+放置工作导航的可选估价从有限范围内通过真实工作预检的站位反向引导，扫描和传播均分片。
+同层组合目标共用此机制；当前没有可用站位时回退原搜索，不剪掉需要未来支撑的分支。
+所有到达判据、累计编辑和原版动作复核保持，估价不是无路证明。
+进度字段work_stance_probes/work_stance_seeds及续批日志便于分清工作位扫描与实际路线展开；
+没有新增默认整趟时间、节点或重试帽。完整证据见CONSTRUCTION-RESUME-AND-WORK-STANCES-2026-10-25。
+
+## 草稿与工地修订更新（2026-10-25）
+
+成功build_diff的draft_retained=true表示本任务保留完整图，data.target={draft_revision}
+可交原set_goal、工地与施工，不重发整图。build_record的draft_list列已核对草稿，
+draft_query(target,offset?)查16格页；设计/实例列表为空不等于草稿丢失。
+design_capture(design_id,target)沿原权限存成持久设计，再显式创建实例。
+直接建筑工具反馈展示原引用、实际列表、分页和修订，Lua结构化data保持。
+build_site query带target、target_edits和draft_revision_allowed；revise需新target和
+expected_revision=旧工地修订，只限最终目标登记前、目标格从未修改的同落点/旋转/格集草稿。
+纠正保留临时见证、通道、范围、检查点与累计账；实例或已施工目标不允许此换图。
+目标观测发现worksite_revision不同则先纠正，成功登记后的原图继续冻结。
+引用按任务/身体/世界隔离；需要跨任务留图须显式保存，已有检查点及20KB/传输限制不放大。
+详见BUILD-DRAFT-RECOVERY-2026-10-25，仍31工具，无直接世界写入。
+
 ## 同层组合工作更新（2026-10-25）
 
 原move_to增加work_targets与expected_revision。已登记原图内的同层放置可提供
@@ -386,6 +495,25 @@ ENVIRONMENT_UNSAFE不能吞或靠换阶段刷新预算，查询仍可用。完�
 
 ## D3 有界持续跟随（2026-10-17）
 
+2026-10-25增加可选布尔protect_owner，默认false保持普通跟随。
+主人要求跟随并保护时必须true，只能以本身体主人为跟随目标；省略target_uuid或明确传主人UUID均可。
+持续观察主人12格内已加载实体，优先正针对主人或最近伤害主人的敌对来源，
+再选择其他未命名且未保护的敌对生物；中立及条件敌对的蜘蛛/普通猪灵须有真实敌对证据。
+锁定原实体引用/编号/UUID，复用EntityAttack、AttackTool和PathTask普通近战；
+死亡后新鲜扫描选择下一只，包括新出现的实体，不把旧编号用于新目标。
+敌人离开护卫范围或身体离主人超过12格就结束该次追击，回到原跟随；
+固定初始32格范围及原工地约束、原许可、租约、导航账户和原期限保持，不跟着敌人扩大范围。
+到位休眠仍观察，避险暂停保留战斗状态且原期限继续；取消/失效不恢复。
+不自动换武器或制作，先inventory/equip准备当前主手；贴近主人宜用斧避免剑横扫旁及。
+正在引爆、观察不完整、未知邻区、无路、横扫风险或许可失败按实际原因终止交回，
+不把站在主人旁边或工具期限结束当成保护成功；未新增远程、盾牌或完整战斗装备选择。
+status.task.progress.follow及终态的follow.protection提供威胁有限样本、优先来源、
+engagements/strikes/observed_deaths/实际生命与吸收观察、最近8次combat_history及省略数。
+死亡是现场事实，不作独占击杀归因；local_clear只说明该次有限完整观察。
+原job progress新增跟随/护卫/战斗显示，仍不唤醒模型或结算工具。
+跟随路径也接入原有usefulFor/retarget，目标移动时保留仍有效的路线和搜索账户。
+完整参考核对及验证边界见FOLLOW-OWNER-PROTECTION-2026-10-25，工具数仍31。
+
 新增follow，当前30工具（21服务端+9本地）。仅可选target_uuid、distance整数2-6、
 seconds整数1-60，默认主人/3格/30秒。只行走、固定初始32格球，已有工地内保守收缩。
 到位休眠不发终态，distance+2迟滞唤醒；原UUID、范围、租约、导航账与期限含避险不重开。
@@ -399,7 +527,8 @@ status.task.progress沿原观察报告阶段/固定范围/计数与导航账，�
 ## B5 双格门续卡（2026-10-17）
 
 普通原版DoorBlock门现在可经同build_blueprint/build_record/build_diff/build_site/build_nearby/
-mc.build施工：必须明确完整两半的half/facing/hinge，其他明确属性要求一致。
+mc.build施工：必须明确完整两半的half/facing；hinge可省略，由原版落位上下文决定。
+两半都明确的属性仍须一致，其他明确属性按图纸核对。
 保留两格验收，下半发一次原版动作/消费一件，上半paired_pending不单独施工；两格须空气。
 两格保护/占位/范围/来源共用，拆改须当前实例活来源且依赖解除；异常/取消保留部分效果。
 床/装饰/组件与其他格式仍不支持，B5未整卡完成；详细规则见B5-STRUCTURE-BLUEPRINTS。

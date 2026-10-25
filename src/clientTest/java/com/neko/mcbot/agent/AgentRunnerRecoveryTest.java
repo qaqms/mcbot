@@ -68,6 +68,63 @@ class AgentRunnerRecoveryTest {
         }
     }
 
+    @Test void milestoneDeduplicationSurvivesExplicitRecoveryWithoutReannouncingOldAchievements() {
+        var oldClient = client(); var old = seed(oldClient);
+        String args = "{\"condition\":{\"type\":\"item\",\"item\":\"dirt\",\"count\":2,\"mode\":\"additional\"}}";
+        old.handleS2c(new Envelope("companion_state", JsonParser.parseString(
+                "{\"companion\":\"testbot\",\"body_id\":\"body-one\",\"body_state\":\"alive\"}").getAsJsonObject()));
+        oldClient.drain();
+        oldClient.engine().tools(1, new ToolCall("milestone", "report_milestone", args)); oldClient.drain();
+        reply(oldClient, old, body(7));
+        reply(oldClient, old, body(7));
+        var saved = oldClient.journal.load(GoalCheckpoint.scope(body(5)));
+        assertEquals(1, saved.getAsJsonObject("host").getAsJsonArray("milestones").size());
+        old.disconnect(); oldClient.drain();
+        var next = client(); var runner = next.create();
+        try {
+            runner.start(); runner.submitTask("恢复目标"); next.drain();
+            var fresh = body(7); fresh.addProperty("body_id", "new-body");
+            reply(next, runner, fresh); reply(next, runner, fresh); reply(next, runner, fresh);
+            long calls = next.toolCount();
+            var duplicate = runner.execute("report_milestone", args).join();
+            assertTrue(duplicate.ok(), duplicate.feedback());
+            assertTrue(duplicate.data().get("already_reported").getAsBoolean());
+            assertEquals(calls, next.toolCount());
+            assertNotEquals(0, runner.currentTaskId());
+        } finally { runner.close(); next.drain(); }
+    }
+
+    @Test void automaticallyReportedEquipmentKeepsItsDeduplicationAcrossExplicitRecovery() {
+        var first = client(); var old = seed(first);
+        old.handleS2c(new Envelope("companion_state", JsonParser.parseString(
+                "{\"companion\":\"testbot\",\"body_id\":\"body-one\",\"body_state\":\"alive\"}").getAsJsonObject()));
+        first.drain();
+        var crafted = JsonParser.parseString("""
+                {"query":false,"can_craft":true,"crafted_count":1,"output_inventory_count":1,
+                 "output_per_batch":{"item":"minecraft:wooden_pickaxe","count":1,"mining_tool":true,"max_damage":59},
+                 "body_delta":{"body_id":"body-one","same_world":true,"observation_known":true,
+                 "dimension_after":"minecraft:overworld"}}
+                """).getAsJsonObject();
+        first.engine().tools(1, new ToolCall("craft", "craft", "{\"item\":\"wooden_pickaxe\"}"));
+        first.drain(); replyTool(first, old, "craft", crafted); reply(first, old, body(7));
+        var saved = first.journal.load(GoalCheckpoint.scope(body(5)));
+        assertEquals(2, saved.getAsJsonObject("host").getAsJsonArray("milestones").size());
+        old.disconnect(); first.drain();
+        var next = client(); var runner = next.create();
+        try {
+            runner.start(); runner.submitTask("恢复目标"); next.drain();
+            var fresh = body(7); fresh.addProperty("body_id", "new-body");
+            reply(next, runner, fresh); reply(next, runner, fresh); reply(next, runner, fresh);
+            try (var events = new com.neko.mcbot.bridge.BridgeEventCapture()) {
+                var repeated = runner.execute("craft", "{\"item\":\"wooden_pickaxe\"}"); next.drain();
+                crafted.getAsJsonObject("body_delta").addProperty("body_id", "new-body");
+                replyTool(next, runner, "craft", crafted);
+                assertTrue(repeated.join().data().get("milestone_reported").getAsBoolean());
+                assertEquals(0, events.events().stream().filter(e -> e.has("milestone")).count());
+            }
+        } finally { runner.close(); next.drain(); }
+    }
+
     @Test void realJournalAndRunnerRejoinRequireOwnerIntentThenFreshPermissionAndOriginalBaseline() {
         var oldClient = client(); var old = seed(oldClient);
         String scope = GoalCheckpoint.scope(body(5));
@@ -170,6 +227,102 @@ class AgentRunnerRecoveryTest {
         data.addProperty("goal_observation_key", (complete ? "b" : "a").repeat(64));
         return data;
     }
+    private AgentRunner stoppedBuilding(OfflineAgentClient client, String revision) {
+        var runner = client.create();
+        runner.start(); runner.submitTask("完成这栋住宅"); client.drain();
+        reply(client,runner,body(0));
+        client.engine().tools(0,new ToolCall("goal","set_goal","{\"type\":\"building\",\"target\":{\"draft_revision\":\""
+                + revision + "\"},\"expected_revision\":\"" + revision + "\",\"lifecycle\":\"long_term\"}"));
+        client.drain(); reply(client,runner,body(0));
+        replyTool(client,runner,"build_diff",buildingEvidence(revision,false));
+        reply(client,runner,body(0));
+        runner.cancelTask(0); client.drain();
+        return runner;
+    }
+    @Test void changedIncarnationOrRejectedServerHandoffCannotWakeTheModel() {
+        for (boolean changedBody : new boolean[]{true,false}) {
+            var client = client(); var runner = stoppedBuilding(client,"e".repeat(64));
+            try {
+                int requests = client.engine().responses.size();
+                long begins = client.sent.stream().filter(e->e.kind().equals("task_begin")).count();
+                runner.submitTask("继续"); client.drain();
+                var fresh = body(0);
+                if (changedBody) fresh.addProperty("body_id","replacement-body");
+                reply(client,runner,fresh);
+                if (!changedBody) {
+                    var rejected = body(0); rejected.addProperty("permission_mode","none");
+                    reply(client,runner,rejected);
+                } else assertEquals(begins,client.sent.stream().filter(e->e.kind().equals("task_begin")).count());
+                assertEquals(requests,client.engine().responses.size());
+                assertEquals(0,runner.currentTaskId());
+            } finally { runner.close(); client.drain(); }
+        }
+    }
+    @Test void stoppedBuildingStatusIsDataOnlyAndCancellationInvalidatesALateContinuePreflight() {
+        var client = client(); var runner = stoppedBuilding(client,"e".repeat(64));
+        try {
+            int requests = client.engine().responses.size();
+            long calls = client.toolCount();
+            runner.submitTask("目标状态"); client.drain();
+            assertEquals(calls,client.toolCount()); assertEquals(requests,client.engine().responses.size());
+            runner.submitTask("继续"); client.drain();
+            runner.cancelTask(0); client.drain();
+            reply(client,runner,body(0));
+            assertEquals(0,runner.currentTaskId()); assertEquals(requests,client.engine().responses.size());
+            runner.submitTask("放弃目标"); client.drain();
+            reply(client,runner,body(0));
+            assertNull(client.journal.load(GoalCheckpoint.scope(body(0))));
+            runner.submitTask("查看附近情况"); client.drain(); reply(client,runner,body(0));
+            var begin = client.sent.stream().filter(e->e.kind().equals("task_begin")).toList().getLast();
+            assertFalse(begin.body().has("continue_construction"),"discarded work never leaks into an unrelated task");
+        } finally { runner.close(); client.drain(); }
+    }
+    @Test void ownerContinueAfterCancellingBuildingRecoversTheExactGoalWithoutReplayingThePendingMove() {
+        var client = client(); var runner = client.create();
+        String revision = "e".repeat(64);
+        String target = "{\"draft_revision\":\"" + revision + "\"}";
+        try {
+            runner.start(); runner.submitTask("完成这栋住宅"); client.drain();
+            reply(client,runner,body(0));
+            client.engine().tools(0,new ToolCall("goal","set_goal","{\"type\":\"building\",\"target\":" + target
+                    + ",\"expected_revision\":\"" + revision + "\",\"lifecycle\":\"long_term\"}"));
+            client.drain(); reply(client,runner,body(0));
+            replyTool(client,runner,"build_diff",buildingEvidence(revision,false));
+            reply(client,runner,body(0));
+            long previousTask = runner.currentTaskId();
+            var saved = client.journal.load(GoalCheckpoint.scope(body(0))).getAsJsonObject("core");
+            runner.execute("move_to","{\"x\":448,\"y\":69,\"z\":-293}"); client.drain();
+            long moves = client.sent.stream().filter(e -> e.kind().equals("tool_call") && e.str("tool").equals("move_to")).count();
+            runner.cancelTask(0); client.drain(); runner.cancelTask(0); client.drain();
+            assertEquals(0,runner.currentTaskId());
+            assertNull(client.journal.load(GoalCheckpoint.scope(body(0))),"cancel still clears durable execution");
+            int requests = client.engine().responses.size();
+            runner.submitTask("继续"); client.drain();
+            assertEquals(requests,client.engine().responses.size(),"continue first checks current identity");
+            reply(client,runner,body(0));
+            var begin = client.sent.stream().filter(e -> e.kind().equals("task_begin")).toList().getLast();
+            var continuation = begin.body().getAsJsonObject("continue_construction");
+            assertNotNull(continuation); assertFalse(begin.body().has("recovery_spatial"));
+            assertEquals(previousTask,continuation.get("previous_task_id").getAsLong());
+            assertEquals(revision,continuation.get("target_revision").getAsString());
+            assertTrue(runner.currentTaskId() > previousTask);
+            reply(client,runner,body(0));
+            assertEquals(JsonParser.parseString(target),client.lastTool().obj("args").get("target"));
+            replyTool(client,runner,"build_diff",buildingEvidence(revision,false));
+            reply(client,runner,body(0));
+            assertEquals(requests+1,client.engine().responses.size());
+            var resumed = client.journal.load(GoalCheckpoint.scope(body(0))).getAsJsonObject("core");
+            assertEquals(saved.get("goal_id"),resumed.get("goal_id"));
+            assertTrue(resumed.get("steps").getAsInt()>saved.get("steps").getAsInt());
+            assertTrue(client.engine().histories.getLast().toString().contains(revision));
+            assertEquals(moves,client.sent.stream().filter(e -> e.kind().equals("tool_call")
+                    && e.str("tool").equals("move_to")).count(),"never replay the old pending movement");
+            client.engine().tools(requests,new ToolCall("query","set_goal","{\"operation\":\"query\"}"));
+            client.drain(); reply(client,runner,body(0));
+            assertTrue(client.engine().histories.getLast().toString().contains("\"registered\":true"));
+        } finally { runner.close(); client.drain(); }
+    }
+
     @Test void recoveredBuildingQueriesOriginalRevisionAndRejectsChangedEvidenceBeforeTheModel() {
         String revision = "a".repeat(64);
         String target = "{\"instance_id\":\"11000000-0000-0000-0000-000000000001\",\"instance_revision\":2}";

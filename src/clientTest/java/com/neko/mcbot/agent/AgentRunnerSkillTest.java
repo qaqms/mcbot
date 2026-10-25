@@ -34,7 +34,7 @@ class AgentRunnerSkillTest {
         assertTrue(firstPage.contains("design_components"));
         assertTrue(firstPage.contains("doors"));
         assertTrue(firstPage.contains("先做下面五件事"));
-        assertEquals(31,client.engine().definitions.getFirst().size());
+        assertEquals(32,client.engine().definitions.getFirst().size());
         assertEquals(0,client.toolCount());
         assertFalse(Files.exists(client.skillsDirectory));
     }
@@ -75,7 +75,7 @@ class AgentRunnerSkillTest {
     @Test void realRunnerReadsKnowledgeLocallyAndKeepsTheSameToolSchemas() throws Exception {
         String name = start("BODY_ON_DEMAND_ONLY");
         var definitions = client.engine().definitions.getFirst();
-        assertEquals(31, definitions.size());
+        assertEquals(32, definitions.size());
         assertFalse(client.engine().prompts.getFirst().contains("BODY_ON_DEMAND_ONLY"));
         assertTrue(client.engine().prompts.getFirst().contains(name));
         help(0, name);

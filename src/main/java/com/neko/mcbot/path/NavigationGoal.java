@@ -8,6 +8,9 @@ public interface NavigationGoal {
     /** Direction within a geometric reach plateau, used only to order equal search priorities. */
     default double approach(int x, int y, int z) { return 0; }
 
+    /** Optional guidance starts at verified work stances, never a proof that other edited stances are impossible. */
+    default boolean estimateWorkStances() { return false; }
+
     /** Null keeps goals with live premises on the world thread. */
     default NavigationGoal snapshot(DigSampler terrain) { return null; }
     default boolean reached(int x, int y, int z, TerrainEdits edits) {
@@ -43,6 +46,9 @@ public interface NavigationGoal {
                 double distance = Double.POSITIVE_INFINITY;
                 for (var member : members) distance = Math.min(distance, member.approach(x, y, z));
                 return distance;
+            }
+            @Override public boolean estimateWorkStances() {
+                return members.stream().allMatch(NavigationGoal::estimateWorkStances);
             }
             @Override public double arrivalCost(DigSampler terrain, int x, int y, int z, TerrainEdits edits) {
                 double cost = Double.POSITIVE_INFINITY;

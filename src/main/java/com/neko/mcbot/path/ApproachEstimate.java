@@ -21,10 +21,12 @@ final class ApproachEstimate {
     private final int sx, sy, sz, cap;
     private final Map<Long, Double> offered = new HashMap<>();
     private final Map<Long, Entry> settled = new HashMap<>();
+    private final Map<Integer, int[]> workLevels = new HashMap<>();
     private final Set<Long> sealed = new HashSet<>();
     private final PriorityQueue<Entry> queue = new PriorityQueue<>(Comparator
             .comparingDouble(Entry::cost).thenComparingInt(Entry::tie).thenComparingLong(Entry::cell));
     private int x, y, z, scans, admitted, expanded;
+    private int workStances;
     private boolean seeding = true, done;
     private double frontier;
 
@@ -41,14 +43,23 @@ final class ApproachEstimate {
     int expanded() { return expanded; }
     int admitted() { return admitted; }
     int seedProbes() { return scans; }
+    int workStances() { return workStances; }
 
     void advance() {
         if (done) return;
         if (seeding) {
             if (scans >= 8192) { disable(); return; }
             scans++;
-            if (terrain.inBounds(x, y, z) && goal.remaining(x, y, z) == 0)
+            if (terrain.inBounds(x, y, z) && goal.remaining(x, y, z) == 0
+                    && (!goal.estimateWorkStances() || goal.reached(x, y, z, TerrainEdits.EMPTY))) {
+                if (goal.estimateWorkStances()) {
+                    workStances++;
+                    var span = workLevels.computeIfAbsent(y, ignored -> new int[]{x, x, z, z});
+                    span[0] = Math.min(span[0], x); span[1] = Math.max(span[1], x);
+                    span[2] = Math.min(span[2], z); span[3] = Math.max(span[3], z);
+                }
                 offer(x, y, z, 0, null);
+            }
             if (++z > bounds.maxZ()) {
                 z = bounds.minZ();
                 if (++y > bounds.maxY()) { y = bounds.minY(); if (++x > bounds.maxX()) seeding = false; }
@@ -71,7 +82,7 @@ final class ApproachEstimate {
             int px = cx + dx, py = cy + dy, pz = cz + dz;
             if (!terrain.inBounds(px, py, pz) || !terrain.allowsStep(px, py, pz, cx, cy, cz)) continue;
             // Only newly occupied cells carry a price; revisiting edited cells is discounted by the caller.
-            double cost = 0;
+            double cost = goal.estimateWorkStances() ? DigAStar.H_UNIT : 0;
             Work work = entry.work();
             boolean departureFloor = false;
             for (int cellY = cy; cellY <= Math.max(py, cy) + 1; cellY++) {
@@ -114,6 +125,7 @@ final class ApproachEstimate {
 
     private void disable() {
         settled.clear();
+        workLevels.clear();
         frontier = 0;
         finish();
     }
@@ -128,7 +140,20 @@ final class ApproachEstimate {
     double cost(int px, int py, int pz, TerrainEdits edits) {
         // This is guidance for an already weighted search, not an optimality bound or a proof of no route.
         Entry entry = settled.get(DigAStar.pack(px, py, pz));
-        if (entry == null) return edits.removed().isEmpty() ? frontier : 0;
+        // An unrelated removal cannot erase travel to a verified work stance outside this truncated field.
+        if (entry == null) {
+            if (!goal.estimateWorkStances()) return edits.removed().isEmpty() ? frontier : 0;
+            // Truncation must not flatten every unvisited floor into the same work distance.
+            // These per-level envelopes only guide ordering; they cannot certify an arrival.
+            double distance = Double.POSITIVE_INFINITY;
+            for (var level : workLevels.entrySet()) {
+                var span = level.getValue();
+                double dx = Math.max(0, Math.max((double) span[0] - px, (double) px - span[1]));
+                double dz = Math.max(0, Math.max((double) span[2] - pz, (double) pz - span[3]));
+                distance = Math.min(distance, Math.max(Math.abs((double) py - level.getKey()), Math.max(dx, dz)));
+            }
+            return Double.isFinite(distance) ? Math.max(frontier, DigAStar.H_UNIT * distance) : frontier;
+        }
         double cost = entry.cost();
         int inspected = 0;
         for (Work work = entry.work(); work != null && inspected++ < 128; work = work.next())

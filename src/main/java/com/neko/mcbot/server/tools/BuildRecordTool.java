@@ -29,6 +29,21 @@ public final class BuildRecordTool implements ServerTool {
             int designRevision=args.has("design_revision") ? BuildTarget.integer(args.get("design_revision"),1,1024) : 0;
             JsonObject data;
             switch (operation) {
+                case "draft_list" -> {
+                    BuildTarget.keys(args,Set.of("operation"));
+                    data=site.drafts().list();
+                }
+                case "draft_query" -> {
+                    BuildTarget.keys(args,Set.of("operation","target","offset"));
+                    data=site.drafts().query(args.getAsJsonObject("target"),offset);
+                }
+                case "design_capture" -> {
+                    BuildTarget.keys(args,Set.of("operation","design_id","target"));
+                    var definition=site.drafts().resolve(args.getAsJsonObject("target")).input();
+                    definition.remove("anchor"); definition.remove("rotation");
+                    store.createDesign(owner,Objects.requireNonNull(id),definition);
+                    data=store.queryDesign(owner,id,1,0,null);
+                }
                 case "design_create" -> {
                     BuildTarget.keys(args,Set.of("operation","design_id","definition"));
                     store.createDesign(owner,Objects.requireNonNull(id),args.getAsJsonObject("definition"));
@@ -72,6 +87,7 @@ public final class BuildRecordTool implements ServerTool {
             return new Result(true,"记录已核对；设计不自动更新实例，记录不授予动作权限，不回放或自动恢复已取消工作。",data);
         } catch (RuntimeException invalid) {
             return new Result(false,"DENIED:记录参数、身份、修订、容量或存储不满足；用tool_help核对build_record。"
+                    + "未保存草稿用draft_list/draft_query，design_capture需本任务实际保留的target；旧哈希不能还原图纸。"
                     + "未执行世界动作，不重开原任务预算。",null);
         }
     }

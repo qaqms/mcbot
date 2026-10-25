@@ -220,6 +220,12 @@ public final class CraftTool implements ServerTool {
             }
         }
         inventory.setChanged();
+        int stored = 0;
+        for (int slot = 0; slot < Inventory.INVENTORY_SIZE; slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (stack.is(selected.output().getItem())) stored += stack.getCount();
+        }
+        data.addProperty("output_inventory_count", stored);
         return new Result(true, "合成完成。" + summary + "成品及配方返还物已全部放入背包；可用 inventory 核对。", data);
     }
 

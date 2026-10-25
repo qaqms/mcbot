@@ -43,6 +43,13 @@ public final class BuildSiteTool implements ServerTool {
                 yield new Arguments(operation, target, target.revision(), List.copyOf(route),
                         args.has("bounds") ? com.neko.mcbot.path.PathSpec.parse(args) : null);
             }
+            case "revise" -> {
+                BuildTarget.keys(args,Set.of("operation","target","expected_revision"));
+                var target=resolve.apply(args.getAsJsonObject("target"));
+                String previous=BuildTarget.string(args.get("expected_revision"),64);
+                if (!previous.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("revision");
+                yield new Arguments(operation,target,previous,List.of(),null);
+            }
             case "checkpoint" -> {
                 BuildTarget.keys(args, Set.of("operation", "expected_revision"));
                 String revision = BuildTarget.string(args.get("expected_revision"), 64);
@@ -65,6 +72,8 @@ public final class BuildSiteTool implements ServerTool {
         catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new Result(false,
                     "DENIED:build_site query仅需operation；begin需target，可选access_route/bounds/expected_revision；"
+                            + "revise需target及旧工地expected_revision，只纠正未施工草稿；"
+                            + "draft_revision须存在于本任务草稿目录，跨任务使用持久实例；"
                             + "checkpoint需expected_revision。无需猜写通道，其他字段不支持；target或修订须有效。", null));
         }
         if (!"query".equals(input.operation()) && (context == null
@@ -81,11 +90,18 @@ public final class BuildSiteTool implements ServerTool {
             case "begin" -> site.begin(input.target(), input.route(), StandingGeometry.feetCell(body),
                     input.scope() != null ? input.scope() : site.active() ? site.scope()
                     : com.neko.mcbot.path.PathSpec.DEFAULT, access);
+            case "revise" -> instance != null
+                    ? new Result(false,"DENIED:实例工地不能按草稿纠正。",null)
+                    : site.revise(input.target(),input.revision(),StandingGeometry.feetCell(body),access);
             case "checkpoint" -> site.checkpoint(input.revision(), StandingGeometry.feetCell(body), access);
             default -> null;
         };
         if (failure==null && instance!=null) site.attach(BuildRecordAccess.store(body),instance);
         var data = site.report(access);
+        if (failure != null && failure.data() != null) {
+            var problem = failure.data().get("object_problem");
+            if (problem != null) data.add("registration_problem", failure.data());
+        }
         if (failure == null && site.active() && !"checkpoint".equals(input.operation()))
             BuildRelocation.describe(body, data, "query".equals(input.operation()));
         return CompletableFuture.completedFuture(new Result(failure == null, failure == null

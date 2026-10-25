@@ -1,0 +1,28 @@
+{
+  "anchor":{"x":-118,"y":88,"z":340},
+  "regions":[
+    {"from":{"x":0,"y":0,"z":0},"to":{"x":6,"y":0,"z":6},"block":"minecraft:oak_planks"},
+    {"from":{"x":0,"y":1,"z":0},"to":{"x":2,"y":3,"z":0},"block":"minecraft:cobblestone"},
+    {"from":{"x":4,"y":1,"z":0},"to":{"x":6,"y":3,"z":0},"block":"minecraft:cobblestone"},
+    {"from":{"x":3,"y":3,"z":0},"to":{"x":3,"y":3,"z":0},"block":"minecraft:cobblestone"},
+    {"from":{"x":0,"y":1,"z":6},"to":{"x":6,"y":3,"z":6},"block":"minecraft:cobblestone"},
+    {"from":{"x":0,"y":1,"z":1},"to":{"x":0,"y":1,"z":5},"block":"minecraft:cobblestone"},
+    {"from":{"x":0,"y":3,"z":1},"to":{"x":0,"y":3,"z":5},"block":"minecraft:cobblestone"},
+    {"from":{"x":0,"y":2,"z":1},"to":{"x":0,"y":2,"z":1},"block":"minecraft:cobblestone"},
+    {"from":{"x":0,"y":2,"z":5},"to":{"x":0,"y":2,"z":5},"block":"minecraft:cobblestone"},
+    {"from":{"x":0,"y":2,"z":2},"to":{"x":0,"y":2,"z":4},"block":"minecraft:glass"},
+    {"from":{"x":6,"y":1,"z":1},"to":{"x":6,"y":1,"z":5},"block":"minecraft:cobblestone"},
+    {"from":{"x":6,"y":3,"z":1},"to":{"x":6,"y":3,"z":5},"block":"minecraft:cobblestone"},
+    {"from":{"x":6,"y":2,"z":1},"to":{"x":6,"y":2,"z":1},"block":"minecraft:cobblestone"},
+    {"from":{"x":6,"y":2,"z":5},"to":{"x":6,"y":2,"z":5},"block":"minecraft:cobblestone"},
+    {"from":{"x":6,"y":2,"z":2},"to":{"x":6,"y":2,"z":4},"block":"minecraft:glass"},
+    {"from":{"x":0,"y":4,"z":0},"to":{"x":6,"y":4,"z":6},"block":"minecraft:oak_planks"},
+    {"from":{"x":3,"y":1,"z":0},"to":{"x":3,"y":1,"z":0},"block":"minecraft:oak_door",
+      "properties":[{"name":"half","value":"lower"},{"name":"facing","value":"south"}]},
+    {"from":{"x":3,"y":2,"z":0},"to":{"x":3,"y":2,"z":0},"block":"minecraft:oak_door",
+      "properties":[{"name":"half","value":"upper"},{"name":"facing","value":"south"}]},
+    {"from":{"x":1,"y":1,"z":1},"to":{"x":1,"y":1,"z":1},"block":"minecraft:crafting_table"},
+    {"from":{"x":5,"y":1,"z":5},"to":{"x":5,"y":1,"z":5},"block":"minecraft:chest",
+      "properties":[{"name":"facing","value":"north"}]}
+  ]
+}

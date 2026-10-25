@@ -3,6 +3,470 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 上层空搜、原样重试与旧建筑记录（2026-10-26，Asia/Shanghai）
+
+- 维护者反馈新版上层仍卡搜索，超时后再次卡住，并要求去除旧地基图纸。确认实例已安装
+  1cdae6候选，不能归因为未换包。最新日志02:24:40路线128开始，提交短半程后接续
+  仍在楼下扩展；02:25:26按30秒有效空搜中断，模型查状态和剩余后02:25:36又mc.build，
+  路线129原地约11秒后玩家退出。冻结证据为build/upper-roof-evidence-20261026.log，
+  SHA256 a6518319e33a8b8766c5645b8e8edc4386f5bf61622dd565d45abf3e32ee8fe8。
+  完整机制、参考取舍和数据边界见docs/UPPER-WORK-AND-STALE-DRAWINGS-2026-10-26.md。
+- 原型回归从本次世界提取相对化、仅方块局部夹具，真实形状/射线/放置出口预检参与。
+  旧码复现相同73/7200工作站位播种及4000节点耗尽，保留upper-roof-before XML。
+  根因是反向工作估价截断后场外统一frontier常数，把不同楼层压平，宽松手距已到0仍非
+  严格工作到达。现保留已核站位各高度的水平包围范围，场外维持高度方向，原场内移除
+  折扣、严格到达和累计地形保持；同场景325节点得到可预检登高路线。旧绕台阶150节点、
+  零编辑场景保持，不声明无需必要支撑或全局最优。
+- BuildSite增加运行时超时证据，MoveToTool同工地工作路线派发前复核。意图包括目标/
+  材料/face、修订和规格，成员换序不绕过；身体、库存、原图真实修改和附近方块均未变
+  就立即NAVIGATION_STALLED，unchanged_stalled_search=true、search_started=false。
+  查询/新Lua/checkpoint/动作收费不算新进展；实际换位0.25格、库存/真实目标编辑/
+  局部地形变化允许重评。最多32份、每份最多2125格，仅读已加载状态，无网络/磁盘/
+  线程等待；无旧失败不增加地形读。新任务/世界清除、同会话继续保持，不保存活身份，
+  不将停滞冒充无路证明，不迁移完整学习，也不保证感知任意远处通路变化。
+- 当前世界持久designs/instances均为空，实例没有skills/NBT覆盖；最新652格房型为模型
+  新绘制，仍将地板放在表土上方并有88处疑似反坡。删除旧记录不等于解决新绘制做法，
+  常驻提示及建筑知识首页明确普通平地清表土后同层基础、方块y与feet_y、登记前检查
+  foundation_surface和反坡。明确架空/坡地设计保持，冻结图和玩家方块不暗改。
+  维护者本轮明确授权清旧图：12份带blocked标记的失效建筑恢复JSON及对应标记已从
+  实例目标目录归档到本仓忽略的build/retired-building-records-20261026，manifest与
+  12份原JSON指纹核对通过；3份非建筑记录保留。其他历史世界实例来源依赖及测试夹具
+  不删除，当前世界不会引用它们。本次没有凭哈希发明新版完整图，测试新设计须新建任务。
+- build/upper-roof-final2-20261026.log强制build --offline --console=plain --no-daemon
+  --rerun-tasks通过，1分3秒、21任务全部执行；核心477/48 suites、根197/27、
+  客户端1448/146，共2122项/221 suites，failures/errors/skipped全0。
+  含本次9项新增，git diff --check通过（原换行警告保持），构建后无Java残留。
+  首次全量后复核发现attempt charge不是真实编辑，已改用targetEdits并补独立回归，
+  最终第二次强制全量覆盖该修正；未弱化或跳过测试。
+- JAR 1904340 bytes，SHA256
+  3405d2cc34b605f2652d15d07d51c2200d841b7a494da49c6aee4f7fb08be1d9；
+  内嵌核心286800 bytes，SHA256
+  1827cf099fc261747672c2bc35e7c88aecb60e6290d386f252318190d6109d9a。
+  官方交付检查确认JAR/核心/桥包完整、核心逐字节一致、实际SDK及自带依赖检查通过。
+  候选与delivery-verification-upper-roof-20261026.json交独立桥接器dist；
+  桥接器0.3.2保持692351 bytes及10abd4a73d39c7e279079be564486fbd46ef2a3bc4302d0f9f33b4140e22c181。
+  未安装JAR、启动游戏/宿主/模型、改参考或宿主源码、拉取/提交/推送；原本地修改保持。
+  离线回归不等于实际运动、模型换方案及新住宅地基质量已验，仍待玩家换包测试。
+
+## 上层施工优先利用已有通路（2026-10-26，Asia/Shanghai）
+
+- 维护者反映上层施工偏好直线拆改/垫脚，已有绕路却不利用。本轮只读复核参考
+  BuildCompanionTask/BuildOrder/Arrival、AStar两遍搜索与到达/改善判据、
+  CostModel/ActionCosts/RouteSpec、Estimate/Vertical/Favoring、Moves、
+  Driver/TripMemory与接续链；机制取舍、版本指纹和边界见
+  docs/EXISTING-CONSTRUCTION-PATHS-2026-10-26.md。仅学机制，不复制/翻译参考实现。
+  最新日志主要为采掘，不虚报新包再次上层卡死；历史施工证据沿用path-stall-evidence，
+  实例指纹为上一轮search-stall候选，旧日志支撑清单不能单独证明每格多余。
+- 根因可独立复现：贪心阶段主排序不计累计动作费，编辑数只破同分；
+  分段首解后64次改善不足以可靠发现先远离工作目标的已有入口。
+  本轮在原DigAStar增加有界已有通路检查：严格放置目标自动启用，活动工地PathTask
+  的普通移动/清障接近/让位及后段预搜显式共用。按行走累计价与距离排序，
+  原PathTransition只在本阶段给零新增挖放余量，实际接触/碰撞/未知/范围/累计地形不变；
+  未找到且原资源允许时回原可编辑搜索。普通地下采掘不默认增加此阶段。
+- 偏好检查最多使用本次节点额度八分之一且不超过256；不是新整趟帽、试错次数或无路证明。
+  原节点/CPU/存储账不重开，预搜的既有未落地支撑不重复扣料；
+  偏好阶段零余量拒绝不污染最终权限/挖放额度诊断。最终封闭起点按当前搜索图判定，
+  不因多一次起点记录而漏报；原取消、全图验收、实际动作及30秒停滞窗口保持。
+  日志existing_path/existing_expanded与观察/失败existing_path_selected/
+  existing_path_expanded只描述规划，不假报真实施工效果。
+- 旧码新增纯算法三项失败：绕门却拆墙、绕缺口却搭桥、组合工作选择需拆改的近目标。
+  原版形状/射线的上层场景旧码展开42节点，拆楼板1格、垫柱2格；
+  修正后150节点，走既有三级台阶，零新增挖放且无需4050次站位预扫描。
+  真实需脚手架的原局部存档屋面仍允许2格支撑，106变169节点，新增63为偏好检查开销，
+  不宣称所有路线提速。scene-before首夹具误用无可点击顶面的锚点已修正，
+  保存有效旧码失败XML；root首命令误选核心过滤，regression首版普通路线时钟采样改变
+  均已修正，未弱化原测试。最终2102旧回归及11新增均通过。
+- build/existing-work-final-20261026.log强制
+  build --offline --console=plain --no-daemon --rerun-tasks成功，1分1秒、21任务全部执行。
+  核心477/48 suites、根196/27、客户端1440/145，共2113项/220 suites，
+  failures/errors/skipped全0。git diff --check通过，构建后无Java残留。
+- 新JAR为1896672 bytes，SHA256
+  1cdae6a8415996a999e4155b5d22f2750cf795c8987bc6421c8b4fdd35ff6471；
+  内嵌核心286126 bytes，SHA256
+  2aa7b439be53b64f9db108437ff666a1aff23b55eac48aeec5f8f5cbad53a31f，
+  官方交付检查确认与独立核心逐字节一致，JAR/核心/插件完整及SDK接口/自带依赖通过。
+  新JAR与delivery-verification-existing-path-20261026.json放独立桥接器dist；
+  桥接器0.3.2不变，本次只更新游戏端。未安装实例或启动游戏/宿主服务/真实模型，
+  未拉取/提交/推送，原本地修改保留。没有迁移参考全部运动模式、自动开关门、
+  最优界证明、完整跨段学习或全量编辑后台；任意长绕路不保证在偏好窗口内发现，
+  实际上层施工、动作流畅与模型调整仍待新包复测。
+
+## 无进展寻路30秒交回模型（2026-10-26，Asia/Shanghai）
+
+- 维护者本轮明确要求约30秒没有移动的搜索自动中断并提醒模型。此授权新增无进展窗口，
+  不撤销健康长路线原无默认整趟时限的政策；此前记录“无默认总时间门”仍指整趟额度。
+  只读复核参考MoveToCompanionTask进展续期/检查点、Watchdog实际移动/工作观察、Driver无路处理、
+  AbstractCompanionTask等待冻结和NavText具体失败反馈。参考将规划等待视为推进并冻结期限，
+  不能原样搬来解决本地空搜，因此只学进展/期限分离与事实回执机制，不复制/翻译实现。
+- 新SearchStall共所有PathTask，包括普通/工作/拾取/动态接近和等待接续；以System.nanoTime
+  记录有效搜索等待约30秒，单次未调度间隔最多1秒，快速游戏刻不会把实际毫秒伪作30秒。
+  实际身体位移至少0.25格或原累计真实挖/放增加才续期；小抖动、节点增加、续批、
+  重规划及目标移动不续期。正常移动/挖放/落稳不消耗，显式避险suspend冻结采样并保留此前等待。
+  这是空搜窗口，未添加整趟距离、节点、重试次数或健康行程总时间门。
+- NAVIGATION_STALLED沿原terminal撤销后台/预搜、释放输入、清瞬时裂纹，原目标/修订/
+  来源/实际成果/权限和导航账户保持。回执含无进展毫秒/上限、当前位置、请求目标、搜索模式、
+  原工作集合身份、model_reassessment_required及已有拒绝诊断。尚未证明目标不可达；
+  核心提示和move_to帮助要求先status details=true核对后换工作位/可做格或补条件，无新事实不原样重发。
+  不使用主线程网络、阻塞等待或额外模型分类器。
+- 新前缀不在Lua try_call的局部恢复白名单，普通重试脚本/内置mc.build均退出到模型；
+  gather亦不内部续试并带原实际采掘量/末次导航回执。新回归覆盖30秒边界、抖动、
+  长路与实际编辑续期、慢动作/避险/未调度间隔、快速游戏刻、动态改目标及搜索对象替换不续期、
+  先前真实效果保留，以及后台线程被测试闸门挂住时主线程仍可立即取消结果。
+  search-stall-focused2已通过。真实runner/AgentLoop离线集成以job_ack(-1)等待、
+  job_event failed解除PARK，新鲜status后产生下一模型请求；模型历史含具体停滞原因，
+  原建筑task_id/登记目标保持，无task_end或新task_begin。模型接收反馈文本，
+  结构化标记保留程序/面板，未将JSON字段必在模型文本作为错误验收要求。
+- build/search-stall-final-20261026.log强制
+  build --offline --console=plain --no-daemon --rerun-tasks成功，1分1秒、21任务全部执行。
+  核心477/48 suites、根186/26、客户端1439/145，共2102项/219 suites，
+  failures/errors/skipped全0。含原实际运动/挖掘/后台/动态接近/施工/汇报全量回归，
+  git diff --check通过，构建后无Java残留。
+- 新JAR为1895849 bytes，SHA256
+  b7fc52e5e1d4942e729462dcf977b1e6f6f53facc63ed4963d7f66387475870c；
+  内嵌核心286126 bytes，SHA256
+  2aa7b439be53b64f9db108437ff666a1aff23b55eac48aeec5f8f5cbad53a31f，
+  与独立核心逐字节一致。官方交付校验通过，JAR与search-stall交付报告放独立桥接器dist。
+  本轮工作期间原桥接目录被外部改名为不带-main的目录，沿用其中原产物交付，不改其源码。
+  本次仅更新游戏端JAR，桥接器0.3.2不变；未安装实例或启动游戏/宿主服务/真实模型，
+  未拉取/提交/推送，原本地改动保留。真实模型是否按建议改变方案及游戏内约30秒表现待联调，
+  未承诺靠一次中断就证明任何模型永不重复派发。
+
+## 建筑工作寻路零估价续修（2026-10-26，Asia/Shanghai）
+
+- 冻结本轮latest.log至build/path-stall-evidence-20261026.log，1179753 bytes，
+  SHA256 18d1e0b3da9acf52e2aa642f73035838cd9e6612e908542d7a2b8e121e62b966。
+  00:35至00:38的367/368/373/376路线分别等待33.0/30.6/21.2/34.7秒，
+  移动输入全为0；376展开到8000节点，work_stances=26/8100。
+  是实际搜索停顿，不能只归因气泡显示；取消和目标现场变化仍及时终止旧路线。
+  玩家所用JAR指纹与上一轮自动阶段汇报交付相同。
+- 根因之一在ApproachEstimate.cost：反向估价只覆盖有限区域；未覆盖位置只要带任何
+  计划移除，就将整个估价归零，连前往已核工作位的移动距离也一并消失。
+  近距离工作目标remaining常为0，因此贪心和加权阶段都会偏向大量无关编辑历史。
+  本轮仅对工作站位估价保留原frontier引导；已覆盖位置仍按实际相关格折扣，
+  普通位置/采掘估价原行为保持。不按坐标合并累计编辑状态，不把估价当无路证明，
+  不加默认整趟时间/节点门，不放宽实际挖放、材料、来源、目标修订或取消。
+- 只读提取玩家退出时的局部方块状态，坐标归一化后存为
+  src/clientTest/resources/navigation/house-work-scene.json（18状态、4737格、连续行压缩）。
+  不含实体、玩家资料或原存档路径，不修改存档。离线用实际形状/轮廓射线、床脚高、
+  PlacementWork、SupportPlacement、局部出口与完整TerrainEdits；权限和放置状态预测为受控替身，
+  不能等同原生执行或完整任务历史。屋顶16目标26/8100的种子统计与日志相同。
+  旧码新增纯算法回归失败；场景回归另精确复现1642节点并绕入拆墙。
+  修正后相同场景106节点、两格支撑且不拆墙；单格墙顶53降至20。
+  禁拆墙场景两版均106节点，作为原保护和辅助登高仍可用的对照；不虚报该项提速。
+- 参考只读复核组合目标/Estimate/TripMemory及Driver的无路线处理，学习“目标距离与编辑
+  代价分开、必须有真实信息变化才能继续”的机制；不复制/翻译其代码或注释。
+  本轮不宣称完整跨段学习或复杂编辑后台已实现，活动工地仍走原世界线程切片。
+- build/house-work-final-20261026.log强制
+  build --offline --console=plain --no-daemon --rerun-tasks成功，1分6秒、21任务全执行。
+  核心475/48 suites、根177/25、客户端1434/144，共2086项/217 suites，
+  failures/errors/skipped全0。新增纯算法与三项局部存档场景均通过；旧码失败证据在
+  build/house-work-regression-before-20261026.log及house-work-scene-before-20261026.log/XML。
+  git diff --check通过，构建后无Java残留；源码既有本地修改保留，未拉取/提交/推送。
+- JAR build/libs/mcbot-0.1.0.jar为1893010 bytes，SHA256
+  0b20580d00101c5e63b4ac4f31aead893e6189dcd03a9bdbcafb57a833e93733。
+  内嵌核心285952 bytes与独立产物逐字节一致，SHA256
+  ff2dbaaf96e5c59d3fe58e6ce8d0cf52190d4bbe7cffe6aac133fd7c9d53f731。
+  独立桥接器dist交付同一JAR及delivery-verification-pathfix-20261026.json；
+  官方检查确认JAR/核心完整、桥接器0.3.2包与原校验一致。本次仅需更新游戏端JAR。
+  未修改宿主/桥接器源码、参考或玩家存档，未安装实例或启动游戏/宿主服务/真实模型；
+  完整原生施工与实际搜索时长仍需维护者用新包复测。
+
+## 自动阶段汇报与非阻塞发送（2026-10-25，Asia/Shanghai）
+
+- 22:34:56宿主任务已成功派发；22:36:02已有10个橡木原木的完整背包成果，
+  22:36:35木镐真实制作入包，但没有report_milestone或milestone事件。
+  普通成功progress仍静默，漏点在完全依赖模型主动选择节点；不是任务未派发。
+  参考只读复核TaskResult/TaskSlot的实际终态、TaskReport的唯一事实源与ExternalHands/
+  CompanionLoop外接进度回调不得阻塞的分工；只学机制，不复制/翻译参考代码。
+- AutomaticMilestone在gather成功的同次36槽最终观察/collection_goal核实材料阶段，
+  包含配方候选来源及本次additional基线；不再拿此前挖掘/移动回执充当最终观察。
+  craft原提交后多读36存储槽成品总量；真实成功、已入包、原身体差量有效且输出有TOOL属性
+  或耐久时自动汇报。不按物品名列升级链，不为木板木棍中间合成逐项播报。
+  长Lua程序内部即触发，原执行继续；不增加模型/查询/动作或预算，不等待猫娘语音。
+- 自动内容ID与等价显式条件别名共原去重账，跨显式恢复保留；同资源集合/同工具每任务自动一次。
+  回执milestone_reported提示模型不重复；查询/失败/受理/取消迟到/身体替换不报，
+  证据缺失只跳过报告，不改变实际动作结果或重发。位置/建筑语义节点仍用原显式核验。
+  SSE每订阅最多256条，仅非阻塞offer，写socket/断开收尾仍在HTTP线程；
+  慢客户端满则断开订阅，原200条环及游标重连保持，超窗口仍不能承诺无损恢复。
+  桥接0.3.2保留原可靠待送、同任务顺序与独立口播，增加submitted/queued/补送诊断。
+- build/automatic-milestone-focused与focused2通过；最终
+  build/automatic-milestone-final-20261025.log强制build --offline --console=plain
+  --no-daemon --rerun-tasks于22:51完成，1分17秒/21任务全执行。
+  XML核心475/48 suites、根176/25、客户端1431/143，共2082项/216 suites，
+  failures/errors/skipped全0。含无显式调用自动汇报、Lua未结束先发、原预算/动作继续、
+  去重/恢复、取消迟到、缺证据和真实HTTP/SSE慢socket回归；后者不读取时仍发布3000条并响应控制。
+  实际SSE输出build/automatic-milestone-wire-20261025.json作为桥接器测试样本，
+  验证两个节点及终态拒收后保序补送；桥接205项、Ruff及官方包检查均通过。
+- JAR build/libs/mcbot-0.1.0.jar为1893002 bytes，SHA256
+  687f9b63f3a07d8527c846e3d6acf27336fd0c71ad2608b46fb637aa7d6e8ab2；
+  核心285952 bytes，SHA256 ff2dbaaf96e5c59d3fe58e6ce8d0cf52190d4bbe7cffe6aac133fd7c9d53f731。
+  官方核验内嵌核心与独立产物相同，配套桥接器0.3.2为692351 bytes，
+  SHA256 10abd4a73d39c7e279079be564486fbd46ef2a3bc4302d0f9f33b4140e22c181。
+  新JAR及插件均放桥接器dist，本次需两端更新；未安装实例、启动游戏/宿主服务/真实模型，
+  未拉取/提交/推送，既有本地修改保留。实机流畅度、宿主主动模型和声音仍待维护者联调；
+  submitted只证明宿主受理，不当作语音已播放。
+
+## 通用关键节点汇报（2026-10-25，Asia/Shanghai）
+
+- 维护者要求长任务按关键成果主动汇报，且各路线复用。只读日志可确认21:34:14木镐、
+  21:35:26石镐真实合成成功，旧桥将普通成功progress全部作为blind，仅后台显示。
+  冻结原件build/milestone-evidence-20261025.log为448387 bytes，SHA256
+  cc7ec4a52e4483426c8da4d77852b5fba35eb80f5a6c2abc82738cf9b1a77f5a；
+  关键成功在958、1294行，副本还含同晚后续测试，不把查询或计划当作制作成功。
+- 新增本地report_milestone及核心MilestoneReport，常驻32工具目录、完整Schema/帮助与提示一致。
+  模型选择能力提升、关键资源、重要位置或施工阶段；ItemGoal复用完整36槽背包及原任务基线，
+  WorldGoal复用完整稳定建筑格集/修订，位置核同维度、接地与真实脚格的球形范围。
+  建筑阶段可核小于原工地的格集，仅该报告跳过整工地修订一致检查，原最终登记/验收保持严格。
+  没有物品升级链、逐任务模板、额外模型分类器或自由文字自证完成。
+  库存不独占证明制作因果，位置不证明矿洞安全，阶段不替代整项目标验收。
+- 外层与Lua共用同一接口，成功才发原progress的可选milestone={id,kind,verified,facts,evidence}。
+  同规范条件去重，原task/goal/权限/预算保持，Lua实际核实查询共享显式原子预算；
+  迟到/取消/身体代际变化不播。去重账随原检查点及建筑同会话继续资料保留，旧记录兼容。
+  最多1024个节点ID为存储保护，满时只拒新报告，不淘汰或终止原任务。
+- 独立桥接器0.3.0只对已关联任务的已核实节点发独立respond通知，POST未返回先暂存，
+  规范ID去重随运行账保存，普通进度不清去重。拒收沿原可靠待送队列，
+  同任务阶段及最终结果按顺序提交，使用相同优先级避免终态优先跳到前面；
+  宿主可批量处理相近通知，本地submitted不保证语音已播。节点不释放待办或重派任务。
+- 只读核对参考TaskResult/TaskSlot、TaskReport/RuntimeState、CompanionLoop外接进度及
+  GoalSteward；取实际事实、活动镜像与长期完成分离机制，未发现可直接套用的完整阶段口播。
+  没有复制/翻译参考代码。结构及契约见docs/ARCHITECTURE、TOOLS、BRIDGE；
+  桥接器docs/REPORTING-2026-10-25含跨端说明，宿主源码未修改。
+- 最终build/milestone-final-20261025.log强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功，1分19秒、21任务全部执行。
+  XML核心469/47 suites、根176/25、客户端1424/143，共2069项/215 suites，
+  failures/errors/skipped全0。新回归含真实runner/loop/Lua/本地HTTP/SSE和检查点，
+  覆盖新鲜成果、去重、继续原目标、取消迟到、建筑阶段与整工地区分及显式共享预算。
+  桥接器189项通过，Ruff及面板检查通过；原世界/身体/传输/模型受控边界不等于联合实测。
+- 新build/libs/mcbot-0.1.0.jar为1886513 bytes，SHA256
+  caa0e8bc71d0b30fb7ad1debb85e9641ecb1e96d94fb3799b8335cedd5e74ac7；
+  内嵌agent-core为281140 bytes，SHA256
+  e8f58a4a74a6ec143e5b16cddc9b9efe2a79471ed1855700c78a7d318d2d23ba，
+  官方交付核验确认内嵌与独立产物逐字节一致。diff检查通过，构建后无Java残留。
+  两端都需更新，JAR名称/版本不变。未安装实例或启动游戏/宿主服务/真实模型，
+  保留本地已有修改，未拉取、提交或推送；实际选点、聊天并行及语音仍需新包联调。
+
+## 桥接联调配套 JAR 交付（2026-10-25，Asia/Shanghai）
+
+- 维护者要求正式插件包和配套 JAR。本轮保留本地既有建筑/护卫源码，
+  未拉取、提交、推送或改动生产代码；强制执行
+  `build --offline --console=plain --no-daemon --rerun-tasks`。
+  build/bridge-delivery-20261025.log 记录成功：1分19秒，21任务全部执行。
+- XML 核心462/46 suites、根176/25、客户端1416/142，
+  共2054项/213 suites，failures/errors/skipped全0。
+  构建后 tools/list-java.ps1 未发现 Java 残留，git diff --check 无错误。
+- build/libs/mcbot-0.1.0.jar 为1878486 bytes，SHA256
+  e06fb2cc14cfa76efc8de6d23a3c270ad94d2ede9742012e9b1fb8ed0509011e。
+  ZIP 完整性通过；内嵌 agent-core-0.1.0.jar 与独立产物逐字节一致，
+  276295 bytes，SHA256
+  e9739cd6f823de2c2136443841f785bfede95bcdc04b6d8718f1331d7679be52。
+- 将交付 JAR 副本放入独立桥接器的 dist，与正式 .neko-plugin、
+  对接测试说明及校验报告同目录。未安装游戏实例，未启动游戏/服务器或真实模型，
+  联合游戏效果、宿主模型工具路由与语音反馈仍待维护者实测。
+
+## 跟随期间保护主人（2026-10-25，Asia/Shanghai）
+
+- 19:39:29的scan_area仅见主人，19:39:37只受理follow j1，1200刻；
+  19:39:54会话关闭后取消。该段没有后续怪物完整观察，不能声称已复现某只敌人的实机攻击。
+  源码可确定follow只跟随/休眠，模型等待长活时不持续观察，自动自保只识别针对伙伴身体的来源，
+  所以“跟随并保护主人”没有持续执行入口。原件冻结build/escort-latest-20261025.log，
+  924019 bytes，SHA256 9859d6055a6ca1cd26c5c725185610a60654241daac127b3dfebe99f78fb3129，
+  关键证据6747、6759、6764至6769、6800至6807行。
+- 只读核对参考FollowCompanionTask/FollowTaskRecord、GuardOwner基准、FightApi/fight.lua、
+  AttackTaskRecord/AttackCompanionTask/Fought、AttackPlan/Battlefield/Menace、
+  Loadout/WeaponDamage/Swing、MobDefenseChain/FleeChain、CompanionBrain/TaskSelector、
+  战斗测试及知识。参考follow本身也不包含主人护卫，其基准通过主动选敌派攻击；
+  有益机制是选敌与共享战斗核分工、原目标承诺、身体抢占归还、实际结果账与有效路线接续。
+  机制取舍和实机边界见docs/FOLLOW-OWNER-PROTECTION-2026-10-25.md，不复制或翻译参考实现。
+- follow新增可选布尔protect_owner，默认false；主人明确要求保护时提示/紧凑目录/完整帮助
+  共同要求true，只能用于本身体主人。FollowWork在原槽内持续监测主人12格来源，
+  优先正攻击或最近伤害主人的敌人，再选可自动攻击的其他敌人；中立及条件敌对对象
+  未有真实敌对证据时不挑衅。原对象/编号/UUID锁定，复用原AttackTool/EntityAttack/PathTask，
+  多敌与新生实体逐次重查，主人走远或敌人离开则停止追击并恢复跟随。
+  同原任务/身体/许可/租约、固定初始32格与工地约束、NavigationBudget及原期限，
+  不另建战斗执行核或重开范围。活护卫标记已有近战，避免普通自保重复抢同一场战斗；
+  真正避险仍优先且恢复重核，普通攻击清理不释放已由REFLEX持有的移动输入。
+- 原跟随适配器接入usefulFor/retarget，目标移动时保留有效路线或更新原搜索，
+  不再只会拆旧路线重建。progress贯通原job和头顶气泡，展示跟随/护卫/战斗，
+  不唤醒模型或结算工具。protection提供来源有限样本、实际挥击、生命/吸收观察、
+  死亡事实、最近8次战斗及省略数；取消/到期也保留部分事实，不作独占击杀归因。
+  观察带原elapsed刻号，旧观察或主人换位不使local_clear为真；期限结束仍goal_satisfied=false。
+- 当前沿原当前主手普通近战，不自动换装或制作。模型先看背包装备适合武器，
+  主人贴近敌人时宜用已有斧等避免剑横扫；原横扫旁及、实际距离、视线、冷却、
+  实体保护及真实原版伤害保持。正在引爆、观察不完整/邻区未加载、无路、武器或许可失败
+  返回实际原因，不声称已保护。远程、盾牌和完整自动战斗选装未借此销账。
+- 本地官方映射javap确认NeutralMob接口、LivingEntity.getLastHurtByMob/
+  getLastHurtByMobTimestamp，以及1.21.11的monster.spider.Spider与monster.piglin.Piglin；
+  原范围/移动/原版攻击接口沿用已有实测入口，编译通过不等于原生实体行为已验。
+- focused2与focused3均通过；最终build/escort-final2-20261025.log于19:58:07完成强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`，1分钟、21任务全部执行。
+  XML核心462/46 suites、根176/25、客户端1416/142，共2054项/213 suites，
+  failures/errors/skipped全0。回归运行实际FollowWork/调度/控制/EntityAttack、
+  dispatcher/progress和气泡，覆盖休眠后新敌、多敌、优先级、原目标、追击系留、
+  跟随恢复/路径保留、共享账、抢占/到期/取消与部分伤害、真实失败不重放及参数/权限闸。
+  世界、运动、真实出手和模型仍为受控边界；diff检查通过，构建后无Java残留。
+- 候选build/libs/mcbot-0.1.0.jar为1,878,486 bytes，SHA256
+  e06fb2cc14cfa76efc8de6d23a3c270ad94d2ede9742012e9b1fb8ed0509011e。
+  内嵌agent-core为276295 bytes，SHA256
+  e9739cd6f823de2c2136443841f785bfede95bcdc04b6d8718f1331d7679be52，与独立产物一致。
+  未安装JAR或启动游戏/服务器/真实模型，未修改宿主/参考/玩家实例；
+  保留此前本地未提交建筑改动，未提交或推送整棵工作树，实际护卫效果仍待新包实测。
+
+## 住宅室内净高与立面协调（2026-10-25，Asia/Shanghai）
+
+- 维护者要求普通住宅室内由三格提高到4至5格。常驻PromptBuilder及按需建筑知识已统一
+  默认主要活动区净高，不含地板/屋顶实体；以整块地板y=0说明四格净空y=1至4、顶从y=5，
+  五格顶从y=6。梁及吊灯另留厚度，登记前列地板、净空、梁灯下缘和最低屋面高度，
+  协调窗的竖向比例和墙面分段；屋面按跨度定坡，不随墙高机械拔尖，家具仍按使用高度。
+  门保持原版两格，门廊和边缘储物区按用途处理，已登记旧图及修订不自动更改。
+- 追加只读核对参考项目building_design全文、decoration及原木小屋/农舍/北欧住宅/长屋
+  风格说明，以及Design、BuildOps、BuildTaskRecord、BuildValidity、BuildSurvey和build.lua。
+  参考的通用设计建议仍为墙高至少3格，并无普通住宅自动保证4至5格净高的校验。
+  有益机制是设计时协调层高、屋顶跨度/坡度、梁灯及室内竖向分区；施工侧按既定图核方块，
+  不补画舒适空间。本轮4至5来自维护者偏好，参考仅学机制，不复制或翻译源码/知识文本。
+- BuildDesignReview的low_residential_volume从整图高度小于5层调整为小于6层的建议，
+  覆盖整块地板/顶仅留三格的住宅。volume_height仍只是整图非空气包围盒；
+  高地基或高屋脊可能掩盖低室内，无警告不代表净高已核实，advice及知识已明确此边界。
+  不新增自动房间推断或改图接口，实际图纸和原动作/验收链保持。
+- 专项BuildDesignReviewTest共6项通过；新增同一住宅3/4/5格净空的边界回归，
+  检查提示及输入/修订不变。最终build/residential-height-final2-20261025.log
+  于19:21完成强制`build --offline --console=plain --no-daemon --rerun-tasks`，
+  1分8秒、21任务全执行。XML核心462/46 suites、根176/25、客户端1402/142，
+  共2040项/213 suites，failures/errors/skipped全0；diff检查通过，构建后无Java残留。
+- 新JAR build/libs/mcbot-0.1.0.jar，1,868,226 bytes，SHA256
+  dffb84c77e499ea8710cbd0425b5d84dd30d91dea4f96658f7ceb962330b8290。
+  内嵌agent-core为276080 bytes，SHA256
+  3ddd7b15ea90c722ad08d6b52d602a9ed36b8bb18bc93ffa187975df8b2f399d，与独立产物一致。
+  保留本地已有未提交改动；未修改宿主/参考/玩家实例，未安装JAR或启动游戏/服务器/真实模型。
+  离线回归不证明真实模型后续设计的净高或外观已验收。
+
+## 建筑工作位搜索与叫停后接续（2026-10-25，Asia/Shanghai）
+
+- 18:49:54至18:50:58的j625/route296，目标(448,69,-293)，约64.349秒、
+  1287刻零移动输入，搜索展开超过24000节点，直至主人叫停。
+  当前站位no_clickable_face不证明全局缺锚点；放置目标的手距几何零区使可选估价
+  把大量实际不能工作的站位当起点，完整编辑分支继续膨胀。
+  冻结日志build/navigation-resume-latest-20261025.log第9768至9825行；
+  该现场没有完整方块快照，不能声称精确重建所有地形或唯一障碍。
+- 18:38:55已登记508格原图e3bb95fc…；叫停清原执行目标，新指令清任务草稿/工地，
+  18:52:04登记查询false、草稿空，与旧摘要形成冲突。不是本轮历史整理单独删原图。
+  参考核对建筑查询/施工/低层/多目标、设计来源、搜索估价/学习/执行及任务停止恢复链，
+  只取本体有益机制，不采用直接写状态、Lua重放或重新计算进度。
+- PlacementWork/组合目标标记可选工作位估价，在原有限扫描及切片中从通过真实工作预检
+  的站位传播引导；DigAStar可行性与加权阶段使用相同引导，不改实际入边/终态/累计编辑。
+  无当前种子或扫描不完整回退原搜索，未来支撑分支不因此被剪掉；新增探测/种子诊断。
+  封闭11×11屋面补缺夹具同判据比较64节点对旧1556节点，不当作真实现场性能保证。
+- 主人叫停后仅在本会话保留已登记长期建筑的原条件和原基线/累计账，执行仍立即取消。
+  明确“继续/继续建造/继续施工/恢复目标”先核同身体/世界，新传输任务经服务端确认
+  原权限已撤、原工地/旧epoch匹配后迁移活空间绑定。草稿、临时来源、待补、实例、
+  通道/范围及导航账保留，原loop重核完整目标及新权限，旧路径/Lua/动作/批准不重放。
+  目标状态可查保留资料，放弃/新普通任务/会话关闭或身体变化清除；跨退出沿原L2，
+  不凭哈希补造已被旧包丢掉的图纸。完整学习与复杂编辑后台仍未借此销账。
+- focused1及focused2通过；最终build/navigation-resume-final-20261025.log
+  强制`build --offline --console=plain --no-daemon --rerun-tasks`：1分9秒、21任务全执行。
+  XML核心462/46 suites、根176/25、客户端1401/142，共2039项/213 suites，
+  failures/errors/skipped全0。新增真实runner/loop与空间组件回归覆盖取消在途移动后
+  显式继续、原图/goal_id/累计步数、临时见证/待补/导航账、迟到取消、身体/权限变化、
+  放弃、其他主人/世界/修订与权限提升拒绝。世界/运动/模型/传输仍为受控边界。
+- 新JAR build/libs/mcbot-0.1.0.jar，1,867,417 bytes，SHA256
+  eaed480e61b5eb84940adad7f7661ee5efc83c6323deeea4f8147f4846013536。
+  本体源码及文档保留已有未提交改动，没有安装包或启动游戏/服务器/真实模型，
+  未改宿主/参考/玩家实例。真实508格现场剩余屋面施工与同会话接续仍待新包测试。
+  机制/冻结原件指纹/限制见docs/CONSTRUCTION-RESUME-AND-WORK-STANCES-2026-10-25.md。
+
+## 建筑草稿取回与旧工地修订纠正（2026-10-25，Asia/Shanghai）
+
+- 最新日志17:35:09的set_goal被拒且未登记；17:35:52工地登记在598格旧图
+  `7e4e4b18…`，17:37:46查询修正版`cdc55cc9…`（疑似反坡计数88降为0），
+  但查询不保存设计/实例、不替换冻结工地。17:38:24历史整理后，mc.goal为空、
+  build_record直接反馈只显示通用成功文本，模型无法重新取得完整候选而请求重画。
+  原始参数未入日志，不能断言首次set_goal失败具体字段或大小原因；不能凭哈希还原旧图。
+- 对照参考设计/蓝图读取、来源差异、记录存储与整理后索引机制，只在本体择益实施。
+  新BuildDrafts在任务内独立保留完整核对图，build_diff给draft_retained与
+  target={draft_revision}供原目标/工地/施工复用；build_record新增draft_list/
+  draft_query与显式design_capture，持久保存沿原文件与实例入口。
+  直接建筑反馈现在展示实际列表、分页和原引用；Lua的完整data及有限页保持。
+- 新build_site revise须明确旧修订，只纠正尚未登记最终目标、目标格从未实际修改、
+  同落点/旋转/格集的材料与属性；保留临时工程活见证、通道、范围、检查点和累计账。
+  单格/双格真实修改计数不因还原世界而清零；正式目标后的直接/Lua纠正均拒绝，
+  登记前候选与worksite_revision不一致则先返回可纠正冲突，不让新图验收混用旧图施工。
+  已核验草稿随现有空间检查点保留，缓存满不淘汰原图，任务/世界改变隔离。
+- 598格夹具覆盖原样持久保存/重载/旋转实例化，真实Conversation整理后参数消失仍可
+  取回修正图；另验保留临时见证/导航账、修改后拒绝纠正、检查点恢复与模型直接可见字段。
+  最终`build --offline --console=plain --no-daemon --rerun-tasks`于17:57完成，
+  日志`build/draft-worksite-final-20261025.log`：59秒、21任务全执行；
+  XML核心462/46 suites、根176/25、客户端1395/142，共2033项/213 suites，
+  failures/errors/skipped全0；diff检查通过，构建后无Java残留。
+- 新JAR：`build/libs/mcbot-0.1.0.jar`，1,863,568 bytes，SHA256
+  `b5fcb9290c55707fd92c500db10404091a89a0f35c90a0e98dcc21ba630499e7`。
+  未安装包、未启动游戏/服务器/真实模型，未修改宿主/参考/游戏目录；
+  保留本地已有未提交建筑改动。真实模型取回/纠正/施工仍待新包实测；
+  历史旧包未保存的cdc55cc9完整格集不由本轮凭哈希补造。
+  完整机制、现场副本指纹及边界见docs/BUILD-DRAFT-RECOVERY-2026-10-25.md。
+
+## 超大建筑回执导致身体状态误判（2026-10-25，Asia/Shanghai）
+
+- 最新 `latest.log` 的直接链路是：17:09:52 `status` 回执原始体量
+  `34179B > 32765B`，服务端改发了仅278B的通用瘦身回执，随后客户端以
+  `STATE_UNAVAILABLE:没有取得有效的最新身体状态` 停止任务。身体并未死亡；
+  超限回执把本应可用的状态快照错误变成了失败结果。
+- 对照参考项目的单份新鲜身体快照机制，本体现在把 `status` 识别为身体快照：
+  超限时保留 `body_id`、连续身份、坐标、维度、生命、权限、身体生命周期和
+  精简背包，标明 `receipt_truncated/status_details_omitted`，保持 `ok=true`；
+  施工/地形/历史诊断改为分步查询。挖掘、放置等动作回执仍按原保守规则返回失败，
+  不把未知副作用标成成功。
+- 新增服务端回执回归，覆盖超大状态仍能通过 `WireSize`、身份和背包可核验；
+  `clientTest`、`agent-core:test`及完整构建均通过。最终
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功（21个任务），
+  当前全量测试1558项、166 suites，failures/errors/skipped均为0。
+- 新JAR：`build/libs/mcbot-0.1.0.jar`，1,855,310 bytes，SHA-256
+  `4DEFB5313225FF2FBA5FF3D4DC911B6923878317DE6EA4CC352D1AC90D395CA4`。
+  本轮未安装JAR、未启动游戏或模型；需用新包复测长建筑施工是否能在大回执后继续，
+  并确认后续 `build_site/build_diff` 分步查询仍能提供完整工地事实。
+
+## 临时支撑回收与住宅设计诊断（2026-10-25，Asia/Shanghai）
+
+- 复核 `latest.log` 时确认9个圆石临时支撑未回收的直接原因：施工停在门目标前，
+  `body_on_temporary=true`，且路线历史有缺口；原策略把整段路线缺口当成所有临时支撑永久不可回收，
+  同时 `mc.build()` 只有整栋完成才尝试收尾清理。因此这不是“没有清理代码”，而是清理触发点和过度保守条件叠加。
+- 参考项目的可取机制是把临时垫路材料与成品来源分开、按当前依赖逐步回收；本体保留原版挖掘、
+  来源见证、实体/承重/通道和权限保护，只放宽一条局部条件：来源完整、用途为`support`、
+  当前不在已记录通行格且没有目标/附着依赖的支撑，即使路线历史有缺口也可回收。
+  `workstation`、已记录通行格、来源未知、区块重载和任何依赖仍保留。施工无可做项或轮次结束前，
+  `mc.build()`现在额外执行一次有界清理，回执报告`temporary_removed/temporary_retained`。
+- `BuildDesignReview`新增住宅体量、净高、屋顶构件与檐口的结构化字段和
+  `compact_residential_footprint`、`low_residential_volume`、`roof_profile_missing`、
+  `roof_no_overhang`警告；只读建议不改写冻结图纸。常驻建筑提示和四页建筑知识把普通住宅默认
+  体量、地基清表、入口过渡、坡屋顶、山墙/脊线、檐口、窗和室内功能前置，减少只读第一页后生成
+  小平顶方盒的概率。旧图不会自动重画，已有目标仍按原修订验收。
+- 最低设计层的可替换草/花覆盖（包括`short_grass`）现在先归类为`needs_clear`，施工会沿原版
+  采掘与材料/权限链清理后再放地板；原有`grass_block`清理、抬高地基建议和坡地表达保持。
+- 相关回归与全量构建通过：`build --offline --console=plain --no-daemon --rerun-tasks`，
+  21个任务成功；当前测试结果合计1558项、166 suites，failures/errors/skipped均为0。
+  新JAR：`build/libs/mcbot-0.1.0.jar`，1,853,451 bytes，SHA-256
+  `AE63D2033510152182A793CD7CA2410EB5076B77F30EC24944D6A6BE24705E9C`。
+  本轮未安装JAR、未启动游戏或模型；需在新包实机复测门位附近支撑是否逐格回收、清理后是否仍能
+  继续门施工，以及新住宅生成是否达到更大体量和坡屋顶/檐口要求。
+
+## 双格门登记与临时工程诊断修复（2026-10-25，Asia/Shanghai）
+
+- 根据最新 `latest.log` 复核了小木石屋：原目标修订 `a7113431…b56` 的172格中170格已满足，
+  剩余门下半/上半两格；此前运行时把目标改成去掉门的170格修订，导致活动工地与外层建筑目标
+  不一致，随后单独 `place_block` 又命中工地通道/临时工程保护。这不是寻路搜索本身证明失败，
+  而是双格登记失败后混用了另一张图纸。
+- 参考双格对象的主半唯一动作、两半共同验收和原版动作回调机制，修复本体门图纸契约：
+  门只强制 `half/facing`，`hinge` 可省略并由原版放置上下文决定；若两半都明确同一属性，
+  仍逐属性核对，不改变冻结图纸。登记失败现在返回具体坐标、对象问题、目标修订和可执行提示。
+- `mc.cleanup_temporary` 遇到活动工地修订与请求修订不一致时返回
+  `blocked=worksite_revision_mismatch`，不再触发Lua断言异常；工地查询为每个临时工程附带
+  `cleanup_reason`。路线观察不完整仍保守阻止回收，保持来源、通道和依赖保护。
+- 新增原172格住宅夹具回归：无合页门图纸保持原修订，170格现状由一次原版门动作补齐两格；
+  覆盖四种旋转、原版左右合页选择、半边属性冲突和修订不一致清理。变更后强制
+  `build --offline --console=plain --no-daemon --rerun-tasks` 全量通过，21项任务执行成功。
+- 新JAR：`build/libs/mcbot-0.1.0.jar`，1,850,155 bytes，SHA-256
+  `a9eb25d939fe917fb61bc122bc4412f9204f7ca44b9cf07068ffe5778949eb4a`。
+  本轮只完成离线验证，未安装或启动实例；活动旧工地需在新任务/新包中按原目标修订重新登记，
+  不能把旧170格工地直接当作172格目标继续。
+
 ## 同层组合放置工作导航（2026-10-25，Asia/Shanghai）
 
 - 维护者授权择益实施前轮所学。开工本地main为d59c13f、工作树干净，与已知origin/main一致；

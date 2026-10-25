@@ -82,6 +82,18 @@ public final class ItemGoal {
     public void observe(JsonObject state) { current = count(state, accepted); }
     public int progress() { return target.additional() ? Math.max(0, current - baseline) : current; }
     public boolean satisfied() { return progress() >= target.count(); }
+    public JsonObject evidence() {
+        var data = new JsonObject();
+        data.addProperty("item", target.item());
+        data.addProperty("count", target.count());
+        data.addProperty("mode", target.additional() ? "additional" : "total");
+        data.addProperty("baseline", baseline);
+        data.addProperty("current", current);
+        var items = new com.google.gson.JsonArray();
+        accepted.stream().sorted().forEach(items::add);
+        data.add("accepted_items", items);
+        return data;
+    }
     public String facts() {
         return (scope == Scope.SUBTASK ? "采集子目标=" : "物品目标=")
                 + (accepted.equals(Set.of(target.item())) ? target.item() : "配方候选来源" + accepted)

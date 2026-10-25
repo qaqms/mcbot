@@ -119,6 +119,35 @@ class ServerToolDispatcherTest {
                 && !"progress".equals(env.str("phase"))).count());
     }
 
+    @Test void followProtectionProgressKeepsTheSameJobAndDoesNotSettleOrReplayCombat() {
+        begin(sender, 1, false);
+        nextResult = new CompletableFuture<>();
+        var activity = new java.util.concurrent.atomic.AtomicReference<>(com.neko.mcbot.task.TickTask.Activity.GUARD);
+        var task = new com.neko.mcbot.task.TickTask() {
+            @Override public Activity activity() { return activity.get(); }
+            @Override public Progress tick(com.neko.mcbot.body.CompanionPlayer body) { return running(); }
+        };
+        onRun = () -> assertTrue(com.neko.mcbot.task.SchedulerProgressFixture.submit(
+                scheduler, companion, task, nextResult));
+        call(1, "follow", "{\"protect_owner\":true}");
+        var ack = receipts.stream().filter(env -> "job_ack".equals(env.kind())).findFirst().orElseThrow();
+        assertEquals("GUARD", receipts.getLast().obj("data").get("activity").getAsString());
+        activity.set(com.neko.mcbot.task.TickTask.Activity.ATTACK);
+        for (int tick = 0; tick < 5; tick++) com.neko.mcbot.task.SchedulerProgressFixture.tick(scheduler);
+        var combat = receipts.getLast();
+        assertEquals("progress", combat.str("phase"));
+        assertEquals("ATTACK", combat.obj("data").get("activity").getAsString());
+        assertEquals(ack.str("job_id"), combat.str("job_id"));
+        assertEquals(ack.num("seq", -1), combat.num("seq", -1));
+        assertFalse(nextResult.isDone());
+        scheduler.cancel(companion, "owner");
+        assertEquals("cancelled", receipts.getLast().str("phase"));
+        int count = receipts.size();
+        for (int tick = 0; tick < 8; tick++) com.neko.mcbot.task.SchedulerProgressFixture.tick(scheduler);
+        assertEquals(count, receipts.size());
+        assertEquals(List.of("follow"), effects);
+    }
+
     @Test void invalidRecoveryRevokesNewPermissionsAndCannotDispatchActions() {
         begin(sender, 71, false);
         nextResult = new CompletableFuture<>();
@@ -327,6 +356,37 @@ class ServerToolDispatcherTest {
         assertTrue(data.get("receipt_truncated").getAsBoolean());
         assertTrue(data.has("body_delta"));
         assertTrue(com.neko.mcbot.common.WireSize.fits(event.encode()));
+    }
+
+    @Test void oversizedStatusKeepsAValidFreshBodySnapshotAndOnlyDropsHeavyDiagnostics() {
+        begin(sender, 1, false);
+        var data = json("""
+                {"x":-12,"y":88,"z":340,"dimension":"minecraft:overworld",
+                 "hp":20.0,"food":20,"slots_used":4,"held":"minecraft:oak_planks",
+                 "body_id":"body-one","body_continuity_id":"continuity-one",
+                 "owner_uuid":"owner","companion_uuid":"companion","world_id":"world",
+                 "alive":true,"body_state":"alive","permission_mode":"自主执行",
+                 "inventory":{"selected_slot":0,"storage_size":36,"slots_used":4,
+                   "mining_tools_known":true,
+                   "slots":[{"slot":0,"item":"minecraft:oak_planks","count":64},
+                            {"slot":1,"item":"","count":0}],"equipment":[]},
+                 "spatial_facts":{"huge":"x"}}
+                """.replace("\n", ""));
+        data.addProperty("heavy_diagnostics", "x".repeat(40_000));
+        nextResult = CompletableFuture.completedFuture(
+                new ServerTool.Result(true, "status".repeat(12_000), data));
+
+        var result = call(1, "status", "{}");
+
+        assertEquals("tool_result", result.kind());
+        assertTrue(result.bool("ok"));
+        assertTrue(result.str("feedback").contains("最新身体状态"));
+        assertTrue(result.obj("data").get("receipt_truncated").getAsBoolean());
+        assertEquals("body-one", result.obj("data").get("body_id").getAsString());
+        assertEquals("minecraft:overworld", result.obj("data").get("dimension").getAsString());
+        assertTrue(result.obj("data").has("inventory"));
+        assertFalse(result.obj("data").has("spatial_facts"));
+        assertTrue(com.neko.mcbot.common.WireSize.fits(result.encode()));
     }
 
     @Test void synchronousMutationExceptionStillReportsFactsAndReleasesOriginalControl() {

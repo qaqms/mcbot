@@ -7,6 +7,18 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteToolTest {
+    @Test void draftCorrectionTakesTheOldRevisionWithoutMistakingItForTheNewContentHash() {
+        var args=JsonParser.parseString("""
+                {"operation":"revise","target":{"anchor":{"x":4,"y":90,"z":0},
+                "cells":[{"x":0,"y":0,"z":0,"block":"oak_planks"}]},"expected_revision":"%s"}
+                """.formatted("a".repeat(64))).getAsJsonObject();
+        var input=BuildSiteTool.arguments(args);
+        assertEquals("a".repeat(64),input.revision());
+        assertNotEquals(input.revision(),input.target().revision());
+        assertFalse(TaskPolicy.observation("build_site",args));
+        args.add("bounds",new com.google.gson.JsonObject());
+        assertThrows(RuntimeException.class,()->BuildSiteTool.arguments(args));
+    }
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
     @Test void beginNeedsOnlyATargetAndAcceptsAMatchingRevisionButNeverIgnoresUnknownFields() {
         var args=JsonParser.parseString("""

@@ -49,6 +49,10 @@ public final class BuildSite {
     private com.neko.mcbot.path.NavigationBudget navigation = new com.neko.mcbot.path.NavigationBudget();
     private int checkpoints, edits;
     private boolean stopped;
+    private int targetEdits;
+    private final BuildDrafts drafts = new BuildDrafts();
+    private final BuildSearchMemory searches = new BuildSearchMemory();
+    private BuildTarget verifiedDraft;
     private BuildRecords records;
     private BuildRecords.Instance instance;
 
@@ -57,13 +61,29 @@ public final class BuildSite {
             target = null; targetCells.clear(); route = List.of(); temporary.clear(); repairs.clear(); rounds.clear();
             protectedCells.clear(); accessCells.clear(); scope = com.neko.mcbot.path.PathSpec.DEFAULT;
             navigation = new com.neko.mcbot.path.NavigationBudget();
-            checkpoints = edits = 0; stopped = false; task = nextTask; world = nextWorld;
+            checkpoints = edits = targetEdits = 0; stopped = false; task = nextTask; world = nextWorld;
+            drafts.clear();
+            searches.clear();
+            verifiedDraft = null;
             records=null; instance=null;
         }
     }
     public boolean active() { return task != null && target != null; }
+    public Object boundTask() { return task; }
+    public boolean boundTo(Object expected, Object expectedWorld) { return task == expected && world == expectedWorld; }
+    public void continueTask(Object expected, Object next, Object nextWorld) {
+        if (!boundTo(expected, nextWorld)) throw new IllegalArgumentException("site_session_changed");
+        task = next;
+    }
     public boolean same(String revision) { return active() && target.revision().equals(revision); }
     public BuildTarget target() { return target; }
+    public BuildDrafts drafts() { return drafts; }
+    public BuildSearchMemory searches() { return searches; }
+    public int targetEdits() { return targetEdits; }
+    public void retainVerifiedDraft(BuildTarget selected) {
+        if (!drafts.remember(selected)) throw new IllegalArgumentException("draft_capacity");
+        verifiedDraft = selected;
+    }
     public com.neko.mcbot.path.PathSpec scope() { return scope; }
     public com.neko.mcbot.path.NavigationBudget navigation() { return navigation; }
     public String instanceId() { return instance==null ? null : instance.id(); }
@@ -74,10 +94,12 @@ public final class BuildSite {
         records=store; instance=selected;
     }
     public void recordPlacement(BlockPos pos, BlockState before, BlockState after, int consumed, Access access) {
+        recordTargetEdit(pos, before, after);
         if (cell(pos) != null && cell(pos).matches(after)) repairs.remove(pos);
         if (instance!=null && cell(pos)!=null) records.placed(instance,pos,before,after,consumed,access);
     }
     public void recordRemoval(BlockPos pos, BlockState before, BlockState after) {
+        recordTargetEdit(pos, before, after);
         if (cell(pos) != null && cell(pos).matches(before) && !cell(pos).matches(after)) repairs.add(pos.immutable());
         if (instance!=null && cell(pos)!=null) records.removed(instance,pos,before,after);
     }
@@ -97,14 +119,45 @@ public final class BuildSite {
     }
     public void recordObjectPlacement(BlockPos primary, Map<BlockPos,BlockState> before,
                                        Map<BlockPos,BlockState> after, int consumed, Access access) {
+        before.forEach((pos,state) -> recordTargetEdit(pos,state,after.get(pos)));
         if (instance!=null && cell(primary)!=null) records.placedObject(instance,primary,before,after,consumed,access);
     }
     public void recordObjectRemoval(Map<BlockPos,BlockState> before, Map<BlockPos,BlockState> after) {
+        before.forEach((pos,state) -> recordTargetEdit(pos,state,after.get(pos)));
         if (instance!=null) {
             var selected=new LinkedHashMap<BlockPos,BlockState>();
             before.forEach((pos,state) -> { if (cell(pos)!=null) selected.put(pos,state); });
             if (!selected.isEmpty()) records.removedObject(instance,selected,after);
         }
+    }
+
+    private void recordTargetEdit(BlockPos pos, BlockState before, BlockState after) {
+        if (cell(pos) != null && before != null && after != null && before != after && targetEdits < Integer.MAX_VALUE)
+            targetEdits++;
+    }
+
+    /** Correct an unbuilt drawing without erasing temporary provenance or navigation accounts. */
+    public ServerTool.Result revise(BuildTarget next, String previousRevision, BlockPos feet, Access access) {
+        if (!same(previousRevision)) return failed("TARGET_REVISION_CHANGED:须核对当前工地旧修订后显式纠正。");
+        if (instance != null || stopped || targetEdits != 0 || !repairs.isEmpty())
+            return failed("DENIED:实例工地、已停止或已改动目标格的工地不能按草稿纠正；原来源及累计账保持。");
+        if (!target.anchor().equals(next.anchor()) || target.rotation() != next.rotation()
+                || !target.index().keySet().equals(next.index().keySet())
+                || next.cells().stream().anyMatch(c -> temporary.containsKey(c.pos())))
+            return failed("DENIED:草稿纠正限原落点、旋转和同一格集的材料/属性修正，不迁移工地或吞并临时工程。");
+        // Validate against the original corridor and scope before touching the live registration.
+        var probe = new BuildSite();
+        probe.bind(task, world);
+        var failure = probe.begin(next, route, feet, scope, access);
+        if (failure != null) return failure;
+        failure = live(access);
+        if (failure != null) return failure;
+        target = next;
+        targetCells.clear(); targetCells.putAll(probe.targetCells);
+        protectedCells.clear(); protectedCells.addAll(probe.protectedCells);
+        accessCells.clear(); accessCells.addAll(probe.accessCells);
+        drafts.remember(next);
+        return null;
     }
 
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet, Access access) {
@@ -114,8 +167,16 @@ public final class BuildSite {
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet,
                                    com.neko.mcbot.path.PathSpec selectedScope, Access access) {
         if (task == null || stopped) return failed("DENIED:没有有效施工任务或工地已停止。");
-        if (next.cells().stream().anyMatch(c -> !BuildObjects.problem(next,c).isEmpty()))
-            return failed("DENIED:双格对象须明确完整且一致的两半目标，不登记缺半或冲突工地。");
+        for (var cell : next.cells()) {
+            String problem = BuildObjects.problem(next,cell);
+            if (!problem.isEmpty()) {
+                var data = BuildTarget.coordinates(cell.pos());
+                data.addProperty("object_problem",problem);
+                data.addProperty("target_revision",next.revision());
+                return new ServerTool.Result(false,"DENIED:双格目标 " + cell.pos().toShortString() + "："
+                        + problem + "。门须完整half/facing，hinge可省略；明确属性不能互相冲突。未登记或修改图纸。",data);
+            }
+        }
         if (target != null) {
             if (accessRoute.isEmpty()) accessRoute = route;
             if (!same(next.revision()) || !route.equals(accessRoute) || !scope.equals(selectedScope))
@@ -152,6 +213,7 @@ public final class BuildSite {
             previous = p;
         }
         target = next;
+        drafts.remember(next);
         target.cells().forEach(cell -> targetCells.put(cell.pos(), cell));
         scope = selectedScope;
         route = accessRoute.stream().map(BlockPos::immutable).toList();
@@ -310,12 +372,21 @@ public final class BuildSite {
             return failed("DENIED:施工修订不符，或目标承担通道/身体支撑。");
         if (BuildObjects.paired(access.state(pos))) return objectMiningGuard(pos, cleanup, access);
         if (cleanup) {
-            if (!access.passageComplete())
-                return failed("TARGET_LOST:实际路线记录有缺口，不能确认临时工程已无通行依赖，未回收。");
             var record = temporary.get(pos);
             if (record == null || record.witness == null || !record.witness.intact()
                     || record.chunk != access.chunk(pos) || record.state != access.state(pos))
                 return failed("DENIED:临时工程来源未知、已被修改或区块已重载，不认领相同方块替换物。");
+            /*
+             * A truncated trail used to make every support immortal.  A support
+             * is a throwaway construction object, though, and its own local
+             * proof is stronger than an unrelated gap elsewhere in the trail:
+             * it has an intact source witness, is not a recorded passage cell,
+             * and has no live target/attachment dependency.  Keep workstations
+             * and anything that was part of the walked passage conservative.
+             */
+            if (!access.passageComplete()
+                    && (!"support".equals(record.purpose) || access.passage(pos)))
+                return failed("TARGET_LOST:实际路线记录有缺口，不能确认临时工程已无通行依赖，未回收。");
             if (cell(pos) != null || target.cells().stream().anyMatch(c -> !c.authored().isAir()
                     && !restorable(c.desired()) && c.pos().below().equals(pos))
                     || cleanupDependent(pos, access))
@@ -420,11 +491,14 @@ public final class BuildSite {
     public JsonObject snapshot() {
         var data = new JsonObject();
         data.addProperty("active", active());
+        if (verifiedDraft != null && !same(verifiedDraft.revision()))
+            data.add("verified_draft",verifiedDraft.input());
         if (!active()) return data;
         data.add("target", target.input()); data.add("scope", scope.snapshot());
         var accessRoute = new JsonArray(); route.forEach(p -> accessRoute.add(BuildTarget.coordinates(p)));
         data.add("route", accessRoute);
         data.addProperty("checkpoints", checkpoints); data.addProperty("edits", edits); data.addProperty("stopped", stopped);
+        data.addProperty("target_edits", targetEdits);
         data.add("navigation", navigation.snapshot());
         var seen = new JsonArray(); rounds.stream().sorted().forEach(seen::add); data.add("rounds", seen);
         var items = new JsonArray();
@@ -446,6 +520,7 @@ public final class BuildSite {
 
     public void restore(JsonObject data, BlockPos feet, Access access) {
         if (!data.getAsJsonPrimitive("active").isBoolean() || active()) throw new IllegalArgumentException();
+        if (data.has("verified_draft")) retainVerifiedDraft(BuildTarget.parse(data.getAsJsonObject("verified_draft")));
         if (!data.get("active").getAsBoolean()) return;
         var target = BuildTarget.parse(data.getAsJsonObject("target"));
         var scope = com.neko.mcbot.path.PathSpec.restore(data.getAsJsonObject("scope"));
@@ -462,6 +537,8 @@ public final class BuildSite {
         if (failure != null) throw new IllegalArgumentException("Worksite changed");
         checkpoints = BuildTarget.integer(data.get("checkpoints"), 0, Integer.MAX_VALUE);
         edits = BuildTarget.integer(data.get("edits"), 0, Integer.MAX_VALUE);
+        // Old checkpoints cannot prove that their edits were all outside the drawing.
+        targetEdits = data.has("target_edits") ? BuildTarget.integer(data.get("target_edits"),0,Integer.MAX_VALUE) : edits;
         if (!data.getAsJsonPrimitive("stopped").isBoolean()) throw new IllegalArgumentException();
         stopped = data.get("stopped").getAsBoolean();
         navigation = com.neko.mcbot.path.NavigationBudget.restore(data.getAsJsonObject("navigation"));
@@ -512,6 +589,14 @@ public final class BuildSite {
         data.addProperty("passage_observation_complete", access.passageComplete());
         if (!active()) return data;
         data.addProperty("target_revision", target.revision());
+        if (instance != null) {
+            var reference = new JsonObject();
+            reference.addProperty("instance_id",instance.id());
+            reference.addProperty("instance_revision",instance.revision());
+            data.add("target",reference);
+        } else if (drafts.remember(target)) data.add("target", BuildDrafts.reference(target));
+        data.addProperty("target_edits", targetEdits);
+        data.addProperty("draft_revision_allowed", instance == null && !stopped && targetEdits == 0 && repairs.isEmpty());
         data.addProperty("repairs_pending", repairs.stream().filter(pos -> !cell(pos).matches(access.state(pos))).count());
         data.addProperty("protected_target_cells", target.cells().size());
         data.addProperty("access_route_cells", route.size());
@@ -539,7 +624,9 @@ public final class BuildSite {
             row.addProperty("present", actual != null && !actual.isAir());
             row.addProperty("provenance_intact", record.witness != null && record.witness.intact()
                     && record.chunk == access.chunk(record.pos) && record.state == access.state(record.pos));
-            row.addProperty("cleanup_allowed", miningGuard(record.pos, target.revision(), true, access) == null);
+            var failure = miningGuard(record.pos, target.revision(), true, access);
+            row.addProperty("cleanup_allowed", failure == null);
+            if (failure != null) row.addProperty("cleanup_reason", failure.feedback());
             rows.add(row);
         }
         data.add("temporary", rows);

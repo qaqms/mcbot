@@ -219,6 +219,39 @@ class BridgeHttpContractTest {
         }
     }
 
+    @Test
+    void stalledSubscriberCannotBlockPublishersOrControlRequestsAndCanReconnect() throws Exception {
+        start();
+        // A raw socket has no HTTP client reader that might silently drain the stream for us.
+        try (var stalled = new java.net.Socket()) {
+            stalled.setReceiveBufferSize(1024);
+            stalled.connect(new java.net.InetSocketAddress("127.0.0.1", bridge.port()));
+            stalled.getOutputStream().write(("GET /v1/events HTTP/1.1\r\nHost: localhost\r\n"
+                    + "Authorization: Bearer " + TOKEN + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            stalled.getOutputStream().flush();
+            stalled.setSoTimeout(3000);
+            assertNotEquals(-1, stalled.getInputStream().read(), "subscription must be accepted");
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                executor.submit(() -> {
+                    var data = json("{\"task_id\":1}");
+                    data.addProperty("text", "x".repeat(4096));
+                    for (int i = 0; i < 3000; i++) bridge.event("progress", data);
+                }).get(5, TimeUnit.SECONDS);
+                assertEquals(200, send("/v1/status", null, true).statusCode());
+                assertEquals(200, send("/v1/task", "{\"text\":\"next work\",\"wait_s\":0}", true).statusCode());
+            }
+        }
+        bridge.event("progress", json("{\"task_id\":1,\"text\":\"verified stage\"}"));
+        var response = client.send(request("/v1/events").header("Authorization", "Bearer " + TOKEN)
+                .header("Last-Event-ID", "3000").build(), HttpResponse.BodyHandlers.ofInputStream());
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor();
+             var body = response.body()) {
+            var reader = new BufferedReader(new InputStreamReader(body, StandardCharsets.UTF_8));
+            var replay = executor.submit(() -> readFrame(reader)).get(5, TimeUnit.SECONDS);
+            assertEquals("verified stage", replay.getAsJsonObject("data").get("text").getAsString());
+        }
+    }
+
     private static JsonObject readFrame(BufferedReader reader) throws Exception {
         JsonObject frame = new JsonObject();
         for (String line; (line = reader.readLine()) != null;) {

@@ -12,6 +12,123 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void chargedAttemptsAndCheckpointsCannotPretendTheConstructionChangedAfterAStall() {
+        var world = new World();
+        var site = site(world);
+        assertEquals(0, site.targetEdits());
+        assertNull(site.charge());
+        assertNull(site.checkpoint(target().revision(), FEET, world));
+        assertEquals(0, site.targetEdits());
+        site.recordRemoval(TARGET, Blocks.STONE.defaultBlockState(), Blocks.AIR.defaultBlockState());
+        assertEquals(1, site.targetEdits());
+    }
+
+    @Test void explicitConstructionContinuationKeepsLiveSourcesDraftsRepairsAndAllAccounts() {
+        var w = new World();
+        var work = new com.neko.mcbot.path.WorkTargets();
+        var trail = new com.neko.mcbot.path.NavigationTrail();
+        var site = new BuildSite();
+        var owner = UUID.randomUUID(); var companion = UUID.randomUUID();
+        var old = new com.neko.mcbot.server.ActionPermissions.Context(owner, companion, "fixture:world", 7, false, true);
+        var next = new com.neko.mcbot.server.ActionPermissions.Context(owner, companion, "fixture:world", 9, false, true);
+        com.neko.mcbot.server.SpatialCheckpoint.bind(old,w,work,site,trail);
+        assertNull(site.begin(target(),ROUTE,FEET,w));
+        temporary(site,w); work.add(TARGET);
+        trail.observe(0,90,0,90,true);
+        site.recordRemoval(TARGET,Blocks.STONE.defaultBlockState(),Blocks.AIR.defaultBlockState());
+        assertTrue(site.navigation().takeReplan());
+        var snapshot = site.snapshot(); var beforeWork = work.snapshot(); var beforeTrail = trail.snapshot();
+        var budget = site.navigation();
+        assertThrows(IllegalArgumentException.class, () -> com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(
+                next,w,work,site,trail,7,"f".repeat(64)));
+        assertEquals(snapshot,site.snapshot());
+        assertThrows(IllegalArgumentException.class, () -> com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(
+                next,new World(),work,site,trail,7,target().revision()));
+        var otherOwner = new com.neko.mcbot.server.ActionPermissions.Context(UUID.randomUUID(),companion,
+                "fixture:world",9,false,true);
+        assertThrows(IllegalArgumentException.class, () -> com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(
+                otherOwner,w,work,site,trail,7,target().revision()));
+        assertEquals(snapshot,site.snapshot());
+        com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(next,w,work,site,trail,7,target().revision());
+        com.neko.mcbot.server.SpatialCheckpoint.bind(next,w,work,site,trail);
+        assertEquals(snapshot,site.snapshot());
+        assertSame(budget,site.navigation());
+        assertEquals(beforeWork,work.snapshot()); assertEquals(beforeTrail,trail.snapshot());
+        assertTrue(site.repairPending(TARGET));
+        assertEquals(target().revision(),site.drafts().resolve(BuildDrafts.reference(target())).revision());
+        assertNull(site.miningGuard(TEMP,target().revision(),true,w),"retain original live source witness");
+        assertThrows(IllegalArgumentException.class, () -> com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(
+                next,w,work,site,trail,7,target().revision()),"old handoff cannot be consumed twice");
+    }
+
+    @Test void constructionContinuationCannotUpgradeThePreviousAuthority() {
+        var w = new World(); var site = new BuildSite();
+        var work = new com.neko.mcbot.path.WorkTargets(); var trail = new com.neko.mcbot.path.NavigationTrail();
+        var owner=UUID.randomUUID(); var companion=UUID.randomUUID();
+        var old=new com.neko.mcbot.server.ActionPermissions.Context(owner,companion,"fixture:world",1,false,false);
+        var upgraded=new com.neko.mcbot.server.ActionPermissions.Context(owner,companion,"fixture:world",2,false,true);
+        com.neko.mcbot.server.SpatialCheckpoint.bind(old,w,work,site,trail);
+        assertNull(site.begin(target(),ROUTE,FEET,w));
+        assertThrows(IllegalArgumentException.class, () -> com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(
+                upgraded,w,work,site,trail,1,target().revision()));
+        assertTrue(site.boundTo(old,w));
+        var next=new com.neko.mcbot.server.ActionPermissions.Context(owner,companion,"fixture:world",2,false,false);
+        com.neko.mcbot.server.SpatialCheckpoint.continueConstruction(next,w,work,site,trail,1,target().revision());
+        assertTrue(site.boundTo(next,w));
+    }
+
+    @Test void anUnbuiltDrawingCanBeExplicitlyCorrectedWithoutDiscardingTemporaryWitnessesOrAccounts() {
+        var w = new World(); var site = site(w); temporary(site,w);
+        assertNull(site.charge()); assertTrue(site.navigation().takeReplan());
+        assertNull(site.checkpoint(target().revision(),FEET,w));
+        var budget = site.navigation(); var previous = site.snapshot();
+        var input = target().input();
+        input.getAsJsonArray("cells").get(0).getAsJsonObject().addProperty("block","oak_planks");
+        var next = BuildTarget.parse(input);
+        assertNotNull(site.begin(next,ROUTE,FEET,w),"begin never silently switches drawings");
+        assertNotNull(site.revise(next,"b".repeat(64),FEET,w));
+        assertEquals(target().revision(),site.target().revision());
+        assertNull(site.revise(next,target().revision(),FEET,w));
+        assertEquals(next.revision(),site.target().revision()); assertSame(budget,site.navigation());
+        assertEquals(previous.get("route"),site.snapshot().get("route"));
+        assertEquals(previous.get("rounds"),site.snapshot().get("rounds"));
+        assertEquals(previous.get("edits"),site.snapshot().get("edits"));
+        assertEquals(previous.get("temporary"),site.snapshot().get("temporary"));
+        assertNull(site.miningGuard(TEMP,next.revision(),true,w),"the live temporary source witness survives");
+        assertTrue(site.report(w).get("draft_revision_allowed").getAsBoolean());
+    }
+
+    @Test void targetEffectsEvenIfLaterUndonePreventDraftRevisionAndSurviveCheckpointRecovery() {
+        for (boolean paired : List.of(false,true)) {
+            var w = new World(); var site = site(w);
+            var target = target();
+            var before = Blocks.AIR.defaultBlockState(); var after = Blocks.STONE.defaultBlockState();
+            if (paired) site.recordObjectPlacement(TARGET,Map.of(TARGET,before),Map.of(TARGET,after),1,w);
+            else site.recordPlacement(TARGET,before,after,1,w);
+            site.recordRemoval(TARGET,after,before);
+            var input = target.input();
+            input.getAsJsonArray("cells").get(0).getAsJsonObject().addProperty("block","oak_planks");
+            var next = BuildTarget.parse(input);
+            assertNotNull(site.revise(next,target.revision(),FEET,w));
+            assertEquals(target.revision(),site.target().revision());
+            assertEquals(2,site.report(w).get("target_edits").getAsInt());
+            var restored = new BuildSite(); restored.bind("restored",w);
+            restored.restore(site.snapshot(),FEET,w);
+            assertNotNull(restored.revise(next,target.revision(),FEET,w));
+        }
+    }
+
+    @Test void invalidCorrectedCorridorOrMovedDrawingNeverPartiallyChangesTheOldSite() {
+        var w = new World(); var site = site(w); temporary(site,w);
+        var original = site.snapshot();
+        var moved = target().input(); moved.add("anchor",BuildTarget.coordinates(TARGET.east()));
+        assertNotNull(site.revise(BuildTarget.parse(moved),target().revision(),FEET,w));
+        var input = target().input();
+        input.getAsJsonArray("cells").get(0).getAsJsonObject().addProperty("block","oak_planks");
+        w.unknown.add(FEET.below());
+        assertNotNull(site.revise(BuildTarget.parse(input),target().revision(),FEET,w));
+        assertEquals(original,site.snapshot());
+    }
     @Test void tasklessQueriesPreserveTheWholeSpatialSessionButANewEpochAndWorldDoNot() {
         var w = new World();
         var work = new com.neko.mcbot.path.WorkTargets();
@@ -570,16 +687,21 @@ class BuildSiteTest {
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
         assertNull(site.navigationRevision(TARGET,w));
     }
-    @Test void missingHistoricalPassagesKeepTemporaryCleanupConservativeWithoutStoppingNormalEdits() {
+    @Test void missingHistoricalPassagesOnlyKeepUnprovenSupportOrWorkstations() {
         var w=new World(); var site=site(w); temporary(site,w);
         w.passageComplete=false;
         assertNull(site.live(w));
         assertNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
-        assertNotNull(site.miningGuard(TEMP,target().revision(),true,w));
+        assertNull(site.miningGuard(TEMP,target().revision(),true,w),
+                "an intact support outside the recorded passage has a local cleanup proof");
+        w.passage.add(TEMP);
+        assertNotNull(site.miningGuard(TEMP,target().revision(),true,w),
+                "a support that was part of the recorded passage remains conservative");
         var restored=new BuildSite(); restored.bind("restored",w);
         restored.restore(site.snapshot(),FEET,w);
         assertNull(restored.live(w));
-        assertNotNull(restored.miningGuard(TEMP,target().revision(),true,w));
+        assertNotNull(restored.miningGuard(TEMP,target().revision(),true,w),
+                "saved temporary provenance is never reconstructed");
     }
     @Test void aDeclaredCorridorInsideTheWholeFootprintDoesNotProveAnExit() {
         var w=new World(); var site=new BuildSite(); site.bind("task",w);

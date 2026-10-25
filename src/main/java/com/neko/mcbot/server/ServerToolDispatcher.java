@@ -247,6 +247,25 @@ public final class ServerToolDispatcher {
                 var nextContext = new ActionPermissions.Context(sender.owner(), cp.id(),
                         cp.dimension(), taskId, mode.getAsBoolean(),
                         autonomous != null && autonomous.getAsBoolean());
+                if (env.body().has("continue_construction")) {
+                    try {
+                        if (env.body().has("recovery_spatial") || !(cp.identity() instanceof CompanionPlayer player)
+                                || permissions.body(sender.owner()) != null) throw new IllegalArgumentException();
+                        var continuation = env.body().getAsJsonObject("continue_construction");
+                        var expected = continuation.getAsJsonObject("identity");
+                        var fresh = recoveryIdentity(player);
+                        com.neko.mcbot.agentcore.loop.GoalCheckpoint.verifyIdentity(expected, fresh);
+                        if (!expected.get("body_id").equals(fresh.get("body_id"))
+                                || player.buildSite().live(new BuildSiteAccess(player)) != null)
+                            throw new IllegalArgumentException();
+                        SpatialCheckpoint.continueConstruction(nextContext, player.level(), player.workTargets(),
+                                player.buildSite(), player.navigationTrail(),
+                                continuation.get("previous_task_id").getAsBigDecimal().longValueExact(),
+                                continuation.get("target_revision").getAsString());
+                    } catch (RuntimeException unavailable) {
+                        return;
+                    }
+                }
                 permissions.begin(nextContext, cp.identity());
                 if (cp.identity() instanceof CompanionPlayer player) player.newBodyTask();
                 if (env.body().has("recovery_spatial")) {
@@ -429,7 +448,7 @@ public final class ServerToolDispatcher {
         int cap = tool.capTicks(args);
         replyAck(sender, seq, jobId, toolName, acceptText(tool, args, jobId, cap), cap);
         McbotMod.LOG.info("[brain] job {} 受理 {} seq={} 帽={}tick", jobId, toolName, seq, cap);
-        if ("move_to".equals(toolName)) scheduler.watch(companion.id(), activity -> {
+        if ("move_to".equals(toolName) || "follow".equals(toolName)) scheduler.watch(companion.id(), activity -> {
             var data = new JsonObject();
             data.addProperty("activity", activity.name());
             replyJobEvent(sender, seq, jobId, toolName, "progress", activity.label(), data);
@@ -675,6 +694,17 @@ public final class ServerToolDispatcher {
      * 才能立刻把“回执太大、换个小范请求”这件事教给模型。
      */
     private static String shrink(String kind, JsonObject body, int originalBytes) {
+        /*
+         * status is the transport's body snapshot.  A large construction report
+         * must not turn a valid body observation into a failed action receipt:
+         * the next model turn needs identity/inventory even when terrain and
+         * worksite diagnostics have to be omitted.  Action receipts keep the
+         * conservative failure path below because their side effects may be
+         * only partially observed.
+         */
+        if ("tool_result".equals(kind) && looksLikeBodySnapshot(body)) {
+            return shrinkBodySnapshot(body, originalBytes);
+        }
         JsonObject small = new JsonObject();
         if (body != null && body.has("seq")) {
             small.addProperty("seq", body.get("seq").getAsInt());
@@ -754,5 +784,93 @@ public final class ServerToolDispatcher {
             small.addProperty("text", text);
         }
         return new Envelope(kind, small).encode();
+    }
+
+    private static boolean looksLikeBodySnapshot(JsonObject body) {
+        if (body == null || !body.has("data") || !body.get("data").isJsonObject()) return false;
+        JsonObject data = body.getAsJsonObject("data");
+        return data.has("body_id") && data.has("dimension") && data.has("hp")
+                && data.has("alive") && data.has("body_state");
+    }
+
+    private static String shrinkBodySnapshot(JsonObject body, int originalBytes) {
+        JsonObject small = new JsonObject();
+        if (body.has("seq")) small.addProperty("seq", body.get("seq").getAsInt());
+        if (body.has("task_id")) small.addProperty("task_id", body.get("task_id").getAsInt());
+        small.addProperty("ok", true);
+
+        JsonObject original = body.getAsJsonObject("data");
+        JsonObject kept = new JsonObject();
+        kept.addProperty("receipt_truncated", true);
+        kept.addProperty("status_details_omitted", true);
+        kept.addProperty("status_original_bytes", originalBytes);
+
+        for (String key : java.util.List.of(
+                "x", "y", "z", "dimension", "hp", "food", "slots_used", "held",
+                "on_fire", "game_tick", "on_ground", "in_water", "eyes_in_water",
+                "in_lava", "air_supply", "max_air_supply", "water_recovery",
+                "body_id", "body_continuity_id", "owner_uuid", "companion_uuid",
+                "world_id", "alive", "body_state", "saturation", "using_item",
+                "permission_mode", "defense_active", "defense_state",
+                "environment_active", "environment_state", "environment_work_safe",
+                "maintenance_active", "maintenance_state")) {
+            var value = original.get(key);
+            if (value != null && value.isJsonPrimitive()) kept.add(key, value.deepCopy());
+        }
+        for (String key : java.util.List.of("body_lifecycle", "task")) {
+            var value = original.get(key);
+            if (value != null && value.isJsonObject()) kept.add(key, value.deepCopy());
+        }
+        var inventory = original.get("inventory");
+        if (inventory != null && inventory.isJsonObject()) {
+            kept.add("inventory", compactInventory(inventory.getAsJsonObject()));
+        }
+
+        small.add("data", kept);
+        small.addProperty("feedback", "已取得最新身体状态；施工、地形和历史诊断因回执超限省略。"
+                + "原回执 " + originalBytes + "B，详细信息请用 build_site/build_diff 或 status 分步查询。");
+        return new Envelope("tool_result", small).encode();
+    }
+
+    private static JsonObject compactInventory(JsonObject original) {
+        JsonObject compact = new JsonObject();
+        for (String key : java.util.List.of("selected_slot", "storage_size", "slots_used",
+                "mining_tools_known")) {
+            var value = original.get(key);
+            if (value != null && value.isJsonPrimitive()) compact.add(key, value.deepCopy());
+        }
+        var slots = original.get("slots");
+        if (slots != null && slots.isJsonArray()) {
+            var keptSlots = new com.google.gson.JsonArray();
+            for (var element : slots.getAsJsonArray()) {
+                if (!element.isJsonObject()) continue;
+                JsonObject source = element.getAsJsonObject();
+                JsonObject slot = new JsonObject();
+                for (String key : java.util.List.of("slot", "item", "count",
+                        "mining_tool", "damage", "max_damage")) {
+                    var value = source.get(key);
+                    if (value != null && value.isJsonPrimitive()) slot.add(key, value.deepCopy());
+                }
+                keptSlots.add(slot);
+            }
+            compact.add("slots", keptSlots);
+        }
+        var equipment = original.get("equipment");
+        if (equipment != null && equipment.isJsonArray()) {
+            var keptEquipment = new com.google.gson.JsonArray();
+            for (var element : equipment.getAsJsonArray()) {
+                if (!element.isJsonObject()) continue;
+                JsonObject source = element.getAsJsonObject();
+                JsonObject slot = new JsonObject();
+                for (String key : java.util.List.of("slot", "inventory_slot", "item",
+                        "count", "mining_tool", "damage", "max_damage")) {
+                    var value = source.get(key);
+                    if (value != null && value.isJsonPrimitive()) slot.add(key, value.deepCopy());
+                }
+                keptEquipment.add(slot);
+            }
+            compact.add("equipment", keptEquipment);
+        }
+        return compact;
     }
 }

@@ -10,6 +10,22 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void inspectedDraftReferencesAndCorrectionOperationsReachEveryBuildingSchema() {
+        var reference=com.google.gson.JsonParser.parseString("{\"draft_revision\":\""+"a".repeat(64)+"\"}");
+        for (String name : List.of("set_goal","build_diff","build_nearby","build_site")) {
+            var spec=ClientToolDefs.SPECS.stream().filter(s->s.name().equals(name)).findFirst().orElseThrow();
+            var schema=com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject();
+            assertDoesNotThrow(()->BoundedWorkflow.validate(reference,schema.getAsJsonObject("properties").getAsJsonObject("target")),name);
+        }
+        var help=ToolCatalog.read("{\"names\":[\"build_record\",\"build_site\",\"build_diff\"]}");
+        for (String word : List.of("draft_list","draft_query","design_capture","revise","draft_retained"))
+            assertTrue(help.feedback().contains(word),word);
+        for (String operation : List.of("draft_list","draft_query"))
+            assertTrue(com.neko.mcbot.agentcore.loop.TaskPolicy.observation("build_record",
+                    com.google.gson.JsonParser.parseString("{\"operation\":\""+operation+"\"}").getAsJsonObject()));
+        assertFalse(com.neko.mcbot.agentcore.loop.TaskPolicy.observation("build_record",
+                com.google.gson.JsonParser.parseString("{\"operation\":\"design_capture\"}").getAsJsonObject()));
+    }
     @Test void combinedWorkSchemaAndHelpExposeTheSameBoundAndActualChosenMember() {
         var compact=ToolCatalog.MODEL_SPECS.stream().filter(s->s.name().equals("move_to")).findFirst().orElseThrow();
         assertTrue(compact.description().contains("work_targets"));
@@ -36,7 +52,7 @@ class ToolCatalogTest {
     @Test void actualWireToolSchemasHaveObjectRootsWithoutTopLevelCombinators() {
         var provider = new OpenAiCompatProvider("offline", "http://127.0.0.1", "synthetic", "fixture");
         var tools = provider.buildBody("system", List.of(), ToolCatalog.MODEL_SPECS).getAsJsonArray("tools");
-        assertEquals(31, tools.size());
+        assertEquals(32, tools.size());
         for (var value : tools) {
             var function = value.getAsJsonObject().getAsJsonObject("function");
             var schema = function.getAsJsonObject("parameters");
@@ -53,6 +69,12 @@ class ToolCatalogTest {
         assertTrue(help.feedback().contains("休眠"));
         assertTrue(help.feedback().contains("goal_satisfied=false"));
         assertTrue(help.feedback().contains("target_uuid"));
+        assertTrue(help.feedback().contains("protect_owner"));
+        assertTrue(help.feedback().contains("last_combat"));
+        var spec = ToolCatalog.MODEL_SPECS.stream().filter(s -> s.name().equals("follow")).findFirst().orElseThrow();
+        assertTrue(spec.description().contains("protect_owner=true"));
+        assertEquals("boolean", JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject()
+                .getAsJsonObject("properties").getAsJsonObject("protect_owner").get("type").getAsString());
         assertFalse(com.neko.mcbot.agentcore.loop.TaskPolicy.observation("follow",
                 new com.google.gson.JsonObject()));
     }

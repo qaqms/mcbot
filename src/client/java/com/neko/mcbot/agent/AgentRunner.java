@@ -112,11 +112,13 @@ public final class AgentRunner implements ToolExecutor {
     private int programPrimitives;
     private int programPrimitiveLimit;
     private JsonObject taskInitialObservation;
+    private java.util.Set<String> reportedMilestones = new java.util.LinkedHashSet<>();
     private WorkFailureMemory workFailures;
     private com.neko.mcbot.agentcore.loop.DeliveryLedger deliveries;
     private GoalJournal goalJournal;
     private String recoveryScope;
     private JsonObject recoveryRecord, recoveryObservation;
+    private JsonObject stoppedConstruction;
     private Boolean restoredAutonomous;
     private boolean preserveCheckpoint, recoveryWriteFailed, recoveryControlPending, durableActive;
     private long recoveryEpoch;
@@ -263,6 +265,7 @@ public final class AgentRunner implements ToolExecutor {
                                 .filter(t -> t.id() == taskId).map(PanelHistory.Task::title).findFirst().orElse(""));
                         explorationRoute = null;
                         taskInitialObservation = null;
+                        reportedMilestones = new java.util.LinkedHashSet<>();
                         workFailures = new WorkFailureMemory();
                         deliveries = new com.neko.mcbot.agentcore.loop.DeliveryLedger();
                         restoredAutonomous = null;
@@ -273,6 +276,7 @@ public final class AgentRunner implements ToolExecutor {
                         if (restored != null) {
                             var host = restored.getAsJsonObject("host");
                             taskInitialObservation = restored.getAsJsonObject("core").getAsJsonObject("initial").deepCopy();
+                            if (host.has("milestones")) reportedMilestones = restoreMilestones(host.getAsJsonArray("milestones"));
                             workFailures = WorkFailureMemory.restore(host.getAsJsonObject("failures"));
                             deliveries = com.neko.mcbot.agentcore.loop.DeliveryLedger.restore(host.getAsJsonObject("deliveries"));
                             if (host.has("exploration")) explorationRoute = ExplorationRoute.restore(host.getAsJsonObject("exploration"));
@@ -286,8 +290,13 @@ public final class AgentRunner implements ToolExecutor {
                         scope.addProperty("autonomous", taskAutonomous()
                                 && !taskPolicies.getOrDefault(taskId, true));
                         if (restored != null) {
-                            scope.add("recovery_spatial", restored.getAsJsonObject("host").get("spatial").deepCopy());
-                            scope.add("recovery_identity", restored.getAsJsonObject("core").get("initial").deepCopy());
+                            var host = restored.getAsJsonObject("host");
+                            if (host.has("continue_construction"))
+                                scope.add("continue_construction", host.get("continue_construction").deepCopy());
+                            else {
+                                scope.add("recovery_spatial", host.get("spatial").deepCopy());
+                                scope.add("recovery_identity", restored.getAsJsonObject("core").get("initial").deepCopy());
+                            }
                         }
                         recoveryRecord = null;
                         sendTaskControl("task_begin", scope);
@@ -461,6 +470,7 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private void shutdownBrain() {
+        stoppedConstruction = null;
         brainGeneration++;
         AgentLoop old = loop;
         if (old == null || old.currentTaskId() == 0) sendCancel();
@@ -755,6 +765,7 @@ public final class AgentRunner implements ToolExecutor {
         boolean died = !env.str("body_state").isEmpty() && !env.str("body_state").equals("alive");
         if (companionChanged || bodyChanged || died && !bodyUnavailable) {
             companionGeneration++;
+            stoppedConstruction = null;
             workFailures = currentTask == 0 ? null : new WorkFailureMemory();
             companionBody = new JsonObject();
             readingCompanion = false;
@@ -890,12 +901,25 @@ public final class AgentRunner implements ToolExecutor {
         if (text == null || text.isBlank()) throw new IllegalArgumentException("text must not be blank");
         long id = taskSeq.incrementAndGet();
         String command = text.trim();
+        if (stoppedConstruction != null && command.equals("目标状态")) {
+            panelHistory.begin(id, text);
+            var core = stoppedConstruction.getAsJsonObject("core");
+            emitDone(id, AgentLoop.TaskStatus.COMPLETED, "本会话保留已叫停建筑的原图与累计账："
+                    + core.get("directive").getAsString() + "；尚未恢复执行。明确发送“继续”后先核对身体和原工地。");
+            return id;
+        }
+        if (stoppedConstruction != null && List.of("继续", "继续建造", "继续施工", "恢复目标").contains(command)) {
+            continueConstruction(id, text);
+            return id;
+        }
+        if (command.equals("放弃目标")) stoppedConstruction = null;
         if (List.of("恢复目标", "目标状态", "放弃目标").contains(command)) {
             recoveryControl(id, command);
             return id;
         }
         recoveryEpoch++;
         recoveryControlPending = false;
+        stoppedConstruction = null;
         if (loop == null || !loop.busy()) clearSavedGoal();
         submitTask(id, text);
         return id;
@@ -1001,10 +1025,84 @@ public final class AgentRunner implements ToolExecutor {
         if (closed) return false;
         recoveryEpoch++;
         recoveryControlPending = false;
+        if (brain != null && currentTask != 0 && (taskId == 0 || taskId == currentTask))
+            retainStoppedConstruction(brain);
         if (taskId == 0 || taskId == currentTask) clearSavedGoal();
         boolean cancelled = brain != null && brain.cancelTask(taskId);
         if (taskId == 0 && !cancelled) sendCancel();
         return cancelled;
+    }
+
+    private void retainStoppedConstruction(AgentLoop brain) {
+        stoppedConstruction = null;
+        try {
+            var core = brain.goalCheckpoint();
+            var goal = brain.registeredGoal();
+            if (core == null || goal == null || !"building".equals(goal.get("type").getAsString())) return;
+            var host = new JsonObject();
+            host.addProperty("read_only", taskPolicies.getOrDefault(currentTask, true));
+            host.addProperty("autonomous", taskAutonomous());
+            host.add("failures", workFailures.snapshot());
+            host.add("milestones", milestoneSnapshot());
+            host.add("deliveries", deliveries.snapshot());
+            if (explorationRoute != null) host.add("exploration", explorationRoute.snapshot());
+            var continuation = new JsonObject();
+            continuation.add("identity", core.get("initial").deepCopy());
+            continuation.addProperty("previous_task_id", currentTask);
+            continuation.add("target_revision", goal.get("expected_revision").deepCopy());
+            host.add("continue_construction", continuation);
+            var retained = new JsonObject();
+            retained.add("core", core);
+            retained.add("host", host);
+            stoppedConstruction = retained;
+        } catch (RuntimeException unsettled) {
+            // An unknown resource ledger cannot be promoted to a resumable construction.
+        }
+    }
+
+    private void continueConstruction(long commandId, String command) {
+        panelHistory.begin(commandId, command);
+        var brain = loop;
+        var retained = stoppedConstruction;
+        if (closed || brain == null || brain.busy() || recoveryControlPending || retained == null) {
+            emitDone(commandId, AgentLoop.TaskStatus.FAILED, "RECOVERY_UNAVAILABLE:当前建筑尚未停稳或没有可接续记录。");
+            return;
+        }
+        recoveryControlPending = true;
+        long epoch = ++recoveryEpoch, generation = brainGeneration, bodyGeneration = companionGeneration;
+        executeRemote("status", "{\"details\":true}", 0, null).whenComplete((state, failure) ->
+                client.executeOnClient(() -> {
+                    if (closed || epoch != recoveryEpoch || generation != brainGeneration || brain != loop
+                            || bodyGeneration != companionGeneration || !client.isCurrentRunner(this)) return;
+                    recoveryControlPending = false;
+                    try {
+                        if (failure != null || state == null || !state.ok() || state.accepted() || brain.busy())
+                            throw new IllegalArgumentException();
+                        var core = retained.getAsJsonObject("core").deepCopy();
+                        var initial = core.getAsJsonObject("initial");
+                        var fresh = state.data();
+                        GoalCheckpoint.verifyIdentity(initial, fresh);
+                        if (!initial.get("body_id").equals(fresh.get("body_id")))
+                            throw new IllegalArgumentException();
+                        // Only data is resumed. The server transfers the current live worksite after cancellation.
+                        core.addProperty("settled", true);
+                        long taskId = taskSeq.incrementAndGet();
+                        panelHistory.begin(taskId, core.get("directive").getAsString());
+                        taskPolicies.put(taskId, retained.getAsJsonObject("host").get("read_only").getAsBoolean());
+                        recoveryRecord = retained.deepCopy();
+                        companionBodyId = fresh.get("body_id").getAsString();
+                        recoveryWriteFailed = false;
+                        stoppedConstruction = null;
+                        brain.resume(taskId, core);
+                        emitDone(commandId, AgentLoop.TaskStatus.COMPLETED,
+                                "已接回原建筑图与累计账，正在核对当前工地及新权限；旧路径、程序和批准不回放。");
+                    } catch (RuntimeException unavailable) {
+                        recoveryRecord = null;
+                        if (brain.currentTaskId() != 0) brain.failTasks("RECOVERY_UNVERIFIABLE:建筑接续未通过现场核对。");
+                        emitDone(commandId, AgentLoop.TaskStatus.FAILED,
+                                "RECOVERY_UNVERIFIABLE:身体、世界或原记录无法核对，未开始新模型请求。");
+                    }
+                }));
     }
 
     private void sendCancel() {
@@ -1144,6 +1242,7 @@ public final class AgentRunner implements ToolExecutor {
         host.addProperty("read_only", taskPolicies.getOrDefault(taskId, true));
         host.addProperty("autonomous", taskAutonomous());
         host.add("failures", workFailures.snapshot());
+        host.add("milestones", milestoneSnapshot());
         try {
             host.add("deliveries", deliveries.snapshot());
             if (explorationRoute != null) host.add("exploration", explorationRoute.snapshot());
@@ -1234,11 +1333,16 @@ public final class AgentRunner implements ToolExecutor {
         WorkFailureMemory.restore(host.getAsJsonObject("failures"));
         com.neko.mcbot.agentcore.loop.DeliveryLedger.restore(host.getAsJsonObject("deliveries"));
         if (host.has("exploration")) ExplorationRoute.restore(host.getAsJsonObject("exploration"));
+        if (host.has("milestones")) restoreMilestones(host.getAsJsonArray("milestones"));
         if (!host.has("spatial") || !host.get("spatial").isJsonObject()) throw new IllegalArgumentException();
     }
 
     @Override
     public CompletableFuture<ToolOutcome> observe(long taskId, JsonObject goal) {
+        return observeWorldGoal(taskId, goal, false);
+    }
+
+    private CompletableFuture<ToolOutcome> observeWorldGoal(long taskId, JsonObject goal, boolean milestone) {
         try {
             var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("set_goal")).findFirst().orElseThrow();
             BoundedWorkflow.validate(goal, com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
@@ -1275,6 +1379,13 @@ public final class AgentRunner implements ToolExecutor {
                                         : result.feedback(), data);
                             }
                             var evidence = result.data();
+                            if (building && !milestone && evidence.has("worksite_revision")
+                                    && !request.get("expected_revision").equals(evidence.get("worksite_revision"))) {
+                                data.add("goal_evidence",evidence);
+                                return new ToolOutcome(false,"TARGET_REVISION_CHANGED:目标图与当前工地修订不同，未按旧图继续。"
+                                        + "先build_site query核对；仅尚未登记最终目标且目标格从未改动时可显式revise，"
+                                        + "expected_revision填旧工地修订，target用已核对的新图引用，不直接沿旧图施工。",data);
+                            }
                             if (!building) {
                                 if (ledger == null || ledger != deliveries) return ToolOutcome.synthetic("CANCELLED:原交付账已结束。");
                                 try { ledger.describe(evidence); }
@@ -1328,6 +1439,7 @@ public final class AgentRunner implements ToolExecutor {
         if (!blockSavedGoal()) return CompletableFuture.completedFuture(new ToolOutcome(false,
                 "CHECKPOINT_UNAVAILABLE:无法保存派发前的在途标记，未执行。"));
         if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(argsJson, sessionSkills));
+        if ("report_milestone".equals(name)) return reportMilestone(argsJson);
         if ("ask_owner".equals(name)) {
             return askOwner(argsJson);
         }
@@ -1337,17 +1449,156 @@ public final class AgentRunner implements ToolExecutor {
         if ("explore".equals(name)) return executeExplore(argsJson, false);
         if ("run_program".equals(name)) return executeProgram(argsJson);
         return executeRemote(name, argsJson, currentTask, loop).thenApply(result -> {
-            if (!"build_diff".equals(name) || !result.ok() || result.accepted()) return result;
+            if (!java.util.Set.of("build_diff","build_record","build_site").contains(name) || result.accepted()) return result;
             // Direct tool history contains feedback only; Lua already receives the full structured data.
             var data = result.data();
             var fields = new JsonObject();
-            for (String key : List.of("target_revision", "total", "remaining", "observation_complete",
+            for (String key : List.of("target", "draft_retained", "worksite_revision", "target_revision", "total", "remaining", "observation_complete",
                     "spatial_stable", "budget_exhausted", "goal_satisfied", "next_offset", "material_next_offset",
-                    "work_next_cursor", "design_components", "design_review", "clearing_work"))
+                    "work_next_cursor", "design_components", "design_review", "clearing_work",
+                    "entries", "task_scoped", "persistent", "active", "target_edits", "draft_revision_allowed",
+                    "instance_id", "instance_revision", "design_id", "design_revision", "content_revision", "cell_count",
+                    "anchor", "rotation", "layers", "offset", "cells", "records", "record_count", "conflicts", "unknown",
+                    "action_count", "temporary", "stopped", "registration_problem"))
                 if (data.has(key)) fields.add(key, data.get(key));
-            return new ToolOutcome(true, result.feedback()
-                    + "\n建筑核对字段（登记时保持同一target，expected_revision取实际target_revision）：\n" + fields, data);
+            if ("build_diff".equals(name)) fields.remove("cells");
+            return new ToolOutcome(result.ok(), result.feedback()
+                    + "\n建筑记录字段（target引用可复用；登记目标用target_revision，纠正工地用旧修订）：\n" + fields, data);
         });
+    }
+
+    private com.google.gson.JsonArray milestoneSnapshot() {
+        var result = new com.google.gson.JsonArray();
+        reportedMilestones.forEach(result::add);
+        return result;
+    }
+
+    private static java.util.Set<String> restoreMilestones(com.google.gson.JsonArray entries) {
+        if (entries.size() > 1024) throw new IllegalArgumentException("Milestone ledger full");
+        var result = new java.util.LinkedHashSet<String>();
+        for (var value : entries) {
+            if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
+                    || !value.getAsString().matches("[0-9a-f]{64}") || !result.add(value.getAsString()))
+                throw new IllegalArgumentException("Invalid milestone ledger");
+        }
+        return result;
+    }
+
+    private CompletableFuture<ToolOutcome> reportMilestone(String json) {
+        long taskId = currentTask, bodyGeneration = companionGeneration;
+        AgentLoop owner = loop;
+        String bodyId = companionBodyId;
+        var ledger = reportedMilestones;
+        if (taskId == 0 || owner == null || !goalObservationCurrent(taskId, owner, bodyGeneration))
+            return CompletableFuture.completedFuture(ToolOutcome.synthetic("CANCELLED:节点所属任务已结束。"));
+        final JsonObject condition;
+        final String id;
+        try {
+            var args = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            var spec = ClientToolDefs.SPECS.stream().filter(s -> s.name().equals("report_milestone")).findFirst().orElseThrow();
+            BoundedWorkflow.validate(args, com.google.gson.JsonParser.parseString(spec.paramsJsonSchema()).getAsJsonObject());
+            condition = com.neko.mcbot.agentcore.loop.MilestoneReport.condition(args.getAsJsonObject("condition"));
+            id = com.neko.mcbot.agentcore.loop.MilestoneReport.id(condition);
+        } catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new ToolOutcome(false, "DENIED:节点须有效item/position/building条件，不能用文字声明完成。"));
+        }
+        if (ledger.contains(id)) {
+            var data = new JsonObject();
+            data.addProperty("already_reported", true);
+            data.addProperty("goal_satisfied", false);
+            return CompletableFuture.completedFuture(new ToolOutcome(true, "此节点已汇报；未重复通知或重新核实当前状态，继续原任务。", data));
+        }
+        if (ledger.size() >= 1024) return CompletableFuture.completedFuture(
+                new ToolOutcome(false, "MILESTONE_LEDGER_FULL:节点去重记录已满；原任务及最终条件保持。"));
+        boolean building = condition.get("type").getAsString().equals("building");
+        var limit = reserveProgramPrimitives(building ? 2 : 1, taskId);
+        if (limit != null) return CompletableFuture.completedFuture(limit);
+        var initial = taskInitialObservation == null ? null : taskInitialObservation.deepCopy();
+        var observed = building ? observeWorldGoal(taskId, condition, true) : observe(taskId);
+        return observed.thenApply(state -> {
+            if (!goalObservationCurrent(taskId, owner, bodyGeneration) || ledger != reportedMilestones
+                    || !bodyId.equals(companionBodyId))
+                return ToolOutcome.synthetic("CANCELLED:节点核实上下文已失效。");
+            if (state == null || !state.ok() || state.accepted())
+                return new ToolOutcome(false, "MILESTONE_UNVERIFIED:未取得有效现场终态，未发出节点汇报。");
+            try {
+                var report = com.neko.mcbot.agentcore.loop.MilestoneReport.verify(condition, initial, state.data(), bodyId);
+                var data = new JsonObject();
+                data.addProperty("goal_satisfied", false);
+                if (ledger.add(id)) {
+                    data.add("milestone", report);
+                    data.addProperty("text", report.get("facts").getAsString());
+                    publishMilestone(taskId, report);
+                } else data.addProperty("already_reported", true);
+                return new ToolOutcome(true, "关键节点已核实并记录，原任务继续。\n" + report.get("facts").getAsString(), data);
+            } catch (RuntimeException unverified) {
+                return new ToolOutcome(false, "MILESTONE_UNVERIFIED:身体、背包、位置或完整建筑条件尚未满足或不可核实；未汇报，原目标保持。");
+            }
+        });
+    }
+
+    private void publishMilestone(long taskId, JsonObject report) {
+        var data = new JsonObject();
+        data.addProperty("goal_satisfied", false);
+        data.add("milestone", report);
+        data.addProperty("text", report.get("facts").getAsString());
+        emit("progress", taskId, data);
+        record("§b[同伴·关键进展] §r" + report.get("facts").getAsString(), taskId);
+        LOG.info("[brain] milestone task={} kind={} id={}", taskId, report.get("kind").getAsString(),
+                report.get("id").getAsString());
+    }
+
+    private ToolOutcome automaticMilestone(String tool, ToolOutcome receipt, long taskId, AgentLoop owner,
+                                            long bodyGeneration) {
+        if (!goalObservationCurrent(taskId, owner, bodyGeneration) || taskInitialObservation == null
+                || taskId == 0 || owner == null || !receipt.ok() || receipt.accepted()) return receipt;
+        try {
+            String dimension = taskInitialObservation.get("dimension").getAsString();
+            var report = switch (tool) {
+                case "gather" -> com.neko.mcbot.agentcore.loop.AutomaticMilestone.collection(
+                        receipt, companionBodyId, dimension);
+                case "craft" -> com.neko.mcbot.agentcore.loop.AutomaticMilestone.crafting(
+                        receipt, companionBodyId, dimension);
+                default -> null;
+            };
+            if (report == null) return receipt;
+            String id = report.get("id").getAsString();
+            var evidence = report.getAsJsonObject("evidence");
+            var condition = new JsonObject();
+            condition.addProperty("type", "item");
+            String alias = null;
+            if (tool.equals("craft")) {
+                condition.addProperty("item", evidence.get("item").getAsString());
+                condition.addProperty("count", 1);
+                condition.addProperty("mode", "total");
+                alias = com.neko.mcbot.agentcore.loop.MilestoneReport.id(condition);
+            } else if (evidence.getAsJsonArray("accepted_items").size() == 1
+                    && (evidence.get("mode").getAsString().equals("total")
+                    || com.neko.mcbot.agentcore.loop.ItemGoal.count(taskInitialObservation,
+                    evidence.getAsJsonArray("accepted_items").get(0).getAsString())
+                    == evidence.get("baseline").getAsInt())) {
+                condition.add("item", evidence.getAsJsonArray("accepted_items").get(0));
+                condition.add("count", evidence.get("count"));
+                condition.add("mode", evidence.get("mode"));
+                alias = com.neko.mcbot.agentcore.loop.MilestoneReport.id(condition);
+            }
+            boolean duplicate = reportedMilestones.contains(id) || alias != null && reportedMilestones.contains(alias);
+            if (!duplicate && reportedMilestones.size() > 1022) return receipt;
+            if (!duplicate) {
+                reportedMilestones.add(id);
+                if (alias != null) reportedMilestones.add(alias);
+                publishMilestone(taskId, report);
+            }
+            var data = receipt.data();
+            data.addProperty("milestone_reported", true);
+            data.addProperty("milestone_id", id);
+            return new ToolOutcome(receipt.ok(), receipt.feedback()
+                    + "\n该材料或工具阶段已自动汇报，同节点无需再调用report_milestone；继续原任务。", data);
+        } catch (RuntimeException unavailable) {
+            // Reporting must never turn an actual successful action into a failure or repeat it.
+            LOG.debug("[brain] automatic milestone unverified task={} tool={}", taskId, tool);
+        }
+        return receipt;
     }
 
     @Override
@@ -1474,7 +1725,9 @@ public final class AgentRunner implements ToolExecutor {
                     }, route);
             gatherTask = taskId;
             gather = run;
-            return run.start();
+            long bodyGeneration = companionGeneration;
+            return run.start().thenApply(receipt ->
+                    automaticMilestone("gather", receipt, taskId, owner, bodyGeneration));
         } catch (RuntimeException invalid) {
             return CompletableFuture.completedFuture(new ToolOutcome(false,
                     "DENIED:连续采集须有效物品/方块targets、明确count/口径、r=1-16、可选时限0-900秒、"
@@ -1577,6 +1830,7 @@ public final class AgentRunner implements ToolExecutor {
 
     private CompletableFuture<ToolOutcome> executeProgramChild(String name, String json) {
         if ("tool_help".equals(name)) return CompletableFuture.completedFuture(ToolCatalog.read(json, sessionSkills));
+        if ("report_milestone".equals(name)) return reportMilestone(json);
         if ("search_resource".equals(name)) return executeSearch(json, true);
         if ("explore".equals(name)) return executeExplore(json, true);
         if ("workflow".equals(name)) return executeWorkflow(json, true);
@@ -1611,18 +1865,24 @@ public final class AgentRunner implements ToolExecutor {
     }
 
     private CompletableFuture<ToolOutcome> executeCompositionRemote(String name, String args, long taskId, AgentLoop owner) {
+        int cost = 1;
+        if ("build_nearby".equals(name)) {
+            var input = com.google.gson.JsonParser.parseString(args).getAsJsonObject();
+            cost = input.has("max_actions") ? input.get("max_actions").getAsInt() : 12;
+        }
+        var limit = reserveProgramPrimitives(cost, taskId);
+        if (limit != null) return CompletableFuture.completedFuture(limit);
+        return executeRemote(name, args, taskId, owner, true);
+    }
+
+    private ToolOutcome reserveProgramPrimitives(int cost, long taskId) {
         if (program != null && !program.done() && programTask == taskId) {
-            int cost = 1;
-            if ("build_nearby".equals(name)) {
-                var input = com.google.gson.JsonParser.parseString(args).getAsJsonObject();
-                cost = input.has("max_actions") ? input.get("max_actions").getAsInt() : 12;
-            }
             if (programPrimitiveLimit > 0 && cost > programPrimitiveLimit - programPrimitives)
-                return CompletableFuture.completedFuture(new ToolOutcome(false, "ACTION_LIMIT:组合的原子调用预算已到，嵌套采集/清单共享此预算。"));
+                return new ToolOutcome(false, "ACTION_LIMIT:组合的原子调用预算已到，嵌套采集/清单及节点核实共享此预算。");
             // Reserve the complete batch before dispatch; cancellation and partial work do not refund it.
             programPrimitives = (int) Math.min(Integer.MAX_VALUE, (long) programPrimitives + cost);
         }
-        return executeRemote(name, args, taskId, owner, true);
+        return null;
     }
 
     private CompletableFuture<ToolOutcome> executeRemote(String name, String argsJson,
@@ -1656,6 +1916,11 @@ public final class AgentRunner implements ToolExecutor {
         if (!body.get("args").isJsonObject()) return CompletableFuture.completedFuture(
                 new ToolOutcome(false, "DENIED:工具参数须为 JSON 对象。"));
         JsonObject args = body.getAsJsonObject("args");
+        if ("build_site".equals(name) && args.has("operation") && args.get("operation").isJsonPrimitive()
+                && args.getAsJsonPrimitive("operation").isString() && "revise".equals(args.get("operation").getAsString())
+                && owner != null && owner.registeredGoal() != null)
+            return CompletableFuture.completedFuture(new ToolOutcome(false,
+                    "DENIED:最终目标已登记，不能用草稿纠正接口更换工地修订；原图与累计账保持。"));
         if (taskId != 0 && !TaskPolicy.observation(name, args) && !blockSavedGoal())
             return CompletableFuture.completedFuture(new ToolOutcome(false, "CHECKPOINT_UNAVAILABLE:未保存派发意图，动作未发送。"));
         if (taskPolicies.getOrDefault(taskId, false) && !TaskPolicy.observation(name, args)) {
@@ -1715,7 +1980,8 @@ public final class AgentRunner implements ToolExecutor {
                 f.complete(new ToolOutcome(false, "DENIED:服务器连接已关闭。"));
             }
         });
-        return f;
+        return name.equals("craft") ? f.thenApply(receipt ->
+                automaticMilestone(name, receipt, taskId, owner, bodyGeneration)) : f;
     }
 
     /** 本地工具：问题按任务归属，120 秒无回复超时。 */

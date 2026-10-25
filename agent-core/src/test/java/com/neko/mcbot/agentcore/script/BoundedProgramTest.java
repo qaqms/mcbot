@@ -16,6 +16,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class BoundedProgramTest {
+    @Test void tryCallCannotHideANavigationStallInsideAScriptRetryLoop() throws Exception {
+        try (var f=new Fixture("""
+                for i=1,20 do mc.try_call("move_to",{x=1,y=64,z=0}) end
+                return mc.call("inventory",{})
+                """)) {
+            f.host=(name,args)->CompletableFuture.completedFuture(
+                    new ToolOutcome(false,"NAVIGATION_STALLED:先核对现场再改路线。"));
+            var result=f.outcome();
+            assertFalse(result.ok());
+            assertTrue(result.feedback().contains("NAVIGATION_STALLED:"));
+            assertEquals(1,f.calls.size());
+        }
+    }
+
     @Test void defaultProgramHasNoCallOrWallClockQuotaAndCanPassTheOldCallCap() throws Exception {
         var plan = BoundedProgram.Plan.parse("{\"code\":\"return 1\"}");
         assertEquals(0, plan.maxCalls());

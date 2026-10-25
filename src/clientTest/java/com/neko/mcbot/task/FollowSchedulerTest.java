@@ -5,6 +5,13 @@ import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.server.FollowFixtures;
 import com.neko.mcbot.server.FollowWork;
 import com.neko.mcbot.server.ServerTool;
+import com.neko.mcbot.server.ThreatFacts;
+import com.neko.mcbot.server.AttackFixtures;
+import com.neko.mcbot.server.EntityAttack;
+import com.neko.mcbot.server.tools.AttackTool;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -15,6 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class FollowSchedulerTest {
+    @BeforeAll static void registries() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
     private final CompanionScheduler scheduler = new CompanionScheduler();
     private final UUID id = UUID.randomUUID();
     private final BodyControl control = new BodyControl(previous -> {
@@ -280,5 +288,240 @@ class FollowSchedulerTest {
         assertTrue(future.join().feedback().startsWith("TIMEOUT:"));
         assertEquals(5, polls.get());
         assertEquals(BodyControl.Owner.IDLE, control.owner());
+    }
+
+    private ThreatFacts.Threat threat(AttackFixtures.Access entity, boolean targeting, double x) {
+        return new ThreatFacts.Threat(entity, entity.id, entity.uuid, new Vec3(x, 0, .5),
+                new AABB(x - 1, 0, -.5, x + 1, 2, 1.5), 0, true, targeting, false);
+    }
+    private void realCombat() {
+        access.combat = enemy -> new AttackTool.Task(new EntityAttack((AttackFixtures.Access) enemy.identity(), 0));
+    }
+    private com.google.gson.JsonObject protection(CompletableFuture<ServerTool.Result> future) {
+        return future.join().data().getAsJsonObject("follow").getAsJsonObject("protection");
+    }
+
+    @Test void sleepingEscortSeesNewOwnerThreatAndUsesRealAttackThenReturnsToFollowing() {
+        realCombat();
+        var future = start(access.protection(30), 30);
+        tick(2);
+        assertEquals("sleeping", phase());
+        assertEquals(0, access.fights);
+        var zombie = new AttackFixtures.Access();
+        zombie.effect = () -> { zombie.health = 0; zombie.alive = false; access.threats = List.of(); };
+        access.threats = List.of(threat(zombie, true, 5));
+        tick(1);
+        assertEquals(1, zombie.strikes);
+        assertEquals(1, access.fights);
+        assertFalse(future.isDone());
+        tick(1);
+        assertEquals("sleeping", phase());
+        access.position = access.body.add(8, 0, 0);
+        tick(3);
+        assertEquals("following", phase());
+        assertEquals(1, access.plans);
+        scheduler.cancel(id, "owner");
+        assertEquals(1, protection(future).get("strikes").getAsInt());
+        assertTrue(protection(future).getAsJsonObject("last_combat").get("target_dead").getAsBoolean());
+        assertFalse(future.join().data().get("goal_satisfied").getAsBoolean());
+    }
+
+    @Test void ordinaryFollowDoesNotAcquireProtectionOrTurnHostilesIntoAnAttackOrder() {
+        realCombat();
+        var zombie = new AttackFixtures.Access();
+        access.threats = List.of(threat(zombie, true, 4));
+        var future = start(true, 4);
+        tick(4);
+        assertTrue(future.join().ok());
+        assertEquals(0, access.scans);
+        assertEquals(0, zombie.strikes);
+        assertEquals(0, access.fights);
+    }
+
+    @Test void ownerAttackerTakesPriorityAndSelectedIdentityDoesNotThrashAsDistancesChange() {
+        realCombat();
+        var attacker = new AttackFixtures.Access();
+        var passer = new AttackFixtures.Access();
+        passer.id = 48;
+        attacker.ready = false;
+        access.threats = List.of(threat(passer, false, 2), threat(attacker, true, 6));
+        var future = start(access.protection(20), 20);
+        tick(1);
+        assertTrue(scheduler.meleeActive(id));
+        assertEquals(1, access.fights);
+        access.threats = List.of(threat(passer, true, 1), threat(attacker, true, 7));
+        tick(3);
+        assertEquals(1, access.fights);
+        assertEquals(0, passer.reservations);
+        assertTrue(attacker.reservations > 0);
+        scheduler.cancel(id, "owner");
+        assertEquals(attacker.uuid.toString(),
+                protection(future).getAsJsonObject("last_combat").get("target_uuid").getAsString());
+    }
+
+    @Test void solvingOneEnemyRescansAndStartsTheNextWithoutSettlingTheFollowCall() {
+        realCombat();
+        var first = new AttackFixtures.Access();
+        var second = new AttackFixtures.Access();
+        second.id = 48;
+        first.effect = () -> {
+            first.alive = false; first.health = 0;
+            access.threats = List.of(threat(second, false, 4));
+        };
+        second.effect = () -> { second.alive = false; second.health = 0; access.threats = List.of(); };
+        access.threats = List.of(threat(first, true, 3), threat(second, false, 4));
+        var future = start(access.protection(8), 8);
+        tick(3);
+        assertEquals(1, first.strikes);
+        assertEquals(1, second.strikes);
+        assertEquals("sleeping", phase());
+        assertFalse(future.isDone());
+        tick(5);
+        assertTrue(future.join().ok());
+        assertEquals(2, protection(future).get("engagements").getAsInt());
+        assertEquals(2, protection(future).get("strikes").getAsInt());
+        assertEquals(2, protection(future).get("observed_deaths").getAsInt());
+        assertEquals(2, protection(future).getAsJsonArray("combat_history").size());
+        assertFalse(protection(future).get("local_clear").getAsBoolean(),
+                "expiry must not turn an older observation into a current safety assertion");
+        assertEquals(7, protection(future).get("observed_elapsed_ticks").getAsInt());
+    }
+
+    @Test void walkingOwnerAwayFromAFightStopsPursuitAndResumesFollowingWithTheSameAccount() {
+        realCombat();
+        var zombie = new AttackFixtures.Access();
+        zombie.ready = false;
+        access.threats = List.of(threat(zombie, true, 4));
+        var future = start(access.protection(30), 30);
+        tick(2);
+        var budget = access.original;
+        access.position = access.body.add(16, 0, 0);
+        access.threats = List.of();
+        tick(3);
+        assertEquals("following", phase());
+        assertTrue(zombie.stops > 0);
+        assertEquals(1, access.plans);
+        assertSame(budget, access.original);
+        assertFalse(scheduler.meleeActive(id));
+        scheduler.cancel(id, "owner");
+        assertEquals(1, protection(future).get("disengagements").getAsInt());
+    }
+
+    @Test void reflexPreemptionPreservesCombatAndOriginalDeadlineAndCancellationReportsPartialDamage() {
+        realCombat();
+        var zombie = new AttackFixtures.Access();
+        access.threats = List.of(threat(zombie, true, 4));
+        var future = start(access.protection(6), 6);
+        tick(1);
+        assertEquals(1, zombie.strikes);
+        control.reflex(true);
+        tick(3);
+        assertEquals(1, zombie.strikes);
+        assertEquals(BodyControl.Owner.REFLEX, control.owner());
+        control.reflex(false);
+        tick(1);
+        assertEquals(2, zombie.strikes);
+        assertEquals(1, access.fights);
+        tick(1);
+        assertTrue(future.join().ok());
+        assertEquals(2, protection(future).get("strikes").getAsInt());
+        assertEquals(6, future.join().data().getAsJsonObject("follow").get("elapsed_ticks").getAsInt());
+        tick(3);
+        assertEquals(2, zombie.strikes);
+    }
+
+    @Test void failedCombatIsAnHonestTerminalWithPartialEvidenceAndNoAutomaticReplay() {
+        for (String failure : List.of("UNSAFE_SWEEP:", "NO_PATH:", "DENIED:", "WRONG_TOOL:")) {
+            realCombat();
+            access.original = null;
+            var zombie = new AttackFixtures.Access();
+            zombie.guard = new ServerTool.Result(false, failure + "controlled boundary", null);
+            access.threats = List.of(threat(zombie, true, 3));
+            int fights = access.fights;
+            var future = start(access.protection(20), 20);
+            tick(1);
+            assertFalse(future.join().ok());
+            assertTrue(future.join().feedback().startsWith(failure), future.join().feedback());
+            tick(2);
+            assertEquals(fights + 1, access.fights);
+            assertEquals(0, zombie.strikes);
+            assertFalse(future.join().data().get("goal_satisfied").getAsBoolean());
+        }
+    }
+
+    @Test void incompleteThreatScanAndFusingExplosionDoNotBecomeClaimsOfSafety() {
+        realCombat();
+        access.threatsComplete = false;
+        var unknown = start(access.protection(20), 20);
+        tick(1);
+        assertTrue(unknown.join().feedback().startsWith("UNKNOWN:"));
+        assertFalse(protection(unknown).get("local_clear").getAsBoolean());
+        access.threatsComplete = true;
+        access.threats = List.of(new ThreatFacts.Threat(new Object(), 99, UUID.randomUUID(),
+                access.position, new AABB(0, 0, 0, 1, 2, 1), 6, true));
+        var blast = start(access.protection(20), 20);
+        tick(1);
+        assertTrue(blast.join().feedback().startsWith("UNSAFE_THREAT:"));
+        assertEquals(0, access.fights);
+    }
+
+    @Test void ownerAbsenceAndCancelStopLiveCombatWithoutRestoringOrAttackingAReplacement() {
+        realCombat();
+        var zombie = new AttackFixtures.Access();
+        zombie.ready = false;
+        access.threats = List.of(threat(zombie, true, 3));
+        var future = start(access.protection(20), 20);
+        tick(1);
+        access.present = false;
+        tick(1);
+        assertEquals("waiting_owner", phase());
+        assertTrue(zombie.stops > 0);
+        scheduler.cancel(id, "owner");
+        access.present = true;
+        tick(3);
+        assertEquals(1, access.fights);
+        assertTrue(future.join().feedback().startsWith("CANCELLED:"));
+        assertFalse(future.join().data().get("automatic_resume").getAsBoolean());
+    }
+
+    @Test void movingOwnerCanKeepUsefulRouteOrRetargetInPlaceWithoutRepeatedAborts() {
+        access.position = access.body.add(8, 0, 0);
+        access.usefulRoute = true;
+        var future = start(true, 100);
+        tick(3);
+        access.position = access.position.add(3, 0, 0);
+        tick(15);
+        assertEquals(1, access.plans);
+        assertEquals(0, access.retargets);
+        access.usefulRoute = false;
+        access.keepRoute = true;
+        tick(1);
+        assertEquals(1, access.retargets);
+        for (int i = 0; i < 3; i++) {
+            access.position = access.position.add(3, 0, 0);
+            tick(10);
+        }
+        assertEquals(1, access.plans);
+        assertEquals(4, access.retargets);
+        assertEquals(0, access.aborts);
+        scheduler.cancel(id, "owner");
+        assertTrue(future.isDone());
+    }
+
+    @Test void cancellingAnInterruptedFightKeepsActualDamageOnceAndNeverStrikesAfterCancellation() {
+        realCombat();
+        var zombie = new AttackFixtures.Access();
+        access.threats = List.of(threat(zombie, true, 3));
+        var future = start(access.protection(30), 30);
+        tick(2);
+        control.reflex(true);
+        scheduler.cancel(id, "owner");
+        assertTrue(future.join().feedback().startsWith("CANCELLED:"));
+        assertEquals(2, protection(future).get("strikes").getAsInt());
+        assertEquals(6, protection(future).get("observed_health_loss").getAsFloat());
+        assertEquals(1, protection(future).getAsJsonArray("combat_history").size());
+        control.reflex(false);
+        tick(4);
+        assertEquals(2, zombie.strikes);
     }
 }

@@ -28,6 +28,9 @@ public final class ToolCatalog {
                     + "无需填写max_calls/timeout_seconds，重复或空搜索交由程序判断。错误按program_error.kind/line核对，已完成动作勿重放。";
         if (spec.name().equals("tool_help")) return spec.description();
         String text = switch (spec.name()) {
+            case "report_milestone" -> "完成关键节点后按condition核实并主动汇报，原任务继续。"
+                    + "item验背包，position验坐标到达，building验完整阶段格集；同条件只报一次。"
+                    + "能力提升、关键资源或施工阶段完成才报，不逐步播查询/木板木棍；run_program内也可mc.call调用。";
             case "consume" -> "按inventory的实际slot原生食用一次，最多100用物刻/120总刻。"
                     + "ACCEPTED等真终态，consumed_count核真实消耗；抢占/取消不重吃，原目标另验。";
             case "equip" -> "按实际slot切主手；target省略/mainhand，或head/chest/legs/feet补空盔甲槽。"
@@ -35,6 +38,7 @@ public final class ToolCatalog {
             case "build_blueprint" -> "只读查看世界内有界原版结构.nbt，按source_revision显式完整导入B4设计；"
                     + "不支持格/载荷阻止导入，实例与施工仍走原建筑入口，无直接世界写入或预算重开。";
             case "build_record" -> "保存/分页修改可复用设计，显式创建或修订隔离实例；target引用复用原差异/工地/施工/Lua。"
+                    + "draft_list/draft_query找回本任务核对过的图，design_capture(design_id,target)保存原草稿，不从摘要重画。"
                     + "逐真实动作落盘，未知来源/外部修改保守冲突；不自动续已取消目标，不补预算，参数先tool_help。";
             case "explore" -> "有界换区观察；surface只行走，underground按direction/target_y/targets开阶梯，return按地下路标返程。"
                     + "默认不限总半径和移动次数，显式max_steps/radius保留，与gather共享已查点；发现不等于入包，取消不返程。";
@@ -67,10 +71,12 @@ public final class ToolCatalog {
                     + "逐格共用原版放置及真实扣料，失败不重放，取消停手；不移动/挖掘/找料。"
                     + "ACCEPTED等终态，局部批次不代表全目标满足；Lua按max_actions预扣原子预算，详情tool_help。";
             case "build_site" -> "任务内登记完整目标，进出通道和范围可选，共用施工保护及累计账。"
+                    + "query返回原图引用；正式目标登记前，未改动目标格的同落点/格集草稿可显式revise(target,expected_revision=旧修订)，不清累计账。"
                     + "多站位用run_program的mc.build(target)，无需手写通道；超出当前手距就换站位，草花和目标清障按原权限自动处理。"
                     + "身体挡格或出口受阻时按工地建议换位、临时开路或安全下落，之后补回原图并尝试回收临时工程；"
                     + "query只读，登记不授予许可，不自动找料，不保证全局返程。";
             case "build_diff" -> "只读建筑格集或fill/regions差异与材料，最多16384格；大图用紧凑区域或实例引用，锚点/旋转/属性固定。"
+                    + "draft_retained=true时data.target为当前任务原图短引用，set_goal直接使用；图可用build_record draft_list找回。"
                     + "Lua的mc.build_diff(target)给全目标统计及有限明细；按next_offset与原修订续页，施工用mc.build。"
                     + "clearing_work给整图已观察清障量及工具准备建议，成片清土按真实配方先备铲。"
                     + "门与床保留两格验收，仅主格动作/一件料；支持空单箱/木桶、工位与常用建筑装饰，细节tool_help。"
@@ -82,6 +88,8 @@ public final class ToolCatalog {
                     + "拾取用新鲜掉落UUID填pickup_target_uuid及物品取整坐标，统一搜索实际触碰落点；到达后核背包。"
                     + "搭路只用无额外组件的普通材料，改地形遵守实际授权；ACCEPTED等真终态。";
             case "follow" -> "持续只行走跟随主人或扫描所得target_uuid；distance默认3、seconds默认30最多60。"
+                    + "跟随并保护主人须protect_owner=true：持续监测主人12格敌人，优先威胁主人者，复用普通近战，解决后恢复跟随。"
+                    + "先装备武器；贴近主人宜用斧避免剑横扫。爆炸/误伤/无路真实失败，当前仅近战。"
                     + "到位休眠不结束，拉开2格才唤醒；固定32格范围交原工地、原搜索账及期限含休眠/避险不重开。"
                     + "ACCEPTED等真终态，期限结束仅行为结束，goal_satisfied=false，取消不恢复。";
             case "attack" -> "默认原地不追击；approach=true在初始64格范围只走路接近同一目标，逐次搜索有资源预算，无累计重规划次数帽。"

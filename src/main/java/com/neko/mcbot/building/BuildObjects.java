@@ -47,7 +47,7 @@ public final class BuildObjects {
                 : state.setValue(DoorBlock.HALF,secondary(state) ? DoubleBlockHalf.LOWER : DoubleBlockHalf.UPPER);
     }
     public static Set<String> requiredProperties(BlockState state) {
-        return bed(state) ? Set.of("part","facing") : Set.of("half","facing","hinge");
+        return bed(state) ? Set.of("part","facing") : Set.of("half","facing");
     }
     public static BuildTarget.Cell at(BuildTarget target, BlockPos pos) {
         return target.index().get(pos);
@@ -56,15 +56,24 @@ public final class BuildObjects {
         if (!paired(cell.authored())) return "";
         String kind=bed(cell.authored()) ? "bed" : "door";
         if (!cell.properties().containsAll(requiredProperties(cell.authored())))
-            return kind+"_requires_explicit_"+(bed(cell.authored()) ? "part_facing" : "half_facing_hinge");
+            return kind+"_requires_explicit_"+(bed(cell.authored()) ? "part_facing" : "half_facing");
         var partner = at(target, other(cell.pos(), cell.desired()));
         if (partner == null || partner.authored().getBlock() != cell.authored().getBlock()
-                || !partner.properties().equals(cell.properties()) || secondary(partner.authored()) == secondary(cell.authored())
+                || !partner.properties().containsAll(requiredProperties(partner.authored()))
+                || secondary(partner.authored()) == secondary(cell.authored())
                 || !other(partner.pos(),partner.desired()).equals(cell.pos()))
             return kind+"_pair_missing_or_inconsistent";
         var first = partnerState(cell.desired());
         var second = partner.desired();
         for (String name : cell.properties()) {
+            // An omitted hinge is chosen by the native context, not by the state's default value.
+            if (!partner.properties().contains(name)) continue;
+            var property = first.getBlock().getStateDefinition().getProperty(name);
+            if (!first.getValue(property).equals(second.getValue(property)))
+                return kind+"_pair_state_mismatch";
+        }
+        for (String name : partner.properties()) {
+            if (!cell.properties().contains(name)) continue;
             var property = first.getBlock().getStateDefinition().getProperty(name);
             if (!first.getValue(property).equals(second.getValue(property)))
                 return kind+"_pair_state_mismatch";

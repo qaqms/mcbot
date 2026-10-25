@@ -12,6 +12,22 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BoundedGatherTest {
+    @Test void aStalledPickupReturnsToTheModelWithPriorMiningEffectsAndNoLocalRetry() {
+        var f=new Fixture(2,0);
+        f.moveFailures.add("NAVIGATION_STALLED:30秒没有移动，请核对现场再改路线。");
+        f.movementEffects=new JsonObject();
+        f.movementEffects.addProperty("navigation_stalled",true);
+        f.movementEffects.addProperty("model_reassessment_required",true);
+        var result=f.run();
+        assertFalse(result.ok());
+        assertTrue(result.feedback().startsWith("NAVIGATION_STALLED:"));
+        assertEquals(1,f.moved);
+        assertEquals(1,f.dug,"already completed mining is retained");
+        assertEquals(1,result.data().get("mined_blocks").getAsInt());
+        assertFalse(result.data().get("goal_satisfied").getAsBoolean());
+        assertTrue(result.data().getAsJsonObject("last_observation").get("model_reassessment_required").getAsBoolean());
+    }
+
     @Test void inventoryHarvestEvidenceContinuesTheSameGatherDespiteAnUnsuitableCurrentHand() {
         var f = new Fixture(2, 0);
         var block = block(true);

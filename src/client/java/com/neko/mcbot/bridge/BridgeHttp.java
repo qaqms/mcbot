@@ -27,7 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -53,7 +53,7 @@ public final class BridgeHttp implements BridgeEvents.Sink {
 
     private static final class SseClient {
         final HttpExchange ex;
-        final LinkedBlockingQueue<String> out = new LinkedBlockingQueue<>();
+        final ArrayBlockingQueue<String> out = new ArrayBlockingQueue<>(256);
 
         SseClient(HttpExchange ex) {
             this.ex = ex;
@@ -140,7 +140,8 @@ public final class BridgeHttp implements BridgeEvents.Sink {
     void stop() {
         BridgeEvents.detach(this);
         for (SseClient c : clients) {
-            c.out.add("STOP");
+            c.out.clear();
+            c.out.offer("STOP");
         }
         server.stop(0);
         executor.shutdownNow();
@@ -154,7 +155,14 @@ public final class BridgeHttp implements BridgeEvents.Sink {
         synchronized (eventLock) {
             EventRing.Event e = service.recordEvent(type, data);
             String frame = frame(e);
-            for (SseClient c : clients) c.out.add(frame);
+            for (SseClient c : clients) {
+                // Socket writes belong to the SSE worker. A stalled subscriber cannot retain unbounded history.
+                if (!c.out.offer(frame)) {
+                    clients.remove(c);
+                    c.out.clear();
+                    c.out.offer("STOP");
+                }
+            }
         }
     }
 
@@ -271,6 +279,7 @@ public final class BridgeHttp implements BridgeEvents.Sink {
             Thread.currentThread().interrupt();
         } finally {
             clients.remove(c);
+            ex.close();
         }
     }
 

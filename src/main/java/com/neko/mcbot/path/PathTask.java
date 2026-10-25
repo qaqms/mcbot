@@ -30,6 +30,7 @@ import java.util.List;
  * 抑抖动，不以累计重规划次数停工。普通只行走候选使用世界快照和后台搜索；
  * 工作到达也先用独占快照后台寻找可工作位置；需要编辑的路线保留主线程分帧回退。
  * 每批搜索 4000 节点，保留边界续搜，无默认整趟节点/记录/累计时间门。
+ * 累计约30秒有效搜索等待没有实际移动或挖放，则结束当前路线，把现场交回模型重新判断。
  * 保留可行答案；分段及可返程的部分路线自动接续，整趟诊断累计不清零。
  * 普通导航在执行时以世界线程剩余切片预搜后段，实际落地后复核采用。
  *
@@ -202,6 +203,7 @@ public final class PathTask extends TickTask {
     private CompanionPlayer drivenBody;
     private PathFailure planFailure;
     private final PathTiming timing = new PathTiming();
+    private final SearchStall searchStall = new SearchStall();
     private boolean timingLogged;
 
     public PathTask(ServerLevel level, BlockPos target, ActionPermissions permissions,
@@ -267,6 +269,10 @@ public final class PathTask extends TickTask {
         if (search != null) {
             data.addProperty("search_expanded", search.expanded());
             data.addProperty("search_batches", search.batches());
+            data.addProperty("existing_path_expanded", search.existingPathExpanded());
+            data.addProperty("existing_path_selected", search.usedExistingPath());
+            data.addProperty("work_stance_probes", search.estimateSeedProbes());
+            data.addProperty("work_stance_seeds", search.estimatedWorkStances());
         }
         if (pickupTarget != null) data.addProperty("pickup_target_uuid", pickupTarget.toString());
         data.addProperty("committed_nodes", executed);
@@ -274,6 +280,8 @@ public final class PathTask extends TickTask {
         data.addProperty("placed_blocks", actualPlaces);
         drops.snapshot(level).entrySet().forEach(entry -> data.add(entry.getKey(), entry.getValue()));
         data.addProperty("replans", replans);
+        data.addProperty("search_idle_ms", searchStall.idleMillis());
+        data.addProperty("search_idle_limit_ms", SearchStall.LIMIT_MILLIS);
         addTripData(data);
         return data;
     }
@@ -308,6 +316,10 @@ public final class PathTask extends TickTask {
         Progress progress;
         try {
             progress = tickBody(c);
+            if (progress instanceof Progress.Running) {
+                var stalled = searchProgress(activity() == Activity.SEARCH, c.getX(), c.getY(), c.getZ());
+                if (stalled != null) progress = stalled;
+            }
             if (progress instanceof Progress.Running && phase == Phase.EXECUTE) {
                 long remaining = Math.min(2_000_000L, SEARCH_SLICE_NS - (System.nanoTime() - tickStarted));
                 if (remaining > 0) advanceContinuation(c, remaining);
@@ -316,6 +328,34 @@ public final class PathTask extends TickTask {
             timing.endTick();
         }
         return progress instanceof Progress.Done done ? new Progress.Done(timed(done.result(), "TERMINAL")) : progress;
+    }
+
+    /** World facts renew the lease; expanding nodes, retargeting and replanning do not. */
+    Progress searchProgress(boolean searching, double x, double y, double z) {
+        if (!searchStall.observe(searching,x,y,z,actualDigs,actualPlaces)) return null;
+        var data = new JsonObject();
+        data.addProperty("navigation_stalled",true);
+        data.addProperty("model_reassessment_required",true);
+        data.addProperty("goal_satisfied",false);
+        data.addProperty("search_idle_ms",searchStall.idleMillis());
+        data.addProperty("search_idle_limit_ms",SearchStall.LIMIT_MILLIS);
+        data.addProperty("search_idle_seconds",searchStall.idleMillis()/1000.0);
+        data.addProperty("stalled_search_mode",searchMode());
+        data.addProperty("x",(int)Math.floor(x));
+        data.addProperty("y",(int)Math.floor(y+1e-5));
+        data.addProperty("z",(int)Math.floor(z));
+        data.addProperty("feet_y",y);
+        data.add("requested_target",com.neko.mcbot.building.BuildTarget.coordinates(target));
+        if (placementSet != null) placementSet.addIdentity(data);
+        if (workTarget != null) data.add("work_target",com.neko.mcbot.building.BuildTarget.coordinates(workTarget));
+        McbotMod.LOG.info("[path] 搜索无实际进展，交回模型 route={} idle_ms={} from={},{},{} target={}",
+                timing.id(),searchStall.idleMillis(),x,y,z,target.toShortString());
+        return terminal(new Result(false,
+                "NAVIGATION_STALLED:累计约30秒有效寻路等待没有实际位移或挖放成果，已中断当前路线并释放移动输入。"
+                + "实际位置=(" + x + "," + y + "," + z + ")，请求目标=(" + target.toShortString() + ")。"
+                + "尚未证明目标不可达，已完成的改动和原目标保留。请先status details=true核对位置、背包和现场，"
+                + "再根据具体障碍选择其他站位、可执行工作或补齐工具/支撑条件；没有新事实时不要原样重试同一路线。",
+                data));
     }
 
     private Progress tickBody(CompanionPlayer c) {
@@ -490,10 +530,11 @@ public final class PathTask extends TickTask {
             diagnostics.addProperty("batches", search.batches());
             diagnostics.addProperty("estimate_expanded", search.estimateExpanded());
             diagnostics.addProperty("estimate_seed_probes", search.estimateSeedProbes());
+            diagnostics.addProperty("existing_path_expanded", search.existingPathExpanded());
+            diagnostics.addProperty("existing_path_selected", search.usedExistingPath());
             diagnostics.addProperty("stored_nodes", search.storedNodes());
             diagnostics.addProperty("created_nodes", search.createdNodes());
-            data.addProperty("departure_blocked", search.failure()!=null && search.failure().startsWith("NO_PATH:")
-                    && search.expanded()==1 && search.createdNodes()==1);
+            data.addProperty("departure_blocked", search.departureBlocked());
             diagnostics.addProperty("storage_collections", search.storageCollections());
             diagnostics.addProperty("partial_candidate_checks", search.partialCandidateChecks());
             diagnostics.addProperty("elapsed_ms", search.elapsedMillis());
@@ -642,8 +683,9 @@ public final class PathTask extends TickTask {
             if (continueSearch(search, allowance, sharedBudget)) {
                 // The completed worker has released ownership; subsequent work uses normal slices.
                 detachedSearch = false;
-                McbotMod.LOG.info("[path] 保留搜索边界继续下一批 expanded={} nodes={}/{} route={} work={}",
-                        search.expanded(), allowance.used(), allowance.limit(), timing.id(), workDiagnostic(c));
+                McbotMod.LOG.info("[path] 保留搜索边界继续下一批 expanded={} nodes={}/{} route={} work_stances={}/{} work={}",
+                        search.expanded(), allowance.used(), allowance.limit(), timing.id(),
+                        search.estimatedWorkStances(), search.estimateSeedProbes(), workDiagnostic(c));
                 return running();
             }
             McbotMod.LOG.info("[path] 搜索失败 from={} to={}: {} {} route={}", c.blockPosition().toShortString(),
@@ -1036,6 +1078,7 @@ public final class PathTask extends TickTask {
                 nodes, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs), goal);
         if (d != null && (sharedBudget == null || sharedBudget.perSearch())) d.segments().continuousStorage();
         if (d == null) return null;
+        if (drivenBody.buildSite().active()) d.preferExistingPaths();
         if (sharedBudget == null) d.totalBudget(SEARCH_TOTAL_NS);
         if (reusePending != null) {
             d.reuseBias(reusePending);
@@ -1079,6 +1122,7 @@ public final class PathTask extends TickTask {
                         end.x(), end.y(), end.z(), target.getX(), target.getY(), target.getZ(),
                         nodes, walkOnly ? 0 : Math.max(0, spec.maxDigs() - actualDigs - reservedDigs),
                         goalFor(from, terrain)).segments().continuousStorage().after(edits);
+                if (c.buildSite().active()) next.preferExistingPaths();
                 next.totalBudget(SEARCH_TOTAL_NS);
                 McbotMod.LOG.info("[path] 执行中预搜 from={} reserved_digs={} reserved_places={} route={}",
                         from.toShortString(), reservedDigs, reservedPlaces, timing.id());
@@ -1257,7 +1301,8 @@ public final class PathTask extends TickTask {
         if (detachedSearch) return "search_mode=BACKGROUND_SNAPSHOT expanded=" + search.expanded()
                 + " worker_ms=" + search.elapsedMillis() + " stored=" + search.storedNodes();
         String preparation = " batches=" + search.batches() + " prep=" + search.estimateExpanded() + "/" + search.estimateSeedProbes()
-                + " stored=" + search.storedNodes();
+                + " stored=" + search.storedNodes() + " existing_path=" + search.usedExistingPath()
+                + " existing_expanded=" + search.existingPathExpanded();
         return memo == null ? "memo=off(验尸超限)" + preparation : "[memo] expanded=" + search.expanded()
                 + " 命中=" + memo.memoHits() + " 实查=" + memo.memoMisses()
                 + " 验尸不符=" + memo.staleCount() + " 耗时=" + search.elapsedMillis() + "ms" + preparation;
@@ -1863,6 +1908,7 @@ public final class PathTask extends TickTask {
     }
 
     @Override public void onSuspend() {
+        searchStall.suspend();
         cancelSearch();
         timing.suspend();
         stopMovement();

@@ -114,4 +114,20 @@ class TaskBubbleStateTest {
         assertEquals(TaskBubbleState.Activity.PROCESSING, TaskBubbleState.Activity.tool("unknown", false));
         assertEquals(TaskBubbleState.Activity.FOLLOWING, TaskBubbleState.Activity.tool("follow", false));
     }
+    @Test void escortProgressShowsGuardCombatAndFollowWithoutWakingModelOrAcceptingLateEvents() {
+        state.begin(7, "保护我");
+        state.sent(7, 20, TaskBubbleState.Activity.FOLLOWING);
+        state.progress(7, 20, "follow", "GUARD");
+        assertEquals(TaskBubbleState.Activity.GUARDING, state.primitive());
+        state.progress(7, 20, "follow", "ATTACK");
+        assertEquals(TaskBubbleState.Activity.ATTACKING, state.primitive());
+        state.progress(8, 20, "follow", "MOVE");
+        assertEquals(TaskBubbleState.Activity.ATTACKING, state.primitive());
+        state.progress(7, 20, "follow", "MOVE");
+        assertEquals(TaskBubbleState.Activity.MOVING, state.primitive());
+        state.finish(7, TaskStatus.CANCELLED, "owner", null, 0);
+        state.progress(7, 20, "follow", "ATTACK");
+        assertNull(state.primitive());
+        assertEquals(TaskBubbleState.Tone.CANCELLED, snapshot(0, 1).tone());
+    }
 }

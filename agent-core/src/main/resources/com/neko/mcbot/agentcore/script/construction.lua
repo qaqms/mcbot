@@ -142,6 +142,13 @@ function mc.build(target, options)
     local effects,omitted={},0
     local last_pages,initial_remaining=nil,nil
     local relocations,recovery_seen,cleanup=0,{},nil
+    local function cleanup_after_stall()
+        if not temporary_possible then return end
+        local current=call("build_site",{operation="query"}).data
+        if current.temporary and #current.temporary>0 then
+            cleanup=mc.cleanup_temporary(revision)
+        end
+    end
     local function effect(cell,kind)
         if #effects<16 then
             effects[#effects+1]={x=cell.x,y=cell.y,z=cell.z,block=cell.block,kind=kind}
@@ -414,6 +421,10 @@ function mc.build(target, options)
         elseif recover(stamp,true) then
             cursor=0
         else
+            -- A blocked build can still have throwaway supports that no longer
+            -- carry any local dependency.  Give the bounded cleanup pass one
+            -- chance before returning the obstruction to the model.
+            cleanup_after_stall()
             local result=report(last_reason or "no_feasible_work_material_support_state_or_protection",round,pages)
             result.last_failure=last_failure
             return result
@@ -424,12 +435,17 @@ function mc.build(target, options)
         local done,remaining=completed(rounds,pages)
         return done or report("cleanup_changed_target",rounds,remaining)
     end
+    cleanup_after_stall()
     return report(reason or "round_limit",rounds,pages)
 end
 
 function mc.cleanup_temporary(revision)
     local site=call("build_site",{operation="query"}).data
-    assert(site.active and site.target_revision==revision)
+    if not site.active or site.target_revision~=revision then
+        return {removed=0,retained=site.temporary and #site.temporary or 0,
+            blocked=site.active and "worksite_revision_mismatch" or "worksite_not_registered",
+            target_revision=site.target_revision,requested_revision=revision,goal_satisfied=false}
+    end
     local removed,attempted,recovery=0,{},{}
     local function finish(blocked)
         local retained=0

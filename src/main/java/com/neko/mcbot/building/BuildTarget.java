@@ -90,7 +90,7 @@ public record BuildTarget(BlockPos anchor, int rotation, List<Cell> cells, Strin
             if (BuildObjects.paired(authored)) {
                 if (!properties.containsAll(BuildObjects.requiredProperties(authored)))
                     return new Material(item, 0, false, BuildObjects.bed(authored)
-                            ? "bed_requires_explicit_part_facing" : "door_requires_explicit_half_facing_hinge");
+                            ? "bed_requires_explicit_part_facing" : "door_requires_explicit_half_facing");
                 return new Material(item, BuildObjects.secondary(authored) ? 0 : 1, true, "");
             }
             if (!(item instanceof BlockItem blockItem) || blockItem.getBlock() != authored.getBlock()

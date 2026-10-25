@@ -11,6 +11,33 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void aStalledRouteReturnsToTheModelInsteadOfTryingMoreConstructionCandidates() throws Exception {
+        var w=new World();
+        var stalled=new JsonObject();
+        stalled.addProperty("navigation_stalled",true);
+        stalled.addProperty("model_reassessment_required",true);
+        stalled.addProperty("search_idle_ms",30000);
+        w.override=(name,args)->name.equals("move_to") ? new ToolOutcome(false,
+                "NAVIGATION_STALLED:30秒没有实际进展，请核对现场再选择路线。",stalled) : null;
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertFalse(result.ok(),result.feedback());
+        assertTrue(result.feedback().contains("NAVIGATION_STALLED:"),result.feedback());
+        assertTrue(result.data().getAsJsonObject("last_receipt").get("model_reassessment_required").getAsBoolean());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        assertEquals("move_to",w.calls.getLast().name(),"the helper must yield immediately");
+        assertEquals(0,w.placed);
+    }
+
+    @Test void cleanupWithAnotherRevisionReportsTheConflictAndNeverDispatchesAnEdit() throws Exception {
+        var w=new World();
+        var result=run(w,"return mc.cleanup_temporary('"+ "b".repeat(64) +"')",128);
+        assertTrue(result.ok(),result.feedback());
+        var report=result.data().getAsJsonObject("returned");
+        assertEquals("worksite_revision_mismatch",report.get("blocked").getAsString());
+        assertFalse(report.get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.calls.size()); assertEquals(0,w.breaks); assertEquals(0,w.moved);
+    }
+
     @Test void unsupportedEavesAreDeferredUntilARealRoofCourseChangesTheWorkFacts() throws Exception {
         var world=new World(); world.moved=1;
         world.override=(name,args)->{

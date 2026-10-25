@@ -77,6 +77,30 @@ class NavigationEstimateTest {
                 "completed work behind the body must not erase the remaining approach price");
     }
 
+    @Test void anUnrelatedRemovalOutsideATruncatedWorkFieldDoesNotEraseTheApproach() {
+        var goal = new NavigationGoal() {
+            @Override public boolean estimateWorkStances() { return true; }
+            @Override public Bounds estimateBounds() { return new Bounds(0,8,0,0,8,0); }
+            @Override public boolean reached(int x,int y,int z) { return remaining(x,y,z)==0; }
+            @Override public double remaining(int x,int y,int z) {
+                return Math.abs(x)+Math.abs(y-8)+Math.abs(z);
+            }
+        };
+        var field = new ApproachEstimate(new Slab(),goal,4,8,0,1);
+        for (int i=0;i<100 && !field.done();i++) field.advance();
+        assertTrue(field.done());
+        assertEquals(1,field.expanded(),"the optional reverse field ends before reaching the body");
+        assertEquals(1,field.workStances());
+        var approach=field.cost(4,8,0,TerrainEdits.EMPTY);
+        assertTrue(approach>0);
+        var removed=TerrainEdits.EMPTY.after(java.util.List.of(DigAStar.pack(4,0,4)),java.util.List.of());
+        assertEquals(approach,field.cost(4,8,0,removed),1e-9,
+                "digging behind the body must not make remote work an instant zero-cost destination");
+        assertEquals(approach,field.cost(4,8,0,removed.after(java.util.List.of(),
+                java.util.List.of(DigAStar.pack(4,8,4)))),1e-9);
+        assertEquals(0,field.cost(0,8,0,TerrainEdits.EMPTY),1e-9);
+    }
+
     @Test void aDeepRouteStillUsesExecutableStairsWithinTheUnchangedDigAllowance() {
         var slab = new Slab();
         var route = new DigAStar(slab, 0, 8, 0, 0, 3, 0, 8000, 24, DigAStar.H_WEIGHT, 0);
@@ -98,6 +122,21 @@ class NavigationEstimateTest {
         assertEquals(3, previous.y());
         assertEquals(0, previous.z());
         assertTrue(slab.air.isEmpty());
+    }
+
+    @Test void anUpperWorkFieldRetainsHeightGuidanceBeyondItsTruncatedReverseFrontier() {
+        var slab = new Slab();
+        var goal = new NavigationGoal() {
+            @Override public boolean estimateWorkStances() { return true; }
+            @Override public Bounds estimateBounds() { return new Bounds(0,8,0,0,8,0); }
+            @Override public boolean reached(int x,int y,int z) { return x==0 && y==8 && z==0; }
+            @Override public double remaining(int x,int y,int z) { return 0; }
+        };
+        var field = new ApproachEstimate(slab,goal,4,2,0,1);
+        while (!field.done()) field.advance();
+        assertTrue(field.cost(4,2,0,TerrainEdits.EMPTY)>field.cost(4,5,0,TerrainEdits.EMPTY),
+                "a broad geometric reach plateau must not flatten all lower floors");
+        assertFalse(goal.reached(4,5,0), "ordering guidance never authorizes work arrival");
     }
 
     @Test void alreadySatisfiedGoalsSkipPreprocessingAndSpendNoEditAllowance() {

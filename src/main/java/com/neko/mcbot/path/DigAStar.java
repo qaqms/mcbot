@@ -63,7 +63,10 @@ public final class DigAStar {
     private static final int GREEDY_NODES = 1000;
     private static final int IMPROVE_NODES = 64;
     private static final int PARTIAL_CANDIDATES = 16;
+    private static final int EXISTING_PATH_NODES = 256;
     private int firstAnswerAt = -1;
+    private boolean preferExisting, existingChecked, existingPass, existingPath;
+    private int existingExpanded;
 
     private record State(long position, int digs, int places, TerrainEdits terrain) { }
 
@@ -199,6 +202,13 @@ public final class DigAStar {
     public boolean segmentEnd() { return segmentEnd; }
     boolean startsAt(int x, int y, int z) { return sx == x && sy == y && sz == z; }
 
+    /** Construction movement shares this preference; ordinary mining keeps its existing search policy. */
+    public DigAStar preferExistingPaths() {
+        if (prepared || estimate != null || existingChecked) throw new IllegalStateException("search already started");
+        preferExisting = true;
+        return this;
+    }
+
     /** 分帧推进（不限时，单测/兼容用）。 */
     public boolean advance(int budget) {
         return advance(budget, Long.MAX_VALUE / 8);
@@ -244,6 +254,24 @@ public final class DigAStar {
                 continue;
             }
             if (!prepared) {
+                if (!existingChecked) {
+                    boolean requested = preferExisting || goal.estimateWorkStances();
+                    if (requested) {
+                        if (usedNanos + System.nanoTime() - t0 >= totalBudgetNanos)
+                            return budgetFailure("TIME", "搜索准备耗尽累计时间预算。");
+                        if (System.nanoTime() - t0 >= sliceNanos) return false;
+                    }
+                    existingChecked = true;
+                    // Strict work goals often have a wide reach plateau. Search existing access with
+                    // travel cost before the greedy pass can turn that plateau into edit histories.
+                    existingPass = requested && maxNodes >= 8
+                            && (maxDigs > 0 || s.maxPlaces() > 0);
+                    if (existingPass) {
+                        prepared = true;
+                        restartFrontier();
+                        continue;
+                    }
+                }
                 if (estimate == null) {
                     if (goal.remaining(sx, sy, sz) == 0
                             && usedNanos + System.nanoTime() - t0 < totalBudgetNanos
@@ -252,7 +280,7 @@ public final class DigAStar {
                         return arrive(start(), 0);
                     }
                     estimate = new ApproachEstimate(s, goal, sx, sy, sz,
-                            !greedy && maxDigs > 0 ? maxNodes / 4 : 0);
+                            goal.estimateWorkStances() || !greedy && maxDigs > 0 ? maxNodes / 4 : 0);
                 }
                 if (!estimate.done()) {
                     // Preprocessing is optional, but its CPU, work and allocations are never free.
@@ -269,7 +297,14 @@ public final class DigAStar {
                 best.put(initial.key, initial);
                 open.add(initial);
             }
-            if (greedy && expanded >= Math.min(GREEDY_NODES, maxNodes / 4))
+            if (existingPass && (existingExpanded >= Math.min(EXISTING_PATH_NODES, maxNodes / 8)
+                    || open.isEmpty())) {
+                existingPass = false;
+                prepared = false;
+                restartFrontier();
+                continue;
+            }
+            if (!existingPass && greedy && expanded >= Math.min(GREEDY_NODES, maxNodes / 4))
                 weightedPass();
             if (!prepared) { i--; continue; }
             if (segmented && stoppingNode != null && expanded - firstAnswerAt >= IMPROVE_NODES)
@@ -288,7 +323,11 @@ public final class DigAStar {
             if (!Double.isFinite(arrival) && segmented && segmentRemaining > 0
                     && goal.remaining(cur.x, cur.y, cur.z) > 0
                     && goal.remaining(cur.x, cur.y, cur.z) <= segmentRemaining) arrival = 0;
-            if (Double.isFinite(arrival) && arrival >= 0 && cur.g + arrival < stoppingCost) {
+            if (existingPass && arrival == 0) {
+                existingPath = true;
+                return arrive(cur, cur.g);
+            }
+            if (!existingPass && Double.isFinite(arrival) && arrival >= 0 && cur.g + arrival < stoppingCost) {
                 stoppingNode = cur;
                 stoppingCost = cur.g + arrival;
                 if (firstAnswerAt < 0) firstAnswerAt = expanded;
@@ -312,6 +351,7 @@ public final class DigAStar {
                         + " 节点，尚未证明目标不可达。");
             }
             expanded++;
+            if (existingPass) existingExpanded++;
             expand(cur);
             if (storedNodes() >= Math.min(collectionAt, maxStoredNodes)) {
                 beginStorageCollection();
@@ -351,6 +391,10 @@ public final class DigAStar {
             prepared = false;
             estimate = null;
         }
+        restartFrontier();
+    }
+
+    private void restartFrontier() {
         open.clear();
         best.clear();
         Node initial = start();
@@ -533,6 +577,12 @@ public final class DigAStar {
     public int chargedNodes() { return expanded + (segmented ? 0 : estimateExpanded()); }
     public int batches() { return batches; }
     public int estimateSeedProbes() { return estimate == null ? 0 : estimate.seedProbes(); }
+    public int estimatedWorkStances() { return estimate == null ? 0 : estimate.workStances(); }
+    public int existingPathExpanded() { return existingExpanded; }
+    public boolean usedExistingPath() { return existingPath; }
+    public boolean departureBlocked() {
+        return failure != null && failure.startsWith("NO_PATH:") && best.size() == 1;
+    }
     public String budgetKind() { return budgetKind; }
     public Map<String, Integer> rejections() { return Map.copyOf(rejected); }
     public List<PathFailure> rejectionSamples() { return List.copyOf(rejectionSamples); }
@@ -621,8 +671,10 @@ public final class DigAStar {
         if (storedNodes() >= maxStoredNodes) return;
         int bx = cur.x + dx, by = cur.y + dy, bz = cur.z + dz;
         var check = PathTransition.check(s, cur.key.terrain(), cur.x, cur.y, cur.z, bx, by, bz,
-                maxDigs - cur.digs, s.maxPlaces() - cur.places);
+                existingPass ? 0 : maxDigs - cur.digs, existingPass ? 0 : s.maxPlaces() - cur.places);
         if (check.plan() == null) {
+            // Preference-only refusals do not describe the permissions of the full search.
+            if (existingPass) return;
             int seen = rejected.merge(check.reason(), 1, Integer::sum);
             if (seen == 1 && rejectionSamples.size() < 8)
                 rejectionSamples.add(new PathFailure(-1, check.reason(), cur.key.position(),
@@ -659,7 +711,7 @@ public final class DigAStar {
         var step = new Step(bx, by, bz, plan.dig(), plan.place(),
                 classify(cur, bx, by, bz, plan.dig(), plan.place()), plan.feetY(), plan.jump());
         Node n = new Node(key, bx, by, bz, digs, places, g,
-                (greedy ? 0 : g) + h(bx, by, bz, plan.terrain()), cur, step);
+                (greedy && !existingPass ? 0 : g) + h(bx, by, bz, plan.terrain()), cur, step);
         nominatePartial(n);
         storedNodes++;
         if (createdNodes < Integer.MAX_VALUE) createdNodes++;
@@ -671,11 +723,15 @@ public final class DigAStar {
         // 距目标**体积**（3×3×3，与 isGoal 同口径）而非距中心：旧 h 到中心在体积边缘最多多算 3，
         // 与体积终点判据不自洽也是噪声源。详见 H_WEIGHT 注释：加权是**故意**的，不可采纳。
         double l = Math.max(0, l1(x, y, z) - (segmented ? segmentRemaining : 0));
+        if (existingPass) return H_UNIT * l * (reuse == null ? 1 : BIAS_REUSE);
         // The first answer follows the goal gradient. Optional edit guidance is reserved for
         // improvement: its truncated field can otherwise pull a short tunnel back to the surface.
-        if (greedy) return H_UNIT * l;
+        double work = goal.estimateWorkStances() && estimate != null
+                ? estimate.cost(x, y, z, edits) : 0;
+        if (greedy) return Math.max(H_UNIT * l, work);
         double guidance = l == 0 ? 0 : H_UNIT * l + (estimate == null ? 0
                 : estimate.cost(x, y, z, edits) * (reuse == null ? 1 : BIAS_REUSE));
+        if (goal.estimateWorkStances()) guidance = Math.max(H_UNIT * l, work);
         return (segmented ? 1.5 : hWeight) * guidance;
     }
 

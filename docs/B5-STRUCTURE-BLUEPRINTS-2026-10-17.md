@@ -98,7 +98,8 @@ BuildTaskRecord、Changes、Built、PlacedBlocks、modules/build.lua和双格次
 保留两半独立验收，仍只调用原版BlockItem.place，不过滤次半或直写状态。
 
 1. 支持命名空间minecraft且精确DoorBlock类的门；不扩大到门子类、床、高植物、流体或任意多格模组。
-   两半须相邻上下、同种门，各自明确half/facing/hinge；属性集合及除half外的明确要求须一致。
+   两半须相邻上下、同种门，各自明确half/facing；hinge可省略并由原版落位上下文决定。
+   两半都明确的属性须一致，其他明确要求按图纸保留。
    open/powered可不指定；明确指定则原样核验，不归一、不放宽或自动开关门。
    缺半、冲突、另半被指定air/其他方块仍保留unsupported缺口；工地不接受这种目标。
    两格均计入原128格、相对±32、实例不重叠及实际范围限制，不自动补出越界格。

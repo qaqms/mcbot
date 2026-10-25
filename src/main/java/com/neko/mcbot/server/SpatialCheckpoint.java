@@ -20,6 +20,23 @@ public final class SpatialCheckpoint {
         trail.bind(context, world);
     }
 
+    /** Explicit same-body continuation transfers live facts; it does not restore inputs or approvals. */
+    public static void continueConstruction(ActionPermissions.Context next, Object world,
+                            com.neko.mcbot.path.WorkTargets work, com.neko.mcbot.building.BuildSite site,
+                            com.neko.mcbot.path.NavigationTrail trail, long previousId, String revision) {
+        Object previous = site.boundTask();
+        if (!(previous instanceof ActionPermissions.Context old) || previousId >= next.taskId()
+                || old.taskId() != previousId || !old.owner().equals(next.owner())
+                || !old.companion().equals(next.companion()) || !old.dimension().equals(next.dimension())
+                || old.readOnly() != next.readOnly() || next.autonomous() && !old.autonomous()
+                || !site.same(revision) || !site.boundTo(previous, world)
+                || !work.boundTo(previous, world) || !trail.boundTo(previous, world))
+            throw new IllegalArgumentException("construction_session_changed");
+        work.continueTask(previous, next, world);
+        site.continueTask(previous, next, world);
+        trail.continueTask(previous, next, world);
+    }
+
     public static JsonObject snapshot(CompanionPlayer body) {
         var data = new JsonObject();
         data.add("work", body.workTargets().snapshot());

@@ -21,6 +21,7 @@ public final class BuildRecordAccess {
     public static BuildTarget resolve(CompanionPlayer body, JsonObject target) {
         if (target!=null && target.has("instance_id")) return instance(body,target).target();
         var site=body.buildSite();
+        if (target!=null && target.has("draft_revision")) return site.drafts().resolve(target);
         return site.active() && site.target().input().equals(target) ? site.target() : BuildTarget.parse(target);
     }
     public static boolean protects(CompanionPlayer body, BlockPos pos) {

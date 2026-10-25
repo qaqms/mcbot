@@ -100,6 +100,7 @@ public record PlacementWork(BlockItem item, Direction face, String temporaryPurp
     public static NavigationGoal goal(BlockPos target, NavigationGeometry geometry, double eyeHeight,
                                       double width, double height, double reach, Assessor assess) {
         return new NavigationGoal() {
+            @Override public boolean estimateWorkStances() { return true; }
             @Override public Bounds estimateBounds() {
                 int r = (int) Math.ceil(reach + 2);
                 return new Bounds(target.getX() - r, (int) Math.floor(target.getY() - eyeHeight - r - 1),

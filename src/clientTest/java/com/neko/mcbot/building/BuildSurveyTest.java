@@ -44,6 +44,10 @@ class BuildSurveyTest {
         assertTrue(ground.get("assessment_complete").getAsBoolean());
         assertFalse(ground.has("advice"),"soil under the original topsoil is not a raised foundation");
         assertEquals(2,count(world.query(target),"needs_clear"));
+        for (var cell:target.cells()) world.blocks.put(cell.pos(),Blocks.SHORT_GRASS.defaultBlockState());
+        assertEquals(2,count(world.query(target),"needs_clear"),
+                "replaceable grass cover must be cleared before the foundation is placed");
+        for (var cell:target.cells()) world.blocks.put(cell.pos(),Blocks.GRASS_BLOCK.defaultBlockState());
         var raised=target.input().deepCopy();
         raised.getAsJsonObject("anchor").addProperty("y",91);
         var onGrass=BuildTarget.parse(raised);

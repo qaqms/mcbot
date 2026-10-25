@@ -89,6 +89,17 @@
       },
       "required": ["contract_version", "session_id", "in_game", "brain_enabled", "companion"]
     },
+    "milestone": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kind": {"enum": ["item", "position", "building"]},
+        "verified": {"const": true},
+        "facts": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "evidence": {"type": "object"}
+      },
+      "required": ["id", "kind", "verified", "facts", "evidence"]
+    },
     "event": {
       "type": "object",
       "properties": {
@@ -100,6 +111,7 @@
         "tool": {"type": "string"},
         "ok": {"type": "boolean"},
         "job_id": {"type": "string"},
+        "milestone": {"$ref": "#/$defs/milestone"},
         "question_id": {"type": "string"},
         "status": {"type": "string"},
         "parked": {"type": "boolean"},

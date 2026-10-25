@@ -22,6 +22,8 @@ class FollowToolTest {
         assertNull(input.target());
         assertEquals(3, input.distance());
         assertEquals(30, input.seconds());
+        assertFalse(input.protectOwner());
+        assertTrue(FollowTool.arguments(args("{\"protect_owner\":true}")).protectOwner());
         var tool = new FollowTool();
         assertEquals(600, tool.capTicks(args("{}")));
         assertEquals(1200, tool.capTicks(args("{\"seconds\":60}")));
@@ -36,8 +38,18 @@ class FollowToolTest {
                 "{\"seconds\":1.2}", "{\"distance\":1}", "{\"distance\":7}", "{\"target_uuid\":3}",
                 "{\"target_uuid\":null}", "{\"target_uuid\":\"1-1-1-1-1\"}", "{\"distance\":true}",
                 "{\"seconds\":2147483649}", "{\"bounds\":{}}", "{\"query\":true}",
+                "{\"protect_owner\":\"true\"}", "{\"protect_owner\":1}", "{\"protect_owner\":null}",
                 "{\"target_uuid\":\"00000000-0000-0000-0000-00000000000A\"}"))
             assertNull(FollowTool.arguments(args(json)), json);
+    }
+
+    @Test void proactiveGuardDoesNotConfuseNeutralOrPassiveCreaturesWithEnemies() {
+        assertTrue(com.neko.mcbot.server.ThreatFacts.guardCandidate(true, false, false, false));
+        assertFalse(com.neko.mcbot.server.ThreatFacts.guardCandidate(true, true, false, false));
+        assertTrue(com.neko.mcbot.server.ThreatFacts.guardCandidate(true, true, true, false));
+        assertTrue(com.neko.mcbot.server.ThreatFacts.guardCandidate(true, true, false, true));
+        assertFalse(com.neko.mcbot.server.ThreatFacts.guardCandidate(false, false, false, false));
+        assertFalse(com.neko.mcbot.server.ThreatFacts.guardCandidate(false, true, true, true));
     }
 
     @Test void frozenLocalSphereIsConservativelyContainedByTheOriginalWorkScope() {

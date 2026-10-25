@@ -20,6 +20,12 @@ public final class FollowFixtures {
         public TickTask.Progress progress = TickTask.running();
         public NavigationBudget original;
         public UUID replacement;
+        public java.util.List<ThreatFacts.Threat> threats = java.util.List.of();
+        public boolean threatsComplete = true;
+        public int scans, fights;
+        public java.util.function.Function<ThreatFacts.Threat, TickTask> combat;
+        public boolean usefulRoute, keepRoute;
+        public int retargets;
 
         @Override public ServerTool.Result guard() { return guardFailure; }
         @Override public FollowWork.Target target() {
@@ -49,10 +55,28 @@ public final class FollowFixtures {
             if (landOnAdvance) body = position.add(-2, 0, 0);
             return route.tickSafe(null);
         }
+        @Override public boolean routeUseful(TickTask route, FollowWork.Target target, int distance) { return usefulRoute; }
+        @Override public boolean retarget(TickTask route, FollowWork.Target target, int distance) {
+            retargets++;
+            return keepRoute;
+        }
         @Override public void stopInput() { stops++; }
         @Override public PathSpec scope() { return new PathSpec(false, false, false, 0, BlockPos.ZERO, 32); }
+        @Override public ThreatFacts.Snapshot threats(FollowWork.Target target) {
+            scans++;
+            return new ThreatFacts.Snapshot(threats, threatsComplete);
+        }
+        @Override public TickTask attack(ThreatFacts.Threat enemy, NavigationBudget budget) {
+            if (original != null && original != budget) throw new AssertionError("combat replaced navigation account");
+            original = budget;
+            fights++;
+            return combat.apply(enemy);
+        }
         public FollowWork work(boolean owner, int duration) {
             return new FollowWork(this, id, owner, 3, duration, new NavigationBudget());
+        }
+        public FollowWork protection(int duration) {
+            return new FollowWork(this, id, true, 3, duration, new NavigationBudget(), true);
         }
     }
     private FollowFixtures() { }

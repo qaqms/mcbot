@@ -36,6 +36,8 @@ class DoorBuildTest {
     }
 
     static final class World extends BuildSurveyTest.World implements BuildWork.Access {
+        BlockPos primary = LOWER;
+        int floorY = 89;
         int actions, consumed = 1;
         boolean valid = true, throwAfter, lowerOnly, wrongUpper;
         Runnable afterAction = () -> { };
@@ -45,7 +47,7 @@ class DoorBuildTest {
         Path recordRoot;
         final BuildSiteTest.World evidence = new BuildSiteTest.World() {
             @Override public BlockState state(BlockPos p) {
-                return p.getY()==89 ? Blocks.STONE.defaultBlockState() : World.this.state(p);
+                return p.getY()==floorY ? Blocks.STONE.defaultBlockState() : World.this.state(p);
             }
         };
         final Map<BlockPos,ServerTool.Result> denials = new HashMap<>();
@@ -67,8 +69,8 @@ class DoorBuildTest {
         }
         @Override public ServerTool.Result beforePlace() {
             if (site==null) return null;
-            var failure=site.placementGuard(LOWER,proposed,evidence);
-            if (failure==null) failure=site.placementGuard(UPPER,BuildObjects.upperState(proposed),evidence);
+            var failure=site.placementGuard(primary,proposed,evidence);
+            if (failure==null) failure=site.placementGuard(primary.above(),BuildObjects.upperState(proposed),evidence);
             return failure!=null ? failure : site.charge();
         }
         @Override public InteractionResult place(BlockPos pos,ItemStack stack,Direction face) {

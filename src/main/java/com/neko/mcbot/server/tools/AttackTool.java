@@ -259,6 +259,21 @@ public final class AttackTool implements ServerTool {
                 permit, lease, outerScope, budget), maxHits));
     }
 
+    /** Escort selection has its own tether; damage, permissions and routes use the ordinary attack. */
+    public static TickTask escort(CompanionPlayer player, LivingEntity entity,
+            CompanionScheduler scheduler, ActionPermissions permissions, ActionPermissions.Context context,
+            com.neko.mcbot.path.PathSpec scope, com.neko.mcbot.path.NavigationBudget budget,
+            java.util.function.Supplier<Result> tether) {
+        return new Task(new EntityAttack(new PlayerAccess(player, player.level(), entity, scheduler,
+                permissions, context, new ActionPermissions.Execution(null), true, scope.anchor(),
+                null, null, scope, budget) {
+            @Override public Result guard() {
+                var failure = tether.get();
+                return failure == null ? super.guard() : failure;
+            }
+        }, 0));
+    }
+
     public static boolean protectedTarget(CompanionPlayer player, LivingEntity target) {
         return !(target instanceof Mob) || target instanceof Player || target == player
                 || player.isAlliedTo(target) || target.isAlliedTo(player)
@@ -349,7 +364,7 @@ public final class AttackTool implements ServerTool {
         return true;
     }
 
-    private static final class PlayerAccess implements EntityAttack.Access {
+    private static class PlayerAccess implements EntityAttack.Access {
         private final CompanionPlayer player;
         private final ServerLevel level;
         private final LivingEntity entity;
@@ -398,7 +413,10 @@ public final class AttackTool implements ServerTool {
                     return true;
                 }
                 @Override public TickTask.Progress advance(TickTask route) { return route.tickSafe(player); }
-                @Override public void stopInput() { player.releaseMovement(); }
+                @Override public void stopInput() {
+                    if (bodyPermit != null || player.bodyControl().owner()
+                            != com.neko.mcbot.body.BodyControl.Owner.REFLEX) player.releaseMovement();
+                }
             }, budget) : null;
         }
         @Override public EntityAttack.Target target() { return describe(player, entity); }

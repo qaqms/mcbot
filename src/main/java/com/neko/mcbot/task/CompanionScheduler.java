@@ -207,7 +207,8 @@ public final class CompanionScheduler {
 
     public boolean meleeActive(UUID companion) {
         var slot = active.get(companion);
-        return slot != null && slot.task() instanceof com.neko.mcbot.server.tools.AttackTool.Task;
+        return slot != null && (slot.task() instanceof com.neko.mcbot.server.tools.AttackTool.Task
+                || slot.task() instanceof com.neko.mcbot.server.FollowWork follow && follow.fighting());
     }
     public boolean consumptionActive(UUID companion) {
         var slot = active.get(companion);
