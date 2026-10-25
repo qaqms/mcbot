@@ -103,16 +103,32 @@ public final class LevelDigSampler implements DigSampler {
 
     @Override
     public double digSeconds(int x, int y, int z) {
+        return digSeconds(x,y,z,null);
+    }
+
+    @Override public double loweringSeconds(int x,int y,int z,TerrainEdits edits) {
+        if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body) || !body.buildSite().active())
+            return INFEASIBLE;
+        var access=new com.neko.mcbot.server.BuildSiteAccess(body,new BlockPos(x,y,z),edits);
+        var support=new BlockPos(x,y-1,z);
+        if (body.buildSite().navigationRevision(support,access)==null || !access.canLowerThrough(support))
+            return INFEASIBLE;
+        return digSeconds(x,y-1,z,access);
+    }
+
+    private double digSeconds(int x,int y,int z,com.neko.mcbot.server.BuildSiteAccess planned) {
         BlockPos p = new BlockPos(x, y, z);
         if (!inBounds(x, y, z) || !level.isLoaded(p)) {
             return INFEASIBLE;
         }
-        if (protectedWork(p)) return INFEASIBLE;
-        // 起点脚下不挖：不从自己站的地方开始掘坟
+        if (planned==null && protectedWork(p) || planned!=null && protectedWork(p,planned)) return INFEASIBLE;
+        // The initial support needs the worksite's live, centered one-block lowering contract.
         var startFoot = geometry == null ? null : geometry.foot(start.getX(), start.getY(), start.getZ(), TerrainEdits.EMPTY);
         if (startFoot == null ? x == start.getX() && z == start.getZ() && y == start.getY() - 1
                 : startFoot.support() == DigAStar.pack(x, y, z)) {
-            return INFEASIBLE;
+            if (planned==null && (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)
+                    || body.buildSite().navigationRevision(p, new com.neko.mcbot.server.BuildSiteAccess(body)) == null
+                    || !new com.neko.mcbot.server.BuildSiteAccess(body).canLowerThrough(p))) return INFEASIBLE;
         }
         var st = level.getBlockState(p);
         if (!st.getFluidState().isEmpty()) {
@@ -122,7 +138,10 @@ public final class LevelDigSampler implements DigSampler {
             return 0; // 已经清了
         }
         // 本格不许挖：方块实体/神圣名册/床；它的正上方是神圣方块的支撑也不许挖
-        if (protectedTerrain(p)) {
+        if (planned==null ? protectedTerrain(p) : com.neko.mcbot.server.WorksiteProtection.protectedCell(p,
+                cell->planned.state(cell)!=null,planned::state,
+                cell->planned.state(cell)!=null && planned.state(cell).hasBlockEntity(),
+                cell->protectedWork(cell,planned))) {
             return INFEASIBLE;
         }
         if (lavaAdjacent(p)) {
@@ -291,14 +310,18 @@ public final class LevelDigSampler implements DigSampler {
     }
 
     private boolean protectedWork(BlockPos cell) {
+        return protectedWork(cell,companion instanceof com.neko.mcbot.body.CompanionPlayer body
+                ? new com.neko.mcbot.server.BuildSiteAccess(body) : null);
+    }
+    private boolean protectedWork(BlockPos cell,com.neko.mcbot.server.BuildSiteAccess access) {
         return preserved(workTarget, cell) || companion instanceof com.neko.mcbot.body.CompanionPlayer body
                 && (body.workTargets().protects(cell) || body.buildSite().protectsNavigation(cell,
-                        new com.neko.mcbot.server.BuildSiteAccess(body))
+                        access)
                 || com.neko.mcbot.server.BuildRecordAccess.protects(body,cell)
                 && com.neko.mcbot.server.BuildRecordAccess.guard(body,cell,true,
-                        body.buildSite().navigationRevision(cell,new com.neko.mcbot.server.BuildSiteAccess(body))) != null
+                        body.buildSite().navigationRevision(cell,access)) != null
                 || body.buildSite().active() && body.navigationTrail().protectsPassage(cell)
-                && body.buildSite().navigationRevision(cell, new com.neko.mcbot.server.BuildSiteAccess(body)) == null);
+                && body.buildSite().navigationRevision(cell,access) == null);
     }
 
     static boolean isSacred(BlockState st) {

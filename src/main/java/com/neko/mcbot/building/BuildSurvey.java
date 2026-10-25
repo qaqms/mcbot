@@ -152,6 +152,7 @@ public final class BuildSurvey {
             bill.available = BuildInventory.available(access.placement().inventory(), bill.item);
             observation.append('|').append(BuiltInRegistries.ITEM.getKey(bill.item)).append(':').append(bill.available);
         }
+        String progressKey = hash(observation.toString());
         var selected=new ArrayList<Row>();
         int nextCursor=-1;
         for (int index=offset;index<rows.size();index++) {
@@ -322,8 +323,10 @@ public final class BuildSurvey {
         data.addProperty("observation_complete", observationComplete && stable);
         data.addProperty("spatial_stable", stable);
         data.addProperty("goal_observation_key", goalKey);
+        data.addProperty("progress_observation_key", progressKey);
         data.addProperty("work_observation_key",hash(observation + "|" + access.workContext()));
         data.add("design_components",designComponents(target));
+        data.add("design_review", BuildDesignReview.describe(target));
         data.add("clearing_work", clearingWork);
         if (after != null) data.add("spatial_facts", after);
         observation.append('|').append(after);

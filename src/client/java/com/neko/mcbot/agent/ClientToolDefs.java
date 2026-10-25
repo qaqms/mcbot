@@ -169,6 +169,9 @@ public final class ClientToolDefs {
                     + "clearing_work汇总全目标已观察待清格，tools按preferred_kind分组给cells、estimated_seconds、"
                     + "estimate_complete、preparation_recommended和sample_tool；assessment_complete=false表示建议有缺口。"
                     + "耗时按当前身体与库存估计，不是实际完工时间；建议备工具不改变施工目标或禁止空手。"
+                    + "design_review提示未明确的楼梯facing/half及相邻上排在高背后方的疑似反坡，"
+                    + "仅建议登记前核对，不禁止装饰或自动改图。progress_observation_key只跟踪目标实际状态和料量，"
+                    + "身体移动不单独重开同一施工格的失败记录；work_observation_key另含身体和全库存现场。"
                     + "out_of_reach只表示当前手够不着，应让mc.build或工作导航换站位，不是设计大小限制。"
                     + "cells[].surface给真实feet/feet_y/support/support_block；支撑方块格与脚格不同，不自动改设计。";
             case "build_nearby" -> "ACCEPTED只表示受理，等真终态。action_attempts为本批尝试，placed_blocks/"

@@ -92,6 +92,8 @@ final class PathTransition {
         if (from == null) return Check.refused("DEPARTURE_FOOTING", DigAStar.pack(fx, fy, fz));
         if (x == fx && z == fz && y == fy + 1)
             return pillar(base, edits, x, fy, z, from, remainingDigs, remainingPlaces);
+        if (x == fx && z == fz && y == fy - 1)
+            return lower(base, edits, x, fy, z, from, remainingDigs);
         var dest = geometry.foot(x, y, z, edits);
         if (dest != null && from.height() - dest.height() > 1 + 1e-5) {
             if (Math.abs(x-fx) + Math.abs(z-fz) != 1)
@@ -143,6 +145,30 @@ final class PathTransition {
         var motion = geometry.motion(fx, from.height(), fz, x, dest.height(), z, after);
         if (motion == NavigationGeometry.Motion.BLOCKED) return Check.refused("MOVEMENT_GEOMETRY", null);
         return new Check(new Plan(dig, place, after, dest.height(), motion == NavigationGeometry.Motion.JUMP), null, null);
+    }
+
+    private static Check lower(DigSampler base, TerrainEdits edits, int x, int y, int z,
+                               NavigationGeometry.Foot from, int remainingDigs) {
+        long support = DigAStar.pack(x, y - 1, z);
+        if (Math.abs(from.height() - y) > 1e-5 || from.support() != support)
+            return Check.refused("DEPARTURE_FOOTING", support);
+        if (remainingDigs < 1) return Check.refused("DIG_LIMIT", support);
+        var terrain = edits.view(base);
+        if (!terrain.known(x, y - 1, z)) return Check.refused("UNKNOWN_TERRAIN", support);
+        if (edits.placed().contains(support) || !DigSampler.feasibleDig(base.loweringSeconds(x,y,z,edits)))
+            return Check.refused("DIG_UNAVAILABLE", support);
+        if (!base.canClear(x, y, z, List.of(support), edits)) return Check.refused("WORK_SIGHT", support);
+        var after = edits.after(List.of(support), List.of());
+        var geometry = base.geometry();
+        var landing = geometry.foot(x, y - 1, z, after);
+        if (landing == null || from.height() - landing.height() <= 0
+                || from.height() - landing.height() > Math.min(1, geometry.maxDrop()) + 1e-5)
+            return Check.refused("NO_SUPPORT", support);
+        var clear = geometry.clearance(x, from.height(), z, x, landing.height(), z, after);
+        if (!clear.known() || !clear.blockers().isEmpty()
+                || geometry.motion(x, from.height(), z, x, landing.height(), z, after)
+                != NavigationGeometry.Motion.WALK) return Check.refused("MOVEMENT_GEOMETRY", support);
+        return new Check(new Plan(List.of(support), List.of(), after, landing.height(), false), null, null);
     }
 
     private static Check pillar(DigSampler base, TerrainEdits edits, int x, int y, int z,

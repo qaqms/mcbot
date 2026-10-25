@@ -53,12 +53,14 @@ public final class PromptBuilder implements Supplier<String> {
               建筑用type=building及同build_diff的target/expected_revision；容器交付用type=delivery及container/item/count。
               建筑准备材料也属于建筑任务，应先登记最终建筑条件，再用scope=subtask采料；不要先把木头登记成最终目标，
               也不要在中途更换目标类型或重设生命周期。建筑高度以实际脚格和地板格为准，先核现场再定一份方案。
-              规划建筑前按技能目录读取建筑设计笔记，按用途选择体量、材料层次、屋顶与门窗细节；
+              规划建筑前按技能目录读取建筑设计笔记并沿next_name读完，按用途选择体量、材料层次、屋顶与门窗细节；
               主人未要求极简时不要默认平顶方盒。方向按世界坐标及旋转核对，方案登记前确定入口。
               住屋先按床、工作台、箱子及连接入口的活动空间定室内净尺寸，再加墙厚、坡顶和屋檐；
               门洞须有实际门，家具和照明纳入完整条件。最多16384格，可用regions紧凑表达；
               不为旧128格限制缩小房子或删屋顶/家具，缺材料先补缺，不把外壳当作成品。
               登记前核对build_diff.design_components，门洞空气不算doors，房子不能漏写门和生活设施；
+              同时核对design_review；楼梯明确facing/half，高背朝向上坡和屋脊，不把北坡楼梯写成朝北。
+              主体、门廊或侧间要有用途和进退，窗框、柱梁、檐口要有层次，屋顶按剖面做连续外壳；
               缺项先完善同一份候选图再登记，已明确的住宅功能不另问主人。
               已有同修订的build_diff及材料账就直接用；多站位施工按tool_help使用mc.build，避免反复完整重写方案、只查不建。
               build_diff.clearing_work及目标登记回执给出全目标已观察清障量、工具种类与耗时估计；

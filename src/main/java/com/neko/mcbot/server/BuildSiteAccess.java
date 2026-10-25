@@ -9,13 +9,21 @@ import net.minecraft.world.phys.AABB;
 /** Native observations for the task's shared worksite. Never loads a missing chunk. */
 public final class BuildSiteAccess implements BuildSite.Access {
     private final CompanionPlayer body;
+    private final BlockPos projectedFeet;
+    private final com.neko.mcbot.path.TerrainEdits edits;
     private MiningTools tools;
     private StandingGeometry geometry;
-    public BuildSiteAccess(CompanionPlayer body) { this.body = body; }
+    public BuildSiteAccess(CompanionPlayer body) { this(body,null,com.neko.mcbot.path.TerrainEdits.EMPTY); }
+    public BuildSiteAccess(CompanionPlayer body, BlockPos feet, com.neko.mcbot.path.TerrainEdits edits) {
+        this.body = body; this.projectedFeet = feet; this.edits = edits;
+    }
     @Override public BlockState state(BlockPos pos) {
         var level = body.level();
-        return level.isInWorldBounds(pos) && level.getWorldBorder().isWithinBounds(pos) && level.isLoaded(pos)
-                ? level.getBlockState(pos) : null;
+        if (!level.isInWorldBounds(pos) || !level.getWorldBorder().isWithinBounds(pos) || !level.isLoaded(pos)) return null;
+        long key=com.neko.mcbot.path.DigAStar.pack(pos.getX(),pos.getY(),pos.getZ());
+        return edits.removed().contains(key) ? net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()
+                : edits.placed().contains(key) ? net.minecraft.world.level.block.Blocks.COBBLESTONE.defaultBlockState()
+                : level.getBlockState(pos);
     }
     @Override public boolean corridor(BlockPos feet) {
         if (geometry == null) geometry = StandingGeometry.forPlayer(body);
@@ -50,10 +58,12 @@ public final class BuildSiteAccess implements BuildSite.Access {
     }
     @Override public boolean occupied(BlockPos pos) {
         var region = new AABB(pos).expandTowards(0, 2, 0);
-        if (region.intersects(body.getBoundingBox())) return true;
+        var own=projectedFeet==null ? body.getBoundingBox()
+                : StandingGeometry.forPlayer(body).body(projectedFeet.getX(),projectedFeet.getY(),projectedFeet.getZ());
+        if (region.intersects(own)) return true;
         var found = new java.util.ArrayList<net.minecraft.world.entity.LivingEntity>();
         body.level().getEntities(net.minecraft.world.level.entity.EntityTypeTest.forClass(
-                net.minecraft.world.entity.LivingEntity.class), region, entity -> entity.isAlive(), found, 1);
+                net.minecraft.world.entity.LivingEntity.class), region, entity -> entity!=body && entity.isAlive(), found, 1);
         return !found.isEmpty();
     }
     @Override public boolean material(BuildTarget.Cell cell) {
@@ -61,6 +71,17 @@ public final class BuildSiteAccess implements BuildSite.Access {
                 && BuildInventory.available(body.getInventory(), cell.material().item()) >= cell.material().units();
     }
     @Override public boolean repairMaterials(java.util.List<BuildTarget.Cell> cells) {
+        if (projectedFeet!=null) {
+            var owed=new java.util.LinkedHashMap<BlockPos,BuildTarget.Cell>();
+            cells.forEach(cell->owed.put(cell.pos(),cell));
+            for (long key:edits.removed()) {
+                var pos=new BlockPos(com.neko.mcbot.path.DigAStar.unpackX(key),
+                        com.neko.mcbot.path.DigAStar.unpackY(key),com.neko.mcbot.path.DigAStar.unpackZ(key));
+                var cell=body.buildSite().target().index().get(pos);
+                if (cell!=null && !cell.authored().isAir()) owed.put(pos,cell);
+            }
+            cells=java.util.List.copyOf(owed.values());
+        }
         var needed = new java.util.HashMap<net.minecraft.world.item.Item, Integer>();
         for (var cell : cells) {
             var material = cell.material();
@@ -71,12 +92,21 @@ public final class BuildSiteAccess implements BuildSite.Access {
                 BuildInventory.available(body.getInventory(), entry.getKey()) >= entry.getValue());
     }
     @Override public boolean canLowerThrough(BlockPos pos) {
-        var feet = StandingGeometry.feetCell(body);
-        var bounds = body.getBoundingBox();
-        if (!body.onGround() || !pos.equals(feet.below()) || Math.abs(body.getY() - feet.getY()) > 1e-5
+        var feet = projectedFeet==null ? StandingGeometry.feetCell(body) : projectedFeet;
+        var bounds = projectedFeet==null ? body.getBoundingBox()
+                : StandingGeometry.forPlayer(body).body(feet.getX(),feet.getY(),feet.getZ());
+        if (projectedFeet==null && (!body.onGround() || Math.abs(body.getY() - feet.getY()) > 1e-5)
+                || !pos.equals(feet.below())
                 || bounds.minX < pos.getX() + 1e-5 || bounds.maxX > pos.getX() + 1 - 1e-5
                 || bounds.minZ < pos.getZ() + 1e-5 || bounds.maxZ > pos.getZ() + 1 - 1e-5) return false;
-        var lowering = StandingGeometry.forPlayer(body, body.buildSite()::inScope);
+        var lowering = projectedFeet==null ? StandingGeometry.forPlayer(body, body.buildSite()::inScope)
+                : new StandingGeometry(new StandingGeometry.Access() {
+                    @Override public boolean known(BlockPos p) { return body.buildSite().inScope(p) && state(p)!=null; }
+                    @Override public java.util.List<AABB> boxes(BlockPos p) {
+                        return StandingGeometry.collision(state(p),body.level(),p);
+                    }
+                },body.getBbWidth(),body.getBbHeight(),body.maxUpStep(),
+                ()->body.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.SAFE_FALL_DISTANCE));
         if (lowering.lowerThrough(feet.getX(), feet.getY(), feet.getZ()) == null) return false;
         var found = new java.util.ArrayList<net.minecraft.world.entity.LivingEntity>();
         body.level().getEntities(net.minecraft.world.level.entity.EntityTypeTest.forClass(

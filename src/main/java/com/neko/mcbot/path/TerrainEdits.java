@@ -54,6 +54,9 @@ public record TerrainEdits(Set<Long> removed, Set<Long> placed) {
             @Override public boolean known(int x, int y, int z) { return base.known(x, y, z); }
             @Override public int maxPlaces() { return base.maxPlaces(); }
             @Override public NavigationGeometry geometry() { return base.geometry(); }
+            @Override public double loweringSeconds(int x,int y,int z,TerrainEdits edits) {
+                return base.loweringSeconds(x,y,z,edits);
+            }
             @Override public boolean canPlaceFrom(int x, int y, int z, long target, TerrainEdits edits) {
                 return base.canPlaceFrom(x, y, z, target, edits);
             }

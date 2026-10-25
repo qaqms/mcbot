@@ -33,6 +33,7 @@ public final class BuildWork extends TickTask {
     private int attempts, placed, consumed, checks, surveys, settle;
     private int pageOffset;
     private int workCursor;
+    private Integer workLayer;
     private long nanos;
     private boolean changed, stopped, finishing;
     private ServerTool.Result failure, terminal;
@@ -91,6 +92,7 @@ public final class BuildWork extends TickTask {
                 var pos = new net.minecraft.core.BlockPos(cell.get("x").getAsInt(),
                         cell.get("y").getAsInt(), cell.get("z").getAsInt());
                 if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)
+                        && (workLayer == null || pos.getY() == workLayer)
                         && (includeRepairs || !cell.get("repair_pending").getAsBoolean())) { ready = cell; break; }
             }
             if (ready == null && offset < 0 && observed.get("work_next_cursor").getAsInt()>=0 && attempts < limit) {
@@ -104,6 +106,7 @@ public final class BuildWork extends TickTask {
             var pos = new net.minecraft.core.BlockPos(ready.get("x").getAsInt(),
                     ready.get("y").getAsInt(), ready.get("z").getAsInt());
             var cell = target.index().get(pos);
+            workLayer = pos.getY();
             invalid = access.valid();
             if (invalid != null) return done(invalid, false);
             if (!access.reserve(cell)) {

@@ -12,6 +12,32 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void dryStairAndSlabRoofCoursesCanBeReopenedAndRestoredWithoutLosingTheirOrientation() {
+        for (String block : List.of("oak_stairs","oak_slab")) {
+            var w = new World();
+            var drawing = BuildTarget.parse(JsonParser.parseString("""
+                    {"anchor":{"x":4,"y":90,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"%s"}]}
+                    """.formatted(block)).getAsJsonObject());
+            var cell=drawing.cells().getFirst();
+            w.states.put(cell.pos(),cell.desired());
+            var site=new BuildSite(); site.bind("roof",w);
+            assertNull(site.begin(drawing,List.of(),FEET,w));
+            assertNull(site.miningGuard(cell.pos(),drawing.revision(),false,w),block);
+            w.material=false;
+            assertNotNull(site.miningGuard(cell.pos(),drawing.revision(),false,w));
+            w.material=true;
+            site.recordRemoval(cell.pos(),cell.desired(),Blocks.AIR.defaultBlockState());
+            w.states.remove(cell.pos());
+            var saved=site.snapshot();
+            var recovered=new BuildSite(); recovered.bind("restored",w); recovered.restore(saved,FEET,w);
+            assertTrue(recovered.repairPending(cell.pos()));
+            assertNull(recovered.placementGuard(cell.pos(),cell.desired(),w));
+            recovered.recordPlacement(cell.pos(),Blocks.AIR.defaultBlockState(),cell.desired(),1,w);
+            assertFalse(recovered.repairPending(cell.pos()));
+            assertEquals(drawing.revision(),recovered.target().revision());
+        }
+    }
+
     @Test void aScaffoldUnderFinishedPlainRoofBlocksCanBeRemovedWithoutChangingTheDrawing() {
         for (String block : List.of("stone","oak_planks","sand","crafting_table")) {
             var w = new World();

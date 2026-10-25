@@ -174,6 +174,7 @@ function mc.build(target, options)
             result.unresolved_omitted=first.remaining and first.remaining-#unresolved
             result.material_bill_complete=first.material_bill_complete
             result.design_components=first.design_components
+            result.design_review=first.design_review
             result.clearing_work=first.clearing_work
         end
         print("mc.build",result)
@@ -237,7 +238,7 @@ function mc.build(target, options)
         call("status",{details=true})
         local pages,reason=checked(target,revision,nil,cursor)
         if not pages then return report(reason,round) end
-        local workstamp=pages[1].work_observation_key or pages[1].observation_key
+        local workstamp=pages[1].progress_observation_key or pages[1].work_observation_key or pages[1].observation_key
         if stamp~=workstamp then
             failed={}
             if cursor~=0 then
@@ -253,12 +254,10 @@ function mc.build(target, options)
             local done,remaining=completed(round-1,pages)
             if done then return done end
             pages,last_pages=remaining,remaining
-            stamp=pages[1].work_observation_key or pages[1].observation_key
+            stamp=pages[1].progress_observation_key or pages[1].work_observation_key or pages[1].observation_key
             failed,cursor,repairing={},0,true
         end
-        -- Leaving a drawing cell is a local body action, rather than another remote work search.
         local moved=false
-        if pages[1].body_obstructs_target or site.body_obstructs_target then moved=recover(stamp,true) end
         local ready,clear,far,clears=nil,nil,nil,{}
         for _,page in ipairs(pages) do
             for _,cell in ipairs(page.cells) do
@@ -283,12 +282,16 @@ function mc.build(target, options)
                 end
             end
         end
+        -- A usable work stance wins over future drawing occupancy. Walking alone does not reopen a pass.
+        local obstructing=pages[1].body_obstructs_target
+        if obstructing==nil then obstructing=site.body_obstructs_target end
+        if not ready and not clear and obstructing then moved=recover(stamp,true) end
         if not moved and (ready or clear or far) then
             call("build_site",{operation="checkpoint",expected_revision=revision})
         end
         if moved then
             cursor=0
-        elseif clear and (not ready or clear.cell.y<=ready.cell.y) then
+        elseif clear and (not ready or clear.cell.y<=ready.cell.y) and (not far or clear.cell.y<=far.cell.y) then
             local worked=0
             for _,candidate in ipairs(clears) do
                 if worked>=actions then break end
@@ -323,7 +326,7 @@ function mc.build(target, options)
                     end
                 end
             end
-        elseif ready then
+        elseif ready and (not far or ready.cell.y<=far.cell.y) then
             local result=attempt("build_nearby",{target=target,expected_revision=revision,
                 max_actions=actions,include_repairs=repairing})
             for _,page in ipairs(pages) do
@@ -365,7 +368,7 @@ function mc.build(target, options)
             cursor=pages[1].work_next_cursor
         elseif not repairing then
             repairing,cursor=true,0
-        elseif recover(stamp) then
+        elseif recover(stamp,true) then
             cursor=0
         else
             local result=report(last_reason or "no_feasible_work_material_support_state_or_protection",round,pages)

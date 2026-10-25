@@ -11,6 +11,63 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void aLowerUnfinishedFloorIsApproachedBeforeAReachableRoof() throws Exception {
+        var w=new World();
+        boolean[] first={true};
+        w.override=(name,args)-> {
+            if (name.equals("build_diff") && w.moved==0) return actual("""
+                    {"target_revision":"%s","remaining":2,"goal_satisfied":false,"observation_complete":true,
+                    "spatial_stable":true,"budget_exhausted":false,"observation_key":"initial",
+                    "offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true},
+                    {"x":4,"y":94,"z":0,"state":"ready","item":"stone","material_available":true}]}
+                    """.formatted(REV));
+            if (name.equals("move_to") || name.equals("build_nearby")) {
+                if (first[0]) {
+                    first[0]=false;
+                    assertEquals("move_to",name,"finish the floor before closing its roof");
+                    assertEquals(90,args.get("y").getAsInt());
+                }
+            }
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+    }
+
+    @Test void freshReadyWorkIsNotAbandonedBecauseAnotherDrawingCellIntersectsTheBody() throws Exception {
+        var w = new World(); w.moved = 1;
+        w.override = (name,args) -> {
+            if (!name.equals("build_site")) return null;
+            return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":true,
+                    "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":true}}
+                    """.formatted(REV));
+        };
+        var result = run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(2,w.placed);
+        assertEquals(0,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+    }
+
+    @Test void bodyOnlyChangesDoNotReplayAnUnproductiveWorkApproach() throws Exception {
+        var w = new World();
+        w.override = (name,args) -> name.equals("build_diff") ? actual("""
+                {"target_revision":"%s","remaining":2,"goal_satisfied":false,"observation_complete":true,
+                "spatial_stable":true,"budget_exhausted":false,"observation_key":"body-%d",
+                "work_observation_key":"body-%d","progress_observation_key":"same-world-and-material",
+                "offset":0,"next_offset":-1,"cells":[{"x":4,"y":90,"z":0,
+                "state":"out_of_reach","item":"stone","material_available":true}]}
+                """.formatted(REV,w.moved,w.moved)) : null;
+        var result = run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertFalse(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        assertEquals(0,w.placed);
+    }
+
     @Test void aPlantLostBeforeArrivalIsReobservedAndReplacedWithoutMiningAirOrStoppingOtherWork() throws Exception {
         var world = new World(); world.clearing = true;
         boolean[] vanished = {false};

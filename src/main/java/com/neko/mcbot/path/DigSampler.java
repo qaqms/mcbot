@@ -47,6 +47,9 @@ public interface DigSampler {
 
     default boolean canPlaceFrom(int x, int y, int z, long target, TerrainEdits edits) { return true; }
 
+    /** Lowering needs stance-aware worksite guards rather than the body's original occupied column. */
+    default double loweringSeconds(int x, int y, int z, TerrainEdits edits) { return digSeconds(x,y-1,z); }
+
     /** Ordered work within one edge, viewed from hypothetical departure feet. */
     default boolean canClear(int fromX, int fromY, int fromZ, java.util.List<Long> cells) {
         return true;

@@ -12,6 +12,34 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class MovementExecutionTest {
+    @Test void dismantlingAColumnUsesGravityAndWaitsForTheMeasuredLandingBeforeAnotherLayer() {
+        var body=new Body();
+        body.position=new Vec3(.5,2,.5);
+        body.obstacles=List.of(Shapes.box(-4,-1,-4,8,0,8),Shapes.box(0,0,0,1,2,1));
+        for (int landing : new int[]{1,0}) {
+            body.obstacles=landing==1
+                    ? List.of(body.obstacles.getFirst(),Shapes.box(0,0,0,1,1,1))
+                    : List.of(body.obstacles.getFirst());
+            var route=new PathSteering(0,landing,0,false);
+            boolean airborne=false;
+            PathSteering.Command command=null;
+            for (int tick=0;tick<100;tick++) {
+                command=body.drive(route);
+                assertFalse(command.jump());
+                assertFalse(command.stuck());
+                if (!body.grounded) { airborne=true; assertFalse(command.arrived()); }
+                if (command.arrived()) break;
+            }
+            assertNotNull(command);
+            assertTrue(airborne);
+            assertTrue(command.arrived());
+            assertTrue(body.grounded);
+            assertEquals(landing,body.position.y,1e-9);
+            assertEquals(.5,body.position.x,1e-9);
+        }
+        assertEquals(0,body.jumps);
+    }
+
     @Test void descentAndLandingCorrectionsBrakeWithoutTurningBackToTheNodeCenter() {
         var route = new PathSteering(1, 0, 0, false);
         var before = new PathSteering.Body(.5, 1, .5, .12, 0, false);

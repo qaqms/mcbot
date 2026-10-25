@@ -32,7 +32,7 @@ public final class DigAStar {
 
     /** 动作仅作播报语义；执行逻辑统一为 挖→放→落位。 */
     public static final byte ACT_START = 0, ACT_WALK = 1, ACT_JUMP = 2, ACT_FALL = 3,
-            ACT_DIG = 4, ACT_PILLAR = 5, ACT_BRIDGE = 6;
+            ACT_DIG = 4, ACT_PILLAR = 5, ACT_BRIDGE = 6, ACT_LOWER = 7;
 
     private static final double MOVE_BASE = 1.0;  // 每步基础代价（≈1 格/秒的节奏单位）
     private static final double MOVE_DIAG = 0.4;  // 斜走略贵
@@ -635,7 +635,9 @@ public final class DigAStar {
         double cost = (MOVE_BASE + (dx != 0 && dz != 0 ? MOVE_DIAG : 0))
                 * (reuse != null && reuse.contains(destKey) ? BIAS_REUSE : 1.0);
         for (long dc : plan.dig()) {
-            double sec = s.digSeconds(unpackX(dc), unpackY(dc), unpackZ(dc));
+            double sec = s.geometry()!=null && dx==0 && dz==0 && dy==-1
+                    ? s.loweringSeconds(cur.x,cur.y,cur.z,cur.key.terrain())
+                    : s.digSeconds(unpackX(dc), unpackY(dc), unpackZ(dc));
             cost += digCost(sec) * (reuse != null && reuse.contains(dc) ? BIAS_REUSE : 1.0);
         }
         for (long pc : plan.place()) {
@@ -712,7 +714,7 @@ public final class DigAStar {
             return vert ? ACT_PILLAR : ACT_BRIDGE;
         }
         if (!dig.isEmpty()) {
-            return ACT_DIG;
+            return s.geometry()!=null && vert && dy < 0 ? ACT_LOWER : ACT_DIG;
         }
         if (vert) {
             return dy > 0 ? ACT_JUMP : ACT_FALL;

@@ -761,9 +761,9 @@ public final class PathTask extends TickTask {
                             + "未执行该方案，重新选择站位或相邻阶梯路线。", null));
         }
         rememberPlan(c, plan);
-        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {} route={}",
+        McbotMod.LOG.info("[path] {}→{} 路径 {} 节点（挖 {} 放 {}）replan={} partial={} {} route={} work={}",
                 c.blockPosition().toShortString(), target.toShortString(), path.size(),
-                digs, places, replans, partialTail, memoStats(), timing.id());
+                digs, places, replans, partialTail, memoStats(), timing.id(), workDiagnostic(c));
         if (digs > 0 || places > 0) {
             StringBuilder sb = new StringBuilder();
             for (DigAStar.Step st : path) {
@@ -1187,12 +1187,15 @@ public final class PathTask extends TickTask {
             for (long cell : step.dig()) {
                 var foot = sampler.geometry() == null ? null : sampler.geometry().foot(
                         previous.x(), previous.y(), previous.z(), edits);
-                if (cell == (foot == null ? DigAStar.pack(previous.x(), previous.y() - 1, previous.z()) : foot.support()))
+                boolean lowering = sampler.geometry() != null && step.x() == previous.x() && step.z() == previous.z()
+                        && step.y() == previous.y() - 1;
+                if (!lowering && cell == (foot == null ? DigAStar.pack(previous.x(), previous.y() - 1, previous.z()) : foot.support()))
                     return new PathFailure(index, "DEPARTURE_SUPPORT", from, to, cell);
                 if (!terrain.known(DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell)))
                     return new PathFailure(index, "UNKNOWN_TERRAIN", from, to, cell);
-                if (!DigSampler.feasibleDig(terrain.digSeconds(
-                        DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))))
+                double seconds=lowering ? sampler.loweringSeconds(previous.x(),previous.y(),previous.z(),edits)
+                        : terrain.digSeconds(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell));
+                if (!DigSampler.feasibleDig(seconds))
                     return new PathFailure(index, "DIG_UNAVAILABLE", from, to, cell);
             }
             var check = PathTransition.check(sampler, edits, previous.x(), previous.y(), previous.z(),
@@ -1300,7 +1303,8 @@ public final class PathTask extends TickTask {
         }
         // 执行期复核节拍
         if (executed > 0 && executed % RECHECK_EVERY == 0
-                && (steering == null || path.get(cursor).action() != DigAStar.ACT_PILLAR) && !validateAhead(c)) {
+                && (steering == null || path.get(cursor).action() != DigAStar.ACT_PILLAR
+                && path.get(cursor).action() != DigAStar.ACT_LOWER) && !validateAhead(c)) {
             beginReplan(c);
             executed = 0;
             return running();
@@ -1312,12 +1316,26 @@ public final class PathTask extends TickTask {
         if (!next.dig().isEmpty()) {
             timing.phase(PathTiming.Phase.DIG);
             if (walkOnly) return new Progress.Done(new Result(false, "NO_PATH:只行走模式不挖掘。", null));
+            if (next.action() == DigAStar.ACT_LOWER && mining == null) {
+                var before = path.get(Math.max(0, cursor - 1));
+                if (steering == null) steering = new PathSteering(before.x(), before.feetY(), before.z(), false);
+                if (!steering.settled(bodyState(c))) {
+                    var command = steering.tick(bodyState(c));
+                    if (command.stuck()) return stuck(c, next);
+                    timing.input(command.x(), command.z(), false);
+                    c.walkForTick(command.x(), command.z(), false);
+                    return running();
+                }
+                steering = null;
+            }
             Progress p = mineOne(c, next.dig().get(0));
             if (p != null) {
                 return p; // 还在挖或终局失败
             }
             path.set(cursor, new DigAStar.Step(next.x(), next.y(), next.z(),
                     next.dig().subList(1, next.dig().size()), next.place(), next.action(), next.feetY(), next.jump()));
+            if (next.action() == DigAStar.ACT_LOWER)
+                steering = new PathSteering(next.x(), next.feetY(), next.z(), false);
             return running();
         }
 
@@ -1357,7 +1375,7 @@ public final class PathTask extends TickTask {
         if (sampler.geometry() != null) {
             var before = path.get(Math.max(0, cursor - 1));
             if (next.action() == DigAStar.ACT_START) shapeChanged = !standingStart(next, sampler);
-            else if (next.action() == DigAStar.ACT_PILLAR) {
+            else if (next.action() == DigAStar.ACT_PILLAR || next.action() == DigAStar.ACT_LOWER) {
                 shapeChanged = !pillarLanding(sampler.geometry(), next, c.getY());
             } else {
                 var check = PathTransition.check(sampler, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),

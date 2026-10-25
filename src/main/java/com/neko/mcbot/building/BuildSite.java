@@ -225,7 +225,7 @@ public final class BuildSite {
             if (state.isAir()) continue;
             if (softClearance(state)) continue;
             if (state.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
-            if (preparation && plainCube(state)) continue;
+            if (preparation && restorable(state)) continue;
             // Unknown attachment behavior is retained. Dry full cubes beside/below are the narrow safe case.
             if (side == Direction.UP || !plainCube(state)) return true;
         }
@@ -244,14 +244,14 @@ public final class BuildSite {
     private boolean supportsFinished(BlockPos pos, Access access) {
         var above=cell(pos.above());
         return above!=null && !above.authored().isAir() && above.matches(access.state(above.pos()))
-                && !plainCube(above.desired());
+                && !restorable(above.desired());
     }
     private boolean cleanupDependent(BlockPos pos, Access access) {
         var independent = new HashSet<BlockPos>();
         for (Direction side : Direction.values()) {
             var near = pos.relative(side);
             var selected = cell(near);
-            if (selected != null && plainCube(selected.desired()) && selected.matches(access.state(near))
+            if (selected != null && restorable(selected.desired()) && selected.matches(access.state(near))
                     && !access.facility(near)) independent.add(near);
         }
         return dependent(pos, access, independent);
@@ -261,6 +261,12 @@ public final class BuildSite {
                 && !(state.getBlock() instanceof FallingBlock)
                 && state.isCollisionShapeFullBlock(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)
                 && state.isSolidRender();
+    }
+    /** Vanilla stairs and slabs stay in place without a block beneath them. */
+    public static boolean restorable(BlockState state) {
+        return plainCube(state) || state != null && !state.hasBlockEntity() && state.getFluidState().isEmpty()
+                && (state.getBlock().getClass() == net.minecraft.world.level.block.StairBlock.class
+                || state.getBlock().getClass() == net.minecraft.world.level.block.SlabBlock.class);
     }
     public ServerTool.Result placementGuard(BlockPos pos, BlockState proposed, Access access) {
         return placementGuard(pos, proposed, access, false);
@@ -311,13 +317,13 @@ public final class BuildSite {
                     || record.chunk != access.chunk(pos) || record.state != access.state(pos))
                 return failed("DENIED:临时工程来源未知、已被修改或区块已重载，不认领相同方块替换物。");
             if (cell(pos) != null || target.cells().stream().anyMatch(c -> !c.authored().isAir()
-                    && !plainCube(c.desired()) && c.pos().below().equals(pos))
+                    && !restorable(c.desired()) && c.pos().below().equals(pos))
                     || cleanupDependent(pos, access))
                 return failed("DENIED:临时工程仍有目标、承重、贴附或工位依赖，未回收。");
         } else {
             var actual = access.state(pos);
-            boolean reopening = selected != null && selected.matches(actual) && plainCube(actual)
-                    && plainCube(selected.desired());
+            boolean reopening = selected != null && selected.matches(actual) && restorable(actual)
+                    && restorable(selected.desired());
             var owed = new ArrayList<BuildTarget.Cell>();
             for (var p : repairs) if (!p.equals(pos) && !cell(p).matches(access.state(p))) owed.add(cell(p));
             if (reopening) owed.add(selected);
@@ -486,7 +492,7 @@ public final class BuildSite {
                 var p = value.getAsJsonObject();
                 var pos = new BlockPos(BuildTarget.integer(p.get("x"), -29999984, 29999984),
                         BuildTarget.integer(p.get("y"), -2048, 2047), BuildTarget.integer(p.get("z"), -29999984, 29999984));
-                if (cell(pos) == null || !plainCube(cell(pos).desired()) || !repairs.add(pos))
+                if (cell(pos) == null || !restorable(cell(pos).desired()) || !repairs.add(pos))
                     throw new IllegalArgumentException("repair");
             }
         }

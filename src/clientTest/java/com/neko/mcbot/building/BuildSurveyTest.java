@@ -116,14 +116,18 @@ class BuildSurveyTest {
         var chunkChanged=world.query(target);
         assertNotEquals(before.get("observation_key"),chunkChanged.get("observation_key"));
         assertEquals(before.get("work_observation_key"),chunkChanged.get("work_observation_key"));
+        assertEquals(before.get("progress_observation_key"),chunkChanged.get("progress_observation_key"));
         world.inventory.setItem(0,new ItemStack(Items.STONE,1));
         var stocked=world.query(target);
         assertNotEquals(before.get("work_observation_key"),stocked.get("work_observation_key"));
         context[0]="moved or equipped";
         var moved=world.query(target);
         assertNotEquals(stocked.get("work_observation_key"),moved.get("work_observation_key"));
+        assertEquals(stocked.get("progress_observation_key"),moved.get("progress_observation_key"),
+                "moving or changing the selected hand is not progress on the drawing");
         world.blocks.put(new BlockPos(0,90,0),Blocks.STONE.defaultBlockState());
         assertNotEquals(moved.get("work_observation_key"),world.query(target).get("work_observation_key"));
+        assertNotEquals(moved.get("progress_observation_key"),world.query(target).get("progress_observation_key"));
     }
 
     @Test void designComponentsReportOmittedDoorsAndCountPairedFurnitureOnlyOnce() {

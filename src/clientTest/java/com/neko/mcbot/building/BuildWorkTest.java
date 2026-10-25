@@ -19,6 +19,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class BuildWorkTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
+    @Test void aBatchFinishesItsCurrentLayerBeforeMovingOnToTheRoof() {
+        var drawing = BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
+                "to":{"x":1,"y":1,"z":0},"block":"stone"}}
+                """).getAsJsonObject());
+        var world=world();
+        var first=finish(new BuildWork(drawing,world,-1,12,()->0));
+        assertTrue(first.ok(),first.feedback());
+        assertEquals(2,first.data().get("placed_blocks").getAsInt());
+        assertTrue(world.blocks.keySet().stream().allMatch(p->p.getY()==90));
+        assertFalse(first.data().get("goal_satisfied").getAsBoolean());
+        var second=finish(new BuildWork(drawing,world,-1,12,()->0));
+        assertEquals(2,second.data().get("placed_blocks").getAsInt());
+        assertTrue(second.data().get("goal_satisfied").getAsBoolean());
+    }
+
     @Test void deferredRepairsDoNotReserveTheOnlyMaterialBeforeOtherWorkAndCanBeRestoredLater() {
         var order=new java.util.ArrayList<net.minecraft.core.BlockPos>();
         var world=new BuildSurveyTest.World() {
