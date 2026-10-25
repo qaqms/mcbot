@@ -21,6 +21,7 @@ public final class BlockAim {
     public interface Access {
         Vec3 eye();
         boolean loaded(BlockPos pos);
+        default boolean replaceable(BlockPos pos) { return false; }
         List<AABB> outline(BlockPos pos);
         BlockHitResult trace(Vec3 from, Vec3 to);
         default BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {
@@ -43,12 +44,21 @@ public final class BlockAim {
 
     /** An empty contact neighborhood cannot be fixed by moving the eye alone. No visibility claim is made here. */
     public static Anchor placementAnchor(Access access, BlockPos target) {
+        return placementAnchor(access, target, face -> true);
+    }
+
+    /** Faces describe the native click, so a neighbor is opposite the allowed face. */
+    public static Anchor placementAnchor(Access access, BlockPos target, Predicate<Direction> faces) {
         boolean unknown = false;
-        var cells = new ArrayList<BlockPos>(7);
-        cells.add(target);
-        for (var direction : Direction.values()) cells.add(target.relative(direction));
+        var cells = new java.util.LinkedHashSet<BlockPos>();
+        for (var face : Direction.values()) if (faces.test(face)) {
+            cells.add(target);
+            cells.add(target.relative(face.getOpposite()));
+        }
         for (var cell : cells) {
             if (!access.loaded(cell)) { unknown = true; continue; }
+            // Clicking a replaceable neighbor replaces that neighbor, not the requested cell.
+            if (!cell.equals(target) && access.replaceable(cell)) continue;
             var outline = access.outline(cell);
             if (outline == null) { unknown = true; continue; }
             if (outline.stream().anyMatch(box -> box.getSize() > 0)) return Anchor.PRESENT;
@@ -92,6 +102,9 @@ public final class BlockAim {
             @Override public List<AABB> outline(BlockPos pos) {
                 return level.getBlockState(pos).getShape(level, pos, CollisionContext.of(player)).toAabbs();
             }
+            @Override public boolean replaceable(BlockPos pos) {
+                return level.getBlockState(pos).canBeReplaced();
+            }
             @Override public BlockHitResult trace(Vec3 from, Vec3 to) {
                 return level.clip(new ClipContext(from, to, ClipContext.Block.OUTLINE,
                         ClipContext.Fluid.NONE, player));
@@ -110,6 +123,7 @@ public final class BlockAim {
         return new Access() {
             @Override public Vec3 eye() { return eye; }
             @Override public boolean loaded(BlockPos pos) { return world.loaded(pos); }
+            @Override public boolean replaceable(BlockPos pos) { return world.replaceable(pos); }
             @Override public List<AABB> outline(BlockPos pos) { return world.outline(pos); }
             @Override public BlockHitResult trace(Vec3 from, Vec3 to) { return world.trace(from, to); }
             @Override public BlockHitResult traceIgnoring(Vec3 from, Vec3 to, Set<BlockPos> ignored) {

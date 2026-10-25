@@ -5,10 +5,20 @@ import com.neko.mcbot.McbotMod;
 import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.common.WireSize;
 
-/** Data-only recovery of the original protection sets and construction accounts. */
+/** Binding and data-only recovery of the original protection sets and construction accounts. */
 public final class SpatialCheckpoint {
     public static final int LIMIT = 16000;
     private SpatialCheckpoint() { }
+
+    public static void bind(ActionPermissions.Context context, Object world,
+                            com.neko.mcbot.path.WorkTargets work, com.neko.mcbot.building.BuildSite site,
+                            com.neko.mcbot.path.NavigationTrail trail) {
+        // Taskless observations have no authority to replace the active spatial session.
+        if (context == null) return;
+        work.bind(context, world);
+        site.bind(context, world);
+        trail.bind(context, world);
+    }
 
     public static JsonObject snapshot(CompanionPlayer body) {
         var data = new JsonObject();

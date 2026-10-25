@@ -374,9 +374,7 @@ public final class CompanionPlayer extends ServerPlayer {
     public com.neko.mcbot.path.NavigationTrail navigationTrail() { return navigationTrail; }
 
     public void bindSpatialTask(com.neko.mcbot.server.ActionPermissions.Context context) {
-        workTargets.bind(context);
-        buildSite.bind(context, level());
-        navigationTrail.bind(context, level());
+        com.neko.mcbot.server.SpatialCheckpoint.bind(context, level(), workTargets, buildSite, navigationTrail);
     }
 
     public com.neko.mcbot.server.HandSnapshot.Pickups handPickups() { return handPickups; }

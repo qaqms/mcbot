@@ -17,7 +17,7 @@ public final class NavigationTrail {
     private boolean truncated, gap;
 
     public void bind(Object nextTask, Object nextWorld) {
-        if (!java.util.Objects.equals(task, nextTask) || world != nextWorld) {
+        if (task != nextTask || world != nextWorld) {
             points.clear(); edits.clear(); passage.clear(); truncated = gap = false;
             task = nextTask; world = nextWorld;
         }

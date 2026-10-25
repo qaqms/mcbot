@@ -1,12 +1,15 @@
 package com.neko.mcbot.server;
 
 import com.neko.mcbot.body.CompanionPlayer;
+import com.neko.mcbot.building.BuildTarget;
 import com.neko.mcbot.path.NavigationGeometry;
 import com.neko.mcbot.path.NavigationGoal;
 import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.level.block.RotatedPillarBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -24,6 +27,55 @@ public record PlacementWork(BlockItem item, Direction face, String temporaryPurp
             return new ServerTool.Result(false, "TARGET_BLOCKED:该物品的特殊、多格或组件状态尚不支持放置工作导航。"
                     + "可先选安全站位，再直接place_block query核对。", null);
         return null;
+    }
+
+    public static BlockAim.Anchor anchor(BlockAim.Access world, BlockPos target, Direction face,
+                                         BuildTarget.Cell cell) {
+        Direction.Axis axis = cell != null && cell.properties().contains("axis")
+                && cell.authored().getBlock() instanceof RotatedPillarBlock
+                ? cell.desired().getValue(RotatedPillarBlock.AXIS) : null;
+        return BlockAim.placementAnchor(world, target,
+                candidate -> (face == null || face == candidate) && (axis == null || axis == candidate.getAxis()));
+    }
+
+    /** Stance-independent failures must not leave an impossible work goal in the search frontier. */
+    public ServerTool.Result targetFailure(CompanionPlayer body, BlockPos target) {
+        var level = body.level();
+        var actual = level.isLoaded(target) ? level.getBlockState(target) : null;
+        var drawing = temporaryPurpose == null ? body.buildSite().target() : null;
+        var cell = drawing == null ? null : drawing.index().get(target);
+        var failure = targetFailure(target, actual, cell,
+                () -> anchor(BlockAim.forPlayer(body), target, face, cell));
+        return failure == null ? ready(body) : failure;
+    }
+
+    public static ServerTool.Result targetFailure(BlockPos target, BlockState actual, BuildTarget.Cell cell,
+                                                  java.util.function.Supplier<BlockAim.Anchor> anchor) {
+        if (actual == null) return new ServerTool.Result(false,
+                "TARGET_LOST:放置工作目标未加载，未继续搜索未知工作站位。", null);
+        if (cell == null) return null;
+        String reason;
+        boolean satisfied = cell.matches(actual);
+        if (satisfied) reason = "target_already_satisfied";
+        else if (!actual.canBeReplaced()) reason = "target_needs_clear";
+        else {
+            var contact = anchor.get();
+            if (contact == BlockAim.Anchor.PRESENT) return null;
+            if (contact == BlockAim.Anchor.UNKNOWN) return new ServerTool.Result(false,
+                    "TARGET_LOST:放置工作目标的兼容点击邻域未加载，先核对现场。", null);
+            reason = "no_compatible_placement_anchor";
+        }
+        var data = new com.google.gson.JsonObject();
+        data.add("work_target", BuildTarget.coordinates(target));
+        data.addProperty("work_kind", "place");
+        data.addProperty("target_already_satisfied", satisfied);
+        data.addProperty("placement_failure", reason);
+        data.addProperty("can_work_here", false);
+        return new ServerTool.Result(false, "TARGET_BLOCKED:"
+                + (satisfied ? "原图该格已经满足，结束旧放置寻路；此观察不证明由本身体施工。"
+                : reason.equals("target_needs_clear") ? "放置目标需要先清理，移动不能代替清理。"
+                : "缺少满足原图状态和请求face的真实点击锚点，移动不能补足该放置前提。")
+                + " 重新核对原图，先做可执行格或恢复待补格。", data);
     }
 
     public NavigationGoal goal(CompanionPlayer body, BlockPos target, NavigationGeometry geometry) {

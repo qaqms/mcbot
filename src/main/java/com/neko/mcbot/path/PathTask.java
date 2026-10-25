@@ -329,8 +329,9 @@ public final class PathTask extends TickTask {
         if (!spec.contains(current.getX(), current.getY(), current.getZ())
                 || !outerScope.contains(current.getX(), current.getY(), current.getZ()))
             return terminal(new Result(false, "SCOPE_CHANGED:身体已离开本段路线范围。", null));
-        if (spec.workArrival() && placement == null && workTarget != null) {
-            var failure = com.neko.mcbot.server.MiningWork.targetFailure(workTarget,
+        if (spec.workArrival() && workTarget != null) {
+            var failure = placement != null ? placement.targetFailure(c, workTarget)
+                    : com.neko.mcbot.server.MiningWork.targetFailure(workTarget,
                     level.isLoaded(workTarget) ? level.getBlockState(workTarget) : null);
             if (failure != null) return terminal(failure);
         }

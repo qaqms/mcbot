@@ -15,6 +15,87 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConstructionPrerequisiteTest {
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
 
+    @Test void theLoggedUprightCornerDefersUntilItsMissingLowerLogIsRestored() {
+        var world = new BlockAimTest.Grid(); world.blocks.clear();
+        BuildTarget target;
+        try (var input = new java.io.InputStreamReader(java.util.Objects.requireNonNull(
+                getClass().getResourceAsStream("/fixtures/logged-house-286.json")), java.nio.charset.StandardCharsets.UTF_8)) {
+            target = BuildTarget.parse(JsonParser.parseReader(input).getAsJsonObject());
+        } catch (java.io.IOException error) { throw new java.io.UncheckedIOException(error); }
+        assertEquals(286, target.cells().size());
+        assertEquals("6b3619074fab3fe32a97c86292be6849b0d2b0cab6f744cebbdc5797750082f3", target.revision());
+        var upper = target.index().get(new BlockPos(248,66,-144));
+        var lower = upper.pos().below();
+        world.blocks.put(lower.below(), Blocks.OAK_LOG.defaultBlockState());
+        world.blocks.put(upper.pos().north(), Blocks.OAK_PLANKS.defaultBlockState());
+        world.blocks.put(upper.pos().east(), Blocks.OAK_PLANKS.defaultBlockState());
+        world.blocks.put(lower.east(), Blocks.OAK_PLANKS.defaultBlockState());
+        var access = farSurvey(world);
+        assertEquals("needs_support", BuildSurvey.cellState(target, upper, access, world.getBlockState(upper.pos())));
+        assertEquals("out_of_reach", BuildSurvey.cellState(target, target.index().get(lower), access,
+                world.getBlockState(lower)));
+        world.blocks.put(lower, target.index().get(lower).desired());
+        assertEquals("out_of_reach", BuildSurvey.cellState(target, upper, access, world.getBlockState(upper.pos())));
+    }
+
+    @Test void authoredAxesRotateOnceAndUnknownCompatibleAnchorsStayUnknown() {
+        for (String axis : java.util.List.of("x", "y", "z")) for (int turn : new int[]{0,90,180,270}) {
+            var target = BuildTarget.parse(JsonParser.parseString("""
+                    {"anchor":{"x":0,"y":2,"z":0},"rotation":%d,"cells":[
+                    {"x":0,"y":0,"z":0,"block":"oak_log","properties":[{"name":"axis","value":"%s"}]}]}
+                    """.formatted(turn,axis)).getAsJsonObject());
+            var cell = target.cells().getFirst();
+            var desiredAxis = cell.desired().getValue(net.minecraft.world.level.block.RotatedPillarBlock.AXIS);
+            var world = new BlockAimTest.Grid(); world.blocks.clear();
+            for (var face : net.minecraft.core.Direction.values())
+                if (face.getAxis() != desiredAxis) world.blocks.put(cell.pos().relative(face), Blocks.STONE.defaultBlockState());
+            assertEquals(BlockAim.Anchor.ABSENT, PlacementWork.anchor(world,cell.pos(),null,cell));
+            var compatible = java.util.Arrays.stream(net.minecraft.core.Direction.values())
+                    .filter(d -> d.getAxis()==desiredAxis).findFirst().orElseThrow();
+            world.unknown.add(cell.pos().relative(compatible));
+            assertEquals(BlockAim.Anchor.UNKNOWN, PlacementWork.anchor(world,cell.pos(),null,cell));
+            world.unknown.clear();
+            world.blocks.put(cell.pos().relative(compatible), Blocks.STONE.defaultBlockState());
+            assertEquals(BlockAim.Anchor.PRESENT, PlacementWork.anchor(world,cell.pos(),null,cell));
+            assertEquals(BlockAim.Anchor.ABSENT, PlacementWork.anchor(world,cell.pos(),compatible,cell),
+                    "an explicit click face does not silently switch to its opposite");
+        }
+    }
+
+    @Test void unspecifiedAxisAndReplaceableTargetsKeepTheirNativePlacementOptions() {
+        var world = new BlockAimTest.Grid(); world.blocks.clear();
+        var target = BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":2,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"oak_log"}]}
+                """).getAsJsonObject());
+        var cell = target.cells().getFirst();
+        world.blocks.put(cell.pos().east(), Blocks.STONE.defaultBlockState());
+        assertEquals(BlockAim.Anchor.PRESENT, PlacementWork.anchor(world,cell.pos(),null,cell));
+        world.blocks.clear();
+        world.blocks.put(cell.pos().east(), Blocks.SNOW.defaultBlockState());
+        assertEquals(BlockAim.Anchor.ABSENT, PlacementWork.anchor(world,cell.pos(),null,cell),
+                "replacing neighboring snow would land in the wrong cell");
+        world.blocks.put(cell.pos(), Blocks.SNOW.defaultBlockState());
+        assertEquals(BlockAim.Anchor.PRESENT, PlacementWork.anchor(world,cell.pos(),null,cell));
+        assertEquals(BlockAim.Anchor.PRESENT, PlacementWork.anchor(BlockAim.fromEye(world,world.eye()),
+                cell.pos(),null,cell));
+    }
+
+    private static BuildSurvey.Access farSurvey(BlockAimTest.Grid world) {
+        return new BuildSurvey.Access() {
+            @Override public net.minecraft.world.level.block.state.BlockState state(BlockPos p) {
+                return world.loaded(p) ? world.getBlockState(p) : null;
+            }
+            @Override public boolean inBounds(BlockPos p) { return true; }
+            @Override public boolean protectedCell(BlockPos p) { return false; }
+            @Override public boolean near(BlockPos p) { return false; }
+            @Override public BlockAim.Anchor placementAnchor(BuildTarget.Cell cell) {
+                return PlacementWork.anchor(world, cell.pos(), null, cell);
+            }
+            @Override public BlockPlacement.Access placement() { throw new AssertionError("far prerequisite only"); }
+            @Override public com.google.gson.JsonObject terrain() { return new com.google.gson.JsonObject(); }
+        };
+    }
+
     @Test void theLoggedUnsupportedEaveWaitsForTheAdjacentRoofCourseInsteadOfSearchingForAStance() {
         var world=new BlockAimTest.Grid(); world.blocks.clear();
         BuildTarget target;

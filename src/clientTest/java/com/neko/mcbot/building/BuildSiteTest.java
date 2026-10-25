@@ -12,6 +12,50 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void tasklessQueriesPreserveTheWholeSpatialSessionButANewEpochAndWorldDoNot() {
+        var w = new World();
+        var work = new com.neko.mcbot.path.WorkTargets();
+        var trail = new com.neko.mcbot.path.NavigationTrail();
+        var site = new BuildSite();
+        var owner = UUID.randomUUID();
+        var body = UUID.randomUUID();
+        var context = new com.neko.mcbot.server.ActionPermissions.Context(owner, body, "fixture:world", 1, false);
+        com.neko.mcbot.server.SpatialCheckpoint.bind(context, w, work, site, trail);
+        assertNull(site.begin(target(), ROUTE, FEET, w));
+        temporary(site, w);
+        w.states.put(TARGET, Blocks.STONE.defaultBlockState());
+        site.recordRemoval(TARGET, Blocks.STONE.defaultBlockState(), Blocks.AIR.defaultBlockState());
+        w.states.remove(TARGET);
+        assertTrue(site.repairPending(TARGET));
+        assertTrue(work.add(TARGET.east(3)));
+        trail.observe(0, 90, 0, 90, true);
+        assertTrue(site.navigation().takeReplan());
+        var before = site.snapshot();
+        var workBefore = work.snapshot();
+        var trailBefore = trail.snapshot();
+        var budget = site.navigation();
+        for (int query = 0; query < 3; query++) {
+            com.neko.mcbot.server.SpatialCheckpoint.bind(null, w, work, site, trail);
+            com.neko.mcbot.server.SpatialCheckpoint.bind(context, w, work, site, trail);
+        }
+        assertEquals(before, site.snapshot(), "observation must preserve repairs and temporary provenance");
+        assertEquals(workBefore, work.snapshot());
+        assertEquals(trailBefore, trail.snapshot());
+        assertSame(budget, site.navigation(), "queries cannot reopen the construction navigation account");
+        var newEpoch = new com.neko.mcbot.server.ActionPermissions.Context(owner, body, "fixture:world", 1, false);
+        assertEquals(context, newEpoch);
+        com.neko.mcbot.server.SpatialCheckpoint.bind(newEpoch, w, work, site, trail);
+        assertFalse(site.active());
+        assertTrue(work.snapshot().isEmpty());
+        assertTrue(trail.snapshot().getAsJsonArray("points").isEmpty());
+        assertNull(site.begin(target(), ROUTE, FEET, w));
+        work.add(TARGET); trail.observe(0, 90, 0, 90, true);
+        com.neko.mcbot.server.SpatialCheckpoint.bind(newEpoch, new World(), work, site, trail);
+        assertFalse(site.active());
+        assertTrue(work.snapshot().isEmpty());
+        assertTrue(trail.snapshot().getAsJsonArray("points").isEmpty());
+    }
+
     @Test void dryStairAndSlabRoofCoursesCanBeReopenedAndRestoredWithoutLosingTheirOrientation() {
         for (String block : List.of("oak_stairs","oak_slab")) {
             var w = new World();

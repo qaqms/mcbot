@@ -3,6 +3,25 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 建筑导航会话与工作前提（2026-10-25）
+
+详见CONSTRUCTION-NAVIGATION-AUDIT-2026-10-25。CompanionPlayer.bindSpatialTask统一调用
+SpatialCheckpoint.bind；null表示无任务观察，不替换活动空间会话。WorkTargets/BuildSite/
+NavigationTrail按真实任务对象与世界绑定，新epoch即使任务号相同也不能继承。
+状态查询继续按原null上下文报告permission_mode=none，不将空间保留当作动作许可。
+
+BlockAim的锚点检查可限定真实点击面，排除会被替换而落错格的邻块，保留可替换目标自身。
+PlacementWork.anchor按明确声明的RotatedPillarBlock轴向与旋转过滤点击面，并遵守显式face。
+BuildSurvey在手距前核前提；缺兼容面不进入换位搜索，下层恢复后按原进展键重评。
+MoveToTool受理与PathTask每刻调用PlacementWork.targetFailure，目标已满足、待清理、
+缺兼容锚点、未知或失料时结束旧寻路并保留实际账；普通无登记图/临时支撑的计划接触保持。
+原工作位形状、原版射线、到位复核、真实放置与冻结目标保持。
+
+本体仍以单格工作目标搜索；活动工地/严格放置/复杂编辑仍有世界线程切片，
+保留frontier不等于参考的跨段学习。参考同层anyOf、同趟学习/拒绝障碍记忆与编辑后台快照
+尚未完整迁移；参考部分施工直接写世界，不能搬其仅手距的宽松放置目标。
+没有新增默认整趟配额、并行模型或直接写世界，原生效果仍待候选复测。
+
 ## 轴向、地表基础与屋檐前提（2026-10-25）
 
 详见AXIS-FOUNDATION-AND-EAVES-2026-10-25。BlockAim.placementAnchor只观察目标及六邻格

@@ -147,7 +147,7 @@ public final class MoveToTool implements ServerTool {
                     null));
         }
         if (placement != null) {
-            var failure = placement.ready(c);
+            var failure = placement.targetFailure(c, workTarget);
             if (failure != null) return CompletableFuture.completedFuture(failure);
         } else if (spec.workArrival() && workTarget != null) {
             var failure = MiningWork.targetFailure(workTarget,

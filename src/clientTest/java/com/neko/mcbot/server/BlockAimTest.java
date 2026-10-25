@@ -41,6 +41,7 @@ class BlockAimTest {
         Grid() { blocks.put(TARGET, Blocks.STONE.defaultBlockState()); }
         @Override public Vec3 eye() { return eye; }
         @Override public boolean loaded(BlockPos pos) { return !unknown.contains(pos); }
+        @Override public boolean replaceable(BlockPos pos) { return getBlockState(pos).canBeReplaced(); }
         @Override public List<AABB> outline(BlockPos pos) {
             outlines++;
             return forcedOutline == null

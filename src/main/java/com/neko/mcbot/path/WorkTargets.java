@@ -7,11 +7,17 @@ import java.util.Set;
 /** Selected work cells belong to one task; expiry never silently grants edits to old work. */
 public final class WorkTargets {
     public static final int LIMIT = 64;
-    private Object task;
+    private Object task, world;
     private final Set<BlockPos> cells = new HashSet<>();
 
     public void bind(Object next) {
-        if (!java.util.Objects.equals(task, next)) { cells.clear(); task = next; }
+        bind(next, null);
+    }
+
+    public void bind(Object next, Object nextWorld) {
+        if (task != next || world != nextWorld) {
+            cells.clear(); task = next; world = nextWorld;
+        }
     }
 
     public boolean add(BlockPos target) {

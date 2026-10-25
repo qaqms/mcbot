@@ -26,6 +26,9 @@ public final class NavigationWork {
         return new BlockAim.Access() {
             @Override public Vec3 eye() { return eye; }
             @Override public boolean loaded(BlockPos pos) { return world.loaded(pos); }
+            @Override public boolean replaceable(BlockPos pos) {
+                return removed.contains(pos) || !placed.contains(pos) && world.replaceable(pos);
+            }
             @Override public List<AABB> outline(BlockPos pos) {
                 return removed.contains(pos) ? List.of() : placed.contains(pos)
                         ? List.of(new AABB(0, 0, 0, 1, 1, 1)) : world.outline(pos);

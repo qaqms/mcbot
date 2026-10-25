@@ -70,8 +70,8 @@ public final class BuildDiffTool implements ServerTool {
                     double range = Math.min(6.5, body.blockInteractionRange()) + 1;
                     return body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos)) <= range * range;
                 }
-                @Override public com.neko.mcbot.server.BlockAim.Anchor placementAnchor(BlockPos pos) {
-                    return com.neko.mcbot.server.BlockAim.placementAnchor(sight, pos);
+                @Override public com.neko.mcbot.server.BlockAim.Anchor placementAnchor(BuildTarget.Cell cell) {
+                    return com.neko.mcbot.server.PlacementWork.anchor(sight, cell.pos(), null, cell);
                 }
                 @Override public BlockPlacement.Access placement() { return placement; }
                 @Override public String workContext() {

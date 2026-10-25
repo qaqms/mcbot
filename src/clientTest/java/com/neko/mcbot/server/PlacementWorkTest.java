@@ -20,6 +20,37 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlacementWorkTest {
+    @Test void aChangedPlacementPremiseEndsTheOldSearchWithoutClaimingAnActionOrChangingTheDrawing() {
+        var drawing = com.neko.mcbot.building.BuildTarget.parse(com.google.gson.JsonParser.parseString("""
+                {"anchor":{"x":2,"y":2,"z":0},"cells":[
+                {"x":0,"y":0,"z":0,"block":"oak_log","properties":[{"name":"axis","value":"y"}]}]}
+                """).getAsJsonObject());
+        var cell = drawing.cells().getFirst();
+        var before = drawing.input().deepCopy();
+        assertNull(PlacementWork.targetFailure(cell.pos(),Blocks.AIR.defaultBlockState(),cell,
+                () -> BlockAim.Anchor.PRESENT));
+        var missing = PlacementWork.targetFailure(cell.pos(),Blocks.AIR.defaultBlockState(),cell,
+                () -> BlockAim.Anchor.ABSENT);
+        assertFalse(missing.ok());
+        assertEquals("no_compatible_placement_anchor",missing.data().get("placement_failure").getAsString());
+        var done = PlacementWork.targetFailure(cell.pos(),cell.desired(),cell,
+                () -> { fail("a satisfied target needs no anchor search"); return null; });
+        assertFalse(done.ok());
+        assertTrue(done.data().get("target_already_satisfied").getAsBoolean());
+        assertFalse(done.data().has("changed"),"target observation must not override earlier route effects");
+        assertFalse(done.data().has("consumed_count"),"the route owns its actual scaffold accounting");
+        var occupied = PlacementWork.targetFailure(cell.pos(),Blocks.DIRT.defaultBlockState(),cell,
+                () -> { fail("clearing must precede placement"); return null; });
+        assertEquals("target_needs_clear",occupied.data().get("placement_failure").getAsString());
+        assertTrue(PlacementWork.targetFailure(cell.pos(),Blocks.AIR.defaultBlockState(),cell,
+                () -> BlockAim.Anchor.UNKNOWN).feedback().startsWith("TARGET_LOST:"));
+        assertTrue(PlacementWork.targetFailure(cell.pos(),null,cell,
+                () -> { fail("unloaded"); return null; }).feedback().startsWith("TARGET_LOST:"));
+        assertNull(PlacementWork.targetFailure(cell.pos(),Blocks.AIR.defaultBlockState(),null,
+                () -> { fail("ordinary placement can approach using planned scaffold contacts"); return null; }));
+        assertEquals(before,drawing.input());
+    }
+
     @Test void nearButUnworkableReachDoesNotFloodEditableGroundBeforeTryingTheBuilding() {
         var grid = new StandingGeometryTest.Grid();
         grid.blocks.clear();

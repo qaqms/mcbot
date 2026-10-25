@@ -36,6 +36,9 @@ public final class BuildSurvey {
         default com.neko.mcbot.server.BlockAim.Anchor placementAnchor(BlockPos pos) {
             return com.neko.mcbot.server.BlockAim.Anchor.PRESENT;
         }
+        default com.neko.mcbot.server.BlockAim.Anchor placementAnchor(BuildTarget.Cell cell) {
+            return placementAnchor(cell.pos());
+        }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -491,7 +494,7 @@ public final class BuildSurvey {
         if (access.protectedCell(cell.pos())) return "protected";
         if (actual.getBlock() == cell.authored().getBlock()) return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";
-        String prerequisite = assessWork ? placementPrerequisite(access, cell.pos()) : null;
+        String prerequisite = assessWork ? placementPrerequisite(access, cell) : null;
         if (prerequisite != null) return prerequisite;
         if (!access.near(cell.pos())) return "out_of_reach";
         return "not_assessed";
@@ -515,13 +518,13 @@ public final class BuildSurvey {
         if (!actual.isAir() || !other.isAir())
             return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (BuildObjects.secondary(cell.authored())) return "paired_pending";
-        String prerequisite = assessWork ? placementPrerequisite(access, cell.pos()) : null;
+        String prerequisite = assessWork ? placementPrerequisite(access, cell) : null;
         if (prerequisite != null) return prerequisite;
         return access.near(cell.pos()) ? "not_assessed" : "out_of_reach";
     }
 
-    private static String placementPrerequisite(Access access, BlockPos pos) {
-        return switch (access.placementAnchor(pos)) {
+    private static String placementPrerequisite(Access access, BuildTarget.Cell cell) {
+        return switch (access.placementAnchor(cell)) {
             case ABSENT -> "needs_support";
             case UNKNOWN -> "unknown";
             case PRESENT -> null;

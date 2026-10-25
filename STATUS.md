@@ -3,6 +3,61 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 建筑寻路全链复核与工地会话（2026-10-25，Asia/Shanghai）
+
+- 维护者反馈房屋寻路反复卡死，要求完整学习参考机制。以本地为准，开工HEAD为c234aea，
+  工作树干净、本地领先origin/main六提交；仅fetch，未pull/reset或远端覆盖本地。
+  只改本体，宿主/连接器/只读参考/玩家实例未改，不安装包或启动游戏/服务器/真实模型。
+  完整证据、机制对照和剩余边界见docs/CONSTRUCTION-NAVIGATION-AUDIT-2026-10-25.md。
+- 首次冻结build/construction-navigation-session-20261025.log，351684 bytes、末15:00:12，
+  SHA256 `55a1d327bfccd4a1d1077ef04a3155eaade305061cc2038c655137ebc7b33770`。
+  退出后再冻结construction-navigation-session-final-20261025.log，376527 bytes、末15:07:12，
+  SHA256 `22c59a2472fe2360e5c4494e94ceeff1e4201ed5f354b8f688a93fcc8d1f7cdf`。
+  j172/route84在14:54:48至15:07:10追place格(248,66,-144)，持续no_clickable_face；
+  15:04:00至少expanded=156000，终态wall约742.5秒、11075刻、input_ticks/through_nodes均0，
+  SEARCH为11074刻、WORLD_THREAD，最后退出中断；不是持续等模型。
+- 286格原图明确角柱axis=y，修订6b361907…0082f3。较晚15:02:41区域保存副本
+  construction-navigation-region-20261025.mca为5886254 bytes，SHA256
+  `78f45fd63be51927693c80c5eff94f6c417ac960ba9799c9195e66bf3f2dabb2`：
+  下方(248,65,-144)缺原木，上方尚空，北/东侧已有木板，侧锚不能产生明确竖向轴向。
+  存档晚于首次日志，不倒推每刻现场；磁盘实例旧JAR与0dcc946f一致不独立证明进程加载身份。
+- 找到可独立复现的会话破坏：面板inspect以task_id=0查询，公共身体绑定把null当换任务，
+  清工地、待补/临时来源和路标，回到旧任务也不能恢复。14:53:27的工地修订不符、
+  后续保存site.active=false与该路径一致，日志未记录具体面板输入，不断言唯一触发者。
+  SpatialCheckpoint统一绑定，无任务查询保留会话及原导航账；真实任务epoch/世界仍隔离，
+  三空间组件使用一致身份语义，查询仍permission_mode=none，不借活动任务许可。
+- BlockAim按真实点击面过滤锚点，排除会被替换而落错格的邻块，保留可替换目标自身/未知；
+  PlacementWork共旋转后明确axis与显式face，BuildSurvey先needs_support再考虑手距，
+  下层真实恢复后才重评上层。MoveTo受理和PathTask每刻复核目标已满足/待清理/锚点丢失/
+  未知及材料，结束旧工作导航后重新核原图；不把他人完成记为本身体动作，实际挖放账保留。
+  前提回执不写全局changed/consumed_count零值覆盖原路线效果，先核实态再核材料，
+  已满足格不误报缺料。收尾修正后重新强制全量，不沿用此前构建指纹。
+  无登记图/临时支撑的计划接触和到位/实际原版放置复核保持，不改冻结原图。
+- 参考BuildSurvey/BuildCompanionTask、Destination/Goals、Navigator/Driver/Arrival、
+  Search/Learning、Trip和输入链均已对照。参考有同层多目标、同趟学习及拒绝障碍、
+  世界快照后台和接续；本体仍有单格目标、缺完整学习和复杂编辑主线程回退。
+  参考部分直接写状态，不能迁其仅够手距的宽松放置目标；也不机械恢复参考默认总配额。
+  本轮没有新增默认整趟节点/时间/次数帽、并行模型或直接写世界，剩余机制不销账。
+- red2旧码精确复现两项断言失败，focused1/2通过；新增6项含同修订286格夹具、
+  三轴四向/显式face/未知/可替换检查、空间会话/预算/来源/新epoch和世界隔离。
+  贯通回归实际运行Lua、BuildSurvey、A*、StandingGeometry、原版形状/clip、BlockPlacement、
+  BuildWork：先恢复下层，再找上层工位并放置，核两件库存消耗与最终原图满足。
+  世界/身体位移/原生状态回调/模型受控，不冒充玩家现场原生施工已经脱困。
+- 首轮全量1分5秒通过；最终以build/construction-navigation-final2-20261025.log第65至66行为准：
+  **1分6秒、21任务强制全执行**；三根XML为核心457/46、根173/24、客户端1371/139，
+  共**2001项/209 suites，failures/errors/skipped全0**。构建后无java残留。
+  本地javap核RotatedPillarBlock原生放置轴向来自点击面的axis，目标旋转后只过滤兼容面，
+  省略axis的旧目标不被补写或改变。
+- JAR build/libs/mcbot-0.1.0.jar为1837439 bytes，SHA256
+  `39b8d8b6c59f707cb1d0705b119a0821a9cf29d3115936f790d38fdd015f39d7`。
+  内嵌core与独立产物同为272953 bytes、SHA256
+  `e4ab72792b9bf566e98e1e4bec396ade590f288ac33da7041725212b1c4f40df`，
+  施工Lua/建筑知识与源码逐字节一致。导入包build/mcbot-import-20261025-construction-navigation-final.zip
+  为1782101 bytes，SHA256 `8ba29277c0cfe2394dc378d48ca8cca1029d6f90c858f4ca46002285184357a6`。
+  仅含mods/mcbot-0.1.0.jar、START-HERE.txt、SHA256SUMS.txt，包内JAR已验同指纹。
+  未安装到实例；施工中查看状态、竖柱待补后续建、屋面运动及动态改动仍待新包实机复测。
+  旧包已经丢失的来源不会自动补回；后续优先同层多目标、同趟学习/拒绝障碍、编辑工作快照。
+
 ## 原木轴向、地表基础与屋檐空搜（2026-10-25，Asia/Shanghai）
 
 - 维护者反馈原木朝向、草坪上铺基础及屋顶持续寻路不动。开工HEAD为f270374、工作树干净；
