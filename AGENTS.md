@@ -13,6 +13,13 @@
 
 ## 当前阶段（2026-10-14，维护者确认）
 
+- 2026-10-25维护者授权参考机制择益实施。本轮同层组合放置导航见
+  docs/WORK-NAVIGATION-MULTI-TARGET-2026-10-25.md及STATUS顶部，覆盖下条三项均未实现的历史。
+  work_targets/expected_revision共原move_to、PlacementWorkSet和严格原版PlacementWork，
+  最多16格同层，跨稳定页且普通/待补阶段分开。失效成员退让后重搜共原账户，
+  selected_work_target为实际成员，Lua投影/显示保留，到位再扫近身施工，不猜首格或记为已放。
+  图纸目标不作脚手架，原材料/累计编辑/许可/取消保持；完整学习与复杂编辑后台仍未实现。
+  最终离线证据/候选以STATUS为准，不安装或启动实例/游戏/模型，不把离线当原生已验。
 - 2026-10-25维护者追加三机制深入学习见docs/WORK-NAVIGATION-DEEP-STUDY-2026-10-25.md
   及STATUS顶部；本轮仅文档，三项未实装。多目标须贯通分页/Lua/实际成员回执；
   ApproachEstimate非下界，完整编辑状态不得只按坐标套死路；后台需冻结身体/工地/许可等

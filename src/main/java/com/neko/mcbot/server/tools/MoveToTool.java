@@ -66,6 +66,13 @@ public final class MoveToTool implements ServerTool {
             return CompletableFuture.completedFuture(
                     new Result(false, "DENIED:需要整数坐标 x/y/z。", null));
         }
+        com.neko.mcbot.server.PlacementWorkSet workSet;
+        try { workSet = workTargets(args); }
+        catch (RuntimeException invalid) {
+            return CompletableFuture.completedFuture(new Result(false,
+                    "DENIED:work_targets须为同层1至16个不重复的{x,y,z,item,face?}放置候选；"
+                            + "须exact=true、arrival=work、expected_revision，外层坐标为首候选，不能混用单格/拾取/返程/清障参数。", null));
+        }
         BlockPos workTarget;
         try { workTarget = workTarget(args); }
         catch (RuntimeException invalid) {
@@ -125,6 +132,25 @@ public final class MoveToTool implements ServerTool {
             id = value.getAsString();
         }
         c.bindSpatialTask(context);
+        if (workSet != null) {
+            var drawing = c.buildSite().target();
+            if (!c.buildSite().active() || drawing == null
+                    || !drawing.revision().equals(args.get("expected_revision").getAsString()))
+                return CompletableFuture.completedFuture(new Result(false,
+                        "TARGET_REVISION_CHANGED:多目标放置须来自当前任务已登记的原图。", null));
+            for (var member : workSet.members()) {
+                var cell = drawing.index().get(member.target());
+                if (cell == null || cell.material().item() != member.work().item())
+                    return CompletableFuture.completedFuture(new Result(false,
+                            "DENIED:多目标成员或材料不属于当前冻结图纸。", null));
+                if (!spec.contains(member.target().getX(), member.target().getY(), member.target().getZ())
+                        || !c.buildSite().inScope(member.target()))
+                    return CompletableFuture.completedFuture(new Result(false,
+                            "SCOPE_CHANGED:多目标成员超出原路线或工地范围。", null));
+            }
+            var failure = workSet.refresh(c);
+            if (failure != null) return CompletableFuture.completedFuture(failure);
+        }
         if (returnId != null) {
             var failure = returnGuard(c.navigationTrail(), returnId, to, spec, () -> {
                 var foot = com.neko.mcbot.server.StandingGeometry.forPlayer(c, c.level()::isLoaded)
@@ -141,7 +167,7 @@ public final class MoveToTool implements ServerTool {
                 || !spec.contains(from.getX(), from.getY(), from.getZ()))
             return CompletableFuture.completedFuture(new Result(false, "SCOPE_CHANGED:起点或目的地超出路线范围。", null));
         var level = c.level();
-        if (!level.hasChunkAt(to) || !level.isLoaded(to)) {
+        if (workSet == null && (!level.hasChunkAt(to) || !level.isLoaded(to))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "TARGET_LOST:(" + to.toShortString() + ") 不在已加载区域，先往那个方向走一段。",
                     null));
@@ -155,22 +181,52 @@ public final class MoveToTool implements ServerTool {
             if (failure != null) return CompletableFuture.completedFuture(failure);
         }
         var endpoint = walkEndpoint(to, walkOnly, args.has("exact") && args.get("exact").getAsBoolean(),
-                workTarget != null || pickup != null, com.neko.mcbot.server.StandingGeometry.forPlayer(c),
+                workTarget != null || pickup != null || workSet != null, com.neko.mcbot.server.StandingGeometry.forPlayer(c),
                 pos -> spec.contains(pos.getX(), pos.getY(), pos.getZ()) && c.buildSite().inScope(pos));
         if (endpoint != null) return CompletableFuture.completedFuture(endpoint);
         ActionPermissions.Scope scope = permissions.take(context, id, to.asLong());
         var path = new PathTask(level, to, permissions, context, scope, sched,
                 args.has("exact") && args.get("exact").getAsBoolean(), walkOnly, workTarget, spec, placement);
+        if (workSet != null) path.placingAny(workSet);
         if (pickup != null) path.pickingUp(pickup);
         if (c.buildSite().active()) path.limitTo(c.buildSite().scope()).usingBudget(c.buildSite().navigation());
         if (!sched.submit(c, path, f, capTicks(args))) {
             return CompletableFuture.completedFuture(new Result(false,
                     "BUSY:我正忙着上一件事，等它结束或让我取消。", null));
         }
-        return f.thenApply(moved -> placement != null
+        return f.thenApply(moved -> workSet != null ? workSet.finish(moved, c) : placement != null
                 ? com.neko.mcbot.server.PlacementWork.finish(moved, () -> placement.assess(c, workTarget))
                 : finishWork(moved, workTarget == null ? null
                 : () -> clear ? MiningWork.plan(c, workTarget).aim() : WorkPositions.miningAim(c, workTarget)));
+    }
+
+    static com.neko.mcbot.server.PlacementWorkSet workTargets(JsonObject args) {
+        if (!args.has("work_targets")) return null;
+        for (String field : java.util.List.of("work_target", "place_item", "face", "temporary_purpose",
+                "pickup_target_uuid", "return_waypoint"))
+            if (args.has(field)) throw new IllegalArgumentException();
+        if (!args.has("exact") || !args.get("exact").isJsonPrimitive()
+                || !args.get("exact").getAsJsonPrimitive().isBoolean() || !args.get("exact").getAsBoolean()
+                || !args.has("arrival") || !args.get("arrival").isJsonPrimitive()
+                || !"work".equals(args.get("arrival").getAsString()) || BreakBlockTool.clearObstructions(args)
+                || !args.has("expected_revision") || !args.get("expected_revision").isJsonPrimitive()
+                || !args.get("expected_revision").getAsJsonPrimitive().isString())
+            throw new IllegalArgumentException();
+        var members = new java.util.ArrayList<com.neko.mcbot.server.PlacementWorkSet.Member>();
+        var array = args.getAsJsonArray("work_targets");
+        if (array.isEmpty() || array.size() > com.neko.mcbot.server.PlacementWorkSet.LIMIT)
+            throw new IllegalArgumentException();
+        for (var value : array) {
+            var member = value.getAsJsonObject();
+            if (!java.util.Set.of("x", "y", "z", "item", "face").containsAll(member.keySet()))
+                throw new IllegalArgumentException();
+            var parsed = PlaceBlockTool.arguments(member);
+            if (parsed == null || !BlockPlacement.supported(parsed.item())) throw new IllegalArgumentException();
+            members.add(new com.neko.mcbot.server.PlacementWorkSet.Member(parsed.pos(),
+                    new com.neko.mcbot.server.PlacementWork(parsed.item(), member.has("face") ? parsed.face() : null)));
+        }
+        if (!members.getFirst().target().equals(BreakBlockTool.readPos(args))) throw new IllegalArgumentException();
+        return new com.neko.mcbot.server.PlacementWorkSet(members, args.get("expected_revision").getAsString());
     }
 
     static Result walkEndpoint(BlockPos target, boolean walkOnly, boolean exact, boolean semantic,

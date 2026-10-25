@@ -8,12 +8,20 @@ local function target_or_goal(target, revision)
     return goal.target,goal.expected_revision
 end
 
-local function move(cell, item, bounds, walk_only)
+local function move(cell, item, bounds, walk_only, candidates, revision)
     local p = {x=cell.x,y=cell.y,z=cell.z}
     local args = {x=p.x,y=p.y,z=p.z,work_target=p,exact=true,
         arrival="work",bounds=bounds,walk_only=walk_only,
         clear_obstructions=not item and walk_only~=true or nil}
     if item then args.place_item=item; args.face=cell.face; args.temporary_purpose=cell.purpose end
+    if candidates and #candidates>1 then
+        args.work_target,args.place_item,args.face=nil,nil,nil
+        args.work_targets,args.expected_revision={},revision
+        for _,candidate in ipairs(candidates) do
+            local c=candidate.cell
+            args.work_targets[#args.work_targets+1]={x=c.x,y=c.y,z=c.z,item=c.item,face=c.face}
+        end
+    end
     local result = attempt("move_to", args)
     if not result.ok then
         if result.failure_kind=="TARGET_LOST" then error("unknown work facts") end
@@ -258,29 +266,53 @@ function mc.build(target, options)
             failed,cursor,repairing={},0,true
         end
         local moved=false
-        local ready,clear,far,clears=nil,nil,nil,{}
-        for _,page in ipairs(pages) do
-            for _,cell in ipairs(page.cells) do
-                local kind=nil
-                if cell.state=="ready" then kind="ready"
-                elseif cell.state=="needs_clear" and cell.clear_allowed then kind="clear"
-                elseif (cell.state=="out_of_reach" or cell.state=="blocked"
-                    or cell.state=="state_conflict" and cell.actual_block and cell.block
-                    and cell.actual_block~=cell.block) and cell.item
-                    and cell.material_available then kind="place" end
-                if kind and (repairing or not cell.repair_pending) then
-                    local key=workkey(cell,kind,stamp)
-                    local candidate={cell=cell,offset=cell.source_offset or page.offset,key=key}
-                    if not failed[key] then
-                        if kind=="ready" and lower(candidate,ready) then ready=candidate end
-                        if kind=="clear" then
-                            clears[#clears+1]=candidate
-                            if lower(candidate,clear) then clear=candidate end
+        local ready,clear,far,clears,fars=nil,nil,nil,{},{}
+        local function scan(scanned)
+            for _,page in ipairs(scanned) do
+                for _,cell in ipairs(page.cells) do
+                    local kind=nil
+                    if cell.state=="ready" then kind="ready"
+                    elseif cell.state=="needs_clear" and cell.clear_allowed then kind="clear"
+                    elseif (cell.state=="out_of_reach" or cell.state=="blocked"
+                        or cell.state=="state_conflict" and cell.actual_block and cell.block
+                        and cell.actual_block~=cell.block) and cell.item
+                        and cell.material_available then kind="place" end
+                    if kind and (repairing or not cell.repair_pending) then
+                        local key=workkey(cell,kind,stamp)
+                        local candidate={cell=cell,offset=cell.source_offset or page.offset,key=key}
+                        if not failed[key] then
+                            if kind=="ready" and lower(candidate,ready) then ready=candidate end
+                            if kind=="clear" then
+                                clears[#clears+1]=candidate
+                                if lower(candidate,clear) then clear=candidate end
+                            end
+                            if kind=="place" then
+                                if lower(candidate,far) then far=candidate; fars={} end
+                                if cell.y==far.cell.y and #fars<16 then fars[#fars+1]=candidate end
+                            end
                         end
-                        if kind=="place" and lower(candidate,far) then far=candidate end
                     end
                 end
             end
+        end
+        scan(pages)
+        -- Keep only a bounded layer of intents, including members on later detail pages.
+        local look=pages[1]
+        local look_cursor=cursor
+        while far and #fars<16 and (not ready or ready.cell.y>far.cell.y)
+            and (not clear or clear.cell.y>far.cell.y)
+            and look.work_next_cursor and look.work_next_cursor>=0 do
+            local last=look.cells[#look.cells]
+            if last and last.y and last.y>far.cell.y then break end
+            if look.work_next_cursor<=look_cursor then return report("invalid_work_cursor",round,pages) end
+            look_cursor=look.work_next_cursor
+            local more,why=checked(target,revision,nil,look_cursor)
+            if not more then return report(why,round) end
+            if more[1].observation_key~=pages[1].observation_key then
+                return report("world_or_material_changed_between_pages",round)
+            end
+            look=more[1]
+            scan(more)
         end
         -- A usable work stance wins over future drawing occupancy. Walking alone does not reopen a pass.
         local obstructing=pages[1].body_obstructs_target
@@ -352,17 +384,28 @@ function mc.build(target, options)
                 last_reason="nearby_no_actual_progress"
             end
         elseif far then
-            local ok,result,trapped=move(far.cell,far.cell.item,site.bounds)
+            local ok,result,trapped=move(far.cell,far.cell.item,site.bounds,nil,fars,revision)
             remember(result)
             if trapped then
                 if not recover(stamp) then return report("departure_blocked",round,pages,result.feedback) end
                 ok=true
             end
             if not ok then
-                failed[far.key]=true
+                for _,candidate in ipairs(fars) do failed[candidate.key]=true end
                 last_reason,last_failure="placement_stance_unavailable",result.feedback
-            else
-                failed[far.key]=true
+            elseif not trapped then
+                local selected=result.data.selected_work_target
+                if not selected and #fars>1 then return report("work_member_unconfirmed",round,nil,result.feedback) end
+                selected=selected or far.cell
+                local matched=false
+                for _,candidate in ipairs(fars) do
+                    local c=candidate.cell
+                    if c.x==selected.x and c.y==selected.y and c.z==selected.z then
+                        failed[candidate.key]=true
+                        matched=true
+                    end
+                end
+                if not matched then return report("work_member_unconfirmed",round,nil,result.feedback) end
             end
         elseif pages[1].work_next_cursor and pages[1].work_next_cursor>=0 then
             cursor=pages[1].work_next_cursor

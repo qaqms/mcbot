@@ -121,6 +121,7 @@ public final class PathTask extends TickTask {
     private final BlockPos workTarget;
     private final PathSpec spec;
     private final com.neko.mcbot.server.PlacementWork placement;
+    private com.neko.mcbot.server.PlacementWorkSet placementSet;
     private NavigationGoal suppliedGoal;
     private java.util.UUID pickupTarget;
     private net.minecraft.world.phys.AABB pickupBounds;
@@ -150,6 +151,12 @@ public final class PathTask extends TickTask {
     public PathTask pickingUp(java.util.UUID targetId) {
         if (suppliedGoal != null || pickupTarget != null) throw new IllegalStateException("goal already bound");
         pickupTarget = java.util.Objects.requireNonNull(targetId);
+        return this;
+    }
+    public PathTask placingAny(com.neko.mcbot.server.PlacementWorkSet work) {
+        if (workTarget != null || suppliedGoal != null || pickupTarget != null || placementSet != null)
+            throw new IllegalStateException("goal already bound");
+        placementSet = java.util.Objects.requireNonNull(work);
         return this;
     }
     public PathTask usingBudget(NavigationBudget budget) {
@@ -252,6 +259,7 @@ public final class PathTask extends TickTask {
         data.addProperty("walk_only", walkOnly);
         data.addProperty("phase", phase.name());
         data.addProperty("search_mode", searchMode());
+        if (placementSet != null) placementSet.addIdentity(data);
         if (workTarget != null) {
             data.add("work_target", com.neko.mcbot.building.BuildTarget.coordinates(workTarget));
             data.addProperty("work_kind", placement == null ? "mine" : "place");
@@ -334,6 +342,15 @@ public final class PathTask extends TickTask {
                     : com.neko.mcbot.server.MiningWork.targetFailure(workTarget,
                     level.isLoaded(workTarget) ? level.getBlockState(workTarget) : null);
             if (failure != null) return terminal(failure);
+        }
+        if (placementSet != null) {
+            int previous = placementSet.generation();
+            var failure = placementSet.refresh(c);
+            if (failure != null) return terminal(failure);
+            if (previous != placementSet.generation() && (search != null || path != null || pendingSearch != null)) {
+                // Removed members change the search priorities and any predicted segment endpoint.
+                beginReplan(c);
+            }
         }
         if (pickupTarget != null) {
             var contact = updatePickup(c);
@@ -659,6 +676,10 @@ public final class PathTask extends TickTask {
 
     private JsonObject workDiagnostic(CompanionPlayer body) {
         var data = new JsonObject();
+        if (placementSet != null) {
+            placementSet.addIdentity(data);
+            return data;
+        }
         if (workTarget == null) return data;
         data.add("target", com.neko.mcbot.building.BuildTarget.coordinates(workTarget));
         data.addProperty("kind", placement == null ? "mine" : "place");
@@ -1023,7 +1044,8 @@ public final class PathTask extends TickTask {
     }
 
     private NavigationGoal goalFor(BlockPos from, LevelDigSampler terrain) {
-        return suppliedGoal != null ? suppliedGoal : spec.workArrival() && placement != null
+        return placementSet != null ? placementSet.goal(drivenBody, terrain.geometry())
+                : suppliedGoal != null ? suppliedGoal : spec.workArrival() && placement != null
                 ? placement.goal(drivenBody, workTarget, terrain.geometry()) : spec.workArrival()
                 ? com.neko.mcbot.server.NavigationWork.goal(com.neko.mcbot.server.BlockAim.forPlayer(drivenBody),
                 workTarget, drivenBody.getEyePosition().y - drivenBody.getY(),
@@ -1641,7 +1663,8 @@ public final class PathTask extends TickTask {
         data.addProperty("arrival", spec.workArrival() ? "work" : "position");
         data.addProperty("feet_y", c.getY());
         data.addProperty("x", at.getX()); data.addProperty("y", at.getY()); data.addProperty("z", at.getZ());
-        String fb = "到了 (" + target.toShortString() + ") 附近，站定在 " + at.toShortString()
+        String fb = (placementSet == null ? "到了 (" + target.toShortString() + ") 附近，"
+                : "已到同层候选的工作范围，") + "站定在 " + at.toShortString()
                 + (need > 0 ? "（这一路动了 " + need + " 个方块）。" : "。");
         return new Progress.Done(new Result(true, fb, data));
     }

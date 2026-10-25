@@ -58,6 +58,41 @@ class MoveToWorkTest {
         }
     }
     private static JsonObject json(String text) { return JsonParser.parseString(text).getAsJsonObject(); }
+    @Test void multiTargetParsingKeepsMemberMaterialsFacesAndRejectsConflictingModesBeforeWorldAccess() {
+        var valid = json("""
+                {"x":2,"y":0,"z":0,"exact":true,"arrival":"work","expected_revision":"%s",
+                "work_targets":[{"x":2,"y":0,"z":0,"item":"oak_log","face":"up"},
+                {"x":4,"y":0,"z":0,"item":"cobblestone"}]}
+                """.formatted("a".repeat(64)));
+        var set = MoveToTool.workTargets(valid);
+        assertEquals(net.minecraft.world.item.Items.OAK_LOG, set.members().getFirst().work().item());
+        assertEquals(net.minecraft.core.Direction.UP, set.members().getFirst().work().face());
+        assertNull(set.members().getLast().work().face());
+        assertTrue(com.neko.mcbot.path.PathSpec.parse(valid).workArrival());
+        var invalids = new java.util.ArrayList<JsonObject>();
+        for (String field : java.util.List.of("work_target", "place_item", "face", "temporary_purpose",
+                "pickup_target_uuid", "return_waypoint")) {
+            var args = valid.deepCopy(); args.addProperty(field, "conflict"); invalids.add(args);
+        }
+        for (String field : java.util.List.of("exact", "arrival", "expected_revision")) {
+            var args = valid.deepCopy(); args.remove(field); invalids.add(args);
+        }
+        var higher = valid.deepCopy();
+        higher.getAsJsonArray("work_targets").get(1).getAsJsonObject().addProperty("y", 1); invalids.add(higher);
+        var duplicate = valid.deepCopy();
+        duplicate.getAsJsonArray("work_targets").set(1, duplicate.getAsJsonArray("work_targets").get(0).deepCopy());
+        invalids.add(duplicate);
+        var oversized = valid.deepCopy();
+        for (int i = 0; i < 15; i++) oversized.getAsJsonArray("work_targets").add(valid.getAsJsonArray("work_targets").get(0));
+        invalids.add(oversized);
+        var extra = valid.deepCopy();
+        extra.getAsJsonArray("work_targets").get(0).getAsJsonObject().addProperty("query", true); invalids.add(extra);
+        var clear = valid.deepCopy(); clear.addProperty("clear_obstructions", true); invalids.add(clear);
+        for (var args : invalids) {
+            assertThrows(RuntimeException.class, () -> MoveToTool.workTargets(args), args.toString());
+            assertTrue(new MoveToTool().runAsync(null, args, null).join().feedback().startsWith("DENIED:"));
+        }
+    }
     private static com.neko.mcbot.server.StandingGeometry floor(boolean slab, boolean unknown) {
         return new com.neko.mcbot.server.StandingGeometry(new com.neko.mcbot.server.StandingGeometry.Access() {
             @Override public boolean known(BlockPos pos) { return !unknown; }

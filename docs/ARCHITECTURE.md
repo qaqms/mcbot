@@ -3,6 +3,18 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 同层组合工作导航（2026-10-25）
+
+详见WORK-NAVIGATION-MULTI-TARGET-2026-10-25。construction.lua按当前普通/待补阶段
+收集最低可做层的最多16格，跨work_scan续页核同一观察，不积累整图。
+多格经原move_to的work_targets/expected_revision进入PlacementWorkSet，
+服务端先核原工地、修订、材料与范围，再由NavigationGoal.anyOf组合严格PlacementWork目标。
+界/距离/同编辑状态终态及成员到达费一起组合；路线不往图纸目标格垫脚手架。
+途中退让失效成员时作废旧搜索与接续，原账户保持；权限、未知、缺料不改写为成功。
+到位按实际身体重验，selected_work_target明确实际成员；Lua私有投影与显示保留该值，
+然后重扫近身施工，不以导航代替放置或整图验收。普通单格、采掘和临时工作保持原接口。
+完整学习和严格编辑后台仍未实装，下节“单格目标”按此前检查点阅读。
+
 ## 建筑导航会话与工作前提（2026-10-25）
 
 详见CONSTRUCTION-NAVIGATION-AUDIT-2026-10-25。CompanionPlayer.bindSpatialTask统一调用

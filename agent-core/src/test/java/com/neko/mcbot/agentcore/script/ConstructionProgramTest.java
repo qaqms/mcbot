@@ -503,7 +503,15 @@ class ConstructionProgramTest {
                 }
                 case "move_to" -> {
                     if(moveFailure!=null) yield new ToolOutcome(false,moveFailure);
-                    moved++; yield actual("{\"can_work_here\":true}");
+                    moved++;
+                    var data=new JsonObject(); data.addProperty("can_work_here",true);
+                    if (args.has("work_targets")) {
+                        var member=args.getAsJsonArray("work_targets").get(0).getAsJsonObject();
+                        var selected=new JsonObject();
+                        for (String key:List.of("x","y","z")) selected.add(key,member.get(key));
+                        data.add("selected_work_target",selected);
+                    }
+                    yield new ToolOutcome(true,"observed",data);
                 }
                 case "build_nearby" -> {
                     if(!repeat) { placed+=remaining; remaining=0; }
@@ -741,6 +749,7 @@ class ConstructionProgramTest {
         w.override=(name,args)-> {
             if (!name.equals("build_diff")) return null;
             int cursor=args.has("work_cursor")?args.get("work_cursor").getAsInt():0;
+            if (cursor==0) observed[0]++;
             return actual("""
                     {"target_revision":"%s","total":40,"remaining":40,"goal_satisfied":false,
                     "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
@@ -748,12 +757,15 @@ class ConstructionProgramTest {
                     "work_scan":true,"work_next_cursor":%d,"offset":0,"next_offset":16,
                     "counts":{"out_of_reach":40},"cells":[{"x":%d,"y":90,"z":0,
                     "state":"out_of_reach","item":"stone","material_available":true}]}
-                    """.formatted(REV,observed[0]++,cursor==0?16:-1,cursor==0?4:5));
+                    """.formatted(REV,observed[0],cursor==0?16:-1,cursor==0?4:5));
         };
         var result=run(w,CODE.replace("max_rounds=3,",""),128);
         assertTrue(result.ok(),result.feedback());
-        assertEquals(List.of(4,5),w.calls.stream().filter(c->c.name().equals("move_to"))
-                .map(c->c.args().get("x").getAsInt()).toList());
+        var moves=w.calls.stream().filter(c->c.name().equals("move_to")).toList();
+        assertEquals(1,moves.size(),"the failed composite is not replayed by unrelated chunk changes");
+        assertEquals(List.of(4,5),java.util.stream.StreamSupport.stream(
+                moves.getFirst().args().getAsJsonArray("work_targets").spliterator(),false)
+                .map(c->c.getAsJsonObject().get("x").getAsInt()).toList());
         assertEquals("placement_stance_unavailable",result.data().getAsJsonObject("returned").get("blocked").getAsString());
     }
 
@@ -792,17 +804,122 @@ class ConstructionProgramTest {
                     "cells":[{"x":4,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true},
                     {"x":5,"y":90,"z":0,"state":"%s","item":"stone","material_available":true}]}
                     """.formatted(REV,w.moved>0?"ready":"out_of_reach"));
-            if(name.equals("move_to") && args.get("x").getAsInt()==5) {
-                w.moved++; return actual("{\"can_work_here\":true}");
+            if(name.equals("move_to") && args.has("work_targets")) {
+                assertEquals(2,args.getAsJsonArray("work_targets").size());
+                w.moved++; return actual("{\"can_work_here\":true,\"selected_work_target\":{\"x\":5,\"y\":90,\"z\":0}}");
             }
             return null;
         };
         var result=run(w,CODE,128);
         assertTrue(result.ok(),result.feedback());
         assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
-        assertEquals(2,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count(),
+                "one composite search reaches the alternative without first exhausting the sealed member");
         assertTrue(w.calls.stream().filter(c->c.name().equals("move_to")).noneMatch(c->c.args().has("face")),
                 "work navigation chooses a real clickable face rather than forcing UP");
+    }
+
+    @Test void sameLayerMembersAcrossWorkPagesKeepMaterialsAndRevisionAndStopBeforeTheHigherLayer() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if(name.equals("build_diff") && w.moved==0) {
+                int cursor=args.get("work_cursor").getAsInt();
+                return actual("""
+                        {"target_revision":"%s","goal_satisfied":false,"remaining":3,
+                        "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                        "observation_key":"same","work_scan":true,"work_next_cursor":%d,
+                        "offset":0,"next_offset":16,"cells":[
+                        {"x":%d,"y":%d,"z":0,"state":"out_of_reach","item":"%s","material_available":true}]}
+                        """.formatted(REV,cursor==0?16:cursor==16?32:-1,
+                        cursor==0?4:5,cursor==32?91:90,cursor==0?"stone":"oak_log"));
+            }
+            if(name.equals("move_to")) {
+                assertEquals(REV,args.get("expected_revision").getAsString());
+                var members=args.getAsJsonArray("work_targets");
+                assertEquals(2,members.size());
+                assertEquals("oak_log",members.get(1).getAsJsonObject().get("item").getAsString());
+                for(var member:members) assertEquals(90,member.getAsJsonObject().get("y").getAsInt());
+                assertFalse(args.has("work_target"));
+                assertFalse(args.has("place_item"));
+                w.moved++;
+                return actual("{\"can_work_here\":true,\"selected_work_target\":{\"x\":5,\"y\":90,\"z\":0}}");
+            }
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.moved);
+    }
+
+    @Test void changedFactsDuringCandidateLookaheadStopBeforeStartingTheCombinedRoute() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if(!name.equals("build_diff")) return null;
+            int cursor=args.get("work_cursor").getAsInt();
+            return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"%s","work_scan":true,"work_next_cursor":%d,
+                    "offset":0,"next_offset":16,"cells":[
+                    {"x":%d,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true}]}
+                    """.formatted(REV,cursor==0?"before":"after",cursor==0?16:-1,cursor==0?4:5));
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals("world_or_material_changed_between_pages",
+                result.data().getAsJsonObject("returned").get("blocked").getAsString());
+        assertEquals(0,w.moved);
+        assertEquals(0,w.checkpoints);
+    }
+
+    @Test void selectingTheSecondMemberDoesNotMarkTheUnchosenFirstMemberAsAlreadyTried() throws Exception {
+        var w=new World(); w.repeat=true;
+        w.override=(name,args)-> {
+            if(name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"same","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true},
+                    {"x":5,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true}]}
+                    """.formatted(REV));
+            if(name.equals("move_to")) {
+                w.moved++;
+                if(w.moved==1) return actual("""
+                        {"selected_work_target":{"x":5,"y":90,"z":0},"selected_place_item":"stone","placed_blocks":1}
+                        """);
+                assertFalse(args.has("work_targets"),"the selected second member is no longer eligible in this pass");
+                assertEquals(4,args.get("x").getAsInt());
+                return new ToolOutcome(false,"NO_PATH:remaining first");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(2,w.moved);
+        assertFalse(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+    }
+
+    @Test void combinedArrivalWithoutAMatchingSelectedMemberCannotBeUsedAsWorkConfirmation() throws Exception {
+        for (String selection:List.of("{}", "{\"selected_work_target\":{\"x\":99,\"y\":90,\"z\":0}}")) {
+            var w=new World();
+            w.override=(name,args)-> {
+                if(name.equals("build_diff")) return actual("""
+                        {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                        "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                        "observation_key":"same","offset":0,"next_offset":-1,"cells":[
+                        {"x":4,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true},
+                        {"x":5,"y":90,"z":0,"state":"out_of_reach","item":"stone","material_available":true}]}
+                        """.formatted(REV));
+                return name.equals("move_to")?actual(selection):null;
+            };
+            var result=run(w,CODE,128);
+            assertTrue(result.ok(),result.feedback());
+            var report=result.data().getAsJsonObject("returned");
+            assertEquals("work_member_unconfirmed",report.get("blocked").getAsString());
+            assertFalse(report.get("remaining_known").getAsBoolean());
+            assertEquals(0,w.placed);
+        }
     }
 
     @Test void lowerFoundationClearingPrecedesAReadyWallFromAnotherPage() throws Exception {

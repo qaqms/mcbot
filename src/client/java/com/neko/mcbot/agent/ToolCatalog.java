@@ -76,7 +76,7 @@ public final class ToolCatalog {
                     + "门与床保留两格验收，仅主格动作/一件料；支持空单箱/木桶、工位与常用建筑装饰，细节tool_help。"
                     + "未知/不支持阻止完成，ready仅当前页预检。只查不施工，不自动找料。";
             case "move_to" -> "规划行走/挖穿/搭路；默认搜索按切片续推，无整趟节点/记录停止额度；walk_only=true不挖放，exact=true指定脚格，"
-                    + "arrival=work须exact及work_target并以工作对象坐标寻工作终点。"
+                    + "arrival=work须exact及work_target或同层work_targets，并以工作对象坐标寻工作终点。"
                     + "采掘目标已为空会结束无效寻路，核对原图后继续；目标消失不算本身体挖除。"
                     + "place_item工作导航省略face时自动检查可点击面，显式face保持原要求。"
                     + "拾取用新鲜掉落UUID填pickup_target_uuid及物品取整坐标，统一搜索实际触碰落点；到达后核背包。"

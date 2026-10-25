@@ -282,7 +282,8 @@ public final class BoundedProgram {
         if (name.equals("status")) return new JsonObject();
         if (name.equals("move_to")) {
             var view = new JsonObject();
-            if (data.has("placed_blocks")) view.add("placed_blocks", data.get("placed_blocks"));
+            for (String key : List.of("placed_blocks", "selected_work_target", "selected_place_item", "work_set_id"))
+                if (data.has(key)) view.add(key, data.get(key));
             return view;
         }
         if (name.equals("break_block") || name.equals("build_nearby")) {
@@ -459,7 +460,8 @@ public final class BoundedProgram {
                 if (plainArrival) for (String key : List.of("x", "y", "z", "feet_y", "arrival", "removed_blocks"))
                     if (receipt.data().has(key)) effect.add(key, receipt.data().get(key));
                 for (String key : List.of("removed", "changed", "placed_blocks", "consumed_count",
-                        "goal_satisfied", "final_verified", "placement_results_complete", "drop_accounting_known"))
+                        "goal_satisfied", "final_verified", "placement_results_complete", "drop_accounting_known",
+                        "work_set_id", "work_target_count", "selected_work_target", "selected_place_item", "can_work_here"))
                     if (receipt.data().has(key)) effect.add(key, receipt.data().get(key));
                 var accounting = receipt.data().get("drop_accounting");
                 if (accounting != null && accounting.isJsonObject()) {

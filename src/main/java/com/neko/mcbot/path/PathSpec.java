@@ -16,7 +16,7 @@ public record PathSpec(boolean workArrival, boolean clear, boolean underground, 
         if (args.has("arrival")) {
             var value = args.get("arrival");
             if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()
-                    || !value.getAsString().equals("work") || !args.has("work_target"))
+                    || !value.getAsString().equals("work") || !(args.has("work_target") || args.has("work_targets")))
                 throw new IllegalArgumentException();
             work = true;
         }

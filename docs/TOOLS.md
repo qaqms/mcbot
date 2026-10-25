@@ -3,6 +3,20 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 同层组合工作更新（2026-10-25）
+
+原move_to增加work_targets与expected_revision。已登记原图内的同层放置可提供
+1至16个不重复的{x,y,z,item,face?}，要求exact=true、arrival=work、原工地修订，
+外层x/y/z为第一成员；不得混用work_target/place_item/顶层face/temporary_purpose/
+pickup_target_uuid/return_waypoint或clear_obstructions=true。
+成员各自核材料、原图状态和真实点击面，寻到任一可工作落点后重新预检。
+回执work_set_id/work_target_count/work_targets标识本批，selected_work_target/selected_place_item
+表示实际可做成员；can_work_here仍仅预检，到位没有放置。
+途中单成员失效不阻止其他成员，全部失效带work_member_failures返回，实际挖放账保留。
+内置mc.build自动跨稳定候选页收集同层集合，普通/待补阶段分开，到位再扫近身施工。
+单格沿原接口；没有新增工具或默认整趟节点/时间/次数帽，跨段学习与编辑后台仍待后续。
+详见WORK-NAVIGATION-MULTI-TARGET-2026-10-25。
+
 ## 屋檐与基础更新（2026-10-25）
 
 build_diff及实际近身施工在手距分类前核目标/六邻格真实轮廓。缺放置锚点为needs_support，

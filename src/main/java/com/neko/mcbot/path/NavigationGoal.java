@@ -24,6 +24,57 @@ public interface NavigationGoal {
 
     record Bounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) { }
 
+    static NavigationGoal anyOf(java.util.List<NavigationGoal> goals) {
+        var members = java.util.List.copyOf(goals);
+        if (members.isEmpty()) throw new IllegalArgumentException("empty goals");
+        return new NavigationGoal() {
+            @Override public boolean reached(int x, int y, int z) {
+                return reached(x, y, z, TerrainEdits.EMPTY);
+            }
+            @Override public boolean reached(int x, int y, int z, TerrainEdits edits) {
+                return members.stream().anyMatch(g -> g.reached(x, y, z, edits));
+            }
+            @Override public double remaining(int x, int y, int z) {
+                double distance = Double.POSITIVE_INFINITY;
+                for (var member : members) distance = Math.min(distance, member.remaining(x, y, z));
+                return distance;
+            }
+            @Override public double approach(int x, int y, int z) {
+                double distance = Double.POSITIVE_INFINITY;
+                for (var member : members) distance = Math.min(distance, member.approach(x, y, z));
+                return distance;
+            }
+            @Override public double arrivalCost(DigSampler terrain, int x, int y, int z, TerrainEdits edits) {
+                double cost = Double.POSITIVE_INFINITY;
+                for (var member : members) {
+                    if (member.reached(x, y, z, edits))
+                        cost = Math.min(cost, member.arrivalCost(terrain, x, y, z, edits));
+                }
+                return cost;
+            }
+            @Override public Bounds estimateBounds() {
+                int lx = Integer.MAX_VALUE, ly = lx, lz = lx;
+                int hx = Integer.MIN_VALUE, hy = hx, hz = hx;
+                for (var member : members) {
+                    var bounds = member.estimateBounds();
+                    if (bounds == null) return null;
+                    lx = Math.min(lx, bounds.minX()); ly = Math.min(ly, bounds.minY()); lz = Math.min(lz, bounds.minZ());
+                    hx = Math.max(hx, bounds.maxX()); hy = Math.max(hy, bounds.maxY()); hz = Math.max(hz, bounds.maxZ());
+                }
+                return new Bounds(lx, ly, lz, hx, hy, hz);
+            }
+            @Override public NavigationGoal snapshot(DigSampler terrain) {
+                var frozen = new java.util.ArrayList<NavigationGoal>();
+                for (var member : members) {
+                    var goal = member.snapshot(terrain);
+                    if (goal == null) return null;
+                    frozen.add(goal);
+                }
+                return anyOf(frozen);
+            }
+        };
+    }
+
     static NavigationGoal position(int tx, int ty, int tz, int radius) {
         return new NavigationGoal() {
             @Override public NavigationGoal snapshot(DigSampler terrain) { return this; }

@@ -10,6 +10,19 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolCatalogTest {
+    @Test void combinedWorkSchemaAndHelpExposeTheSameBoundAndActualChosenMember() {
+        var compact=ToolCatalog.MODEL_SPECS.stream().filter(s->s.name().equals("move_to")).findFirst().orElseThrow();
+        assertTrue(compact.description().contains("work_targets"));
+        var properties=JsonParser.parseString(compact.paramsJsonSchema()).getAsJsonObject().getAsJsonObject("properties");
+        var members=properties.getAsJsonObject("work_targets");
+        assertEquals(com.neko.mcbot.server.PlacementWorkSet.LIMIT,members.get("maxItems").getAsInt());
+        assertEquals(64,properties.getAsJsonObject("expected_revision").get("minLength").getAsInt());
+        var help=ToolCatalog.read("{\"names\":[\"move_to\"]}");
+        assertTrue(help.ok(),help.feedback());
+        assertTrue(help.feedback().contains("selected_work_target"));
+        assertTrue(help.feedback().contains("expected_revision"));
+    }
+
     @Test void pickupIdentityIsDiscoverableInCompactAndFullMovementHelp() {
         var move = ToolCatalog.MODEL_SPECS.stream().filter(spec -> spec.name().equals("move_to")).findFirst().orElseThrow();
         assertTrue(move.description().contains("pickup_target_uuid"));

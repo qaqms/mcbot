@@ -35,14 +35,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConstructionNavigationPipelineTest {
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
 
-    @Test void realSurveyLuaSearchRaysAndWorkRestoreTheLowerLogBeforeApproachingTheUpperLog() throws Exception {
-        var target = BuildTarget.parse(JsonParser.parseString("""
-                {"anchor":{"x":248,"y":64,"z":-144},"fill":{
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void realSurveyLuaSearchRaysAndWorkRestoreLowerLogsBeforeApproachingTheUpperLog(boolean multiple) throws Exception {
+        var input = JsonParser.parseString("""
+                {"anchor":{"x":248,"y":64,"z":-144},"regions":[{
                 "from":{"x":0,"y":0,"z":0},"to":{"x":0,"y":2,"z":0},
-                "block":"oak_log","properties":[{"name":"axis","value":"y"}]}}
-                """).getAsJsonObject());
+                "block":"oak_log","properties":[{"name":"axis","value":"y"}]}]}
+                """).getAsJsonObject();
+        if (multiple) input.getAsJsonArray("regions").add(JsonParser.parseString("""
+                {"from":{"x":1,"y":1,"z":-2},"to":{"x":1,"y":1,"z":-2},
+                "block":"oak_log","properties":[{"name":"axis","value":"y"}]}
+                """));
+        var target = BuildTarget.parse(input);
         var lower = new BlockPos(248,65,-144);
         var upper = lower.above();
+        var extra = new BlockPos(249,65,-146);
         var world = new BlockAimTest.Grid(); world.blocks.clear();
         world.eye = new Vec3(242.5,65.62,-143.5);
         for (int x=241;x<=252;x++) for (int z=-148;z<=-140;z++)
@@ -52,10 +60,11 @@ class ConstructionNavigationPipelineTest {
         world.blocks.put(upper.east(),Blocks.OAK_PLANKS.defaultBlockState());
         world.blocks.put(lower.east(),Blocks.OAK_PLANKS.defaultBlockState());
         world.blocks.put(lower.west().below(),Blocks.COBBLESTONE.defaultBlockState());
+        if (multiple) world.blocks.put(extra.below(),Blocks.OAK_LOG.defaultBlockState());
         var placed = new ArrayList<BlockPos>();
         var approached = new ArrayList<BlockPos>();
         var inventory = BlockActionFixtures.inventory();
-        inventory.setItem(0,new ItemStack(Items.OAK_LOG,2));
+        inventory.setItem(0,new ItemStack(Items.OAK_LOG,multiple ? 3 : 2));
         var collision = new StandingGeometryTest.Grid();
         collision.blocks.clear();
         var geometry = collision.geometry();
@@ -65,7 +74,9 @@ class ConstructionNavigationPipelineTest {
             @Override public boolean inBounds(BlockPos p) { return true; }
             @Override public boolean protectedCell(BlockPos p) { return false; }
             @Override public boolean near(BlockPos p) { return world.eye.distanceToSqr(Vec3.atCenterOf(p))<=5.5*5.5; }
-            @Override public boolean repairPending(BlockPos p) { return p.equals(lower) && !placed.contains(lower); }
+            @Override public boolean repairPending(BlockPos p) {
+                return (p.equals(lower) || multiple && p.equals(extra)) && !placed.contains(p);
+            }
             @Override public BlockAim.Anchor placementAnchor(BuildTarget.Cell cell) {
                 return PlacementWork.anchor(world,cell.pos(),null,cell);
             }
@@ -87,7 +98,10 @@ class ConstructionNavigationPipelineTest {
             @Override public BlockState proposedState() { return proposed; }
             @Override public InteractionResult place(BlockPos p, ItemStack stack, Direction face) {
                 assertTrue(target.index().get(p).matches(proposed));
-                if (p.equals(upper)) assertEquals(java.util.List.of(lower),placed);
+                if (p.equals(upper)) {
+                    assertTrue(placed.contains(lower));
+                    if (multiple) assertTrue(placed.contains(extra));
+                }
                 world.blocks.put(p,proposed); stack.shrink(1); placed.add(p);
                 return InteractionResult.SUCCESS;
             }
@@ -110,12 +124,12 @@ class ConstructionNavigationPipelineTest {
             }
         };
         var queue = new LinkedBlockingQueue<Runnable>();
-        var program = new BoundedProgram(new BoundedProgram.Plan("""
-                local t={anchor={x=248,y=64,z=-144},fill={
-                    from={x=0,y=0,z=0},to={x=0,y=2,z=0},block="oak_log",
-                    properties={{name="axis",value="y"}}}}
-                return mc.build(t)
-                """,0,0),()->0L,(name,json)->{
+        var registered = new JsonObject();
+        registered.addProperty("type","building");
+        registered.add("target",target.input());
+        registered.addProperty("expected_revision",target.revision());
+        boolean[] combined = {false};
+        var program = new BoundedProgram(new BoundedProgram.Plan("return mc.build()",0,0),()->0L,(name,json)->{
             var args=JsonParser.parseString(json).getAsJsonObject();
             ServerTool.Result result;
             switch (name) {
@@ -136,19 +150,36 @@ class ConstructionNavigationPipelineTest {
                         : BuildSurvey.query(target,work,args.get("offset").getAsInt(),0,()->0);
                 case "move_to" -> {
                     var p=new BlockPos(args.get("x").getAsInt(),args.get("y").getAsInt(),args.get("z").getAsInt());
-                    assertTrue(args.has("place_item"));
-                    assertNull(PlacementWork.targetFailure(p,work.state(p),target.index().get(p),
-                            ()->work.placementAnchor(target.index().get(p))));
-                    if (p.equals(upper)) assertEquals(java.util.List.of(lower),placed);
+                    var members = new ArrayList<PlacementWorkSet.Member>();
+                    if (args.has("work_targets")) {
+                        combined[0]=true;
+                        assertEquals(target.revision(),args.get("expected_revision").getAsString());
+                        for (var value:args.getAsJsonArray("work_targets")) {
+                            var c=value.getAsJsonObject();
+                            var point=new BlockPos(c.get("x").getAsInt(),c.get("y").getAsInt(),c.get("z").getAsInt());
+                            assertEquals("minecraft:oak_log",c.get("item").getAsString());
+                            members.add(new PlacementWorkSet.Member(point,new PlacementWork(
+                                    (net.minecraft.world.item.BlockItem)Items.OAK_LOG,null)));
+                        }
+                        assertEquals(2,members.size());
+                        assertTrue(members.stream().allMatch(m->m.target().getY()==65));
+                    } else {
+                        assertTrue(args.has("place_item"));
+                        members.add(new PlacementWorkSet.Member(p,new PlacementWork(
+                                (net.minecraft.world.item.BlockItem)Items.OAK_LOG,null)));
+                    }
+                    var set=new PlacementWorkSet(members,target.revision());
+                    assertNull(set.refresh(member->PlacementWork.targetFailure(member.target(),work.state(member.target()),
+                            target.index().get(member.target()),()->work.placementAnchor(target.index().get(member.target())))));
                     collision.blocks.clear(); collision.blocks.putAll(world.blocks);
-                    var goal=PlacementWork.goal(p,geometry,1.62,.6,1.8,4.5,(eye,bounds,edits)->{
+                    var goal=set.goal(member->PlacementWork.goal(member.target(),geometry,1.62,.6,1.8,4.5,(eye,bounds,edits)->{
                         assertEquals(TerrainEdits.EMPTY,edits);
                         var original=world.eye; world.eye=eye;
                         try {
                             return PlacementWork.assessFaces(null,face->
-                                    BlockPlacement.assessDesired(work,p,0,face,target,target.index().get(p)));
+                                    BlockPlacement.assessDesired(work,member.target(),0,face,target,target.index().get(member.target())));
                         } finally { world.eye=original; }
-                    });
+                    }));
                     var from=BlockPos.containing(world.eye.x,world.eye.y-1.62,world.eye.z);
                     var search=new DigAStar(terrain,from.getX(),from.getY(),from.getZ(),
                             p.getX(),p.getY(),p.getZ(),4000,0,goal);
@@ -158,9 +189,15 @@ class ConstructionNavigationPipelineTest {
                     assertTrue(goal.reached(end.x(),end.y(),end.z()));
                     var foot=geometry.foot(end.x(),end.y(),end.z(),TerrainEdits.EMPTY);
                     world.eye=new Vec3(end.x()+.5,foot.height()+1.62,end.z()+.5);
-                    approached.add(p);
                     var data=new JsonObject(); data.addProperty("removed_blocks",0); data.addProperty("placed_blocks",0);
-                    result=new ServerTool.Result(true,"work arrival",data);
+                    result=set.finish(new ServerTool.Result(true,"work arrival",data),member->{
+                        var failure=PlacementWork.assessFaces(null,face->BlockPlacement.assessDesired(
+                                work,member.target(),0,face,target,target.index().get(member.target())));
+                        return failure==null?new ServerTool.Result(true,"fresh native preflight",null):failure;
+                    });
+                    assertTrue(result.ok(),result.feedback());
+                    var selected=result.data().getAsJsonObject("selected_work_target");
+                    approached.add(new BlockPos(selected.get("x").getAsInt(),selected.get("y").getAsInt(),selected.get("z").getAsInt()));
                 }
                 case "build_nearby" -> {
                     assertTrue(args.get("include_repairs").getAsBoolean(),"missing lower log must enter the repair pass");
@@ -173,7 +210,7 @@ class ConstructionNavigationPipelineTest {
                 default -> throw new AssertionError(name);
             }
             return CompletableFuture.completedFuture(new ToolOutcome(result.ok(),result.feedback(),result.data()));
-        },queue::add,()->{});
+        },queue::add,()->{},registered);
         var future=program.start();
         try {
             long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
@@ -185,8 +222,15 @@ class ConstructionNavigationPipelineTest {
             var result=future.join();
             assertTrue(result.ok(),result.feedback());
             assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
-            assertEquals(java.util.List.of(lower,upper),placed);
-            assertEquals(java.util.List.of(lower,upper),approached);
+            if (multiple) {
+                assertTrue(combined[0],"the real Lua/survey chain must dispatch a composite work request");
+                assertEquals(java.util.Set.of(lower,extra,upper),new java.util.HashSet<>(placed));
+                assertEquals(upper,placed.getLast(),"finish the lower layer before the upper log");
+                assertEquals(3,placed.size());
+            } else {
+                assertEquals(java.util.List.of(lower,upper),placed);
+                assertEquals(java.util.List.of(lower,upper),approached);
+            }
             assertEquals(0,inventory.getItem(0).getCount());
             assertTrue(BuildSurvey.verify(target,work,0,()->0).data().get("goal_satisfied").getAsBoolean());
         } finally {
