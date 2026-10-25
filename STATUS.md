@@ -55,8 +55,10 @@
   导入包build/mcbot-import-20261025-flowers-tools.zip为1763518 bytes，SHA256
   `84e26cde113fda744d1e0bc821b23550e5426ab46f279f7bc4c5170984c5ddf5`，
   仅含mods内JAR、START-HERE.txt和SHA256SUMS.txt，包内JAR按构建指纹校验；
-  历史包保留。构建后仅见既有玩家Java进程，无Gradle残留。Git提交/推送按实际结果执行，
-  本轮fetch在约21秒后因github.com:443连接失败，未确认远端是否有新更新，未改代理/凭据。
+  历史包保留。构建后仅见既有玩家Java进程，无Gradle残留。源码提交55c0fe4；
+  首次fetch在约21秒后因github.com:443连接失败，随后匿名fetch成功，确认远端无额外新提交。
+  首次push被失效环境凭据拒绝；仅在子进程临时移除该覆盖，使用既有GitHub CLI钥匙环登录，
+  已将上轮及本轮提交从远端5cbbdcd推进至55c0fe4。未修改代理或凭据存储，进程环境已恢复。
   保留既有玩家进程，未修改活世界；真实备铲决策、野花簇动作及同现场寻路耗时仍待新包实测。
 
 ## 辅助施工登高与临时工程清理（2026-10-25，Asia/Shanghai）
