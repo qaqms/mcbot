@@ -29,6 +29,7 @@ public final class BuildDiffTool implements ServerTool {
 
     public static BuildSurvey.Access access(CompanionPlayer body, BuildTarget target) {
             var placement = BlockPlacement.forPlayer(body);
+            var sight = com.neko.mcbot.server.BlockAim.forPlayer(body);
             var geometry = com.neko.mcbot.server.StandingGeometry.forPlayer(body);
             return new BuildSurvey.Access() {
                 private com.neko.mcbot.server.MiningTools miningTools;
@@ -68,6 +69,9 @@ public final class BuildDiffTool implements ServerTool {
                 @Override public boolean near(BlockPos pos) {
                     double range = Math.min(6.5, body.blockInteractionRange()) + 1;
                     return body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos)) <= range * range;
+                }
+                @Override public com.neko.mcbot.server.BlockAim.Anchor placementAnchor(BlockPos pos) {
+                    return com.neko.mcbot.server.BlockAim.placementAnchor(sight, pos);
                 }
                 @Override public BlockPlacement.Access placement() { return placement; }
                 @Override public String workContext() {

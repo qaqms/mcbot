@@ -129,7 +129,7 @@ public final class BlockPlacement {
         return preflight(access, pos, slot, face);
     }
 
-    /** Neighbor-independent cubes use native state prediction through pending edits, then live preflight on arrival. */
+    /** Known native work states use edited contacts and collision; actual arrival always rechecks the live world. */
     public static ServerTool.Result assessPlannedAt(CompanionPlayer player, BlockPos pos, int slot, Direction face,
                                                     Vec3 eye, AABB body, TerrainEdits edits, String temporaryPurpose) {
         if (edits.equals(TerrainEdits.EMPTY)) return assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose);
@@ -138,7 +138,11 @@ public final class BlockPlacement {
         var material = player.getInventory().getItem(slot);
         if (!(material.getItem() instanceof BlockItem item)
                 || item.getClass() != BlockItem.class
-                || !SupportPlacement.predictable(item))
+                || !SupportPlacement.workPredictable(item)
+                || !SupportPlacement.predictable(item)
+                && (!player.level().isLoaded(pos) || !player.level().getBlockState(pos).isAir()
+                || !player.level().getFluidState(pos).isEmpty()
+                || !SupportPlacement.nativeWorkNeighborhood(item,pos,edits)))
             return assessAt(player, pos, slot, face, eye, body, edits, temporaryPurpose);
         if (!player.gameMode.isSurvival() || !player.getAbilities().mayBuild)
             return failed("DENIED:当前模式不允许生存放置。", false, 0);
@@ -151,14 +155,15 @@ public final class BlockPlacement {
             return failed("TARGET_BLOCKED:特殊临时工位须在实际现场核对。", false, 0);
         var level = player.level();
         var projected = new PlayerAccess(player, eye, body, edits);
-        boolean planned = SupportPlacement.canPlanBlock(level, BlockAim.forPlayer(player), pos, eye, body,
+        boolean planned = SupportPlacement.canPlanWorkBlock(level, BlockAim.forPlayer(player), pos, eye, body,
                 material, Math.min(6.5, player.blockInteractionRange()), edits,
                 near -> level.isInWorldBounds(near) && level.getWorldBorder().isWithinBounds(near)
                         && level.isLoaded(near) && level.mayInteract(player, near),
                 candidate -> candidate == face && player.mayUseItemAt(pos, candidate, material),
                 bounds -> level.isUnobstructed(player, net.minecraft.world.phys.shapes.Shapes.create(bounds)),
-                hit -> item.getBlock().getStateForPlacement(projected.placementContext(material, hit)),
-                state -> player.buildSite().placementGuard(pos, state, site, temporaryPurpose != null) == null
+                hit -> projected.plannedState(pos, material, hit),
+                state -> state.canSurvive(level,pos)
+                        && player.buildSite().placementGuard(pos, state, site, temporaryPurpose != null) == null
                         && constructionExit(player, pos, state, body, edits) == null);
         return planned ? null : failed(
                 "TARGET_BLOCKED:计划改动后的碰撞、点击面、材料、目标状态或放置条件尚未满足。", false, 0);
@@ -622,11 +627,28 @@ public final class BlockPlacement {
             return geometryFailure != null ? geometryFailure : constructionExit(player,pos,desired,bounds,edits);
         }
         private BlockPlaceContext placementContext(ItemStack stack, BlockHitResult clickHit) {
+            return placementContext(stack,clickHit,null);
+        }
+        private BlockState plannedState(BlockPos target, ItemStack stack, BlockHitResult clickHit) {
+            BlockPos clicked=clickHit.getBlockPos();
+            boolean futureSupport=edits.placed().contains(DigAStar.pack(clicked.getX(),clicked.getY(),clicked.getZ()));
+            var prediction=placementContext(stack,clickHit,futureSupport ? target : null);
+            if (!target.equals(prediction.getClickedPos())) return null;
+            return ((BlockItem)stack.getItem()).getBlock().getStateForPlacement(prediction);
+        }
+        private BlockPlaceContext placementContext(ItemStack stack, BlockHitResult clickHit, BlockPos plannedLanding) {
             Vec3 click = clickHit.getLocation();
             Direction face = clickHit.getDirection();
             Vec3 toward = click.subtract(eye);
             var look = Look.toward(toward.lengthSqr() < 1e-10 ? player.getLookAngle() : toward);
             return new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack, clickHit) {
+                @Override public BlockPos getClickedPos() {
+                    return plannedLanding==null ? super.getClickedPos() : plannedLanding;
+                }
+                @Override public boolean replacingClickedOnBlock() {
+                    return plannedLanding==null ? super.replacingClickedOnBlock()
+                            : plannedLanding.equals(clickHit.getBlockPos());
+                }
                 @Override public Direction getHorizontalDirection() { return look.horizontal(); }
                 @Override public float getRotation() { return look.yaw(); }
                 @Override public Direction getNearestLookingDirection() { return look.order()[0]; }

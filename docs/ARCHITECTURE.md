@@ -3,6 +3,26 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 轴向、地表基础与屋檐前提（2026-10-25）
+
+详见AXIS-FOUNDATION-AND-EAVES-2026-10-25。BlockAim.placementAnchor只观察目标及六邻格
+实际轮廓，不以当前眼睛的视线代替锚点存在性；全空为ABSENT，未知不冒充空气。
+BuildDiffTool把真实访问器接到BuildSurvey，未满足可替换格在手距分类前分成needs_support/
+unknown/可继续评估。work_scan先枚举可做工作，邻接格真实完成后沿原进度键重新评估檐角；
+query/work与逐格施工共判据，verify_only完整验收略过锚点工作检查。
+
+SupportPlacement.canPlanWorkBlock允许精确原版楼梯/半砖作为工作目标，原canPlan/canPlanBlock
+仍只认稳定整块。计划点击的落位在只读原版上下文中明确为已核对的目标，不改真实动作的落位选择。
+目标原为空气且无待落地目标编辑；楼梯同层四邻格存在编辑时回退现场，避免原生转角读旧邻居。
+累计地形核真实轮廓射线、脚手架遮挡、身体/实体碰撞、许可、冻结状态和局部出口；
+到位后原PlacementWork.finish及实际BlockPlacement重验，预检不消费也不直接写状态。
+
+design_review增加logs_missing_axis，未声明axis的旧目标继续按原契约匹配，不推断柱梁用途。
+普通build_diff在原查询预算内提供foundation_surface：最低设计层y、已观察格数、层内/层下
+表土数量、有限样本和完整性。它描述当前现场，不反推原始地形，不禁止坡地或抬高设计。
+知识默认普通平地先清表土再同层放基础，区别support方块y与feet_y；旧图/旧锚点不暗改。
+没有新工具、固定房型、默认整趟搜索帽或并行模型；原生效果待玩家新包复测。
+
 ## 目标登记与直接查询反馈（2026-10-25）
 
 详见GOAL-REGISTRATION-2026-10-25。AgentLoop对话工具消息保存feedback，不自动携带ToolOutcome.data。

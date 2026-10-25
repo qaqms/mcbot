@@ -3,6 +3,19 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 屋檐与基础更新（2026-10-25）
+
+build_diff及实际近身施工在手距分类前核目标/六邻格真实轮廓。缺放置锚点为needs_support，
+明细placement_failure=no_placement_anchor，先做相邻可做格，实际变化后重评；它不是搜索距离帽。
+轮廓未知不冒充空气，有轮廓但视线被挡仍须正常换位/清障。verify_only不追加这类工作检查。
+design_review.logs_missing_axis提示原木柱梁漏写轴向；旧目标的省略属性匹配契约不改。
+普通查询的design_review.foundation_surface提供lowest_design_y、observed_cells、
+topsoil_in_layer/topsoil_below_layer、assessment_complete及最多4个samples，描述当前表土位置，
+不是原始地形或坡地错误的证明。新住宅普通平地默认清表土后同层放基础，不自动降低旧锚点。
+楼梯/半砖工作目标可经累计脚手架预检，原生转角相关邻格尚待改动时仍按现场核；
+导航支撑材料仍是稳定整块，实际原版动作、来源、取消与完整验收保持。
+详见AXIS-FOUNDATION-AND-EAVES-2026-10-25。
+
 ## 目标登记反馈更新（2026-10-25）
 
 直接build_diff成功反馈附实际target_revision、next_offset/material_next_offset、完整/稳定标记、

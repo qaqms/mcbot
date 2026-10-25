@@ -11,6 +11,35 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void unsupportedEavesAreDeferredUntilARealRoofCourseChangesTheWorkFacts() throws Exception {
+        var world=new World(); world.moved=1;
+        world.override=(name,args)->{
+            if (name.equals("build_diff") && world.remaining>0) return actual("""
+                    {"target_revision":"%s","remaining":%d,"goal_satisfied":false,"observation_complete":true,
+                    "spatial_stable":true,"budget_exhausted":false,"progress_observation_key":"roof-%d",
+                    "observation_key":"roof-%d","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":94,"z":-1,"state":"%s","item":"stone","material_available":true},
+                    {"x":4,"y":94,"z":0,"state":"%s","item":"stone","material_available":true}]}
+                    """.formatted(REV,world.remaining,world.placed,world.placed,
+                    world.placed==0?"needs_support":world.moved>1?"ready":"out_of_reach",
+                    world.placed==0?"ready":"satisfied"));
+            if (name.equals("move_to")) {
+                assertEquals(1,world.placed,"do the inner roof first instead of navigating to an unsupported eave");
+                assertEquals(-1,args.get("z").getAsInt());
+            }
+            if (name.equals("build_nearby")) {
+                world.placed++; world.remaining--;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            return null;
+        };
+        var result=run(world,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(2,world.placed);
+        assertEquals(1,world.calls.stream().filter(c->c.name().equals("move_to")).count());
+    }
+
     @Test void aLowerUnfinishedFloorIsApproachedBeforeAReachableRoof() throws Exception {
         var w=new World();
         boolean[] first={true};

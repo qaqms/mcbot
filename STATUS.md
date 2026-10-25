@@ -3,6 +3,52 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 原木轴向、地表基础与屋檐空搜（2026-10-25，Asia/Shanghai）
+
+- 维护者反馈原木朝向、草坪上铺基础及屋顶持续寻路不动。开工HEAD为f270374、工作树干净；
+  仅改本体，宿主/连接器/参考/玩家实例只读，不安装包、不启动游戏/服务器/真实模型。
+  证据与机制见docs/AXIS-FOUNDATION-AND-EAVES-2026-10-25.md。
+  冻结build/logs-axis-foundation-session-20261025.log，349830 bytes、末写14:18:08，
+  SHA256 `8ae362bfffcad4874d2f4d888814be034780649392a77b441488b90f9e71673a`。
+  实例磁盘JAR匹配上轮1bc7dcc0；保存区域副本末写14:22:38，晚于日志，不倒推全部现场。
+- 登记图410格，anchor=(190,64,436)，角柱未写axis。保存时两柱分别为axis=x/z，
+  地板y=64、下方y=63为dirt；省略轴向和地板高度来自图纸，不称执行器违背明确状态。
+  14:14:03的j138/route66先追悬空檐角(190,69,435)，4格支撑半程后身体到屋面，
+  持续no_clickable_face；日志第2650行expanded=92000、created nodes=96000，期间无新模型请求。
+  内侧(190,69,436)尚未建，旧分类把缺点击锚点当作换位就能解决而长时间空搜。
+- 只读学习参考作者姿态核对、支撑等待/远处分类、实际收遍及origin地表高度语义；
+  不复制/翻译代码、注释、技能或资产，不采用直接写世界施工。
+  BlockAim按目标与六邻格真实轮廓区分无锚/未知/可继续评估；BuildSurvey在手距之前核前提，
+  needs_support先等相邻真实施工，再沿原进度键重评；有轮廓但当前视线受挡仍走正常换位。
+  query/实际施工共判据，完整verify_only略过该工作检查，不用新次数/时间/节点帽治疗空搜。
+- 楼梯/半砖工作目标可用累计脚手架真实接触/碰撞，路线支撑仍只用稳定整块。
+  只有未来稳定支撑用只读预测落位；既有点击格仍核原版落位，不能把可替换邻块当邻接放置。
+  楼梯同层四邻格有待落地编辑、目标有待改动或原半砖待合并时保持现场回退；
+  真实权限、来源、冻结状态、材料、出口及到位/动作前重验保持，不直接写状态。
+- design_review增加logs_missing_axis与普通查询的foundation_surface。原木柱梁明确轴向；
+  新平地住宅默认先清表土再同层放地基，分清support方块y与feet_y。地表诊断仅描述当前状态，
+  不将已建地板下有泥土误判为应降层。旧图/锚点/省略属性契约保持，不静默改建。
+  知识16223 bytes、仍四页；31工具、原Schema和Lua公共数据保持，不新增固定房型或并行模型。
+- focused1/2/3/4均通过，最后专项49秒。收尾核对进一步保持稳定整块约束、
+  既有点击格原生落位和已建地板诊断边界；前三次强制全量均通过，最终以
+  build/axis-foundation-final4-20261025.log第65至66行为准：**1分35秒、21任务强制全执行**。
+  三根XML为核心457/46、根173/24、客户端1365/138，共**1995项/208 suites，
+  failures/errors/skipped全0**，新增8项。新fixture保留本次410格原图的真实修订，
+  覆盖先内侧后檐角、Lua延后缺支撑格、连续垫高楼梯工作位、原木四向旋转/旧图不改及地表诊断。
+  49格草地先清再同层放基础且下方泥土保留，105/128/400格、原屋顶拆降与取消/预算回归保持。
+  注册表/形状/射线/A*/Lua/施工核实际参与，世界/身体运动/预测回调/模型受控，不冒充现场已脱困。
+- 最终JAR build/libs/mcbot-0.1.0.jar为1834591 bytes，SHA256
+  `0dcc946f2c098157c37dd5c985bf9c84351e5e67dce8288a52b82ced232ea235`。
+  内嵌core与独立产物一致，272953 bytes，SHA256
+  `e4ab72792b9bf566e98e1e4bec396ade590f288ac33da7041725212b1c4f40df`。
+  图纸知识/施工Lua与源码逐字节一致；导入包
+  build/mcbot-import-20261025-axis-foundation-eaves-final.zip为1778943 bytes，SHA256
+  `8455fbae8139a0ee8fe8e8d482a081cc272c64f18238743380a2b4b616d9e131`。
+  仅含mods/mcbot-0.1.0.jar、START-HERE.txt、SHA256SUMS.txt，包内JAR已验同指纹，历史包保留。
+  构建后仅既有玩家PID154888，无Gradle残留，未修改活世界。
+  本轮fetch约21秒后仍因github.com:443连接失败，未改代理或凭据；远端同步待网络恢复。
+  新图轴向/基础决策及同现场屋檐续接、屋面离开仍待新包实机复测；旧图不自动重画。
+
 ## 目标登记STATE_UNAVAILABLE与反馈衔接（2026-10-25，Asia/Shanghai）
 
 - 维护者反馈目标登记缺完整现场即停。开工HEAD为b261218，工作树干净，仅改本体；
@@ -7090,6 +7136,16 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-25屋面预检本地官方映射javap/字节码/编译核对，未运行游戏：
+`BlockPlaceContext(Level,Player,InteractionHand,ItemStack,BlockHitResult)`公开，
+`getClickedPos/replacingClickedOnBlock`可覆写；实际放置保留原版选择，仅已核真实接触的未来稳定支撑
+用只读预测落位。StairBlock.getStateForPlacement读取目标流体、点击面/高度、水平朝向，
+private static getStairsShape(BlockState,BlockGetter,BlockPos)读取同层四邻格，
+不是public API，不假设可直接调用。SlabBlock.getStateForPlacement读取目标当前状态、
+流体、点击面/高度，既有同种半砖可变double；有这类待落地状态时不冒充计划预测已准确。
+`BlockState.canSurvive(LevelReader,BlockPos)`需要LevelReader，不能把BlockGetter叠层视图强转代用。
+原生放置/注入及实际身体脱困仍待实机。
 
 2026-10-25野花簇/原木本地官方映射javap、字节码及真实注册表回归，未运行游戏：
 `FlowerBedBlock extends VegetationBlock implements BonemealableBlock,SegmentableBlock`，

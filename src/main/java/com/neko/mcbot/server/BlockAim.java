@@ -39,6 +39,23 @@ public final class BlockAim {
         public boolean ok() { return failure == null; }
     }
 
+    public enum Anchor { PRESENT, ABSENT, UNKNOWN }
+
+    /** An empty contact neighborhood cannot be fixed by moving the eye alone. No visibility claim is made here. */
+    public static Anchor placementAnchor(Access access, BlockPos target) {
+        boolean unknown = false;
+        var cells = new ArrayList<BlockPos>(7);
+        cells.add(target);
+        for (var direction : Direction.values()) cells.add(target.relative(direction));
+        for (var cell : cells) {
+            if (!access.loaded(cell)) { unknown = true; continue; }
+            var outline = access.outline(cell);
+            if (outline == null) { unknown = true; continue; }
+            if (outline.stream().anyMatch(box -> box.getSize() > 0)) return Anchor.PRESENT;
+        }
+        return unknown ? Anchor.UNKNOWN : Anchor.ABSENT;
+    }
+
     public record MiningPlan(Aim aim, List<BlockPos> blockers) {
         public boolean ok() { return aim.ok(); }
     }

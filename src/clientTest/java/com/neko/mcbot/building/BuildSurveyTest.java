@@ -28,6 +28,40 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSurveyTest {
+    @Test void foundationObservationsDistinguishReplacingTopsoilFromAddingAnExtraFloorAboveIt() {
+        var world=new World();
+        world.inventory.setItem(0,new ItemStack(Items.STONE,64));
+        var target=cells("""
+                [{"x":0,"y":0,"z":0,"block":"stone"},{"x":1,"y":0,"z":0,"block":"stone"}]
+                """);
+        for (var cell:target.cells()) {
+            world.blocks.put(cell.pos(),Blocks.GRASS_BLOCK.defaultBlockState());
+            world.blocks.put(cell.pos().below(),Blocks.DIRT.defaultBlockState());
+        }
+        var ground=world.query(target).getAsJsonObject("design_review").getAsJsonObject("foundation_surface");
+        assertEquals(90,ground.get("lowest_design_y").getAsInt());
+        assertEquals(2,ground.get("topsoil_in_layer").getAsInt());
+        assertTrue(ground.get("assessment_complete").getAsBoolean());
+        assertFalse(ground.has("advice"),"soil under the original topsoil is not a raised foundation");
+        assertEquals(2,count(world.query(target),"needs_clear"));
+        var raised=target.input().deepCopy();
+        raised.getAsJsonObject("anchor").addProperty("y",91);
+        var onGrass=BuildTarget.parse(raised);
+        var before=onGrass.input().deepCopy();
+        var review=world.query(onGrass).getAsJsonObject("design_review").getAsJsonObject("foundation_surface");
+        assertEquals(0,review.get("topsoil_in_layer").getAsInt());
+        assertEquals(2,review.get("topsoil_below_layer").getAsInt());
+        assertEquals(91,review.get("lowest_design_y").getAsInt());
+        assertTrue(review.has("advice"));
+        assertEquals(before,onGrass.input(),"observations do not lower or rewrite an authored foundation");
+        for (var cell:onGrass.cells()) world.blocks.put(cell.pos(),cell.desired());
+        assertFalse(world.query(onGrass).getAsJsonObject("design_review").getAsJsonObject("foundation_surface")
+                .has("advice"),"an already built floor cannot reveal its original surface height");
+        world.unknown.add(new BlockPos(0,90,0));
+        assertFalse(world.query(onGrass).getAsJsonObject("design_review").getAsJsonObject("foundation_surface")
+                .get("assessment_complete").getAsBoolean());
+    }
+
     @Test void clearingToolAdviceCountsTheWholeSiteAndRefreshesAfterAUsefulToolIsMade() {
         int[] observations = {0};
         boolean[] efficient = {false};

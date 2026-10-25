@@ -33,6 +33,9 @@ public final class BuildSurvey {
         default boolean repairPending(BlockPos pos) { return false; }
         default boolean bodyObstructsTarget() { return false; }
         default JsonObject miningTool(BlockPos pos, BlockState state) { return null; }
+        default com.neko.mcbot.server.BlockAim.Anchor placementAnchor(BlockPos pos) {
+            return com.neko.mcbot.server.BlockAim.Anchor.PRESENT;
+        }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -142,7 +145,7 @@ public final class BuildSurvey {
                     if (bill != null) bill.unresolved++;
                 }
             }
-            String state = cellState(target, cell, access, actual, actuals::get, material.supported());
+            String state = cellState(target, cell, access, actual, actuals::get, material.supported(), assessWork);
             if (!material.supported()) billComplete = false;
             rows.add(new Row(cell, material, actual, rowIndex++, state));
         }
@@ -191,6 +194,7 @@ public final class BuildSurvey {
             }
             if (!row.material.supported()) data.addProperty("unsupported_reason",row.material.reason());
             data.addProperty("state",row.state);
+            if (row.state.equals("needs_support")) data.addProperty("placement_failure","no_placement_anchor");
             data.addProperty("clear_allowed",row.state.equals("needs_clear") && access.clearable(row.cell));
             if (row.state.equals("needs_clear") && !data.get("clear_allowed").getAsBoolean())
                 data.addProperty("clear_reason",access.clearReason(row.cell));
@@ -250,6 +254,8 @@ public final class BuildSurvey {
                     row.data.add("placement_failure", best.data().get("placement_failure"));
             }
         }
+        var designReview=BuildDesignReview.describe(target);
+        if (observeSurface) designReview.add("foundation_surface",foundationSurface(rows,access,clock,start));
         var after = access.terrain();
         budgetExhausted |= clock.getAsLong()-start>=MAX_NANOS;
         boolean stable = SpatialFacts.retained(before, after) && before.equals(after);
@@ -326,7 +332,7 @@ public final class BuildSurvey {
         data.addProperty("progress_observation_key", progressKey);
         data.addProperty("work_observation_key",hash(observation + "|" + access.workContext()));
         data.add("design_components",designComponents(target));
-        data.add("design_review", BuildDesignReview.describe(target));
+        data.add("design_review", designReview);
         data.add("clearing_work", clearingWork);
         if (after != null) data.add("spatial_facts", after);
         observation.append('|').append(after);
@@ -342,10 +348,57 @@ public final class BuildSurvey {
         return new ServerTool.Result(true, "建筑只读核对：已满足" + satisfied + "/" + rows.size()
                 + "；分类=" + counts + "。查询未施工，材料分配只针对当前页且未预留；"
                 + "out_of_reach只是当前站位手够不着，使用工作导航换站位；surface为实际支撑/脚高，不是路线可达证明。"
+                + "needs_support表示尚缺放置前提，先完成相邻有支撑的格，现场改变后再核对，不靠反复走近解决。"
                 + "page_counts仅本页，counts含全目标及页外未评估格；本页完成不等于整栋完成。"
                 + "明细和料单分别按next_offset/material_next_offset及同一expected_revision续页，Lua可用mc.build_diff(target)。"
                 + (clearingWork.get("preparation_recommended").getAsBoolean()
                 ? " 清障工具准备见clearing_work：批量清理前按真实配方考虑补做合适工具，材料和工具不由施工程序自动制作。" : ""), data);
+    }
+
+    private static JsonObject foundationSurface(List<Row> rows, Access access, LongSupplier clock, long start) {
+        int lowest=rows.stream().filter(row->!row.cell.authored().isAir()).mapToInt(row->row.cell.pos().getY())
+                .min().orElse(rows.getFirst().cell.pos().getY());
+        int observed=0, replace=0, above=0, exposedAbove=0;
+        boolean complete=true;
+        var samples=new JsonArray();
+        for (var row:rows) {
+            if (row.cell.pos().getY()!=lowest || row.cell.authored().isAir()) continue;
+            if (clock.getAsLong()-start>=MAX_NANOS) { complete=false; break; }
+            var below=access.state(row.cell.pos().below());
+            if (row.actual==null || below==null) { complete=false; continue; }
+            observed++;
+            if (soil(row.actual)) replace++;
+            if (soil(below)) {
+                above++;
+                if (row.actual.isAir() || row.actual.canBeReplaced()) exposedAbove++;
+            }
+            if (samples.size()<4 && (soil(row.actual) || soil(below))) {
+                var sample=BuildTarget.coordinates(row.cell.pos());
+                sample.addProperty("actual_block",BuiltInRegistries.BLOCK.getKey(row.actual.getBlock()).toString());
+                sample.addProperty("below_block",BuiltInRegistries.BLOCK.getKey(below.getBlock()).toString());
+                samples.add(sample);
+            }
+        }
+        var data=new JsonObject();
+        data.addProperty("lowest_design_y",lowest);
+        data.addProperty("observed_cells",observed);
+        data.addProperty("topsoil_in_layer",replace);
+        data.addProperty("topsoil_below_layer",above);
+        data.addProperty("assessment_complete",complete);
+        data.add("samples",samples);
+        if (exposedAbove>0) data.addProperty("advice","最低设计层有待放格位于草地或泥土上方，核对是否有意抬高地基。"
+                + "普通平地住宅默认替换表土，按support的方块y与feet_y分别定高；"
+                + "这是当前地表样本，不是原始地形或坡地错误的证明，不自动改变已登记锚点。");
+        return data;
+    }
+
+    private static boolean soil(BlockState state) {
+        return state.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK)
+                || state.is(net.minecraft.world.level.block.Blocks.DIRT)
+                || state.is(net.minecraft.world.level.block.Blocks.COARSE_DIRT)
+                || state.is(net.minecraft.world.level.block.Blocks.PODZOL)
+                || state.is(net.minecraft.world.level.block.Blocks.ROOTED_DIRT)
+                || state.is(net.minecraft.world.level.block.Blocks.MYCELIUM);
     }
 
     private static JsonObject clearingWork(List<Row> rows, Access access, LongSupplier clock, long start,
@@ -427,9 +480,10 @@ public final class BuildSurvey {
 
     /** The same fresh cell rules precede advisory work and every actual building action. */
     public static String cellState(BuildTarget.Cell cell, Access access, BlockState actual) {
-        return cellState(cell,access,actual,cell.material().supported());
+        return cellState(cell,access,actual,cell.material().supported(),true);
     }
-    private static String cellState(BuildTarget.Cell cell, Access access, BlockState actual, boolean supported) {
+    private static String cellState(BuildTarget.Cell cell, Access access, BlockState actual, boolean supported,
+                                    boolean assessWork) {
         if (!access.inBounds(cell.pos())) return "out_of_scope";
         if (actual == null) return "unknown";
         if (!supported) return "unsupported";
@@ -437,18 +491,21 @@ public final class BuildSurvey {
         if (access.protectedCell(cell.pos())) return "protected";
         if (actual.getBlock() == cell.authored().getBlock()) return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";
+        String prerequisite = assessWork ? placementPrerequisite(access, cell.pos()) : null;
+        if (prerequisite != null) return prerequisite;
         if (!access.near(cell.pos())) return "out_of_reach";
         return "not_assessed";
     }
 
     public static String cellState(BuildTarget target, BuildTarget.Cell cell, Access access, BlockState actual) {
-        return cellState(target, cell, access, actual, access::state,target.material(cell).supported());
+        return cellState(target, cell, access, actual, access::state,target.material(cell).supported(),true);
     }
 
     private static String cellState(BuildTarget target, BuildTarget.Cell cell, Access access, BlockState actual,
-                                    java.util.function.Function<BlockPos, BlockState> states, boolean supported) {
+                                    java.util.function.Function<BlockPos, BlockState> states, boolean supported,
+                                    boolean assessWork) {
         if (!supported) return "unsupported";
-        if (!BuildObjects.paired(cell.authored())) return cellState(cell, access, actual, true);
+        if (!BuildObjects.paired(cell.authored())) return cellState(cell, access, actual, true,assessWork);
         var partner = BuildObjects.at(target, BuildObjects.other(cell.pos(), cell.desired()));
         if (!access.inBounds(cell.pos()) || !access.inBounds(partner.pos())) return "out_of_scope";
         var other = states.apply(partner.pos());
@@ -458,7 +515,17 @@ public final class BuildSurvey {
         if (!actual.isAir() || !other.isAir())
             return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (BuildObjects.secondary(cell.authored())) return "paired_pending";
+        String prerequisite = assessWork ? placementPrerequisite(access, cell.pos()) : null;
+        if (prerequisite != null) return prerequisite;
         return access.near(cell.pos()) ? "not_assessed" : "out_of_reach";
+    }
+
+    private static String placementPrerequisite(Access access, BlockPos pos) {
+        return switch (access.placementAnchor(pos)) {
+            case ABSENT -> "needs_support";
+            case UNKNOWN -> "unknown";
+            case PRESENT -> null;
+        };
     }
 
     private static String classify(ServerTool.Result failure) {

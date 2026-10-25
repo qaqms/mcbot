@@ -46,6 +46,39 @@ public final class SupportPlacement {
                                       Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
                                       Predicate<AABB> entityClear, Function<BlockHitResult, BlockState> prediction,
                                       Predicate<BlockState> admissible) {
+        return canPlanBlock(world,sight,target,eye,body,material,reach,edits,permitted,mayUse,entityClear,
+                prediction,admissible,false);
+    }
+
+    /** Work targets may be shaped; navigation supports still have to be stable full cubes. */
+    public static boolean canPlanWorkBlock(BlockGetter world, BlockAim.Access sight, BlockPos target,
+                                          Vec3 eye, AABB body, ItemStack material, double reach, TerrainEdits edits,
+                                          Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
+                                          Predicate<AABB> entityClear, Function<BlockHitResult, BlockState> prediction,
+                                          Predicate<BlockState> admissible) {
+        if (!(material.getItem() instanceof BlockItem item) || !workPredictable(item) || !sight.loaded(target)) return false;
+        if (!predictable(item) && (!world.getBlockState(target).isAir()
+                || !world.getFluidState(target).isEmpty() || !nativeWorkNeighborhood(item,target,edits))) return false;
+        return canPlanBlock(world,sight,target,eye,body,material,reach,edits,permitted,mayUse,entityClear,
+                prediction,admissible,true);
+    }
+
+    static boolean nativeWorkNeighborhood(BlockItem item, BlockPos target, TerrainEdits edits) {
+        if (changed(target,edits)) return false;
+        if (item.getBlock().getClass()==net.minecraft.world.level.block.StairBlock.class)
+            for (var side:Direction.Plane.HORIZONTAL) if (changed(target.relative(side),edits)) return false;
+        return true;
+    }
+    private static boolean changed(BlockPos pos, TerrainEdits edits) {
+        long key=DigAStar.pack(pos.getX(),pos.getY(),pos.getZ());
+        return edits.removed().contains(key) || edits.placed().contains(key);
+    }
+
+    private static boolean canPlanBlock(BlockGetter world, BlockAim.Access sight, BlockPos target,
+                                       Vec3 eye, AABB body, ItemStack material, double reach, TerrainEdits edits,
+                                       Predicate<BlockPos> permitted, Predicate<Direction> mayUse,
+                                       Predicate<AABB> entityClear, Function<BlockHitResult, BlockState> prediction,
+                                       Predicate<BlockState> admissible, boolean work) {
         if (material.isEmpty() || !ItemStack.isSameItemSameComponents(material, new ItemStack(material.getItem()))
                 || !(material.getItem() instanceof BlockItem item)
                 || item.getClass() != BlockItem.class || body.intersects(new AABB(target))) return false;
@@ -56,7 +89,7 @@ public final class SupportPlacement {
         var view = BlockAim.editedWorld(world, removed, placed);
         var current = view.getBlockState(target);
         if (!current.isAir() || !current.getFluidState().isEmpty()) return false;
-        if (!predictable(item)) return false;
+        if (!(work ? workPredictable(item) : predictable(item))) return false;
         for (var near : BlockPos.betweenClosed(BlockPos.containing(body.minX, body.minY, body.minZ).offset(-1, -1, -1),
                 BlockPos.containing(body.maxX, body.maxY, body.maxZ).offset(1, 1, 1)))
             if (!sight.loaded(near)) return false;
@@ -75,7 +108,12 @@ public final class SupportPlacement {
             if (!contact.ok()) continue;
             var state = prediction.apply(contact.hit());
             if (state != null && state.getBlock() == item.getBlock()
-                    && state.isCollisionShapeFullBlock(view, target) && admissible.test(state)) return true;
+                    && (work && !predictable(item) || state.isCollisionShapeFullBlock(view, target))) {
+                var collision=StandingGeometry.collision(state,view,target);
+                if (collision!=null && collision.stream().map(box->box.move(target))
+                        .noneMatch(box->box.intersects(body) || !entityClear.test(box)) && admissible.test(state))
+                    return true;
+            }
         }
         return false;
     }
@@ -87,6 +125,11 @@ public final class SupportPlacement {
                 || block.getClass() == net.minecraft.world.level.block.RotatedPillarBlock.class
                 || block.getClass() == net.minecraft.world.level.block.TransparentBlock.class
                 && block.defaultBlockState().getValues().isEmpty();
+    }
+
+    static boolean workPredictable(BlockItem item) {
+        return predictable(item) || item.getBlock().getClass()==net.minecraft.world.level.block.StairBlock.class
+                || item.getBlock().getClass()==net.minecraft.world.level.block.SlabBlock.class;
     }
 
     private static Set<BlockPos> positions(Set<Long> cells) {

@@ -16,6 +16,98 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SupportPlacementTest {
+    @Test void aHighStairWorkGoalFindsTheRouteAcrossSeveralPendingSupports() {
+        var target=new BlockPos(1,9,0);
+        var terrain=new Terrain(target,8) {
+            @Override public boolean inBounds(int x,int y,int z) { return x==0 && z==0 && y>=-1 && y<=12; }
+            @Override public boolean canPlaceFrom(int x,int y,int z,long cell,TerrainEdits edits) {
+                var foot=geometry.foot(x,y,z,edits);
+                if (foot==null) return false;
+                double feet=cell==DigAStar.pack(x,y,z) ? y+1.02 : foot.height();
+                return SupportPlacement.canPlan(world,world,
+                        new BlockPos(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell)),
+                        new Vec3(x+.5,feet+1.62,z+.5),geometry.body(x,feet,z),inventory.getItem(0),4.5,
+                        edits,p->true,f->true,b->true);
+            }
+        };
+        terrain.world.blocks.remove(target);
+        terrain.world.blocks.put(target.below(),Blocks.STONE.defaultBlockState());
+        terrain.world.blocks.put(new BlockPos(0,-1,0),Blocks.STONE.defaultBlockState());
+        var material=new ItemStack(Items.OAK_STAIRS);
+        var desired=Blocks.OAK_STAIRS.defaultBlockState();
+        var goal=PlacementWork.goal(target,terrain.geometry,1.62,.6,1.8,4.5,(eye,body,edits)->
+                SupportPlacement.canPlanWorkBlock(terrain.world,terrain.world,target,eye,body,material,4.5,
+                        edits,p->true,f->true,b->true,hit->desired,desired::equals)
+                        ? null : new ServerTool.Result(false,"TARGET_BLOCKED:stair contact or collision",null));
+        var route=new DigAStar(new MemoDigSampler(terrain),0,0,0,1,9,0,4000,0,goal).segments();
+        while (!route.advance(100)) { }
+        assertNull(route.failure(),()->route.failure()+" "+route.rejections());
+        assertTrue(route.placedCount()>=7);
+        var edits=TerrainEdits.EMPTY;
+        for (var step:route.path()) edits=edits.after(step.dig(),step.place());
+        var end=route.path().getLast();
+        assertTrue(goal.reached(end.x(),end.y(),end.z(),edits));
+        assertTrue(terrain.world.getBlockState(target).isAir());
+        assertEquals(8,terrain.inventory.getItem(0).getCount());
+        assertEquals(1,material.getCount());
+    }
+
+    @Test void roofStairsAndSlabsCanUseScaffoldingWithoutBecomingRouteSupportMaterials() {
+        for (var material:List.of(new ItemStack(Items.OAK_STAIRS),new ItemStack(Items.OAK_SLAB))) {
+            var world=new BlockAimTest.Grid(); world.blocks.clear();
+            var target=new BlockPos(2,1,0);
+            var support=DigAStar.pack(2,0,0);
+            var edits=TerrainEdits.EMPTY.after(List.of(),List.of(support));
+            var item=(net.minecraft.world.item.BlockItem)material.getItem();
+            var desired=item.getBlock().defaultBlockState();
+            var body=new AABB(.2,1,.2,.8,2.8,.8);
+            var eye=new Vec3(.5,2.62,.5);
+            assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,eye,body,material,4.5,
+                    TerrainEdits.EMPTY,p->true,f->true,b->true,hit->desired,desired::equals));
+            assertTrue(SupportPlacement.canPlanWorkBlock(world,world,target,eye,body,material,4.5,
+                    edits,p->true,f->true,b->true,hit->desired,desired::equals));
+            assertFalse(SupportPlacement.canPlanBlock(world,world,target,eye,body,material,4.5,
+                    edits,p->true,f->true,b->true,hit->desired,desired::equals));
+            assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,eye,body,material,4.5,
+                    edits,p->true,f->true,b->true,hit->desired,s->false));
+            assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,eye,body,material,4.5,
+                    edits,p->false,f->true,b->true,hit->desired,desired::equals));
+            assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,eye,body,material,4.5,
+                    edits,p->true,f->true,b->false,hit->desired,desired::equals));
+            assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,eye,new AABB(target),material,4.5,
+                    edits,p->true,f->true,b->true,hit->desired,desired::equals));
+            world.blocks.put(target.below(),Blocks.COBBLESTONE.defaultBlockState());
+            assertTrue(SupportPlacement.canPlanWorkBlock(world,world,target,eye,body,material,4.5,
+                    TerrainEdits.EMPTY,p->true,f->true,b->true,hit->desired,desired::equals));
+            assertTrue(world.getBlockState(target).isAir());
+            assertEquals(1,material.getCount());
+        }
+    }
+
+    @Test void pendingStairCornersAndSlabMergesStillRequireTheirNativeNeighborhoodToLand() {
+        var world=new BlockAimTest.Grid(); world.blocks.clear();
+        var target=new BlockPos(2,1,0);
+        var below=TerrainEdits.EMPTY.after(List.of(),List.of(DigAStar.pack(2,0,0)));
+        var corner=below.after(List.of(),List.of(DigAStar.pack(2,1,1)));
+        var stair=(net.minecraft.world.item.BlockItem)Items.OAK_STAIRS;
+        var slab=(net.minecraft.world.item.BlockItem)Items.OAK_SLAB;
+        assertTrue(SupportPlacement.nativeWorkNeighborhood(stair,target,below));
+        assertFalse(SupportPlacement.nativeWorkNeighborhood(stair,target,corner));
+        assertTrue(SupportPlacement.nativeWorkNeighborhood(slab,target,corner));
+        var removedTarget=below.after(List.of(DigAStar.pack(2,1,0)),List.of());
+        assertFalse(SupportPlacement.nativeWorkNeighborhood(stair,target,removedTarget));
+        assertFalse(SupportPlacement.nativeWorkNeighborhood(slab,target,removedTarget));
+        world.blocks.put(target,Blocks.OAK_SLAB.defaultBlockState());
+        assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,new Vec3(.5,2.62,.5),
+                new AABB(.2,1,.2,.8,2.8,.8),new ItemStack(slab),4.5,removedTarget,p->true,f->true,b->true,
+                hit->Blocks.OAK_SLAB.defaultBlockState(),s->true),"do not predict a double slab from a live half slab");
+        world.unknown.add(target);
+        assertFalse(SupportPlacement.canPlanWorkBlock(world,world,target,new Vec3(.5,2.62,.5),
+                new AABB(.2,1,.2,.8,2.8,.8),new ItemStack(slab),4.5,below,p->true,f->true,b->true,
+                hit->Blocks.OAK_SLAB.defaultBlockState(),s->true));
+        assertFalse(SupportPlacement.workPredictable((net.minecraft.world.item.BlockItem)Items.CHEST));
+    }
+
     @Test void anAuthoredPillarAxisCanUseNearbyPlannedScaffoldingAndStillRequiresTheRightFace() {
         var target = new BlockPos(1, 9, 0);
         var terrain = new Terrain(target, 8) {

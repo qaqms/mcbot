@@ -36,7 +36,11 @@ class ConstructionPipelineTest {
         int stock=Math.max(128,(count+63)/64*64);
         for (int slot=0;slot<stock/64;slot++)
             world.inventory.setItem(slot,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE,64));
-        target.cells().forEach(c->world.blocks.put(c.pos(),Blocks.DIRT.defaultBlockState()));
+        var topsoil=(count==49 ? Blocks.GRASS_BLOCK : Blocks.DIRT).defaultBlockState();
+        target.cells().forEach(c->{
+            world.blocks.put(c.pos(),topsoil);
+            world.blocks.put(c.pos().below(),Blocks.DIRT.defaultBlockState());
+        });
         BuildSurvey.Access survey=new BuildSurvey.Access() {
             @Override public net.minecraft.world.level.block.state.BlockState state(BlockPos p) { return world.state(p); }
             @Override public boolean inBounds(BlockPos p) { return world.inBounds(p); }
@@ -88,9 +92,9 @@ class ConstructionPipelineTest {
                 }
                 case "break_block" -> {
                     var pos=new BlockPos(args.get("x").getAsInt(),args.get("y").getAsInt(),args.get("z").getAsInt());
-                    assertEquals("minecraft:dirt",args.get("expected_block").getAsString());
+                    assertEquals(count==49 ? "minecraft:grass_block" : "minecraft:dirt",args.get("expected_block").getAsString());
                     assertEquals(target.revision(),args.get("site_revision").getAsString());
-                    assertEquals(Blocks.DIRT.defaultBlockState(),world.blocks.get(pos));
+                    assertEquals(topsoil,world.blocks.get(pos));
                     world.blocks.remove(pos); cleared[0]++;
                     result=new ServerTool.Result(true,"full source and body observations ".repeat(40),
                             JsonParser.parseString("{\"removed\":true,\"changed\":true,\"collected_count\":0}").getAsJsonObject());
@@ -128,6 +132,11 @@ class ConstructionPipelineTest {
             assertEquals(count,report.get("cleared_blocks").getAsInt());
             assertEquals(count,report.get("placed_blocks").getAsInt());
             assertEquals(0,report.get("remaining").getAsInt());
+            for (var cell:target.cells()) {
+                assertEquals(90,cell.pos().getY(),"replace topsoil at its own height");
+                assertEquals(Blocks.STONE.defaultBlockState(),world.state(cell.pos()));
+                assertEquals(Blocks.DIRT.defaultBlockState(),world.state(cell.pos().below()),"preserve soil under the foundation");
+            }
             assertEquals(stock-count,BuildInventory.available(world.inventory,net.minecraft.world.item.Items.STONE));
             assertTrue(offsets.contains(48));
             assertTrue(offsets.size()<count*3,"full-page scans must be shared by a batch of clearing actions");

@@ -8,6 +8,30 @@ import static org.junit.jupiter.api.Assertions.*;
 class BuildDesignReviewTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
+    @Test void pillarAxesAreExplicitDrawingRequirementsAndMissingAxesAreOnlyAdvice() {
+        for (int rotation : new int[]{0,90,180,270}) {
+            var target=BuildTarget.parse(JsonParser.parseString("""
+                    {"anchor":{"x":0,"y":64,"z":0},"rotation":%d,"cells":[
+                    {"x":0,"y":1,"z":0,"block":"oak_log"},
+                    {"x":1,"y":1,"z":0,"block":"oak_log","properties":[{"name":"axis","value":"y"}]},
+                    {"x":2,"y":1,"z":0,"block":"oak_log","properties":[{"name":"axis","value":"x"}]}]}
+                    """.formatted(rotation)).getAsJsonObject());
+            var input=target.input().deepCopy();
+            var review=BuildDesignReview.describe(target);
+            assertEquals(1,review.get("logs_missing_axis").getAsInt());
+            assertTrue(review.get("advice").getAsString().contains("axis"));
+            for (var cell:target.cells()) {
+                var state=cell.desired();
+                var other=state.setValue(net.minecraft.world.level.block.RotatedPillarBlock.AXIS,
+                        state.getValue(net.minecraft.world.level.block.RotatedPillarBlock.AXIS)
+                                ==net.minecraft.core.Direction.Axis.X ? net.minecraft.core.Direction.Axis.Z
+                                : net.minecraft.core.Direction.Axis.X);
+                assertEquals(!cell.properties().contains("axis"),cell.matches(other));
+            }
+            assertEquals(input,target.input(),"advice cannot rewrite a registered drawing");
+        }
+    }
+
     static BuildTarget slope(String facing,int rotation) {
         return BuildTarget.parse(JsonParser.parseString("""
                 {"anchor":{"x":212,"y":69,"z":58},"rotation":%d,"regions":[
