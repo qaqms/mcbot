@@ -88,6 +88,18 @@ public final class StandingGeometry implements NavigationGeometry {
         return bodyAt(x + .5, feet, z + .5);
     }
 
+    /** A centered full-block support may be removed only onto a known, clear landing one block below. */
+    public Foot lowerThrough(int x, int y, int z) {
+        var at = standing(x, y, z, TerrainEdits.EMPTY);
+        long below = DigAStar.pack(x, y - 1, z);
+        if (at == null || !same(at.height(), y) || at.support() != below) return null;
+        var after = TerrainEdits.EMPTY.after(List.of(below), List.of());
+        var landing = standing(x, y - 1, z, after);
+        if (landing == null || at.height() - landing.height() <= EPS
+                || at.height() - landing.height() > Math.min(1, maxDrop()) + EPS) return null;
+        return motion(x, at.height(), z, x, landing.height(), z, after) == Motion.WALK ? landing : null;
+    }
+
     private AABB bodyAt(double x, double feet, double z) {
         double half = width / 2;
         return new AABB(x - half, feet, z - half, x + half, feet + height, z + half);

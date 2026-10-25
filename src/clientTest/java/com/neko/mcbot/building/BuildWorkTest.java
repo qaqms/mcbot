@@ -19,6 +19,34 @@ import static org.junit.jupiter.api.Assertions.*;
 class BuildWorkTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
+    @Test void deferredRepairsDoNotReserveTheOnlyMaterialBeforeOtherWorkAndCanBeRestoredLater() {
+        var order=new java.util.ArrayList<net.minecraft.core.BlockPos>();
+        var world=new BuildSurveyTest.World() {
+            @Override public boolean repairPending(net.minecraft.core.BlockPos pos) { return pos.getX()==0; }
+            @Override public InteractionResult place(net.minecraft.core.BlockPos pos,ItemStack stack,Direction face) {
+                order.add(pos); stack.shrink(1); blocks.put(pos,proposed);
+                return InteractionResult.SUCCESS;
+            }
+        };
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var access=new BuildWork.Access() {
+            @Override public BuildSurvey.Access survey() { return world; }
+            @Override public ServerTool.Result valid() { return null; }
+            @Override public boolean reserve(BuildTarget.Cell cell) { return true; }
+        };
+        var drawing=target(2);
+        var first=finish(new BuildWork(drawing,access,-1,12,()->0,false));
+        assertTrue(first.ok(),first.feedback());
+        assertEquals(java.util.List.of(new net.minecraft.core.BlockPos(1,90,0)),order);
+        assertFalse(first.data().get("goal_satisfied").getAsBoolean());
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var second=finish(new BuildWork(drawing,access,-1,12,()->0,true));
+        assertTrue(second.data().get("goal_satisfied").getAsBoolean());
+        assertEquals(java.util.List.of(new net.minecraft.core.BlockPos(1,90,0),
+                new net.minecraft.core.BlockPos(0,90,0)),order);
+        assertEquals(0,world.inventory.getItem(0).getCount());
+    }
+
     static final class World extends BuildSurveyTest.World implements BuildWork.Access {
         int actions, reservations, recorded;
         boolean valid = true, reserve = true, wrongState, throwAfter;

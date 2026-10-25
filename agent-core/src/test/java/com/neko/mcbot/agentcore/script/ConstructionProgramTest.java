@@ -11,6 +11,177 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void freshWholeTargetBodyEvidenceTriggersRelocationEvenIfTheInitialSiteWasClear() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":%s,
+                    "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":true}}
+                    """.formatted(REV,args.get("operation").getAsString().equals("query") && w.moved==0));
+            if (name.equals("build_diff") && w.moved==0) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":2,"observation_complete":true,
+                    "spatial_stable":true,"budget_exhausted":false,"body_obstructs_target":true,
+                    "observation_key":"body-in-drawing","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"blocked","item":"stone","material_available":true}]}
+                    """.formatted(REV));
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        var move=w.calls.stream().filter(c->c.name().equals("move_to")).findFirst().orElseThrow().args();
+        assertFalse(move.has("work_target"));
+        assertEquals(-1,move.get("x").getAsInt());
+    }
+
+    @Test void navigationSupportEffectsSurviveThePrivateViewAndTriggerAutomaticCleanup() throws Exception {
+        var w=new World();
+        boolean[] removed={false};
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual(w.moved==0
+                    ? "{\"active\":true,\"target_revision\":\""+REV+"\",\"temporary\":[]}"
+                    : """
+                    {"active":true,"target_revision":"%s","temporary":[
+                    {"x":8,"y":90,"z":0,"block":"minecraft:stone","present_known":true,
+                    "present":%s,"cleanup_allowed":true}]}
+                    """.formatted(REV,!removed[0]));
+            if (name.equals("move_to")) {
+                w.moved++;
+                return actual("{\"placed_blocks\":"+(w.moved==1?1:0)+",\"can_work_here\":true}");
+            }
+            if (name.equals("break_block")) {
+                assertTrue(args.get("temporary_cleanup").getAsBoolean());
+                removed[0]=true; w.breaks++;
+                return actual("{\"removed\":true}");
+            }
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.breaks);
+        assertEquals(1,result.data().getAsJsonObject("returned").get("temporary_removed").getAsInt());
+    }
+
+    @Test void repairsAreDeferredUntilOtherWorkAndThenRestoredUnderTheSameRevision() throws Exception {
+        var w = new World();
+        w.override = (name,args) -> {
+            if (name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":%s,"remaining":%d,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"work-%d","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"%s","item":"stone","material_available":true,"repair_pending":true},
+                    {"x":5,"y":90,"z":0,"state":"%s","item":"stone","material_available":true}]}
+                    """.formatted(REV,w.remaining==0,w.remaining,w.remaining,
+                    w.remaining==0?"satisfied":"ready",w.remaining<2?"satisfied":"ready"));
+            if (name.equals("build_nearby")) {
+                assertEquals(REV,args.get("expected_revision").getAsString());
+                assertEquals(w.remaining==1,args.get("include_repairs").getAsBoolean());
+                w.remaining--; w.placed++;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(2,w.placed);
+    }
+
+    @Test void anUnchangedRecoveryIsNotRetriedAndPermissionOrCancellationFailuresStopIt() throws Exception {
+        for (String failure : List.of("NO_PATH:unchanged","DENIED:permission","CANCELLED:owner")) {
+            var w=new World(); w.moveFailure=failure;
+            w.override=(name,args)->name.equals("build_site") ? actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":true,
+                    "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":true}}
+                    """.formatted(REV)) : null;
+            var result=run(w,CODE.replace("max_rounds=3,",""),128);
+            assertEquals(failure.startsWith("NO_PATH"),result.ok(),result.feedback());
+            assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")
+                    && !c.args().has("work_target")).count(),"the same failed local plan is attempted once");
+            assertEquals(0,w.placed);
+            assertEquals(0,w.breaks);
+        }
+    }
+
+    @Test void wholeTargetCompletionAutomaticallyReclaimsKnownTemporaryWorkAndRechecksTheDrawing() throws Exception {
+        var w=new World(); w.remaining=0;
+        boolean[] removed={false};
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[
+                    {"x":8,"y":90,"z":0,"block":"minecraft:stone","present_known":true,
+                    "present":%s,"cleanup_allowed":true}]}
+                    """.formatted(REV,!removed[0]));
+            if (name.equals("break_block")) {
+                assertTrue(args.get("temporary_cleanup").getAsBoolean());
+                assertEquals(REV,args.get("site_revision").getAsString());
+                removed[0]=true; w.breaks++;
+                return actual("{\"removed\":true}");
+            }
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(1,w.breaks);
+        var report=result.data().getAsJsonObject("returned");
+        assertTrue(report.get("goal_satisfied").getAsBoolean());
+        assertEquals(1,report.get("temporary_removed").getAsInt());
+        assertEquals(0,report.get("temporary_retained").getAsInt());
+        assertEquals("build_diff",w.calls.getLast().name());
+    }
+    @Test void aBodyInTheDrawingMovesToTheObservedAdjacentStanceBeforeStartingWork() throws Exception {
+        var w = new World();
+        w.override = (name,args) -> name.equals("build_site") ? actual("""
+                {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":%s,
+                "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":true}}
+                """.formatted(REV,w.moved==0)) : null;
+        var result = run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        var moved = w.calls.stream().filter(c -> c.name().equals("move_to")).toList();
+        assertEquals(1,moved.size());
+        assertEquals(-1,moved.getFirst().args().get("x").getAsInt());
+        assertTrue(moved.getFirst().args().get("walk_only").getAsBoolean());
+        assertFalse(moved.getFirst().args().has("work_target"));
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,result.data().getAsJsonObject("returned").get("relocations").getAsInt());
+    }
+
+    @Test void aProvenBlockedDepartureExecutesARealLocalRecoveryAndThenResumesTheOriginalDrawing() throws Exception {
+        var w = new World();
+        w.override = (name,args) -> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":false,
+                    "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":false}}
+                    """.formatted(REV));
+            if (name.equals("move_to") && args.has("work_target") && w.moved==0)
+                return new ToolOutcome(false,"NO_PATH:closed departure",
+                        JsonParser.parseString("{\"departure_blocked\":true}").getAsJsonObject());
+            return null;
+        };
+        var result = run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(2,w.calls.stream().filter(c -> c.name().equals("move_to")).count());
+        assertEquals(1,w.moved);
+        assertEquals(2,w.placed);
+    }
+
+    @Test void aSafeColumnDescentUsesTheOriginalBreakToolWithTheFrozenRevisionAndExpectedBlock() throws Exception {
+        var w = new World();
+        w.override = (name,args) -> name.equals("build_site") ? actual("""
+                {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":%s,
+                "relocation":{"operation":"lower","x":0,"y":89,"z":0,
+                "expected_block":"minecraft:stone","temporary_cleanup":false}}
+                """.formatted(REV,w.breaks==0)) : null;
+        var result = run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(1,w.breaks);
+        var mined = w.calls.stream().filter(c -> c.name().equals("break_block")).findFirst().orElseThrow().args();
+        assertEquals(REV,mined.get("site_revision").getAsString());
+        assertEquals("minecraft:stone",mined.get("expected_block").getAsString());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+    }
     @Test void emptyCellOrientationConflictChangesWorkStanceButAnExistingWrongStateIsNotReplaced() throws Exception {
         for (boolean empty:new boolean[]{true,false}) {
             var world=new World();

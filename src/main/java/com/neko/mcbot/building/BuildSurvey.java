@@ -30,6 +30,8 @@ public final class BuildSurvey {
         default String clearReason(BuildTarget.Cell cell) { return ""; }
         default JsonObject surface(BlockPos pos) { return null; }
         default String workContext() { return ""; }
+        default boolean repairPending(BlockPos pos) { return false; }
+        default boolean bodyObstructsTarget() { return false; }
     }
     private static final List<String> STATES = List.of("satisfied", "missing_material", "needs_clear",
             "needs_support", "out_of_reach", "protected", "unknown", "unsupported", "state_conflict",
@@ -63,6 +65,10 @@ public final class BuildSurvey {
     public static ServerTool.Result queryForWork(BuildTarget target, Access access, int offset, LongSupplier clock) {
         return query(target, access, offset, 0, clock, true, false, false, false);
     }
+    public static ServerTool.Result queryForWork(BuildTarget target, Access access, int offset, LongSupplier clock,
+                                                boolean includeRepairs) {
+        return query(target, access, offset, 0, clock, true, false, false, false, includeRepairs);
+    }
 
     /** Cursor is an index in the canonical target, not a page number. Satisfied cells need no detail transport. */
     public static ServerTool.Result workScan(BuildTarget target, Access access, int cursor, LongSupplier clock) {
@@ -72,6 +78,10 @@ public final class BuildSurvey {
     public static ServerTool.Result nearby(BuildTarget target, Access access, int cursor, LongSupplier clock) {
         return query(target, access, cursor, 0, clock, true, false, true, true);
     }
+    public static ServerTool.Result nearby(BuildTarget target, Access access, int cursor, LongSupplier clock,
+                                           boolean includeRepairs) {
+        return query(target, access, cursor, 0, clock, true, false, true, true, includeRepairs);
+    }
 
     public static ServerTool.Result verify(BuildTarget target, Access access, int offset, LongSupplier clock) {
         return query(target, access, offset, 0, clock, false, false, false, false);
@@ -80,6 +90,11 @@ public final class BuildSurvey {
     private static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
                                             LongSupplier clock, boolean assessWork, boolean observeSurface,
                                             boolean workScan, boolean nearbyOnly) {
+        return query(target,access,offset,materialOffset,clock,assessWork,observeSurface,workScan,nearbyOnly,true);
+    }
+    private static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
+                                            LongSupplier clock, boolean assessWork, boolean observeSurface,
+                                            boolean workScan, boolean nearbyOnly, boolean includeRepairs) {
         if (offset < 0 || offset >= target.cells().size() || !workScan && offset % PAGE != 0
                 || materialOffset < 0 || materialOffset > BuildTarget.LIMIT || materialOffset % PAGE != 0)
             throw new IllegalArgumentException("page");
@@ -139,6 +154,7 @@ public final class BuildSurvey {
         int nextCursor=-1;
         for (int index=offset;index<rows.size();index++) {
             var row=rows.get(index);
+            if (!includeRepairs && access.repairPending(row.cell.pos())) continue;
             if (workScan && (row.state.equals("satisfied") || nearbyOnly && !row.state.equals("not_assessed"))) continue;
             if (workScan && !nearbyOnly && !List.of("not_assessed","needs_clear","out_of_reach").contains(row.state)) continue;
             if (workScan && row.material.item()!=null && bills.get(
@@ -157,6 +173,7 @@ public final class BuildSurvey {
             var data=row.cell.describe();
             row.data=data;
             data.addProperty("source_offset",row.index/PAGE*PAGE);
+            data.addProperty("repair_pending", access.repairPending(row.cell.pos()));
             data.addProperty("material_rule_supported",row.material.supported());
             data.addProperty("material_units",row.material.units());
             data.addProperty("matches_actual",row.cell.matches(row.actual));
@@ -269,6 +286,7 @@ public final class BuildSurvey {
         var data = new JsonObject();
         data.addProperty("query", true);
         data.addProperty("target_revision", target.revision());
+        data.addProperty("body_obstructs_target", access.bodyObstructsTarget());
         var anchor = new JsonObject();
         anchor.addProperty("x", target.anchor().getX()); anchor.addProperty("y", target.anchor().getY());
         anchor.addProperty("z", target.anchor().getZ());

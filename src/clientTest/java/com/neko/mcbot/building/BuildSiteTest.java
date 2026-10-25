@@ -12,6 +12,52 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void finishedPlainWorkCanBeReopenedAndTheSameFrozenCellRemainsDueUntilRestored() {
+        var w = new World(); var site = site(w);
+        w.states.put(TARGET,Blocks.STONE.defaultBlockState());
+        assertNull(site.miningGuard(TARGET,target().revision(),false,w));
+        assertEquals(target().revision(),site.navigationRevision(TARGET,w));
+        assertNotNull(site.miningGuard(TARGET,null,false,w));
+        site.recordRemoval(TARGET,w.state(TARGET),Blocks.AIR.defaultBlockState());
+        w.states.remove(TARGET);
+        assertTrue(site.repairPending(TARGET));
+        assertEquals(1,site.report(w).get("repairs_pending").getAsInt());
+        var saved = site.snapshot();
+        var restored = new BuildSite(); restored.bind("next-session",w);
+        restored.restore(saved,FEET,w);
+        assertTrue(restored.repairPending(TARGET));
+        assertNull(restored.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
+        restored.recordPlacement(TARGET,Blocks.AIR.defaultBlockState(),Blocks.STONE.defaultBlockState(),1,w);
+        w.states.put(TARGET,Blocks.STONE.defaultBlockState());
+        assertFalse(restored.repairPending(TARGET));
+        assertEquals(0,restored.report(w).get("repairs_pending").getAsInt());
+        assertEquals(target().revision(),restored.target().revision());
+    }
+
+    @Test void reopeningStillRequiresRepairMaterialsAndDoesNotRemoveFacilitiesOrAnOccupiedSupport() {
+        var w = new World(); var site = site(w);
+        w.states.put(TARGET,Blocks.STONE.defaultBlockState());
+        w.material = false;
+        assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
+        w.material = true; w.occupied.add(TARGET);
+        assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
+        w.occupied.clear(); w.states.put(TARGET.above(),Blocks.CRAFTING_TABLE.defaultBlockState());
+        assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
+        w.states.remove(TARGET.above()); w.states.put(TARGET,Blocks.CRAFTING_TABLE.defaultBlockState());
+        assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
+    }
+
+    @Test void reclaimingAnOldRouteSupportNeedsLiveProvenanceAndNoCurrentBodyOrDependency() {
+        var w = new World(); var site = site(w); temporary(site,w);
+        w.passage.add(TEMP);
+        assertNull(site.miningGuard(TEMP,target().revision(),true,w));
+        assertEquals(target().revision(),site.navigationRevision(TEMP,w));
+        w.occupied.add(TEMP);
+        assertNotNull(site.miningGuard(TEMP,target().revision(),true,w));
+        assertNull(site.navigationRevision(TEMP,w));
+        w.occupied.clear(); w.states.put(TEMP.above(),Blocks.TORCH.defaultBlockState());
+        assertNotNull(site.miningGuard(TEMP,target().revision(),true,w));
+    }
     @Test void recoveredSiteKeepsProtectionNavigationAndEditAccountsWithoutGrantingOldCleanupRights() {
         var world = new World(); var original = site(world); temporary(original, world);
         assertNull(original.charge()); assertTrue(original.navigation().takeReplan());
@@ -176,14 +222,16 @@ class BuildSiteTest {
         assertNotNull(site.placementGuard(TARGET,Blocks.STONE.defaultBlockState(),w));
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
     }
-    @Test void clearingRequiresOriginalRevisionRealMaterialAndNoFinishedCellOrDependants() {
+    @Test void clearingAndReopeningRequireTheOriginalRevisionRealMaterialAndNoAttachedDependants() {
         var w=new World(); var site=site(w);
         w.states.put(TARGET,Blocks.DIRT.defaultBlockState());
         assertNotNull(site.miningGuard(TARGET,null,false,w));
         assertNull(site.miningGuard(TARGET,target().revision(),false,w));
         w.material=false; assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
         w.material=true; w.states.put(TARGET,Blocks.STONE.defaultBlockState());
-        assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
+        assertNull(site.miningGuard(TARGET,target().revision(),false,w),
+                "an ordinary finished cube may be temporarily reopened under the same drawing");
+        assertNotNull(site.miningGuard(TARGET,null,false,w));
         w.states.put(TARGET,Blocks.DIRT.defaultBlockState()); w.states.put(TARGET.above(),Blocks.STONE.defaultBlockState());
         assertNull(site.miningGuard(TARGET,target().revision(),false,w),
                 "a static full cube above is not a falling or attached dependency");
@@ -397,8 +445,9 @@ class BuildSiteTest {
         assertTrue(site.protects(TARGET),"the complete design stays protected for unrelated actions");
         assertNotNull(site.miningGuard(TARGET,null,false,w));
         w.states.put(TARGET,Blocks.STONE.defaultBlockState());
-        assertNull(site.navigationRevision(TARGET,w));
-        assertTrue(site.protectsNavigation(TARGET,w));
+        assertEquals(target().revision(),site.navigationRevision(TARGET,w));
+        assertFalse(site.protectsNavigation(TARGET,w));
+        assertNotNull(site.miningGuard(TARGET,null,false,w));
         w.states.put(TARGET,Blocks.SPRUCE_LEAVES.defaultBlockState());
         w.states.put(TARGET.above(),Blocks.TORCH.defaultBlockState());
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));

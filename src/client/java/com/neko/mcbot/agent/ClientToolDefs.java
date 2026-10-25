@@ -78,6 +78,8 @@ public final class ClientToolDefs {
             case "build_site" -> "data.active/task_scoped/target_revision为当前任务工地；scope_limited=false时没有bounds，未限制总半径；"
                     + "access_route_explicit表示是否显式声明通道，passage_observation_complete仅为历史通行记录完整性；"
                     + "checkpoints/edit_attempts及navigation_*累计不重开，temporary含实际来源与cleanup_allowed；"
+                    + "body_obstructs_target/body_on_temporary为实际身体状态，relocation是只读局部换位或安全下落建议，"
+                    + "仍须原工具执行重验；repairs_pending是临时开路后尚未补回的原图格；"
                     + "登记不改世界或授予许可，return_guaranteed=false；只保护声明通道，不证明全局逃生。";
             case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
                     + "hp/food为数值，on_ground/in_water/eyes_in_water/in_lava为布尔。"
@@ -443,8 +445,10 @@ public final class ClientToolDefs {
                     + "purpose为support/workstation。mc.cleanup_temporary(revision)另行有界回收，依赖未解除保留。"
                     + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,consumed_count,remaining,blocked,counts,unresolved}，"
                     + "不包在data里，并自动输出施工结果；脚本执行成功不代表建筑完成。默认批次12动作，不主动加短max_rounds拆断连续施工。"
+                    + "身体挡格时先按只读relocation换位，出口受阻时可按原动作临时开路、搭支撑或确认安全落点后逐格下落。"
+                    + "同修订普通施工格可在有补料、无占位/设施/依赖时暂拆，repair_pending保留原图缺口，其他工作之后再补回。"
                     + "不自动找料合成，额外工位/脚手架由temporary指定；路线支撑可按真实库存与原权限放置。"
-                    + "外层建筑目标验收仍另行执行。任务结束不自动清理或跨任务认领。",
+                    + "完成后尝试回收本任务临时工程，temporary_retained仍有缺口，不跨任务认领；外层完整目标另验。",
                     """
                     {"type":"object","properties":{"operation":{"type":"string","enum":["query","begin","checkpoint"]},
                     "target":%s,"access_route":{"type":"array","minItems":2,"maxItems":64,"items":%s},
@@ -459,13 +463,15 @@ public final class ClientToolDefs {
                     + "400ms累计协作工作帽/每次查询50ms/200游戏刻；自动模式直接筛选全目标近身候选，不逐刻等待所有空页，不中断单个原版回调。"
                     + "失败不重放，取消后不再动作；实际扣料与半成品保留，两个游戏刻后重新核全目标。"
                     + "已有满足格不消费；沿用36槽默认组件及build_diff支持范围。双格对象仅主格一次动作/消费一件，"
+                    + "include_repairs默认true；false在原料分配和候选筛选前延后临时拆开的待补格，mc.build完成其他工作后再恢复。"
                     + "两半逐格记录；任一半未知/保护/占位不得动作。ACCEPTED等真终态；本批结束不是整栋完成。"
                     + "Lua按max_actions预扣原子预算，换页/换阶段不补原预算。",
                     """
                     {"type":"object","properties":{"target":%s,
                     "offset":{"type":"integer","minimum":0,"maximum":16368},
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64},
-                    "max_actions":{"type":"integer","minimum":1,"maximum":12}},
+                    "max_actions":{"type":"integer","minimum":1,"maximum":12},
+                    "include_repairs":{"type":"boolean"}},
                     "required":["target","expected_revision"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
             new ToolSpec("search_resource", "优先用此只读入口查找资源：一次调用在本地完成同中心全部分页，最多5页、30秒；"

@@ -33,7 +33,8 @@ public final class BoundedProgram {
             + "mc.build_diff(target,revision,offset)按next_offset续页，不在Lua攒万格大表。"
             + "已登记建筑可直接mc.build()或mc.build_diff()，mc.goal()返回当前登记条件副本；"
             + "无需重新生成原图或把内容修订号当instance_id。"
-            + "mc.cleanup_temporary(revision)只回收新鲜判定可拆的本任务临时工程。";
+            + "身体挡格或出口受阻时mc.build先按工地事实换位、临时开路或安全下落，原图待补格延后恢复；"
+            + "完成后自动尝试mc.cleanup_temporary(revision)，回收仍受依赖和来源检查。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
             if (json == null || bytes(json) > 20000) throw new IllegalArgumentException();
@@ -178,8 +179,8 @@ public final class BoundedProgram {
             });
             try (var source = BoundedProgram.class.getResourceAsStream("construction.lua")) {
                 if (source == null) throw new IllegalStateException("missing construction helper");
-                byte[] text = source.readNBytes(16385);
-                if (text.length > 16384) throw new IllegalStateException("oversized construction helper");
+                byte[] text = source.readNBytes(32769);
+                if (text.length > 32768) throw new IllegalStateException("oversized construction helper");
                 globals.load(new String(text, StandardCharsets.UTF_8), "construction-helper").call();
             } catch (java.io.IOException unavailable) { throw new IllegalStateException(unavailable); }
             var build = api.get("build");
@@ -277,7 +278,12 @@ public final class BoundedProgram {
     private JsonObject helperData(String name, ToolOutcome receipt) {
         var data = receipt.data();
         if (!constructing || !receipt.ok()) return data;
-        if (name.equals("status") || name.equals("move_to")) return new JsonObject();
+        if (name.equals("status")) return new JsonObject();
+        if (name.equals("move_to")) {
+            var view = new JsonObject();
+            if (data.has("placed_blocks")) view.add("placed_blocks", data.get("placed_blocks"));
+            return view;
+        }
         if (name.equals("break_block") || name.equals("build_nearby")) {
             var view = new JsonObject();
             for (String key : List.of("removed", "placed_blocks", "consumed_count", "placement_results"))
@@ -289,7 +295,7 @@ public final class BoundedProgram {
         var view = new JsonObject();
         for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
                 "observation_key", "work_observation_key", "design_components", "goal_satisfied", "offset", "next_offset", "total", "remaining",
-                "material_bill_complete", "work_scan", "work_next_cursor", "counts"))
+                "material_bill_complete", "work_scan", "work_next_cursor", "counts", "body_obstructs_target"))
             if (data.has(key)) view.add(key, data.get(key));
         var cells = new JsonArray();
         for (var value : data.getAsJsonArray("cells")) {
@@ -301,7 +307,7 @@ public final class BoundedProgram {
                 continue;
             }
             for (String key : List.of("x", "y", "z", "block", "actual_block", "source_offset",
-                    "clear_allowed", "clear_reason", "unsupported_reason", "placement_failure"))
+                    "clear_allowed", "clear_reason", "unsupported_reason", "placement_failure", "repair_pending"))
                 if (cell.has(key)) selected.add(key, cell.get(key));
             if ("out_of_reach".equals(cell.get("state").getAsString())
                     || "blocked".equals(cell.get("state").getAsString())
@@ -411,7 +417,7 @@ public final class BoundedProgram {
                 feedbackRefs.put(receipt.feedback(), completed);
                 return;
             }
-            if (constructing && (name.equals("build_diff") || name.equals("status"))) {
+            if (constructing && (name.equals("build_diff") || name.equals("status") || name.equals("build_site"))) {
                 // The helper consumes full facts and emits a final result. Repeating every page can stop useful work.
                 constructionQueries++;
                 lastQuerySuppressed = true;

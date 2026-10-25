@@ -1701,7 +1701,8 @@ public final class PathTask extends TickTask {
             clearCrack();
             digPos = pos;
             String revision = c.buildSite().navigationRevision(pos, new com.neko.mcbot.server.BuildSiteAccess(c));
-            mining = BlockMining.forPlayer(c, pos, null, "path_clear", revision, false, spec.reserveDurability());
+            mining = BlockMining.forPlayer(c, pos, null, "path_clear", revision,
+                    revision != null && c.buildSite().temporary(pos), spec.reserveDurability());
         }
         double seconds = sampler.digSeconds(x, y, z);
         if (!DigSampler.feasibleDig(seconds)) {

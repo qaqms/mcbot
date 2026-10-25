@@ -27,6 +27,7 @@ public final class BuildWork extends TickTask {
     private final Access access;
     private final int offset, limit;
     private final LongSupplier clock;
+    private final boolean includeRepairs;
     private final JsonArray results = new JsonArray();
     private final java.util.Set<net.minecraft.core.BlockPos> attempted = new java.util.HashSet<>();
     private int attempts, placed, consumed, checks, surveys, settle;
@@ -38,6 +39,9 @@ public final class BuildWork extends TickTask {
     private JsonObject observed;
 
     public BuildWork(BuildTarget target, Access access, int offset, int limit, LongSupplier clock) {
+        this(target,access,offset,limit,clock,true);
+    }
+    public BuildWork(BuildTarget target, Access access, int offset, int limit, LongSupplier clock, boolean includeRepairs) {
         if (offset < -1 || offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0
                 || limit < 1 || limit > MAX_ACTIONS) throw new IllegalArgumentException("bounded work");
         this.target = target;
@@ -46,6 +50,7 @@ public final class BuildWork extends TickTask {
         this.pageOffset = Math.max(0, offset);
         this.limit = limit;
         this.clock = clock;
+        this.includeRepairs = includeRepairs;
     }
 
     @Override public Progress tick(CompanionPlayer body) {
@@ -70,8 +75,8 @@ public final class BuildWork extends TickTask {
         long start = clock.getAsLong();
         try {
             surveys++;
-            var survey = offset<0 ? BuildSurvey.nearby(target,access.survey(),workCursor,clock)
-                    : BuildSurvey.queryForWork(target, access.survey(), pageOffset, clock);
+            var survey = offset<0 ? BuildSurvey.nearby(target,access.survey(),workCursor,clock,includeRepairs)
+                    : BuildSurvey.queryForWork(target, access.survey(), pageOffset, clock,includeRepairs);
             observed = survey.data();
             checks += observed.get("work_preflights").getAsInt();
             if (observed.get("budget_exhausted").getAsBoolean()
@@ -85,7 +90,8 @@ public final class BuildWork extends TickTask {
                 var cell = value.getAsJsonObject();
                 var pos = new net.minecraft.core.BlockPos(cell.get("x").getAsInt(),
                         cell.get("y").getAsInt(), cell.get("z").getAsInt());
-                if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)) { ready = cell; break; }
+                if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)
+                        && (includeRepairs || !cell.get("repair_pending").getAsBoolean())) { ready = cell; break; }
             }
             if (ready == null && offset < 0 && observed.get("work_next_cursor").getAsInt()>=0 && attempts < limit) {
                 workCursor=observed.get("work_next_cursor").getAsInt();

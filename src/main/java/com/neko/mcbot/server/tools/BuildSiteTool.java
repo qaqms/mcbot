@@ -85,9 +85,12 @@ public final class BuildSiteTool implements ServerTool {
             default -> null;
         };
         if (failure==null && instance!=null) site.attach(BuildRecordAccess.store(body),instance);
+        var data = site.report(access);
+        if (failure == null && site.active() && !"checkpoint".equals(input.operation()))
+            BuildRelocation.describe(body, data, "query".equals(input.operation()));
         return CompletableFuture.completedFuture(new Result(failure == null, failure == null
                 ? "工地事实已核对；登记不改世界。未声明通道时由正常导航选择真实工作站位；"
                         + "out_of_reach只表示当前手够不着，应换站位继续，不等于整个设计不可达。"
-                : failure.feedback(), site.report(access)));
+                : failure.feedback(), data));
     }
 }

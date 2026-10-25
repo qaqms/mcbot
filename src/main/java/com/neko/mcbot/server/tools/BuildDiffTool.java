@@ -44,6 +44,10 @@ public final class BuildDiffTool implements ServerTool {
                                 return value != null && value.hasBlockEntity();
                             }, body.workTargets()::protects);
                 }
+                @Override public boolean repairPending(BlockPos pos) { return body.buildSite().repairPending(pos); }
+                @Override public boolean bodyObstructsTarget() {
+                    return body.buildSite().same(target.revision()) && body.buildSite().obstructs(body.getBoundingBox());
+                }
                 @Override public boolean clearable(BuildTarget.Cell cell) {
                     return body.buildSite().same(target.revision())
                             && body.buildSite().miningGuard(cell.pos(), target.revision(), false,

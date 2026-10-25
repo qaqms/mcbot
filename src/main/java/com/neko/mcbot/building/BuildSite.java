@@ -32,6 +32,8 @@ public final class BuildSite {
         default boolean passage(BlockPos pos) { return false; }
         default boolean passageComplete() { return true; }
         default boolean canMine(BlockState actual) { return true; }
+        default boolean canLowerThrough(BlockPos pos) { return false; }
+        default boolean repairMaterials(List<BuildTarget.Cell> cells) { return cells.stream().allMatch(this::material); }
     }
     private record Temporary(BlockPos pos, BlockState state, String purpose, Object chunk, CellWitness witness) { }
     private Object task, world;
@@ -39,6 +41,7 @@ public final class BuildSite {
     private final Map<BlockPos, BuildTarget.Cell> targetCells = new HashMap<>();
     private List<BlockPos> route = List.of();
     private final Map<BlockPos, Temporary> temporary = new LinkedHashMap<>();
+    private final Set<BlockPos> repairs = new HashSet<>();
     private final Set<String> rounds = new LinkedHashSet<>();
     private final Set<BlockPos> protectedCells = new HashSet<>();
     private final Set<BlockPos> accessCells = new HashSet<>();
@@ -51,7 +54,7 @@ public final class BuildSite {
 
     public void bind(Object nextTask, Object nextWorld) {
         if (task != nextTask || world != nextWorld) {
-            target = null; targetCells.clear(); route = List.of(); temporary.clear(); rounds.clear();
+            target = null; targetCells.clear(); route = List.of(); temporary.clear(); repairs.clear(); rounds.clear();
             protectedCells.clear(); accessCells.clear(); scope = com.neko.mcbot.path.PathSpec.DEFAULT;
             navigation = new com.neko.mcbot.path.NavigationBudget();
             checkpoints = edits = 0; stopped = false; task = nextTask; world = nextWorld;
@@ -71,10 +74,26 @@ public final class BuildSite {
         records=store; instance=selected;
     }
     public void recordPlacement(BlockPos pos, BlockState before, BlockState after, int consumed, Access access) {
+        if (cell(pos) != null && cell(pos).matches(after)) repairs.remove(pos);
         if (instance!=null && cell(pos)!=null) records.placed(instance,pos,before,after,consumed,access);
     }
     public void recordRemoval(BlockPos pos, BlockState before, BlockState after) {
+        if (cell(pos) != null && cell(pos).matches(before) && !cell(pos).matches(after)) repairs.add(pos.immutable());
         if (instance!=null && cell(pos)!=null) records.removed(instance,pos,before,after);
+    }
+    public boolean repairPending(BlockPos pos) { return repairs.contains(pos); }
+    public boolean temporary(BlockPos pos) { return temporary.containsKey(pos); }
+
+    /** A work stance should not occupy the collision volume that the frozen drawing still needs. */
+    public boolean obstructs(net.minecraft.world.phys.AABB body) {
+        for (var pos : BlockPos.betweenClosed(BlockPos.containing(body.minX, body.minY, body.minZ),
+                BlockPos.containing(body.maxX, body.maxY, body.maxZ))) {
+            var selected = cell(pos);
+            if (selected == null || selected.authored().isAir()) continue;
+            var boxes = com.neko.mcbot.server.StandingGeometry.collision(selected.desired(), EmptyBlockGetter.INSTANCE, pos);
+            if (boxes == null || boxes.stream().anyMatch(box -> box.move(pos).intersects(body))) return true;
+        }
+        return false;
     }
     public void recordObjectPlacement(BlockPos primary, Map<BlockPos,BlockState> before,
                                        Map<BlockPos,BlockState> after, int consumed, Access access) {
@@ -181,7 +200,8 @@ public final class BuildSite {
         return inScope(feet);
     }
     public String navigationRevision(BlockPos pos, Access access) {
-        return active() && cell(pos) != null && miningGuard(pos, target.revision(), false, access) == null
+        return active() && (cell(pos) != null || temporary.containsKey(pos))
+                && miningGuard(pos, target.revision(), temporary.containsKey(pos), access) == null
                 ? target.revision() : null;
     }
     public boolean protectsNavigation(BlockPos pos, Access access) {
@@ -263,12 +283,13 @@ public final class BuildSite {
         if (!inScope(pos)) return failed("SCOPE_CHANGED:改动超出冻结工地范围。");
         var selected = cell(pos);
         boolean targetEdit = same(revision) && !cleanup && selected != null;
-        if (access.passage(pos) && !targetEdit && !softClearance(access.state(pos)))
+        if (access.passage(pos) && !targetEdit && !cleanup && !softClearance(access.state(pos)))
             return failed("DENIED:不为无关清障拆实际经过的通道或其地板。");
         if (revision == null) return protects(pos) || access.facility(pos) || access.facility(pos.above())
                 ? failed("DENIED:工地目标、支撑、通道、工位或临时工程不可作为普通清障。") : null;
         boolean soft = softClearance(access.state(pos));
-        if (!same(revision) || accessCell(pos) && !soft || access.occupied(pos) && !soft)
+        if (!same(revision) || accessCell(pos) && !soft
+                || access.occupied(pos) && !soft && !access.canLowerThrough(pos))
             return failed("DENIED:施工修订不符，或目标承担通道/身体支撑。");
         if (BuildObjects.paired(access.state(pos))) return objectMiningGuard(pos, cleanup, access);
         if (cleanup) {
@@ -282,11 +303,17 @@ public final class BuildSite {
                     || dependent(pos, access)) return failed("DENIED:临时工程仍有目标、承重、贴附或工位依赖，未回收。");
         } else {
             var actual = access.state(pos);
-            if (selected == null || actual == null || selected.matches(actual)
-                    || instance==null && actual.getBlock() == selected.authored().getBlock() || !selected.material().supported()
+            boolean reopening = selected != null && selected.matches(actual) && plainCube(actual)
+                    && plainCube(selected.desired());
+            var owed = new ArrayList<BuildTarget.Cell>();
+            for (var p : repairs) if (!p.equals(pos) && !cell(p).matches(access.state(p))) owed.add(cell(p));
+            if (reopening) owed.add(selected);
+            if (selected == null || actual == null || selected.matches(actual) && !reopening
+                    || instance==null && actual.getBlock() == selected.authored().getBlock() && !reopening
+                    || reopening && !access.repairMaterials(owed) || !selected.material().supported()
                     || !access.material(selected) || access.facility(pos) || dependent(pos, access, Set.of(), true)
                     || supportsFinished(pos, access))
-                return failed("DENIED:只清有材料可替换、非成品且无依赖的冻结目标障碍；状态冲突交回模型。");
+                return failed("DENIED:原图清障或临时开路的补料、占位、设施或依赖条件不满足，未拆除。");
             if (instance!=null && (!records.mayChange(instance,pos,access) || !records.hasCapacity(instance,pos)))
                 return failed("DENIED:旧实例格来源不可证、已被外部修改或累计记录额度耗尽，未拆除。");
         }
@@ -387,6 +414,10 @@ public final class BuildSite {
             items.add(item);
         }
         data.add("temporary", items);
+        var pending = new JsonArray();
+        repairs.stream().sorted(java.util.Comparator.comparingLong(BlockPos::asLong))
+                .forEach(pos -> pending.add(BuildTarget.coordinates(pos)));
+        data.add("repairs", pending);
         if (instance != null) {
             data.addProperty("instance_id", instance.id()); data.addProperty("instance_revision", instance.revision());
         }
@@ -434,6 +465,17 @@ public final class BuildSite {
                     || temporary.put(pos, new Temporary(pos, BuildTarget.parse(input).cells().getFirst().authored(),
                     purpose, null, null)) != null) throw new IllegalArgumentException();
         }
+        if (data.has("repairs")) {
+            var pending = data.getAsJsonArray("repairs");
+            if (pending.size() > target.cells().size()) throw new IllegalArgumentException();
+            for (var value : pending) {
+                var p = value.getAsJsonObject();
+                var pos = new BlockPos(BuildTarget.integer(p.get("x"), -29999984, 29999984),
+                        BuildTarget.integer(p.get("y"), -2048, 2047), BuildTarget.integer(p.get("z"), -29999984, 29999984));
+                if (cell(pos) == null || !plainCube(cell(pos).desired()) || !repairs.add(pos))
+                    throw new IllegalArgumentException("repair");
+            }
+        }
         // Old witnesses are never reconstructed from a saved block state.
         if (stopped || navigation.exhausted()
                 || live(access) != null) throw new IllegalArgumentException("Worksite exhausted or unavailable");
@@ -450,6 +492,7 @@ public final class BuildSite {
         data.addProperty("passage_observation_complete", access.passageComplete());
         if (!active()) return data;
         data.addProperty("target_revision", target.revision());
+        data.addProperty("repairs_pending", repairs.stream().filter(pos -> !cell(pos).matches(access.state(pos))).count());
         data.addProperty("protected_target_cells", target.cells().size());
         data.addProperty("access_route_cells", route.size());
         data.addProperty("checkpoints", checkpoints); data.addProperty("edit_attempts", edits);

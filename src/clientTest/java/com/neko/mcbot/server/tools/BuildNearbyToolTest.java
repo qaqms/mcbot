@@ -30,6 +30,11 @@ class BuildNearbyToolTest {
         }
         input.addProperty("expected_revision", BuildTarget.parse(input.getAsJsonObject("target")).revision());
         assertEquals(12, BuildNearbyTool.arguments(input).maxActions());
+        assertTrue(BuildNearbyTool.arguments(input).includeRepairs());
+        input.addProperty("include_repairs",false);
+        assertFalse(BuildNearbyTool.arguments(input).includeRepairs());
+        var invalid=input.deepCopy(); invalid.addProperty("include_repairs","false");
+        assertThrows(IllegalArgumentException.class,()->BuildNearbyTool.arguments(invalid));
         assertEquals(-1, BuildNearbyTool.arguments(input).offset());
         input.addProperty("offset",0);
         assertEquals(0, BuildNearbyTool.arguments(input).offset());

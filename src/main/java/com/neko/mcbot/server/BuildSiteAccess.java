@@ -60,6 +60,30 @@ public final class BuildSiteAccess implements BuildSite.Access {
         return cell.authored().isAir() || cell.material().item() != null
                 && BuildInventory.available(body.getInventory(), cell.material().item()) >= cell.material().units();
     }
+    @Override public boolean repairMaterials(java.util.List<BuildTarget.Cell> cells) {
+        var needed = new java.util.HashMap<net.minecraft.world.item.Item, Integer>();
+        for (var cell : cells) {
+            var material = cell.material();
+            if (!material.supported() || material.item() == null) return false;
+            needed.merge(material.item(), material.units(), Integer::sum);
+        }
+        return needed.entrySet().stream().allMatch(entry ->
+                BuildInventory.available(body.getInventory(), entry.getKey()) >= entry.getValue());
+    }
+    @Override public boolean canLowerThrough(BlockPos pos) {
+        var feet = StandingGeometry.feetCell(body);
+        var bounds = body.getBoundingBox();
+        if (!body.onGround() || !pos.equals(feet.below()) || Math.abs(body.getY() - feet.getY()) > 1e-5
+                || bounds.minX < pos.getX() + 1e-5 || bounds.maxX > pos.getX() + 1 - 1e-5
+                || bounds.minZ < pos.getZ() + 1e-5 || bounds.maxZ > pos.getZ() + 1 - 1e-5) return false;
+        var lowering = StandingGeometry.forPlayer(body, body.buildSite()::inScope);
+        if (lowering.lowerThrough(feet.getX(), feet.getY(), feet.getZ()) == null) return false;
+        var found = new java.util.ArrayList<net.minecraft.world.entity.LivingEntity>();
+        body.level().getEntities(net.minecraft.world.level.entity.EntityTypeTest.forClass(
+                net.minecraft.world.entity.LivingEntity.class), new AABB(pos).expandTowards(0, 2, 0),
+                entity -> entity != body && entity.isAlive(), found, 1);
+        return found.isEmpty();
+    }
     @Override public Object chunk(BlockPos pos) {
         return body.level().getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
     }

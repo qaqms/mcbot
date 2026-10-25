@@ -3,7 +3,27 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
-## 施工封口与进展更新（2026-10-25）
+## 施工让位与恢复更新（2026-10-25）
+
+build_site query/begin增加body_obstructs_target、body_on_temporary、repairs_pending及可选relocation。
+relocation.operation=move给相邻x/y/z及walk_only；operation=lower给脚下坐标、expected_block和
+temporary_cleanup。这些是只读建议，mc.build经原move_to/break_block执行，每一步仍重新核现场和许可。
+身体挡图先让位，封闭起点先尝试局部恢复；实际失败与完整回执不隐藏，不通过登记授予动作许可。
+
+同修订普通整块目标可在有补料、无设施/占位/依赖且实例来源有效时暂拆；目标与修订不变。
+脚下拆除另外要求身体停稳且整身在支撑列内、已知安全落点和完整净空，不支持直接挖空或伤害下落。
+build_diff cells[].repair_pending表示本工地拆开尚待补回的原图格。
+整图body_obstructs_target随原差异查询给出，正常施工不额外反复查询恢复建议。
+build_nearby新增可选include_repairs（严格布尔，默认true）；false在分配原料前延后待补格。
+mc.build先做常规格，候选遍历后再补回，最终仍按完整原图验收。
+
+完成后自动尝试清理本任务临时工程，mc.build结果增加relocations、temporary_removed和temporary_retained。
+后两者只在实际调用清理时出现；暂留可能来自来源缺口、真实占位或依赖，不假报已清空。
+清理若再次打开目标格，则同程序续修。实际经过过的临时支撑可按新鲜来源/依赖回收，
+历史路线缺口、外部同块替换和区块重载仍阻止认领；取消不自动补回或恢复旧授权。
+原工具数31、显式限制、材料及结果保护保持，未新增默认整趟搜索帽；实机效果见STATUS边界。
+
+## 施工封口与进展更新（2026-10-25，先前检查点）
 
 build_diff新增work_observation_key与design_components，工具仍31项。
 前者供本次mc.build去重失败候选，身体/目标实际状态/库存变化可重评，

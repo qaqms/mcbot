@@ -15,13 +15,13 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 public final class BuildNearbyTool implements ServerTool {
-    record Arguments(BuildTarget target, int offset, int maxActions) { }
+    record Arguments(BuildTarget target, int offset, int maxActions, boolean includeRepairs) { }
 
     static Arguments arguments(JsonObject args) {
         return arguments(args,BuildTarget::parse);
     }
     private static Arguments arguments(JsonObject args,java.util.function.Function<JsonObject,BuildTarget> resolve) {
-        BuildTarget.keys(args, Set.of("target", "expected_revision", "offset", "max_actions"));
+        BuildTarget.keys(args, Set.of("target", "expected_revision", "offset", "max_actions", "include_repairs"));
         var target = resolve.apply(args.getAsJsonObject("target"));
         String expected = BuildTarget.string(args.get("expected_revision"), 64);
         if (!expected.equals(target.revision())) throw new IllegalArgumentException("revision");
@@ -29,7 +29,9 @@ public final class BuildNearbyTool implements ServerTool {
         if (offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0)
             throw new IllegalArgumentException("page");
         int limit = args.has("max_actions") ? BuildTarget.integer(args.get("max_actions"), 1, BuildWork.MAX_ACTIONS) : 12;
-        return new Arguments(target, offset, limit);
+        if (args.has("include_repairs") && (!args.get("include_repairs").isJsonPrimitive()
+                || !args.getAsJsonPrimitive("include_repairs").isBoolean())) throw new IllegalArgumentException();
+        return new Arguments(target, offset, limit, !args.has("include_repairs") || args.get("include_repairs").getAsBoolean());
     }
 
     @Override public String name() { return "build_nearby"; }
@@ -79,7 +81,7 @@ public final class BuildNearbyTool implements ServerTool {
                         && !body.buildSite().same(input.target().revision()))
                     com.neko.mcbot.building.BuildObjects.footprint(cell.pos(),cell.desired()).forEach(body.workTargets()::add);
             }
-        }, input.offset(), input.maxActions(), System::nanoTime);
+        }, input.offset(), input.maxActions(), System::nanoTime, input.includeRepairs());
         var future = new CompletableFuture<Result>();
         if (!scheduler.submit(body, work, future, capTicks(args)))
             return CompletableFuture.completedFuture(new Result(false, "BUSY:身体任务槽已占用，未开始施工。", null));

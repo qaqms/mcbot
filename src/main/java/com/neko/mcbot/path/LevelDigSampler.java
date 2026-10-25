@@ -284,6 +284,8 @@ public final class LevelDigSampler implements DigSampler {
                 && (body.workTargets().protects(cell) || body.buildSite().protectsNavigation(cell,
                         new com.neko.mcbot.server.BuildSiteAccess(body))
                 || com.neko.mcbot.server.BuildRecordAccess.protects(body,cell)
+                && com.neko.mcbot.server.BuildRecordAccess.guard(body,cell,true,
+                        body.buildSite().navigationRevision(cell,new com.neko.mcbot.server.BuildSiteAccess(body))) != null
                 || body.buildSite().active() && body.navigationTrail().protectsPassage(cell)
                 && body.buildSite().navigationRevision(cell, new com.neko.mcbot.server.BuildSiteAccess(body)) == null);
     }

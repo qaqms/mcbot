@@ -83,6 +83,24 @@ local function lower(candidate, current)
     return not current or candidate.cell.y<current.cell.y
 end
 
+local function relocate(site, revision, stamp, seen)
+    local plan=site.relocation
+    if not plan then return false end
+    local key=plan.operation..":"..plan.x..":"..plan.y..":"..plan.z..":"..(stamp or "")
+    if seen[key] then return false end
+    seen[key]=true
+    local result
+    if plan.operation=="move" then
+        result=attempt("move_to",{x=plan.x,y=plan.y,z=plan.z,exact=true,
+            walk_only=plan.walk_only,bounds=site.bounds})
+    elseif plan.operation=="lower" then
+        result=attempt("break_block",{x=plan.x,y=plan.y,z=plan.z,expected_block=plan.expected_block,
+            site_revision=revision,temporary_cleanup=plan.temporary_cleanup})
+    else return false end
+    if not result.ok then call("status",{details=true}) end
+    return result.ok,result
+end
+
 function mc.build(target, options)
     local revision
     target,revision=target_or_goal(target)
@@ -99,9 +117,14 @@ function mc.build(target, options)
         access_route=o.access_route,bounds=o.bounds,expected_revision=revision}).data
     revision=revision or site.target_revision
     assert(site.target_revision==revision)
+    local temporary_possible=site.temporary and #site.temporary>0 or false
+    local function remember(result)
+        if result and (result.data.placed_blocks or 0)>0 then temporary_possible=true end
+    end
     local placed,cleared,consumed=0,0,0
     local effects,omitted={},0
     local last_pages,initial_remaining=nil,nil
+    local relocations,recovery_seen,cleanup=0,{},nil
     local function effect(cell,kind)
         if #effects<16 then
             effects[#effects+1]={x=cell.x,y=cell.y,z=cell.z,block=cell.block,kind=kind}
@@ -119,6 +142,11 @@ function mc.build(target, options)
             initial_remaining=initial_remaining,total=first and first.total,remaining=first and first.remaining,
             remaining_known=current,outer_goal_verified=false,
             effects=effects,effects_omitted=omitted,last_failure=failure}
+        result.relocations=relocations
+        if cleanup then
+            result.temporary_removed=cleanup.removed
+            result.temporary_retained=cleanup.retained
+        end
         if satisfied then result.evidence="fresh_whole_target_diff" end
         if pages then
             local counts,unresolved={},{}
@@ -141,13 +169,30 @@ function mc.build(target, options)
         print("mc.build",result)
         return result
     end
+    local function completed(round,pages)
+        if not temporary_possible then return report(nil,round,pages) end
+        local current=call("build_site",{operation="query"}).data
+        if current.temporary and #current.temporary>0 then
+            cleanup=mc.cleanup_temporary(revision)
+            local fresh=call("build_site",{operation="query"}).data
+            local retained=0
+            for _,record in ipairs(fresh.temporary) do
+                if not record.present_known or record.present~=false then retained=retained+1 end
+            end
+            cleanup.retained=retained
+        end
+        local final,why=checked(target,revision)
+        if final and not final[1].goal_satisfied then return nil,final end
+        return report(why or "cleanup_changed_target",round,final)
+    end
     local temporary=o.temporary or {}
     assert(type(temporary)=="table" and #temporary<=16)
     if #temporary>0 then
         local pages,reason=checked(target,revision)
         if not pages then return report(reason) end
         if pages[1].goal_satisfied then
-            return report(nil,0,pages)
+            local done=completed(0,pages)
+            if done then return done end
         end
     end
     for _,cell in ipairs(temporary) do
@@ -162,11 +207,21 @@ function mc.build(target, options)
             if not move(cell,cell.item,site.bounds) then return report("temporary_stance_unavailable") end
             call("place_block",{x=cell.x,y=cell.y,z=cell.z,item=cell.item,
                 face=cell.face or "up",temporary_purpose=cell.purpose})
+            temporary_possible=true
             site=call("build_site",{operation="query"}).data
         end
     end
     local round, failed, last_reason, last_failure=0,{},nil,nil
     local cursor,stamp=0,nil
+    local repairing=false
+    local function recover(workstamp, required)
+        site=call("build_site",{operation="query"}).data
+        if required and not site.body_obstructs_target then return false end
+        local ok,result=relocate(site,revision,workstamp,recovery_seen)
+        remember(result)
+        if ok then relocations=relocations+1 end
+        return ok
+    end
     while rounds==0 or round<rounds do
         round=round+1
         call("status",{details=true})
@@ -185,8 +240,15 @@ function mc.build(target, options)
         last_pages=pages
         initial_remaining=initial_remaining or pages[1].remaining
         if pages[1].goal_satisfied then
-            return report(nil,round-1,pages)
+            local done,remaining=completed(round-1,pages)
+            if done then return done end
+            pages,last_pages=remaining,remaining
+            stamp=pages[1].work_observation_key or pages[1].observation_key
+            failed,cursor,repairing={},0,true
         end
+        -- Leaving a drawing cell is a local body action, rather than another remote work search.
+        local moved=false
+        if pages[1].body_obstructs_target or site.body_obstructs_target then moved=recover(stamp,true) end
         local ready,clear,far,clears=nil,nil,nil,{}
         for _,page in ipairs(pages) do
             for _,cell in ipairs(page.cells) do
@@ -197,7 +259,7 @@ function mc.build(target, options)
                     or cell.state=="state_conflict" and cell.actual_block and cell.block
                     and cell.actual_block~=cell.block) and cell.item
                     and cell.material_available then kind="place" end
-                if kind then
+                if kind and (repairing or not cell.repair_pending) then
                     local key=workkey(cell,kind,stamp)
                     local candidate={cell=cell,offset=cell.source_offset or page.offset,key=key}
                     if not failed[key] then
@@ -211,8 +273,12 @@ function mc.build(target, options)
                 end
             end
         end
-        if ready or clear or far then call("build_site",{operation="checkpoint",expected_revision=revision}) end
-        if clear and (not ready or clear.cell.y<=ready.cell.y) then
+        if not moved and (ready or clear or far) then
+            call("build_site",{operation="checkpoint",expected_revision=revision})
+        end
+        if moved then
+            cursor=0
+        elseif clear and (not ready or clear.cell.y<=ready.cell.y) then
             local worked=0
             for _,candidate in ipairs(clears) do
                 if worked>=actions then break end
@@ -220,7 +286,11 @@ function mc.build(target, options)
                     worked=worked+1
                     local cell=candidate.cell
                     local ok,result,trapped=move(cell,nil,site.bounds)
-                    if trapped then return report("departure_blocked",round,pages,result.feedback) end
+                    remember(result)
+                    if trapped then
+                        if recover(stamp) then break end
+                        return report("departure_blocked",round,pages,result.feedback)
+                    end
                     if not ok then
                         failed[candidate.key]=true
                         last_reason,last_failure="clearing_stance_unavailable",result.feedback
@@ -244,7 +314,7 @@ function mc.build(target, options)
             end
         elseif ready then
             local result=attempt("build_nearby",{target=target,expected_revision=revision,
-                max_actions=actions})
+                max_actions=actions,include_repairs=repairing})
             for _,page in ipairs(pages) do
                 if page.work_scan or page.offset==ready.offset then
                     for _,cell in ipairs(page.cells) do
@@ -269,7 +339,11 @@ function mc.build(target, options)
             end
         elseif far then
             local ok,result,trapped=move(far.cell,far.cell.item,site.bounds)
-            if trapped then return report("departure_blocked",round,pages,result.feedback) end
+            remember(result)
+            if trapped then
+                if not recover(stamp) then return report("departure_blocked",round,pages,result.feedback) end
+                ok=true
+            end
             if not ok then
                 failed[far.key]=true
                 last_reason,last_failure="placement_stance_unavailable",result.feedback
@@ -278,6 +352,10 @@ function mc.build(target, options)
             end
         elseif pages[1].work_next_cursor and pages[1].work_next_cursor>=0 then
             cursor=pages[1].work_next_cursor
+        elseif not repairing then
+            repairing,cursor=true,0
+        elseif recover(stamp) then
+            cursor=0
         else
             local result=report(last_reason or "no_feasible_work_material_support_state_or_protection",round,pages)
             result.last_failure=last_failure
@@ -286,7 +364,8 @@ function mc.build(target, options)
     end
     local pages,reason=checked(target,revision)
     if pages and pages[1].goal_satisfied then
-        return report(nil,rounds,pages)
+        local done,remaining=completed(rounds,pages)
+        return done or report("cleanup_changed_target",rounds,remaining)
     end
     return report(reason or "round_limit",rounds,pages)
 end
@@ -294,6 +373,10 @@ end
 function mc.cleanup_temporary(revision)
     local site=call("build_site",{operation="query"}).data
     assert(site.active and site.target_revision==revision)
+    if site.body_on_temporary then
+        relocate(site,revision,"cleanup",{})
+        site=call("build_site",{operation="query"}).data
+    end
     local removed,retained=0,0
     for _,record in ipairs(site.temporary) do
         if record.present_known and record.present==false then

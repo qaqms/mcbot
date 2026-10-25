@@ -66,6 +66,26 @@ class StandingGeometryTest {
         }
     }
 
+    @Test void loweringAWorkColumnNeedsAKnownSafeLandingAndRejectsAHoleOrPartialSupport() {
+        var grid = new Grid();
+        grid.blocks.put(BlockPos.ZERO,Blocks.STONE.defaultBlockState());
+        var landing = grid.geometry().lowerThrough(0,1,0);
+        assertNotNull(landing);
+        assertEquals(0,landing.height());
+        assertEquals(DigAStar.pack(0,-1,0),landing.support());
+        assertEquals(Blocks.STONE.defaultBlockState(),grid.blocks.get(BlockPos.ZERO));
+        grid.blocks.remove(BlockPos.ZERO.below());
+        assertNull(grid.geometry().lowerThrough(0,1,0));
+        grid.blocks.put(BlockPos.ZERO.below(),Blocks.MAGMA_BLOCK.defaultBlockState());
+        assertNull(grid.geometry().lowerThrough(0,1,0));
+        grid.blocks.put(BlockPos.ZERO.below(),Blocks.STONE.defaultBlockState());
+        grid.unknown.add(BlockPos.ZERO.below());
+        assertNull(grid.geometry().lowerThrough(0,1,0));
+        grid.unknown.clear();
+        grid.blocks.put(BlockPos.ZERO,Blocks.OAK_SLAB.defaultBlockState());
+        assertNull(grid.geometry().lowerThrough(0,0,0));
+    }
+
     @Test void theLastRoofGapIsDeferredFromAnInteriorSupportButCanBeClosedFromOutside() {
         var grid=new Grid();
         grid.blocks.put(BlockPos.ZERO,Blocks.COBBLESTONE.defaultBlockState());
