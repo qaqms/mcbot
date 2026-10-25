@@ -35,7 +35,9 @@
   导入包build/mcbot-import-20261025-goal-registration.zip，1772191 bytes，SHA256
   `fa82f57518728a2f96ed421032a0830c2036cbefc9d69bf9de6b4c2d81bc7a53`。
   仅含mods/mcbot-0.1.0.jar、START-HERE.txt、SHA256SUMS.txt，包内JAR已验同指纹。
-  构建后仅保留既有玩家PID140608，无Gradle残留；未修改活世界，源码提交/推送按Git最终状态。
+  构建后仅保留既有玩家PID140608，无Gradle残留；未修改活世界。
+  业务源码本地提交85a3c2c；push约21秒后因github.com:443连接失败，未修改代理/凭据存储。
+  测试包可用，远端同步待网络恢复；未把离线通过记成玩家现场通过。
   完整机制、证据边界及重测要点见docs/GOAL-REGISTRATION-2026-10-25.md。
 
 ## 屋面往返、楼梯方向与施工下地（2026-10-25，Asia/Shanghai）
