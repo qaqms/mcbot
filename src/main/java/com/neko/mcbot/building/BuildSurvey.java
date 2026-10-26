@@ -517,7 +517,10 @@ public final class BuildSurvey {
         if (actual == null) return "unknown";
         if (!supported) return "unsupported";
         if (cell.matches(actual)) return "satisfied";
-        if (actual.isAir() ? access.protectedPlacement(cell.pos()) : access.protectedCell(cell.pos()))
+        boolean protectedNow = actual.isAir() ? access.protectedPlacement(cell.pos())
+                : access.protectedCell(cell.pos());
+        boolean deliberateClear = protectedNow && !actual.isAir() && access.clearable(cell);
+        if (protectedNow && !deliberateClear)
             return "protected";
         if (actual.getBlock() == cell.authored().getBlock()) return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";

@@ -3,6 +3,27 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 工地误放设施遮挡修补（2026-10-26，Asia/Shanghai）
+
+- 最新日志显示修订 `2eee63c3...` 为770格目标，344格满足、剩426格；基础只剩
+  `(134,63,371)`，原图要橡木板、现场为泥土，其上方 `(134,64,371)` 是误放的
+  工作台。旧逻辑把目标先标为 `protected`，又把工作台按普通设施拒绝，导致
+  `break_block` 两次无法进入修补链。
+- `BuildSite` 现在只在设施不属于冻结图纸、正位于同修订未完成实体目标上方、
+  目标材料可用且没有身体/通道/依赖冲突时，允许带当前 `site_revision` 的误放
+  设施拆除；目标下方的同修订清理同步允许该单一依赖先移除。其他设施、临时
+  支撑、附件和普通玩家建筑仍拒绝。
+- `BuildSurvey` 在同修订 `clearable` 已通过时优先报告 `needs_clear`，不再把目标
+  误报成 `protected`，保留 `clear_allowed` 和执行前原版守卫。实际操作仍需
+  `expected_block`、同修订、真实工具/射线/权限和原版移除回执。
+- 参考机制复核了目标破坏与放置的统一逐格复核、设施保护和动作前重查；未复制
+  参考代码或放宽全局清障。详见 `docs/WORKSITE-REPAIR-OBSTRUCTION-2026-10-26.md`。
+- 新增两项工地守卫与分类回归，针对性测试通过；随后强制
+  `build --offline --console=plain --no-daemon --rerun-tasks` 全部通过，
+  当前 XML 汇总 1685 tests / 176 suites，failures/errors/skipped 全为0。
+  新JAR `build/libs/mcbot-0.1.0.jar` 为1938138 bytes，SHA256
+  `8d9986ef6aee730e1303632d8afc25f61bcc1d4fc09c8a1e9292350389aad658`。
+
 ## 屋面收尾受阻诊断（2026-10-26，Asia/Shanghai）
 
 - 最新日志冻结为 `build/roof-finish-current-20261026.log`，末时刻

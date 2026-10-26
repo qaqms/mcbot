@@ -413,6 +413,22 @@ class BuildSurveyTest {
         assertEquals(0, world.prepares);
     }
 
+    @Test void anAuthorizedTargetRepairOverridesProtectionClassificationWithoutWeakeningOtherCells() {
+        var target = cells("[{\"x\":0,\"y\":0,\"z\":0,\"block\":\"oak_planks\"}]");
+        var world = new World() {
+            @Override public boolean clearable(BuildTarget.Cell cell) {
+                return cell.pos().equals(new BlockPos(0, 90, 0));
+            }
+        };
+        world.blocks.put(new BlockPos(0, 90, 0), Blocks.DIRT.defaultBlockState());
+        world.protectedCells.add(new BlockPos(0, 90, 0));
+        var data = world.query(target);
+        assertEquals(1, count(data, "needs_clear"));
+        assertEquals(0, count(data, "protected"));
+        assertTrue(data.getAsJsonArray("cells").get(0).getAsJsonObject()
+                .get("clear_allowed").getAsBoolean());
+    }
+
     @Test void actualNativePredictionMustMeetExplicitPropertiesAndMayUseAnotherLegalFace() {
         var target = cells("""
                 [{"x":0,"y":0,"z":0,"block":"oak_log","properties":[{"name":"axis","value":"x"}]}]

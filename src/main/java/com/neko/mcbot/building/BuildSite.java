@@ -299,7 +299,13 @@ public final class BuildSite {
             var near = pos.relative(side);
             if (removing.contains(near)) continue;
             var state = access.state(near);
-            if (state == null || access.facility(near)) return true;
+            if (state == null) return true;
+            // A misplaced facility directly above an unfinished target is the narrow
+            // repair case: remove it first, then replace the target below. Other
+            // facilities remain hard dependencies and stay protected.
+            if (access.facility(near)
+                    && !(preparation && side == Direction.UP && misplacedFacility(near, access)))
+                return true;
             if (state.isAir()) continue;
             if (softClearance(state)) continue;
             if (state.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
@@ -308,6 +314,17 @@ public final class BuildSite {
             if (side == Direction.UP || !plainCube(state)) return true;
         }
         return false;
+    }
+
+    /** A facility may be repaired only when it is outside the drawing and sits on an unfinished target. */
+    private boolean misplacedFacility(BlockPos pos, Access access) {
+        if (!active() || cell(pos) != null || !access.facility(pos)) return false;
+        var below = cell(pos.below());
+        var actualBelow = access.state(pos.below());
+        return below != null && !below.authored().isAir() && actualBelow != null
+                && !below.matches(actualBelow) && below.material().supported()
+                && access.material(below) && !access.passage(pos) && !access.occupied(pos)
+                && !dependent(pos, access, Set.of(), false);
     }
     /** Ordinary flowers and segmented flower beds need not carry the replaceable flag. */
     public static boolean softClearance(BlockState state) {
@@ -384,9 +401,11 @@ public final class BuildSite {
         if (revision == null) return protects(pos) || access.facility(pos) || access.facility(pos.above())
                 ? failed("DENIED:工地目标、支撑、通道、工位或临时工程不可作为普通清障。") : null;
         boolean soft = softClearance(access.state(pos));
+        boolean repairFacility = same(revision) && misplacedFacility(pos, access);
         if (!same(revision) || accessCell(pos) && !soft
                 || access.occupied(pos) && !soft && !access.canLowerThrough(pos))
             return failed("DENIED:施工修订不符，或目标承担通道/身体支撑。");
+        if (repairFacility) return null;
         if (BuildObjects.paired(access.state(pos))) return objectMiningGuard(pos, cleanup, access);
         if (cleanup) {
             var record = temporary.get(pos);

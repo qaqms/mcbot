@@ -486,6 +486,28 @@ class BuildSiteTest {
         w.states.remove(TARGET.above()); w.states.put(TARGET.east(),Blocks.TORCH.defaultBlockState());
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
     }
+
+    @Test void anErrantFacilityAboveAnUnfinishedTargetCanBeRemovedBeforeTheTargetIsRepaired() {
+        var w = new World();
+        var design = BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":4,"y":90,"z":0},"cells":[
+                {"x":0,"y":0,"z":0,"block":"oak_planks"}]}
+                """).getAsJsonObject());
+        var site = new BuildSite();
+        site.bind("repair", w);
+        assertNull(site.begin(design, List.of(), FEET, w));
+        w.states.put(TARGET, Blocks.DIRT.defaultBlockState());
+        w.states.put(TARGET.above(), Blocks.CRAFTING_TABLE.defaultBlockState());
+
+        assertNull(site.miningGuard(TARGET.above(), design.revision(), false, w),
+                "the misplaced workstation is a repair obstruction, not an ordinary facility target");
+        assertNull(site.miningGuard(TARGET, design.revision(), false, w),
+                "the target below may be replaced after the obstruction is removed");
+
+        w.states.remove(TARGET.above());
+        assertNotNull(site.miningGuard(TARGET.above(), design.revision(), false, w),
+                "an unrelated empty cell is never a facility repair target");
+    }
     @Test void existingFacilitiesUnknownNeighborsBodySupportAndStateConflictsAreNeverCleared() {
         var w=new World(); var site=site(w);
         w.states.put(TARGET,Blocks.CRAFTING_TABLE.defaultBlockState());
