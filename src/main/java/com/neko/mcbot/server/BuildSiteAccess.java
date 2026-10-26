@@ -122,6 +122,16 @@ public final class BuildSiteAccess implements BuildSite.Access {
     }
     @Override public boolean passage(BlockPos pos) { return body.navigationTrail().protectsPassage(pos); }
     @Override public boolean passageComplete() { return body.navigationTrail().passageComplete(); }
+    @Override public boolean cleanupReady(BlockPos pos) {
+        // Occupied supports use the descent-and-landing lifecycle, never an ordinary local dig.
+        var actual = state(pos);
+        return actual != null && !occupied(pos) && BlockMining.forPlayer(body, pos,
+                net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(actual.getBlock()).toString(),
+                "temporary_cleanup", body.buildSite().target().revision(), true).preflight(5.5) == null;
+    }
+    @Override public double cleanupDistanceSq(BlockPos pos) {
+        return body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos));
+    }
     @Override public boolean canMine(BlockState state) {
         if (tools == null) tools = MiningTools.forPlayer(body);
         return tools.best(state) != null;

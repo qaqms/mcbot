@@ -12,6 +12,27 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void cleanupReadinessRequiresLiveProvenanceAndNeverGrantsActionPermission() {
+        int[] observed={0};
+        var world=new World() {
+            @Override public boolean cleanupReady(BlockPos pos) { observed[0]++; return true; }
+            @Override public double cleanupDistanceSq(BlockPos pos) { return 4.25; }
+        };
+        var site=site(world); temporary(site,world);
+        var before=site.snapshot();
+        var record=site.report(world).getAsJsonArray("temporary").get(0).getAsJsonObject();
+        assertTrue(record.get("cleanup_allowed").getAsBoolean());
+        assertTrue(record.get("cleanup_ready").getAsBoolean());
+        assertEquals(4.25,record.get("cleanup_distance_sq").getAsDouble());
+        assertEquals(1,observed[0]);
+        assertEquals(before,site.snapshot(),"observations cannot spend actions or change sources");
+        world.witnesses.get(TEMP).invalidate();
+        record=site.report(world).getAsJsonArray("temporary").get(0).getAsJsonObject();
+        assertFalse(record.get("cleanup_allowed").getAsBoolean());
+        assertFalse(record.get("cleanup_ready").getAsBoolean());
+        assertEquals(1,observed[0],"a stale source cannot be offered as nearby work");
+    }
+
     @Test void aWindowDoesNotMakeItsOrdinaryWallSupportPermanentlyUndiggable() {
         var w=new World();
         var design=BuildTarget.parse(JsonParser.parseString("""

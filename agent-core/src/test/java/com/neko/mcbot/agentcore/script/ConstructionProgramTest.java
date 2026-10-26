@@ -11,6 +11,143 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void anEmptyCandidatePageIsNotPermissionToDismantleBeforeCheckingLaterWork() throws Exception {
+        var w=new World();
+        w.override=(name,args)->{
+            if(name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":true,
+                    "relocation":{"operation":"lower","x":0,"y":93,"z":0,
+                    "expected_block":"minecraft:oak_planks","temporary_cleanup":false}}
+                    """.formatted(REV));
+            if(name.equals("build_diff") && w.moved==0) {
+                boolean first=!args.has("work_cursor") || args.get("work_cursor").getAsInt()==0;
+                return actual("""
+                        {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                        "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                        "body_obstructs_target":true,"observation_key":"paged","offset":0,"next_offset":-1,
+                        "work_scan":true,"work_next_cursor":%d,"cells":%s}
+                        """.formatted(REV,first?16:-1,first?"[]":"""
+                        [{"x":4,"y":94,"z":0,"state":"out_of_reach","item":"minecraft:stone",
+                        "material_available":true}]
+                        """));
+            }
+            if(name.equals("break_block")) fail("inspect later candidate pages before dismantling the stance");
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(1,w.moved);
+        assertEquals(0,w.breaks);
+    }
+
+    @Test void futureDrawingOccupancyDoesNotDismantleAWorkingStanceBeforeTheNextWorkRoute() throws Exception {
+        var w=new World();
+        w.override=(name,args)->{
+            if(name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":true,
+                    "relocation":{"operation":"lower","x":0,"y":93,"z":0,
+                    "expected_block":"minecraft:oak_planks","temporary_cleanup":false}}
+                    """.formatted(REV));
+            if(name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":%s,"remaining":%d,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "body_obstructs_target":true,"observation_key":"work-%d","goal_observation_key":"drawing-%d",
+                    "offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":%d,"z":0,"state":"%s","item":"minecraft:oak_planks","material_available":true}]}
+                    """.formatted(REV,w.placed==2,2-w.placed,w.placed,w.placed,94+w.placed,
+                    w.placed==2?"satisfied":w.moved>w.placed?"ready":"out_of_reach"));
+            if(name.equals("move_to")) {
+                assertTrue(args.has("work_target"),"continue useful work before a speculative descent");
+                w.moved++;
+                return actual("{\"can_work_here\":true}");
+            }
+            if(name.equals("break_block")) fail("future drawing occupancy alone must not dismantle a finished block");
+            if(name.equals("build_nearby")) {
+                w.placed++;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(2,w.moved);
+        assertEquals(2,w.placed);
+        assertEquals(0,w.breaks);
+    }
+
+    @Test void cleanupDrainsVisibleNearbySupportsBeforeWalkingToAnEarlierHigherRecord() throws Exception {
+        var w=new World();
+        var removed=new ArrayList<Integer>();
+        w.override=(name,args)->{
+            if(name.equals("build_site")) {
+                var site=JsonParser.parseString("""
+                        {"active":true,"target_revision":"%s","temporary":[]}
+                        """.formatted(REV)).getAsJsonObject();
+                for(int x:new int[]{8,9,10}) site.getAsJsonArray("temporary").add(JsonParser.parseString("""
+                        {"x":%d,"y":%d,"z":0,"block":"minecraft:stone","cleanup_allowed":true,
+                        "cleanup_ready":%s,"cleanup_distance_sq":%d,"present_known":true,"present":%s}
+                        """.formatted(x,x==8?92:90,x!=8||w.moved>0,x==8?100:x==9?4:1,!removed.contains(x))));
+                return new ToolOutcome(true,"fresh sight and distance",site);
+            }
+            if(name.equals("move_to")) {
+                assertEquals(List.of(10,9),removed,"finish both visible supports before leaving");
+                assertEquals(8,args.get("x").getAsInt());
+                assertTrue(args.get("walk_only").getAsBoolean());
+                w.moved++;
+                return actual("{\"can_work_here\":true}");
+            }
+            if(name.equals("break_block")) {
+                assertTrue(args.get("temporary_cleanup").getAsBoolean());
+                assertTrue(removed.add(args.get("x").getAsInt()));
+                w.breaks++;
+                return actual("{\"removed\":true}");
+            }
+            return null;
+        };
+        var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(List.of(10,9,8),removed);
+        assertEquals(1,w.moved);
+        assertEquals(3,result.data().getAsJsonObject("returned").get("removed").getAsInt());
+    }
+
+    @Test void cleanupApproachesTheNearestAdmissibleSupportThenReevaluatesItsNewNeighbors() throws Exception {
+        var w=new World();
+        var removed=new ArrayList<Integer>();
+        w.override=(name,args)->{
+            if(name.equals("build_site")) {
+                var site=JsonParser.parseString("""
+                        {"active":true,"target_revision":"%s","temporary":[]}
+                        """.formatted(REV)).getAsJsonObject();
+                for(int x:new int[]{10,8,9}) {
+                    int dx=w.moved==0?x:x-8;
+                    site.getAsJsonArray("temporary").add(JsonParser.parseString("""
+                            {"x":%d,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":true,
+                            "cleanup_ready":%s,"cleanup_distance_sq":%d,"present_known":true,"present":%s}
+                            """.formatted(x,w.moved>0,dx*dx,!removed.contains(x))));
+                }
+                return new ToolOutcome(true,"fresh work facts",site);
+            }
+            if(name.equals("move_to")) {
+                assertEquals(8,args.get("x").getAsInt(),"registration order must not select the farthest support");
+                assertEquals(0,w.moved);
+                w.moved++;
+                return actual("{\"can_work_here\":true}");
+            }
+            if(name.equals("break_block")) {
+                removed.add(args.get("x").getAsInt()); w.breaks++;
+                return actual("{\"removed\":true}");
+            }
+            return null;
+        };
+        var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(List.of(8,9,10),removed);
+        assertEquals(1,w.moved,"reobserve local work after each removal");
+    }
+
     @Test void foundationSupplyGapReturnsToTheModelBeforeAnyUpperWorkEvenWithRawMaterialsInInventory() throws Exception {
         var w=new World();
         w.override=(name,args)-> {
@@ -610,7 +747,7 @@ class ConstructionProgramTest {
                     {"target_revision":"%s","goal_satisfied":false,"remaining":2,"observation_complete":true,
                     "spatial_stable":true,"budget_exhausted":false,"body_obstructs_target":true,
                     "observation_key":"body-in-drawing","offset":0,"next_offset":-1,"cells":[
-                    {"x":4,"y":90,"z":0,"state":"blocked","item":"stone","material_available":true}]}
+                    {"x":4,"y":90,"z":0,"state":"blocked"}]}
                     """.formatted(REV));
             return null;
         };
@@ -679,7 +816,8 @@ class ConstructionProgramTest {
     @Test void anUnchangedRecoveryIsNotRetriedAndPermissionOrCancellationFailuresStopIt() throws Exception {
         for (String failure : List.of("NO_PATH:unchanged","DENIED:permission","CANCELLED:owner")) {
             var w=new World(); w.moveFailure=failure;
-            w.override=(name,args)->name.equals("build_site") ? actual("""
+            w.override=(name,args)->name.equals("build_diff") && w.moved==0 ? bodyBlockedDiff()
+                    : name.equals("build_site") ? actual("""
                     {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":true,
                     "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":true}}
                     """.formatted(REV)) : null;
@@ -720,7 +858,8 @@ class ConstructionProgramTest {
     }
     @Test void aBodyInTheDrawingMovesToTheObservedAdjacentStanceBeforeStartingWork() throws Exception {
         var w = new World();
-        w.override = (name,args) -> name.equals("build_site") ? actual("""
+        w.override = (name,args) -> name.equals("build_diff") && w.moved==0 ? bodyBlockedDiff()
+                : name.equals("build_site") ? actual("""
                 {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":%s,
                 "relocation":{"operation":"move","x":-1,"y":90,"z":0,"walk_only":true}}
                 """.formatted(REV,w.moved==0)) : null;
@@ -757,7 +896,8 @@ class ConstructionProgramTest {
 
     @Test void aSafeColumnDescentUsesTheOriginalBreakToolWithTheFrozenRevisionAndExpectedBlock() throws Exception {
         var w = new World();
-        w.override = (name,args) -> name.equals("build_site") ? actual("""
+        w.override = (name,args) -> name.equals("build_diff") && w.moved==0 ? bodyBlockedDiff()
+                : name.equals("build_site") ? actual("""
                 {"active":true,"target_revision":"%s","temporary":[],"body_obstructs_target":%s,
                 "relocation":{"operation":"lower","x":0,"y":89,"z":0,
                 "expected_block":"minecraft:stone","temporary_cleanup":false}}
@@ -814,6 +954,15 @@ class ConstructionProgramTest {
         assertEquals(16368,world.calls.getLast().args().get("offset").getAsInt());
         assertEquals(REV,world.calls.getLast().args().get("expected_revision").getAsString());
     }
+    private static ToolOutcome bodyBlockedDiff() {
+        return actual("""
+                {"target_revision":"%s","remaining":2,"goal_satisfied":false,"observation_complete":true,
+                "spatial_stable":true,"budget_exhausted":false,"observation_key":"body-blocked",
+                "body_obstructs_target":true,"offset":0,"next_offset":-1,
+                "cells":[{"x":4,"y":90,"z":0,"state":"blocked"}]}
+                """.formatted(REV));
+    }
+
     static final String REV = "a".repeat(64);
     static final String CODE = """
             local t={anchor={x=4,y=90,z=0},cells={{x=0,y=0,z=0,block="stone"}}}

@@ -3,6 +3,16 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 工作站位与就近回收（2026-10-26）
+
+详见CONSTRUCTION-STANCE-AND-LOCAL-CLEANUP-2026-10-26。body_obstructs_target是未来图纸碰撞体积，
+不独自证明必须拆脚下降。Lua先做可用工作/普通工作换位和候选续页，无工作或实际起步受阻再恢复。
+BuildSite临时项新增cleanup_ready/cleanup_distance_sq，BuildSiteAccess在来源和依赖允许时复用
+BlockMining原生只读预检；占身体的支撑不进入普通原地挖掘，仍走拆降和落稳链。
+回收先消化当前可挖集合，再按距离选择换位目标，每次实际移除后重新观察；同距才以高度区分，
+承重/贴附仍由原守卫决定。walk_only、动作前许可/来源/区域锁及整图验收保持。
+没有把参考组合采掘目标或自动脚手架回收写成完整迁移；真实路程与拆补次数仍待实测。
+
 ## 基础顺序与补制交接（2026-10-26）
 
 详见FOUNDATION-ORDER-AND-SUPPLY-2026-10-26。BuildFoundation跨全图核最低可恢复主体层，

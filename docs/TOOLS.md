@@ -3,6 +3,16 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 工作站位与就近回收（2026-10-26）
+
+build_site.temporary增加cleanup_ready，表示来源/依赖允许且当前原生挖掘预检通过；
+cleanup_distance_sq是实际眼睛到方块中心的距离平方，可用时才返回。查询不切换主手或执行动作。
+mc.cleanup_temporary先原地做当前可挖格，之后按新鲜距离选择需换位目标，每次移除重查；
+同距以高度区分，承重/贴附、来源、占位、区域锁和动作许可仍逐格核验。
+脚下支撑不作普通就地挖掘，沿原拆降/确认落稳链；清理接近仍walk_only，不造新支撑。
+body_obstructs_target只说明身体碰到未来图纸体积；有可执行工作/正常工作换位或未查后页时
+不提前拆脚下降，无工作或起步实际受阻再恢复。详见CONSTRUCTION-STANCE-AND-LOCAL-CLEANUP-2026-10-26。
+
 ## 基础顺序与补制（2026-10-26）
 
 build_diff所有模式增加foundation_work：active/y/total/unfinished/repairs_pending/known，

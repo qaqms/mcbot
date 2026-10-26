@@ -374,7 +374,8 @@ function mc.build(target, options)
         -- A usable work stance wins over future drawing occupancy. Walking alone does not reopen a pass.
         local obstructing=pages[1].body_obstructs_target
         if obstructing==nil then obstructing=site.body_obstructs_target end
-        if not ready and not clear and obstructing then moved=recover(stamp,true) end
+        if not ready and not clear and not far and obstructing
+            and (not pages[1].work_next_cursor or pages[1].work_next_cursor<0) then moved=recover(stamp,true) end
         if not ready and not clear then work_arrival=false end
         if not moved and (ready or clear or far or pending_repairs) then
             local checkpoint=call("build_site",{operation="checkpoint",expected_revision=revision}).data
@@ -523,6 +524,14 @@ function mc.cleanup_temporary(revision)
     end
     local removed,attempted,recovery=0,{},{}
     local failures,failures_omitted={},0
+    local function nearer(candidate,current)
+        if not current then return true end
+        local ready,was_ready=candidate.cleanup_ready==true,current.cleanup_ready==true
+        if ready~=was_ready then return ready end
+        local distance,previous=candidate.cleanup_distance_sq,current.cleanup_distance_sq
+        if distance and previous and distance~=previous then return distance<previous end
+        return candidate.y>current.y
+    end
     local function finish(blocked)
         local retained,reasons,reasons_omitted=0,{},0
         for _,record in ipairs(site.temporary) do
@@ -541,7 +550,14 @@ function mc.cleanup_temporary(revision)
     end
     while true do
         local moved=false
-        if site.body_on_temporary then
+        local record=nil
+        for _,candidate in ipairs(site.temporary) do
+            local key=candidate.x..":"..candidate.y..":"..candidate.z
+            if candidate.cleanup_allowed and not attempted[key]
+                and not (candidate.present_known and candidate.present==false)
+                and nearer(candidate,record) then record=candidate end
+        end
+        if not (record and record.cleanup_ready) and site.body_on_temporary then
             local plan=site.relocation
             local ok,result=relocate(site,revision,"cleanup",recovery)
             moved=ok
@@ -555,17 +571,11 @@ function mc.cleanup_temporary(revision)
             end
         end
         if not moved then
-            local record=nil
-            for _,candidate in ipairs(site.temporary) do
-                local key=candidate.x..":"..candidate.y..":"..candidate.z
-                if candidate.cleanup_allowed and not attempted[key]
-                    and not (candidate.present_known and candidate.present==false)
-                    and (not record or candidate.y>record.y) then record=candidate end
-            end
             if not record then return finish() end
             attempted[record.x..":"..record.y..":"..record.z]=true
             -- Dismantling must not create another scaffold just to reach the previous one.
-            local reachable,result=move(record,nil,site.bounds,true)
+            local reachable,result=true,nil
+            if not record.cleanup_ready then reachable,result=move(record,nil,site.bounds,true) end
             if not reachable then
                 if #failures<8 then
                     failures[#failures+1]={x=record.x,y=record.y,z=record.z,

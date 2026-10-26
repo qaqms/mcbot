@@ -34,6 +34,8 @@ public final class BuildSite {
         default boolean canMine(BlockState actual) { return true; }
         default boolean canLowerThrough(BlockPos pos) { return false; }
         default boolean repairMaterials(List<BuildTarget.Cell> cells) { return cells.stream().allMatch(this::material); }
+        default boolean cleanupReady(BlockPos pos) { return false; }
+        default double cleanupDistanceSq(BlockPos pos) { return Double.NaN; }
     }
     private record Temporary(BlockPos pos, BlockState state, String purpose, Object chunk, CellWitness witness) { }
     private Object task, world;
@@ -635,6 +637,9 @@ public final class BuildSite {
                     && record.chunk == access.chunk(record.pos) && record.state == access.state(record.pos));
             var failure = miningGuard(record.pos, target.revision(), true, access);
             row.addProperty("cleanup_allowed", failure == null);
+            row.addProperty("cleanup_ready", failure == null && access.cleanupReady(record.pos));
+            double distance = access.cleanupDistanceSq(record.pos);
+            if (Double.isFinite(distance) && distance >= 0) row.addProperty("cleanup_distance_sq", distance);
             if (failure != null) row.addProperty("cleanup_reason", failure.feedback());
             rows.add(row);
         }

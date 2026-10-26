@@ -93,7 +93,9 @@ public final class ClientToolDefs {
                     + "revise须target及expected_revision=旧工地修订；只纠正同落点/旋转/格集的材料或属性，保留临时工程和累计账。"
                     + "access_route_explicit表示是否显式声明通道，passage_observation_complete仅为历史通行记录完整性；"
                     + "checkpoints/edit_attempts及navigation_*累计不重开，temporary含实际来源与cleanup_allowed；"
+                    + "cleanup_ready为当前原生采掘预检通过，cleanup_distance_sq为眼睛到格中心距离平方，只作选序，动作前仍重验；"
                     + "body_obstructs_target/body_on_temporary为实际身体状态，relocation是只读局部换位或安全下落建议，"
+                    + "碰到未来图纸占地不证明须立刻拆脚下降；先做可执行工作或正常工作换位，确无工作或起步受阻才恢复。"
                     + "仍须原工具执行重验；repairs_pending是临时开路后尚未补回的原图格；"
                     + "登记不改世界或授予许可，return_guaranteed=false；只保护声明通道，不证明全局逃生。";
             case "status" -> "data.x/y/z为脚格整数，dimension为字符串；没有data.position或data.pos。"
