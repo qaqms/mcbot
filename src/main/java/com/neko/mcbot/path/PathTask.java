@@ -97,6 +97,9 @@ public final class PathTask extends TickTask {
     /** liveify 后的真实挖/放计数（NEED_CONFIRM 清单与到达文案的唯一事实源）。 */
     private int planDigs;
     private int planPlaces;
+    private int actualDoorInteractions;
+    private final java.util.Map<BlockPos,net.minecraft.world.level.block.state.BlockState> restoreDoors
+            =new java.util.LinkedHashMap<>();
     /** 本轮搜索是重规划（失败文案加"路被改变后"前缀；旧路降权集只在重搜时装）。 */
     private boolean wasReplan;
     /** Reversible prefix from a search batch; continue from its actual landing. */
@@ -297,6 +300,8 @@ public final class PathTask extends TickTask {
     }
 
     private void addTripData(JsonObject data) {
+        data.addProperty("door_interactions",actualDoorInteractions);
+        data.addProperty("doors_pending_restore",restoreDoors.size());
         data.addProperty("navigation_goal", pickupTarget != null ? "pickup" : spec.workArrival() ? "work" : "position");
         data.addProperty("departure_alignments", departureAlignments);
         data.addProperty("segments", segments);
@@ -616,7 +621,7 @@ public final class PathTask extends TickTask {
             } finally { pendingSearch = null; }
             // Dry routes can finish without preparing live edit costs. A failed dry search falls
             // back to the existing world-thread edit planner when terrain changes are permitted.
-            if (!walkOnly && search.failure() != null) {
+            if (search.failure() != null) {
                 allowance.observe(search);
                 search = null;
             }
@@ -730,6 +735,8 @@ public final class PathTask extends TickTask {
         if (check != null && !check.ok()) {
             if (check.data() != null && check.data().has("placement_failure"))
                 data.add("placement_failure", check.data().get("placement_failure"));
+            if (check.data() != null && check.data().has("placement_face_failures"))
+                data.add("placement_face_failures", check.data().get("placement_face_failures"));
             data.addProperty("current_failure", check.feedback());
         }
         return data;
@@ -754,14 +761,15 @@ public final class PathTask extends TickTask {
                             && (pos.equals(current) || spec.allowsStep(current.getX(), current.getY(), current.getZ(),
                             pos.getX(), pos.getY(), pos.getZ()) && stepConstraint.test(current, pos)));
             if (departure == null) return new Progress.Done(new Result(false,
-                    "NO_PATH:实际脚底附近没有可验证的同高度起步站位；未证明目标无路，"
+                    "NO_PATH:实际脚底附近没有可验证的受支撑起步站位；未证明目标无路，"
                             + "也不能据此认定缺少垫脚材料。请核对脚下碰撞、加载和路线范围。", null));
-            departureSteering = new PathSteering(departure.getX(), c.getY(), departure.getZ(), false);
+            var landing=geometry.standing(departure.getX(),departure.getY(),departure.getZ(),TerrainEdits.EMPTY);
+            departureSteering = new PathSteering(departure.getX(), landing.height(), departure.getZ(), false);
             departureAlignments++;
             McbotMod.LOG.info("[path] 格边起步对齐 actual={} to={} route={}",
                     c.position(), departure.toShortString(), timing.id());
         }
-        if (!geometry.canAlign(c.getX(), c.getY(), c.getZ(), departure))
+        if (!geometry.canDepart(c.getX(), c.getY(), c.getZ(), departure))
             return new Progress.Done(new Result(false,
                     "NO_PATH:起步对齐的支撑或净空已变化，停止输入；请重新观察实际站位。", null));
         timing.phase(PathTiming.Phase.STEER);
@@ -864,6 +872,14 @@ public final class PathTask extends TickTask {
     private java.util.Map<String, ActionPermissions.Change> changes(List<DigAStar.Step> plan) {
         var changes = new java.util.LinkedHashMap<String, ActionPermissions.Change>();
         for (var step : plan) {
+            for (long cell:step.toggle()) {
+                addChange(changes,"toggle",cell);
+                var pos=com.neko.mcbot.server.DoorTraversal.pos(cell);
+                var state=level.isLoaded(pos) ? level.getBlockState(pos) : null;
+                var restore=new ActionPermissions.Change("door_restore",pos.asLong(),
+                        state==null ? null : com.neko.mcbot.server.DoorTraversal.flip(state));
+                changes.put(ActionPermissions.key(restore),restore);
+            }
             for (long cell : step.dig()) addChange(changes, "dig", cell);
             for (long cell : step.place()) addChange(changes, "place", cell);
         }
@@ -879,6 +895,8 @@ public final class PathTask extends TickTask {
     private Progress needConfirmation(java.util.Map<String, ActionPermissions.Change> changes, int digs, int places) {
         clearCrack();
         JsonObject data = confirmData(digs, places);
+        long doorCells = changes.values().stream().filter(change -> change.operation().equals("toggle")).count();
+        String doors = doorCells == 0 ? "" : "、开关门涉及 " + doorCells + " 格（含通过后条件允许时恢复）";
         StringBuilder cells = new StringBuilder();
         if (changes.size() <= 256) for (var change : changes.values()) {
             BlockPos pos = BlockPos.of(change.position());
@@ -893,10 +911,10 @@ public final class PathTask extends TickTask {
                 : "用 ask_owner 携带 authorization_id=" + id
                 + " 展示完整清单征得主人明确确认，再用 move_to 携带相同 authorization_id 重发；模型布尔不能授权。";
         if (id != null) data.addProperty("authorization_summary",
-                "路线目的地 " + target.toShortString() + "；挖 " + digs + " 格、放 " + places + " 格。具体清单：" + cells);
+                "路线目的地 " + target.toShortString() + "；挖 " + digs + " 格、放 " + places + " 格" + doors + "。具体清单：" + cells);
         return new Progress.Done(new Result(false,
                 "NEED_CONFIRM:到 " + target.toShortString() + " 需要挖 " + digs + " 格、放 " + places
-                        + " 格。" + inlineList() + instruction, data));
+                        + " 格" + doors + "。" + inlineList() + instruction, data));
     }
 
     private Progress checkChange(String op, BlockPos pos) {
@@ -1045,7 +1063,8 @@ public final class PathTask extends TickTask {
                 && (sharedBudget == null || sharedBudget.perSearch())) {
             backgroundTried = true;
             var snapshot = NavigationSnapshot.capture(level, from, drivenBody.getBbWidth(),
-                    drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope, sampler.geometry().maxDrop());
+                    drivenBody.getBbHeight(), drivenBody.maxUpStep(), spec, outerScope, sampler.geometry().maxDrop(),
+                    drivenBody.getEyeHeight(),drivenBody.blockInteractionRange());
             var frozenGoal = goal.snapshot(snapshot);
             if (frozenGoal != null) {
                 var dry = new DigAStar(snapshot, from.getX(), from.getY(), from.getZ(),
@@ -1217,7 +1236,7 @@ public final class PathTask extends TickTask {
             }
             var p = check.plan();
             previous = new DigAStar.Step(step.x(), step.y(), step.z(), p.dig(), p.place(),
-                    step.action(), p.feetY(), p.jump());
+                    step.action(), p.feetY(), p.jump(),p.toggle());
             out.add(previous);
             edits = p.terrain();
         }
@@ -1239,7 +1258,7 @@ public final class PathTask extends TickTask {
             if (!sampler.inBounds(step.x(), step.y(), step.z()))
                 return new PathFailure(index, "OUT_OF_BOUNDS", from, to, to);
             if (step.action() == DigAStar.ACT_START) {
-                if (previous != null || !step.dig().isEmpty() || !step.place().isEmpty())
+                if (previous != null || !step.dig().isEmpty() || !step.place().isEmpty() || !step.toggle().isEmpty())
                     return new PathFailure(index, "INVALID_START", from, to, to);
                 if (sampler.geometry() != null) {
                     var foot = sampler.geometry().foot(step.x(), step.y(), step.z(), edits);
@@ -1278,6 +1297,8 @@ public final class PathTask extends TickTask {
                     DigAStar.unpackX(cell), DigAStar.unpackY(cell), DigAStar.unpackZ(cell))).toList();
             if (!expected.dig().equals(neededDig) || !expected.place().equals(neededPlace))
                 return new PathFailure(index, "EDIT_LIST_CHANGED", from, to, null);
+            if (!step.toggle().containsAll(expected.toggle()))
+                return new PathFailure(index,"DOOR_LIST_CHANGED",from,to,null);
             edits = expected.terrain();
             digs += neededDig.size();
             places += neededPlace.size();
@@ -1327,6 +1348,7 @@ public final class PathTask extends TickTask {
         JsonArray arr = new JsonArray();
         int listed = 0;
         for (DigAStar.Step st : path) {
+            for (long cell:st.toggle()) if (listed++<32) arr.add(cellDesc("toggle",cell));
             for (long cell : st.dig()) {
                 if (listed++ < 32) {
                     arr.add(cellDesc("dig", cell));
@@ -1342,6 +1364,7 @@ public final class PathTask extends TickTask {
         data.add("blocks", arr);
         data.addProperty("dig", digs);
         data.addProperty("place", places);
+        data.addProperty("toggle_cells", path.stream().flatMap(step -> step.toggle().stream()).distinct().count());
         if (listed > 32) {
             data.addProperty("truncated_of", listed);
         }
@@ -1365,6 +1388,7 @@ public final class PathTask extends TickTask {
 
     private Progress executeTick(CompanionPlayer c) {
         timing.phase(PathTiming.Phase.VALIDATE);
+        restorePassedDoors(c);
         // 到达判定：路径走完且与末节点贴近
         if (cursor >= path.size()) {
             return arrived(c);
@@ -1379,6 +1403,43 @@ public final class PathTask extends TickTask {
         }
 
         DigAStar.Step next = path.get(cursor);
+
+        if (!next.toggle().isEmpty()) {
+            stopMovement();
+            var before=path.get(Math.max(0,cursor-1));
+            var edge=PathTransition.check(sampler,TerrainEdits.EMPTY,before.x(),before.y(),before.z(),
+                    next.x(),next.y(),next.z(),Math.max(0,spec.maxDigs()-actualDigs),sampler.maxPlaces());
+            if (edge.plan()==null || !next.toggle().containsAll(edge.plan().toggle())) {
+                beginReplan(c);
+                return running();
+            }
+            var cells=edge.plan().toggle();
+            if (!cells.isEmpty()) {
+                var pos=com.neko.mcbot.server.DoorTraversal.pos(cells.getFirst());
+                var parts=sampler.toggleCells(pos.getX(),pos.getY(),pos.getZ());
+                if (parts.isEmpty()) { beginReplan(c); return running(); }
+                for (long cell:parts) {
+                    var permission=checkChange("toggle",com.neko.mcbot.server.DoorTraversal.pos(cell));
+                    if (permission!=null) return permission;
+                }
+                var original=level.getBlockState(pos);
+                var result=com.neko.mcbot.server.DoorTraversal.interact(c,pos);
+                if (!result.ok()) return new Progress.Done(result);
+                // A gate may adopt the player's facing during native use; only restore the OPEN state.
+                var actual=level.getBlockState(pos);
+                restoreDoors.putIfAbsent(pos,actual.setValue(
+                        net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN,
+                        original.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN)));
+                actualDoorInteractions++;
+                for (long cell:parts) authorization.observed("toggle",
+                        com.neko.mcbot.server.DoorTraversal.pos(cell).asLong());
+                McbotMod.LOG.info("[path] 门交互 {} route={}",pos.toShortString(),timing.id());
+                return running();
+            }
+            path.set(cursor,new DigAStar.Step(next.x(),next.y(),next.z(),next.dig(),next.place(),
+                    next.action(),next.feetY(),next.jump()));
+            return running();
+        }
 
         // 1) 本节点要挖的格：逐拍真计时（mineOne 完成/已清返回 null，推进清单）
         if (!next.dig().isEmpty()) {
@@ -1401,7 +1462,7 @@ public final class PathTask extends TickTask {
                 return p; // 还在挖或终局失败
             }
             path.set(cursor, new DigAStar.Step(next.x(), next.y(), next.z(),
-                    next.dig().subList(1, next.dig().size()), next.place(), next.action(), next.feetY(), next.jump()));
+                    next.dig().subList(1, next.dig().size()), next.place(), next.action(), next.feetY(), next.jump(),next.toggle()));
             if (next.action() == DigAStar.ACT_LOWER)
                 steering = new PathSteering(next.x(), next.feetY(), next.z(), false);
             return running();
@@ -1429,7 +1490,7 @@ public final class PathTask extends TickTask {
                 return p;
             }
             path.set(cursor, new DigAStar.Step(next.x(), next.y(), next.z(),
-                    next.dig(), next.place().subList(1, next.place().size()), next.action(), next.feetY(), next.jump()));
+                    next.dig(), next.place().subList(1, next.place().size()), next.action(), next.feetY(), next.jump(),next.toggle()));
             return running();
         }
 
@@ -1559,7 +1620,7 @@ public final class PathTask extends TickTask {
         for (int i = index; i <= index + 2; i++) {
             var before = plan.get(i - 1);
             var next = plan.get(i);
-            if (next.action() != DigAStar.ACT_WALK || next.jump() || !next.dig().isEmpty()
+            if (next.action() != DigAStar.ACT_WALK || next.jump() || !next.dig().isEmpty() || !next.toggle().isEmpty()
                     || !next.place().isEmpty() || Math.abs(next.feetY() - start.feetY()) > 1e-5
                     || next.x() - before.x() != dx || next.z() - before.z() != dz) return false;
             var edge = PathTransition.check(terrain, TerrainEdits.EMPTY, before.x(), before.y(), before.z(),
@@ -1576,6 +1637,7 @@ public final class PathTask extends TickTask {
                 && (after.action() == DigAStar.ACT_WALK || after.action() == DigAStar.ACT_FALL)
                 && here.dig().isEmpty() && here.place().isEmpty()
                 && after.dig().isEmpty() && after.place().isEmpty()
+                && here.toggle().isEmpty() && after.toggle().isEmpty()
                 && before.feetY() >= here.feetY() && before.feetY() - here.feetY() <= 1.00001
                 && here.feetY() >= after.feetY() && here.feetY() - after.feetY() <= 1.00001
                 && !here.jump() && !after.jump()
@@ -1816,6 +1878,50 @@ public final class PathTask extends TickTask {
     }
 
     // ---- Shared actions; the path supplies its live sacred/hazard checks. ----
+
+    private void restorePassedDoors(CompanionPlayer body) {
+        var iterator=restoreDoors.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry=iterator.next();
+            var pos=entry.getKey();
+            if (!level.isLoaded(pos)) continue;
+            var current=level.getBlockState(pos);
+            if (current==entry.getValue()) { iterator.remove(); continue; }
+            if (current!=com.neko.mcbot.server.DoorTraversal.flip(entry.getValue())) {
+                iterator.remove();
+                continue;
+            }
+            if (doorAhead(path,cursor,pos)) continue;
+            if (Math.hypot(body.getX()-pos.getX()-.5,body.getZ()-pos.getZ()-.5)<1.3) continue;
+            if (body.getEyePosition().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos))
+                    > Math.pow(body.blockInteractionRange()+1,2)) continue;
+            var parts=sampler.toggleCells(pos.getX(),pos.getY(),pos.getZ());
+            if (parts.isEmpty() || parts.stream().anyMatch(cell-> {
+                var part=com.neko.mcbot.server.DoorTraversal.pos(cell);
+                return !permissions.allowsChange(context,authorization,
+                        new ActionPermissions.Change("door_restore",part.asLong(),level.getBlockState(part)));
+            })) continue;
+            var result=com.neko.mcbot.server.DoorTraversal.interact(body,pos);
+            if (result.ok()) {
+                actualDoorInteractions++;
+                for (long cell:parts) authorization.observed("door_restore",
+                        com.neko.mcbot.server.DoorTraversal.pos(cell).asLong());
+                iterator.remove();
+                McbotMod.LOG.info("[path] 门恢复 {} route={}",pos.toShortString(),timing.id());
+            }
+        }
+    }
+
+    static boolean doorAhead(List<DigAStar.Step> plan,int cursor,BlockPos door) {
+        if (plan==null) return false;
+        for (int i=Math.max(0,cursor);i<plan.size();i++) {
+            var step=plan.get(i);
+            if (step.x()==door.getX() && step.z()==door.getZ()
+                    && Math.abs(step.feetY()-door.getY())<=2) return true;
+            if (step.toggle().contains(com.neko.mcbot.server.DoorTraversal.key(door))) return true;
+        }
+        return false;
+    }
 
     /** 返回 null=还在挖/刚清完交回主流程；Done=终局（含失败教学）。 */
     private Progress mineOne(CompanionPlayer c, long cell) {

@@ -38,6 +38,10 @@ roof_no_overhang或low_residential_volume时，不能把它们当成可忽略的
 5. 用 build_diff 检查整图材料及 design_components。住宅的 doors、beds、crafting_tables、
    containers、lights 为零时，先检查是不是漏写了功能，不要将一个没有门的外壳登记为完整住宅。
    stairs、slabs 是图纸所用构件的数量，不是屋顶美观或封闭的自动评分。
+   object_validation.valid 须为 true；false 的 issues 给双格错误坐标和 expected_partner，
+   先纠正候选再登记。床头=床脚沿 facing 前进一格，两格 facing 相同，part 分别 head/foot。
+   例如床脚 z=9、床头 z=8，二者应 facing=north；写成 south 会把床头指向 z=10。
+   INVALID_BUILD_TARGET 表示登记前图纸未通过，可在本任务纠正，不需取消任务或请主人重设目标。
 
 build_diff 核对成功且 draft_retained=true 时，data.target 是完整草稿的短引用，set_goal 直接用它和
 target_revision，避免重新展开整图超出参数大小。历史整理后未登记目标的 mc.goal() 为空是正常的，
@@ -202,8 +206,10 @@ placed_blocks、cleared_blocks、remaining、blocked 和 design_components。程
 临时工位应在图纸和通路外，用 temporary_purpose=workstation 登记，不要把工作台放进
 图中要求空气的室内脚格。临时支撑走原来源记录与回收接口，不拆无关设施。身体挡住
 图中待放格时，mc.build 先选择图纸碰撞范围外的相邻站位；必要时使用真实材料搭支撑，
-或临时打开有材料能补回的普通施工方块。拆开的目标格标为 repair_pending，优先做其他工作，
-随后仍按原图补回。脚下方块只有在身体停稳、正下方有已知安全落点且完整下降柱净空时，
+或临时打开有材料能补回的普通施工方块。拆开的目标格标为 repair_pending；
+到位先完成本次工作，再优先原地补回可达缺口，然后离开做其他工作，不等整栋完成。
+仍占身体、会封出口或暂时够不到的格保留待补，后续按原图恢复。
+脚下方块只有在身体停稳、正下方有已知安全落点且完整下降柱净空时，
 才可由恢复步骤逐格拆除并依原版重力落地。完整原图仍须验收，临时拆开不算完成。
 完成后自动尝试回收本任务临时工程，temporary_retained 非零表示仍有依赖或来源缺口需处理。
 

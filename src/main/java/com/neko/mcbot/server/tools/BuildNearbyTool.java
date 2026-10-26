@@ -15,13 +15,13 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 public final class BuildNearbyTool implements ServerTool {
-    record Arguments(BuildTarget target, int offset, int maxActions, boolean includeRepairs) { }
+    record Arguments(BuildTarget target, int offset, int maxActions, boolean includeRepairs, boolean repairsOnly) { }
 
     static Arguments arguments(JsonObject args) {
         return arguments(args,BuildTarget::parse);
     }
     private static Arguments arguments(JsonObject args,java.util.function.Function<JsonObject,BuildTarget> resolve) {
-        BuildTarget.keys(args, Set.of("target", "expected_revision", "offset", "max_actions", "include_repairs"));
+        BuildTarget.keys(args, Set.of("target", "expected_revision", "offset", "max_actions", "include_repairs", "repairs_only"));
         var target = resolve.apply(args.getAsJsonObject("target"));
         String expected = BuildTarget.string(args.get("expected_revision"), 64);
         if (!expected.equals(target.revision())) throw new IllegalArgumentException("revision");
@@ -29,9 +29,13 @@ public final class BuildNearbyTool implements ServerTool {
         if (offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0)
             throw new IllegalArgumentException("page");
         int limit = args.has("max_actions") ? BuildTarget.integer(args.get("max_actions"), 1, BuildWork.MAX_ACTIONS) : 12;
-        if (args.has("include_repairs") && (!args.get("include_repairs").isJsonPrimitive()
-                || !args.getAsJsonPrimitive("include_repairs").isBoolean())) throw new IllegalArgumentException();
-        return new Arguments(target, offset, limit, !args.has("include_repairs") || args.get("include_repairs").getAsBoolean());
+        for (String key : Set.of("include_repairs", "repairs_only"))
+            if (args.has(key) && (!args.get(key).isJsonPrimitive()
+                    || !args.getAsJsonPrimitive(key).isBoolean())) throw new IllegalArgumentException();
+        boolean include = !args.has("include_repairs") || args.get("include_repairs").getAsBoolean();
+        boolean repairsOnly = args.has("repairs_only") && args.get("repairs_only").getAsBoolean();
+        if (repairsOnly && !include) throw new IllegalArgumentException("repair mode");
+        return new Arguments(target, offset, limit, include, repairsOnly);
     }
 
     @Override public String name() { return "build_nearby"; }
@@ -56,6 +60,8 @@ public final class BuildNearbyTool implements ServerTool {
         var level = body.level();
         if (body.buildSite().active() && !body.buildSite().same(input.target().revision()))
             return CompletableFuture.completedFuture(new Result(false, "TARGET_REVISION_CHANGED:不能用另一目标改动已登记工地。", null));
+        if (input.repairsOnly() && !body.buildSite().same(input.target().revision()))
+            return CompletableFuture.completedFuture(new Result(false, "TARGET_REVISION_CHANGED:原地修补须当前登记工地的待补记录。", null));
         var work = new BuildWork(input.target(), new BuildWork.Access() {
             @Override public BuildSurvey.Access survey() { return BuildDiffTool.access(body, input.target()); }
             @Override public Result valid() {
@@ -81,7 +87,7 @@ public final class BuildNearbyTool implements ServerTool {
                         && !body.buildSite().same(input.target().revision()))
                     com.neko.mcbot.building.BuildObjects.footprint(cell.pos(),cell.desired()).forEach(body.workTargets()::add);
             }
-        }, input.offset(), input.maxActions(), System::nanoTime, input.includeRepairs());
+        }, input.offset(), input.maxActions(), System::nanoTime, input.includeRepairs(), input.repairsOnly());
         var future = new CompletableFuture<Result>();
         if (!scheduler.submit(body, work, future, capTicks(args)))
             return CompletableFuture.completedFuture(new Result(false, "BUSY:身体任务槽已占用，未开始施工。", null));

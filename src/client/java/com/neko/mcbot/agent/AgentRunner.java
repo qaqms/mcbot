@@ -1369,6 +1369,8 @@ public final class AgentRunner implements ToolExecutor {
                                 return ToolOutcome.synthetic("CANCELLED:目标观测上下文已失效。");
                             var data = state.data();
                             if (!result.ok() || result.accepted()) {
+                                if (building && !result.accepted() && result.data().has("object_validation"))
+                                    data.add("goal_evidence",result.data());
                                 if (!result.accepted() && result.feedback().startsWith("OUT_OF_REACH:")) {
                                     data.addProperty("goal_evidence_unavailable", true);
                                     data.addProperty("goal_evidence_reason", "OUT_OF_REACH");
@@ -1379,6 +1381,12 @@ public final class AgentRunner implements ToolExecutor {
                                         : result.feedback(), data);
                             }
                             var evidence = result.data();
+                            if (building && evidence.has("object_validation")
+                                    && !evidence.getAsJsonObject("object_validation").get("valid").getAsBoolean()) {
+                                data.add("goal_evidence",evidence);
+                                return new ToolOutcome(false,com.neko.mcbot.building.BuildObjects.invalidFeedback(
+                                        evidence.getAsJsonObject("object_validation")),data);
+                            }
                             if (building && !milestone && evidence.has("worksite_revision")
                                     && !request.get("expected_revision").equals(evidence.get("worksite_revision"))) {
                                 data.add("goal_evidence",evidence);
@@ -1455,7 +1463,7 @@ public final class AgentRunner implements ToolExecutor {
             var fields = new JsonObject();
             for (String key : List.of("target", "draft_retained", "worksite_revision", "target_revision", "total", "remaining", "observation_complete",
                     "spatial_stable", "budget_exhausted", "goal_satisfied", "next_offset", "material_next_offset",
-                    "work_next_cursor", "design_components", "design_review", "clearing_work",
+                    "work_next_cursor", "design_components", "design_review", "object_validation", "clearing_work",
                     "entries", "task_scoped", "persistent", "active", "target_edits", "draft_revision_allowed",
                     "instance_id", "instance_revision", "design_id", "design_revision", "content_revision", "cell_count",
                     "anchor", "rotation", "layers", "offset", "cells", "records", "record_count", "conflicts", "unknown",

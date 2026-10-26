@@ -43,7 +43,7 @@ final class NavigationContinuation {
         var edits = TerrainEdits.EMPTY;
         for (int i = cursor; i < path.size(); i++) {
             var step = path.get(i);
-            edits = edits.after(step.dig(), step.place());
+            edits = edits.after(step.dig(), step.place()).toggle(step.toggle());
         }
         return edits;
     }

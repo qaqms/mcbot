@@ -65,6 +65,11 @@ public final class BuildDiffTool implements ServerTool {
                                 return value != null && value.hasBlockEntity();
                             }, body.workTargets()::protects);
                 }
+                @Override public boolean protectedPlacement(BlockPos pos) {
+                    return WorksiteProtection.protectedPlacement(pos, p -> state(p) != null,
+                            this::state, p -> state(p) != null && state(p).hasBlockEntity(),
+                            body.workTargets()::protects);
+                }
                 @Override public boolean repairPending(BlockPos pos) { return body.buildSite().repairPending(pos); }
                 @Override public boolean bodyObstructsTarget() {
                     return body.buildSite().same(target.revision()) && body.buildSite().obstructs(body.getBoundingBox());
@@ -186,8 +191,11 @@ public final class BuildDiffTool implements ServerTool {
                     + "相对坐标±32，cells无重复格、regions按次序覆盖；状态名/值须在真实注册表中，"
                     + "offset/material_offset须为16的倍数，work_cursor须配work_scan且沿原修订。", null);
         }
-        return work ? BuildSurvey.workScan(target,access.apply(target),cursor,clock)
+        var result=work ? BuildSurvey.workScan(target,access.apply(target),cursor,clock)
                 : verify ? BuildSurvey.verify(target, access.apply(target), offset, clock)
                 : BuildSurvey.query(target, access.apply(target), offset, materialOffset, clock);
+        var validation=result.data().getAsJsonObject("object_validation");
+        return verify && !validation.get("valid").getAsBoolean()
+                ? new Result(false,com.neko.mcbot.building.BuildObjects.invalidFeedback(validation),result.data()) : result;
     }
 }

@@ -104,6 +104,22 @@ public final class BuildSite {
         if (instance!=null && cell(pos)!=null) records.removed(instance,pos,before,after);
     }
     public boolean repairPending(BlockPos pos) { return repairs.contains(pos); }
+    public Set<BlockPos> interactionSources(java.util.Collection<BlockPos> positions,Access access) {
+        if (instance==null || !records.hasCapacity(instance,positions)) return Set.of();
+        var owned=new HashSet<BlockPos>();
+        for (var pos:positions) if (cell(pos)!=null && access.state(pos)!=null && !access.state(pos).isAir()
+                && records.mayChange(instance,pos,access)) owned.add(pos.immutable());
+        return Set.copyOf(owned);
+    }
+    public void recordInteraction(Map<BlockPos,BlockState> before,Map<BlockPos,BlockState> after,
+                                  Set<BlockPos> owned,Access access) {
+        before.forEach((pos,state)->recordTargetEdit(pos,state,after.get(pos)));
+        if (instance!=null && !owned.isEmpty()) {
+            var selected=new LinkedHashMap<BlockPos,BlockState>();
+            before.forEach((pos,state)-> { if (cell(pos)!=null) selected.put(pos,state); });
+            records.interacted(instance,selected,after,owned,access);
+        }
+    }
     public boolean temporary(BlockPos pos) { return temporary.containsKey(pos); }
 
     /** A work stance should not occupy the collision volume that the frozen drawing still needs. */
@@ -167,15 +183,13 @@ public final class BuildSite {
     public ServerTool.Result begin(BuildTarget next, List<BlockPos> accessRoute, BlockPos feet,
                                    com.neko.mcbot.path.PathSpec selectedScope, Access access) {
         if (task == null || stopped) return failed("DENIED:没有有效施工任务或工地已停止。");
-        for (var cell : next.cells()) {
-            String problem = BuildObjects.problem(next,cell);
-            if (!problem.isEmpty()) {
-                var data = BuildTarget.coordinates(cell.pos());
-                data.addProperty("object_problem",problem);
-                data.addProperty("target_revision",next.revision());
-                return new ServerTool.Result(false,"DENIED:双格目标 " + cell.pos().toShortString() + "："
-                        + problem + "。门须完整half/facing，hinge可省略；明确属性不能互相冲突。未登记或修改图纸。",data);
-            }
+        var validation=BuildObjects.validation(next);
+        if (!validation.get("valid").getAsBoolean()) {
+            var data=validation.getAsJsonArray("issues").get(0).getAsJsonObject().deepCopy();
+            data.addProperty("object_problem",data.get("reason").getAsString());
+            data.addProperty("target_revision",next.revision());
+            data.add("object_validation",validation);
+            return new ServerTool.Result(false,BuildObjects.invalidFeedback(validation),data);
         }
         if (target != null) {
             if (accessRoute.isEmpty()) accessRoute = route;
@@ -322,7 +336,8 @@ public final class BuildSite {
         return state != null && !state.hasBlockEntity() && state.getFluidState().isEmpty()
                 && !(state.getBlock() instanceof FallingBlock)
                 && state.isCollisionShapeFullBlock(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)
-                && state.isSolidRender();
+                && (state.isSolidRender()
+                || state.getBlock().getClass() == net.minecraft.world.level.block.TransparentBlock.class);
     }
     /** Vanilla stairs and slabs stay in place without a block beneath them. */
     public static boolean restorable(BlockState state) {
@@ -376,16 +391,10 @@ public final class BuildSite {
             if (record == null || record.witness == null || !record.witness.intact()
                     || record.chunk != access.chunk(pos) || record.state != access.state(pos))
                 return failed("DENIED:临时工程来源未知、已被修改或区块已重载，不认领相同方块替换物。");
-            /*
-             * A truncated trail used to make every support immortal.  A support
-             * is a throwaway construction object, though, and its own local
-             * proof is stronger than an unrelated gap elsewhere in the trail:
-             * it has an intact source witness, is not a recorded passage cell,
-             * and has no live target/attachment dependency.  Keep workstations
-             * and anything that was part of the walked passage conservative.
-             */
+            // Historical walking is not a live dependency. Explicit corridors, bodies and
+            // attachments are checked separately; only workstations still need the full trail.
             if (!access.passageComplete()
-                    && (!"support".equals(record.purpose) || access.passage(pos)))
+                    && !"support".equals(record.purpose))
                 return failed("TARGET_LOST:实际路线记录有缺口，不能确认临时工程已无通行依赖，未回收。");
             if (cell(pos) != null || target.cells().stream().anyMatch(c -> !c.authored().isAir()
                     && !restorable(c.desired()) && c.pos().below().equals(pos))
@@ -438,7 +447,7 @@ public final class BuildSite {
                 || cell(pos) != null || accessCell(pos) || access.passage(pos) && !"support".equals(purpose)
                 || temporary.containsKey(pos)
                 || temporary.size() >= TEMP_LIMIT || access.state(pos) != Blocks.AIR.defaultBlockState())
-            return failed("DENIED:临时用途须support/workstation、原格须空气且不占目标/通道，最多16条不淘汰。");
+            return failed("DENIED:临时用途须support/workstation、原格须空气且不占目标/通道，最多16条待回收记录。");
         return null;
     }
     public void placedTemporary(BlockPos pos, BlockState before, BlockState after, String purpose, Access access) {
@@ -447,8 +456,8 @@ public final class BuildSite {
         temporary.put(pos.immutable(), new Temporary(pos.immutable(), after, purpose, access.chunk(pos), access.watch(pos)));
     }
     public void removedTemporary(BlockPos pos) {
-        // Keep the slot consumed and the invalidated witness: repeated placement cannot recycle the provenance cap.
-        var record = temporary.get(pos);
+        // Called only after actual guarded removal. A later placement needs a fresh consumed item and witness.
+        var record = temporary.remove(pos);
         if (record != null && record.witness != null) record.witness.invalidate();
     }
     public ServerTool.Result charge() {

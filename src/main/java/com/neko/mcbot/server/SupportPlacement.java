@@ -71,7 +71,7 @@ public final class SupportPlacement {
     }
     private static boolean changed(BlockPos pos, TerrainEdits edits) {
         long key=DigAStar.pack(pos.getX(),pos.getY(),pos.getZ());
-        return edits.removed().contains(key) || edits.placed().contains(key);
+        return edits.removed().contains(key) || edits.placed().contains(key) || edits.toggled().contains(key);
     }
 
     private static boolean canPlanBlock(BlockGetter world, BlockAim.Access sight, BlockPos target,
@@ -86,7 +86,7 @@ public final class SupportPlacement {
             if (!sight.loaded(near) || !permitted.test(near)) return false;
         var removed = positions(edits.removed());
         var placed = positions(edits.placed());
-        var view = BlockAim.editedWorld(world, removed, placed);
+        var view = BlockAim.editedWorld(BlockAim.toggledWorld(world,edits.toggled()), removed, placed);
         var current = view.getBlockState(target);
         if (!current.isAir() || !current.getFluidState().isEmpty()) return false;
         if (!(work ? workPredictable(item) : predictable(item))) return false;
@@ -99,7 +99,7 @@ public final class SupportPlacement {
             if (boxes == null || boxes.stream().anyMatch(box -> box.move(cell).intersects(body))) return false;
         }
         if (!entityClear.test(body) || !entityClear.test(new AABB(target))) return false;
-        var aimed = NavigationWork.view(sight, eye, removed, placed);
+        var aimed = NavigationWork.view(BlockAim.withToggles(sight,world,edits.toggled()), eye, removed, placed);
         for (var face : Direction.values()) {
             var clicked = target.relative(face.getOpposite());
             if (!view.getBlockState(clicked).getFluidState().isEmpty()) continue;

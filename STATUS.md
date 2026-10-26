@@ -3,6 +3,293 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## Git恢复与集中提交（2026-10-26，Asia/Shanghai）
+
+- 维护者要求提交推送。插件工作目录缺少Git元数据，已从原仓库的origin/main恢复历史，
+  基线为`6b0f0e7d145a88084925a82edd143d29a5f9ba49`；仅恢复版本管理，没有检出覆盖工作文件。
+  本轮集中归档基线之后的封闭屋面工作、基础保护/射线、门通行/半格起步/临时回收、
+  及时修补及床头脚图纸校验，包含对应源码、测试、相对坐标夹具和机制记录。
+- 验证沿用下节最终强制全量2164项/222 suites全过；构建后未再修改源码或测试。
+  JAR指纹与原生待验边界保持下节记录，不将JAR、构建日志、缓存或运行数据加入源码提交。
+  提交前核暂存清单、差异格式、密钥与机器绝对路径；提交编号及远端同步结果以Git为准。
+  下文“无Git元数据、未提交/推送”均为当时检查点，不覆盖本次恢复。
+
+## 床头脚错误与目标冻结前校验（2026-10-26，Asia/Shanghai）
+
+- 维护者反馈再次失败，要求查日志并参考相关机制修复。实例匹配上一轮及时修补候选
+  `d881f4f94127512b022e2adda62b4253d653755a5c412c5469f153a74b670751`。
+  新日志冻结为`build/bed-goal-evidence-20261026.log`，99002 bytes，末时刻16:56:57，
+  SHA256 `d1f0b8781e6725912033d349e0ae6c7d4d2449c14d6a93dcf2baffe2ecbff170`。
+  本次施工尚未开始：360–361附近查询686格、现场已有1格满足；426附近先登记图纸，
+  445附近施工才拒绝(-235,64,-432)的bed_pair_missing_or_inconsistent。
+  床头相对z8、床脚z9却均声明facing=south，按原版头=脚沿facing一格应为north。
+  485附近修正图因最终目标已固定被拒绝，493附近模型报告blocked。
+  首页基础明细未展示后页错误；不能把这次当作屋面寻路或及时修补实测失败。
+  中间参数/Schema错误缺完整调用源码，不据输出null断定丢图或具体脚本原因；
+  前部登录/Realms错误后工具正常运行，不作为此次根因。
+- 配对拒绝本身正确，问题是目标登记与施工准入检查不一致，先冻结了无法原生放置的图。
+  BuildObjects.validation现复用原problem规则核完整图纸，返回object_validation：
+  valid、全部invalid_cells、最多4条issues及issues_omitted；可推导时给旋转后
+  world_facing/expected_partner，作者属性仍明确旋转前，不新增材料/距离/房型限制。
+  BuildSurvey所有模式都给诊断，普通build_diff仍成功供纠正并保留草稿；
+  verify_only拒绝非法配对为INVALID_BUILD_TARGET，BuildSite.begin共用同一检查。
+- AgentRunner保留同次身体和配对证据，成功信封中的明确非法标记也拒绝，核心WorldGoal再核。
+  AgentLoop先核身体、维度和存活，只在尚未登记时允许INVALID_BUILD_TARGET同任务纠正；
+  未登记门槛禁止降级物品目标或文字完成，原账户、取消/死亡和已登记目标冻结规则保持。
+  直接工具历史、内置Lua、工具帮助和常驻/建筑知识均贯通有限诊断及床头脚方向规则。
+  不自动转床、补画原图或删掉第二格验收，不修改既有冻结目标/恢复文件。
+- 参考只读复核BuildApi、BuildOps、Canvas、BuildStates、BuildTaskRecord及GoalSteward，
+  学习查询/施工共享设计解释、动作前明确成对占地及单次原生动作/材料口径。
+  保留本插件门床两格完整验收，不迁移参考排除次半的目标表达、另开模型判完成或直写世界。
+  证据、机制取舍及边界见`docs/PAIRED-DRAWING-GOAL-VALIDATION-2026-10-26.md`；
+  未复制/翻译参考代码、注释或文档。
+- 三项新回归先在旧码失败，见`build/bed-goal-before-20261026.log`（43秒）；
+  相关专项见`build/bed-goal-focused-20261026.log`（45秒）。
+  最终`build/bed-goal-final-20261026.log`记录JDK21强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功，1分15秒，
+  21任务全部执行，无UP-TO-DATE/FROM-CACHE。三根XML实核：核心491项/48 suites、
+  根198/27、客户端1475/147，共2164项/222 suites，failures/errors/skipped全0，
+  比此前新增8项。覆盖四旋转、后页错误、全计数/有限样本/回执限额、两种服务端信封、
+  实际Survey→Runner→Loop拒绝非法床并同任务纠正登记/验收，以及错误身体、取消迟到。
+  既有原生一次床动作/两格要求、冻结目标、未知/缺料及及时修补回归保持；
+  身体/世界、网络和原生回调仍受控，不代表真实模型或完整686格施工已验。
+- 新JAR `build/libs/mcbot-0.1.0.jar`为1930694 bytes，SHA256
+  `05d1c88e6c4ed864a16057d737c1ca62c75376c980fd7579d7311eb3246fb7a7`。
+  根归档476条均可读取，版本0.1.0、MC约束~1.21.11、Java>=21，
+  两入口、Mixin声明及全部声明类齐全；LuaJ 3.0.1及META-INF/LICENSE-luaj.txt存在。
+  内嵌核心288626 bytes、122条均可读取，与独立核心一致，SHA256
+  `b340a09182eead531789d7fee5f7a2fa2661b3a952094643c7b1ebb77a8223ec`。
+  施工Lua本轮未改，29165 bytes，低于32KiB可信资源上界，源码/包内SHA256一致：
+  `5d2af655cbbc633ab20b664051d5acc4638e445ed9c3443557aac83969833321`。
+  改动源码/文档无机器绝对路径、冲突标记或行尾空白；构建后list-java未见Java残留。
+- 没有Git元数据，未提交/推送；只改插件，宿主、连接器、参考、玩家实例及原图未改。
+  未安装JAR、启动游戏/服务器/宿主或调用真实模型。真实模型在同任务纠正图纸、
+  完整686格施工、此前及时修补/屋面收尾与临时工程回收仍需换包实测；
+  本轮不会自动解冻日志中已经登记的旧目标。
+
+## 临时开路后及时修补（2026-10-26，Asia/Shanghai）
+
+- 维护者要求临时拆开的原图格在到位后尽快补回，避免整栋建完才修导致失去工作面。
+  新日志冻结为`build/early-repair-evidence-20261026.log`，末时刻15:56:54，SHA256
+  `81db3e2c32b4d0714b5d140070810ad7791af80f84d4e15994f2337d656a73aa`。
+  实例匹配此前fe3ec92b候选。本次513/524、剩11格橡木板y69–72，
+  路线真实拆过的(-236,69,-445)、(-236,72,-438)最终仍缺。
+  屋面工作组4个严格站位种子/6048探测，至少8000节点后零输入/挖放，
+  按原30秒空搜返回NAVIGATION_STALLED；不证明全部剩余都因延迟修补造成。
+  route312/314已有门交互与恢复，本次不能再说完全不会开门。
+  自主授权与128圆石/15橡木板有证据，最终模型“须主人批准脚手架或改屋顶”无对应依据；
+  一次VALUE_LIMIT、三次FUNCTION_CALL另记脚本错误，不混作寻路根因。
+- 原Lua常规阶段排除repair_pending，普通候选遍历结束才恢复，确实把时机固定得过晚。
+  现成功工作导航到位先做本次近身工作，下一趟路线或其他工作前，原地优先补可达缺口。
+  不额外寻路/挖掘/搭支撑；没有本次可做工作时不永久等待，
+  精简导航回执保留removed_blocks，实际拆除也触发待补检查，不要求缺口在当前明细页。
+  真修补后重新观察；相同work_observation_key的空检查去重。
+  占身体、封出口、缺支撑或够不到的格保留原图来源及最后恢复阶段，fatal仍立即退出。
+- build_nearby新增严格布尔repairs_only，须当前匹配活动工地，不得与include_repairs=false组合。
+  BuildSurvey在候选分页/原料分配前筛待补，自动模式跨全图，显式offset仍限原16格页；
+  BuildWork预留区域后再核待补来源。原生放置、材料、修订、来源、许可/锁及占位/出口保持。
+  无可修格成功仅表示本次本地检查结束，placed_blocks=0/no_work_here=true，不是整图完成；
+  实际动作与预算失败不吞。实际提前修补并入placed/consumed/effects，
+  另报nearby_repaired_blocks；临时支撑回收仍是独立来源/依赖链。
+- 参考只读复核施工到位/重扫/重排/收遍、Survey、Order、CellRules与Outstanding，
+  学习当前可做工作优先与最终新鲜核对，未找到等价导航拆除后即时恢复事务。
+  没有复制/翻译参考代码或注释，也未采用直写世界、免材料、移除完成分母或刷新期限。
+  机制、日志行证据与边界见`docs/EARLY-CONSTRUCTION-REPAIRS-2026-10-26.md`；
+  常驻提示、施工知识、工具与架构文档已同步新时机。
+- 两项Lua时序回归先在旧码失败，见`build/early-repair-before-20261026.log`。
+  专项及真实来源链离线测试通过后，首轮全量新增“下一页无工作”回归发现精简视图
+  漏传实际拆除数；已补接线，失败日志`build/early-repair-final-20261026.log`保留。
+  最终`build/early-repair-final2-20261026.log`记录JDK21强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功，1分15秒，
+  21任务全部执行，无UP-TO-DATE/FROM-CACHE。三根XML实核：核心488项/48 suites、
+  根198/27、客户端1470/147，共2156项/222 suites，failures/errors/skipped全0，
+  比此前新增10项。覆盖时机、跨页/单份材料、显式页、来源失效、暂不可修、去重和fatal。
+  实际BuildSite报告/待补账、Survey、Lua、BuildWork、BlockPlacement及recordPlacement
+  贯通验证“当前工作→修补销账→屋面下一路线”和实际扣料；身体/世界/到达/原生回调仍受控。
+- 新JAR `build/libs/mcbot-0.1.0.jar`为1928219 bytes，SHA256
+  `d881f4f94127512b022e2adda62b4253d653755a5c412c5469f153a74b670751`。
+  根归档476条均可读取，版本0.1.0、MC约束~1.21.11、Java>=21，两入口及Mixin存在，
+  LuaJ 3.0.1与META-INF/LICENSE-luaj.txt齐全。内嵌核心288112 bytes、122条均可读，
+  与独立核心一致，SHA256
+  `119bce4170c7ab461076b6cf925021abce42a73632b8bd23d3c8d146766b98dc`。
+  施工Lua为29165 bytes，低于32KiB可信资源上界，源码/包内SHA256一致：
+  `5d2af655cbbc633ab20b664051d5acc4638e445ed9c3443557aac83969833321`。
+  改动源码/文档无机器绝对路径、冲突标记或行尾空白；构建后list-java未见Java残留。
+- 没有Git元数据，未提交/推送；只改插件，宿主、连接器、参考、玩家实例及原图未改。
+  未自动安装JAR、启动游戏/服务器/宿主或调用真实模型。
+  真实通行后的填补时机、完整524格施工、余下11格屋面与30秒空搜是否仍出现都待换包复测；
+  本轮没有据离线通过宣称屋面寻路、任意临时工程回收或所有原生运动已完成验收。
+
+## 门通行、半格屋面起步与临时工程回收（2026-10-26，Asia/Shanghai）
+
+- 维护者反馈有门却破墙、末段失败及搭路块迟迟不清。冻结日志为
+  `build/doors-cleanup-evidence-20261026.log`，SHA256
+  `7c6c39c9d2a093931f8183dcbb3040351133027e0533827b5833b52bb777bbd5`。
+  实例匹配此前b62ff047候选；本次目标修订
+  `dd722fbb878244f051131f990fe048948b81ca9af32e7bacaf99e9ed034ae420`，
+  最终597/611满足、14缺失，临时记录14条、回收0，不是游戏崩溃。
+  12912附近实际挖5放1后停在半格楼梯边，后续反复同高起步NO_PATH；
+  RESULT_LIMIT、模型工作参数错误及目标已空气分别判读，不以增大回执限额代替修复。
+- 门能力此前没有进入路线动作。现TerrainEdits独立保存双格门toggle，贯通真实碰撞/
+  工作射线、A*及费用、已有通路偏好、后台快照、现场重建/校验、让位与续段；
+  普通相邻形状步可先开关手动门，再核移动，不消耗挖放额度。
+  规划和执行均可点击实际可见的任一半。PathTask沿原任务许可和区域锁，核
+  加载/双半一致/视线/手距及门板实体占位，调用原版useWithoutItem并观察真实OPEN变化。
+  通过后条件允许才恢复；不能在刚打开时立即关回，取消后不补动作。
+  确认清单包含toggle/door_restore，walk_only仍不挖放但可沿原许可交互，
+  door_interactions/doors_pending_restore只作实际诊断。事前已证实的实例来源才可刷新，
+  不能借交互认领外部替换物；interact实际动作支持持久解码。
+- 同高对齐过严已在实际保存几何中精确复现。新相对方块夹具
+  `src/clientTest/resources/navigation/door-roof-20261026.json`含7状态/99段，
+  日志停止位姿相对值(0.01217092919944,0.5,0.4995466320367)，旧canAlign拒绝，
+  新canDepart核全程支撑和原版碰撞后可下降半格到(0,0,0)中心。
+  只取实际脚底覆盖列、下降不超台阶高度，不抬高/传送/挖放，未知和无支撑继续拒绝。
+  这是形状/位姿复现，不是原生travel或完整611格施工验收。
+- 临时support不再因历史经过或路线记录截断永久被钉住；显式通道、当前身体/实体、
+  设施、图纸、贴附/重力及来源守卫保持。实际守卫移除后释放16条待回收记录槽，
+  16未回收仍拒绝第17条，不能登记刷新来源。Lua清理局部够不到可继续其他候选，
+  真移除后重评依赖；取消、权限/安全/未知、动作账户和NAVIGATION_STALLED仍立即退出。
+  mc.build满槽按新鲜工作实态尝试回收，完工及局部受阻也收尾；若清理改变原图则重新观察/
+  恢复。返回真实回收/保留数、最多各8条失败/保留原因及omitted，原Lua沙箱和回执限额保持。
+- 参考复核覆盖门语义、净空/动作、费用、双格编辑叠层、快照/搜索、实际瞄准/原生交互/
+  效果账及到达，并接此前完整Survey/CellRules/Outstanding、BuildOrder、施工收遍/
+  重扫/settle、Driver与学习/续段链。未找到等价自动拆临时支撑机制，
+  BuildCompanionTask.cleanup主要释放控制，不能据方法名宣称会拆脚手架。
+  机制取舍、实现边界和证据见
+  `docs/DOORS-ROOF-DEPARTURE-AND-TEMPORARY-CLEANUP-2026-10-26.md`。
+  没有迁移直接写世界/免材料/缩减完成分母，也未声称全部步型、完整学习或编辑后台完成。
+- 最终`build/doors-cleanup-final3-20261026.log`记录JDK21强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功，1分12秒，
+  21任务全部执行，无UP-TO-DATE/FROM-CACHE。三根XML实核：核心483项/48 suites、
+  根198/27、客户端1465/147，共2146项/222 suites，failures/errors/skipped全0，
+  比此前新增12项。覆盖门替代破墙/两半/上半点击/未知与铁门拒绝、后台到现场及续段、
+  恢复时机、实例来源、半格位姿、清理跳过局部受阻、满槽先回收及fatal不续试。
+- JAR `build/libs/mcbot-0.1.0.jar`为1926689 bytes，SHA256
+  `fe3ec92b7944ebe671e625092a3dc5a413904822fa10f48eb7874ab0fba3d35e`。
+  476条归档均可读取，版本0.1.0、MC约束~1.21.11、Java>=21、两入口及Mixin齐全；
+  LuaJ 3.0.1及根归档META-INF/LICENSE-luaj.txt存在。
+  内嵌核心287624 bytes、122条均可读取，与独立核心一致，SHA256
+  `1a666b07103fefb2c732b470ee74297543d28d2f72445abb3fd83c5bb8c411b0`。
+  核心施工Lua为27753 bytes，源码/包内SHA256一致：
+  `9ad107c0dcf672aea37fc5879415768794e34f20e4c95105742d4b545af7fd04`，
+  低于既有32KiB内置资源限额。改动源码/文档无机器绝对路径、冲突标记及行尾空白；
+  构建后tools/list-java.ps1未见Java残留。
+- 当前没有Git元数据，未拉取/提交/推送。只改本体，宿主、连接器、参考、玩家实例和冻结图
+  未改；没有安装包、启动游戏/服务器/宿主或调用真实模型。原生开关门/穿过/恢复、
+  完整611格收尾及14条临时工程的真实清理仍待换包复测。尤其剩余protected、
+  needs_support及四个no_clickable_face不能据本轮离线起步修复声称全部消除。
+
+## 墙下基础缺格、保护误判与工作射线（2026-10-26，Asia/Shanghai）
+
+- 维护者反馈再次失败，要求完整参考相关机制并修正过严判断。新日志冻结为
+  `build/foundation-failure-evidence-20261026.log`，SHA256
+  `731a2b00a46c2edb7092ae586268aea2222f717694667d8d42e6d7c52ba5f5f8`。
+  实例匹配前次241ceb候选。本次新建筑546格，最终236满足、310缺失；
+  (-232,63,-338)墙下基础反复0/8100工作位后按原30秒空搜窗口结束。
+  完整工作分页为保护1、距离29、阻塞11、缺支撑269；上层依赖低层原木，
+  不把全部缺支撑当作独立寻路错误，也不从挖空后的地表警告推断应改冻图高度。
+- 已修两类过严判断：原版完整玻璃因不遮光被排除普通可恢复整块，连带其下墙体无法开路；
+  床下实际空气的待补基础被拆除支撑守卫判成protected。现分别核干燥完整碰撞/实际补料等
+  恢复条件，以及仅空气的补放保护。原设施、已有非空支撑、重力、来源和材料条件保留。
+- 工作搜索补身体已净空但点击射线受阻的合法开口引导。PlacementWork沿既有射线计划，
+  编辑后重验同一严格工作目标；ApproachEstimate先无编辑、再身体开口、最后射线开口，
+  共原8192探测及存储账户，不加默认整趟帽。初版造成旧屋面第三起点1144节点回归，
+  分阶段后恢复261，旧断言未放宽。实际失败另带六面有界原因，避免只见首个点击面。
+- 原存档提取仅方块相对夹具foundation-wall-20261026.json。必须保留证据边界：
+  旧码几何夹具329节点已成功；加BuildSite守卫近似后旧码332节点仍成功，
+  最终全量333节点成功，未精确复现原生0/8100。测试工地图不是完整546格，
+  原生目标/库存/实体/站位差异仍待复测；独立合成场景证实射线开口能力及保护边界。
+- 参考完整复核全图分类、施工顺序/收遍/重扫、目标与双层到达、费用/步型/前提、
+  累计编辑、AStar/Estimate、驱动结果采纳/unsolved、TripMemory/Learning/Continuation；
+  独立实现与取舍见`docs/FOUNDATION-WORK-AND-PROTECTION-2026-10-26.md`。
+  未采用直接写世界/免材料/缩减目标分母，不把完整学习、所有运动或编辑后台记为已完成。
+- `build/foundation-work-final-20261026.log`记录JDK21强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功，
+  1分16秒，21任务全部执行。三根XML实核：核心480/48 suites、根198/27、
+  客户端1456/146，合计2134项/221 suites，failures/errors/skipped全部0，比此前新增5项。
+  既有封闭屋面三个起点335/325/261节点保持；诊断JSON仅实际预检生成。
+- 新JAR `build/libs/mcbot-0.1.0.jar`为1909503 bytes，SHA256
+  `b62ff04730407b649592091baf0b5426c6d8d1b61a942a16d1226a7af87f61c3`。
+  473条归档均可读取；内嵌核心287223 bytes，与本次独立核心一致，SHA256
+  `24b35a144e5ecb8f90139ec03d2b51f7cbd6e2bd42e4b558f307ab90c13fc823`；
+  核心内施工Lua与源码SHA256同为
+  `986e8249148ee3819f8c5a98258360212bc608fbe4ac877a49061ca22f837f36`。
+  Fabric/MC/Java约束、入口/Mixin及LuaJ许可均齐全，构建后无Java残留。
+- 当前没有Git元数据，未拉取/提交/推送。只改本体，没有修改宿主、连接器、参考、
+  玩家实例或冻结图纸，没有安装包或启动游戏/宿主/真实模型。
+  本轮修复和2134项离线通过不证明实际546格完成；仍须维护者换包复测原失败现场。
+
+## 封闭屋面缺格与施工拆补循环（2026-10-26，Asia/Shanghai）
+
+- 维护者要求分析上午末段失败并完整对照相关参考机制。实际日志冻结为
+  `build/construction-failure-evidence-20261026.log`，SHA256
+  `88e05a45d4bc0feacc6f4b704383f8c219acaa934f94f030b3aef390dbf4af79`。
+  实例安装包匹配下节c8518e源码快照包，不能归因为未换包。日志13279行有一次程序
+  121次成功移动/135次成功近身施工，含临时拆开成品后的补建，次数不等于净完成；
+  13561及13680行确认493/507满足，仍缺14格，最终没有假报完成。
+- 日志多次对(-226,68,-442)得到0/4050工作位；只读提取停止存档的相对化、仅方块夹具，
+  证实此缺格被已建木板/楼梯包围，现状没有直接可点击站位。旧码离线同场景4000节点耗尽，
+  失败XML见`build/enclosed-roof-before-20261026.xml`。ApproachEstimate现先核全部无编辑
+  工作位，无解才在原有限预处理账户内核保留支撑、已知且单格允许清理的身体净空，
+  用累计移除视图复核同一严格放置目标，候选带挖价；原路线逐边/现场/许可/来源复核不变。
+  三个起点在最终全量分别335/325/261节点得到严格可预检路线；并非原生世界施工通过。
+- 原失败候选会随图纸/料量变化重开，不能识别临时开路引发的拆补状态循环。
+  内置投影补传已有goal_observation_key，Lua独立记录成功工作移动前的图纸实态；
+  当前近身施工和待补先做，若再次移动会重复已走图纸状态，则返回
+  construction_state_repeated/model_reassessment_required及新鲜剩余，不把位移、
+  库存变化和动作次数当进展。完成数相同但不同实态仍可继续，收尾清理后的恢复另行核对。
+  历史仅属本次mc.build，原跨程序空搜记忆/30秒窗口/整图核验保持；
+  没有新增默认整趟帽，也未放宽设施/脚下支撑保护。两个旧码循环回归先失败，
+  见`build/construction-cycle-before-20261026.xml`。
+- 参考对照覆盖Survey/CellRules/Outstanding、BuildOrder及施工准备/收遍/完成重扫、
+  Destination/任务及驱动Arrival/Goals、CostModel/ActionCosts/RouteSpec、
+  EditedView/Moves、AStar/Estimate/Vertical、Driver/TripMemory/Learning/Continuation、
+  WorldSnapshot/Searches。取舍及完整证据见
+  `docs/ENCLOSED-ROOF-AND-CONSTRUCTION-CYCLES-2026-10-26.md`；
+  不采用参考直接写世界/免材料或缩减原保护目标分母的完成方式。
+  完整跨段学习、复杂编辑后台及其他运动模式没有借此销账。
+- 专项通过后，`build/construction-final-20261026.log`记录强制
+  `build --offline --console=plain --no-daemon --rerun-tasks`成功，
+  1分15秒，21任务全部执行。三根XML实核：核心480项/48 suites、根198/27、
+  客户端1451/146，合计2129项/221 suites，failures/errors/skipped均0，
+  比此前新增7项。含本次封闭缺格三起点、拆补循环/库存变化无施工、相同剩余不同实态、
+  开口保护/未知/支撑/接触边界，以及原Survey→Lua→组合目标→A*→BuildWork回归。
+- 新JAR `build/libs/mcbot-0.1.0.jar`为1905591 bytes，SHA256
+  `241ceb038b3a6c9fe2ea27529fc1c8ae97a6b87f542ca585883af156439c2ab9`。
+  473条归档均可读取；内嵌核心287223 bytes，与本次独立核心一致，SHA256
+  `24b35a144e5ecb8f90139ec03d2b51f7cbd6e2bd42e4b558f307ab90c13fc823`；
+  内嵌施工Lua与源码SHA256同为
+  `986e8249148ee3819f8c5a98258360212bc608fbe4ac877a49061ca22f837f36`。
+  Fabric/MC/Java约束及LuaJ依赖齐全，构建后未见Java残留。
+- 当前仍无Git元数据，没有拉取/提交/推送。未修改宿主、连接器、参考或玩家实例，
+  未安装JAR或启动游戏/宿主/真实模型。工作台下(-232,63,-438)保护基础格仍是真实未完成，
+  不由寻路修复；实际偏移落点与计划中心预检差异也未声称全部消除。
+  完整507格收尾、原生运动及来源/材料/实体条件仍待维护者换包复测。
+
+## 本地源码快照重新构建（2026-10-26 09:03，Asia/Shanghai）
+
+- 维护者要求了解宿主、本体与只读参考的职责后构建JAR。本轮核对开工说明、
+  开发环境、最新进度、交接材料、架构及本体入口；宿主与参考仅作只读了解，
+  没有复制参考代码，没有修改业务源码、构建版本或玩家配置。
+- 当前目录无Git元数据，按现有源码快照构建，未拉取、提交或推送。
+  使用本机已有Temurin 21.0.10与Gradle wrapper 9.5.1，
+  `gradlew.bat build --offline --console=plain --no-daemon --rerun-tasks`
+  成功，耗时2分1秒，21个任务全部执行，无UP-TO-DATE或FROM-CACHE任务。
+- 本轮三根XML实核：`agent-core/build/test-results/test`为477项/48 suites，
+  `build/test-results/test`为197项/27 suites，
+  `build/test-results/clientTest`为1448项/146 suites；
+  合计2122项/221 suites，failures/errors/skipped均为0。
+- 产物`build/libs/mcbot-0.1.0.jar`为1904290 bytes，SHA256
+  `c8518e947017f6de4a3c74d4be51b072672730cfac42a6ecd9f2a10c64364863`。
+  JAR内版本0.1.0，Minecraft约束`~1.21.11`、Java约束`>=21`；
+  公共/客户端入口与Mixin配置存在，473个归档条目均可读取。
+  内嵌`agent-core-0.1.0.jar`为286761 bytes，与本次独立核心逐字节一致，
+  SHA256 `71b241cfb923af191f1c921ab97ac8a06da41c25129e0b1ff71bf10bd3ebe24e`；
+  LuaJ 3.0.1及其许可均在包内。本次新构建指纹独立记录，不沿用历史包哈希。
+- 构建提示既有过时API、Gradle弃用及映射警告，未阻断构建或测试。
+  没有安装JAR、启动游戏/服务器/宿主或调用真实模型；离线通过不替代原生游戏
+  与宿主联合验收，先前待验边界保持。
+
 ## 上层空搜、原样重试与旧建筑记录（2026-10-26，Asia/Shanghai）
 
 - 维护者反馈新版上层仍卡搜索，超时后再次卡住，并要求去除旧地基图纸。确认实例已安装
@@ -7721,6 +8008,13 @@ S3 关账 commit（代码+探针+harness 修+文档）。
 下张卡：**R1-S1 纯算法（加权 h + PARTIAL 三分 + getter + 山体用例①②③⑥）**。
 
 ## 1.21.11 API 实测字段笔记（javap 自证，勿凭记忆改写）
+
+2026-10-26门交互以本地1.21.11官方映射javap、编译及真实注册表核对，未运行游戏：
+`DoorBlock.type():BlockSetType`及`BlockSetType.canOpenByHand():boolean`公开；
+`BlockBehaviour.BlockStateBase.useWithoutItem(Level,Player,BlockHitResult):InteractionResult`公开，
+与DoorBlock内部protected的同名覆写签名不同。本体调用BlockState入口，只交互方块，
+不调用可能使用手持物品的放置路径。双格实际状态/来源与身体碰撞另行核验，
+签名正确不等于原生开门/红石联动已验。
 
 2026-10-25屋面预检本地官方映射javap/字节码/编译核对，未运行游戏：
 `BlockPlaceContext(Level,Player,InteractionHand,ItemStack,BlockHitResult)`公开，

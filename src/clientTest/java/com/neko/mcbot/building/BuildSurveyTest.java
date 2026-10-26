@@ -28,6 +28,50 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSurveyTest {
+    @Test void pairedDrawingDiagnosticsCountAllInvalidCellsButKeepOnlyFourExamples() {
+        var target=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
+                "to":{"x":31,"y":0,"z":0},"block":"red_bed"}}
+                """).getAsJsonObject());
+        var world=new World();
+        var result=BuildSurvey.query(target,world,0,0,()->0);
+        var validation=result.data().getAsJsonObject("object_validation");
+        assertEquals(32,validation.get("invalid_cells").getAsInt());
+        assertEquals(4,validation.getAsJsonArray("issues").size());
+        assertEquals(28,validation.get("issues_omitted").getAsInt());
+        assertTrue(result.feedback().contains("INVALID_BUILD_TARGET:"));
+        assertTrue(result.data().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length<20000);
+        assertEquals(0,world.prepares);
+    }
+
+    @Test void invalidBedsOutsideTheDetailPageAreReportedForTheWholeDrawingWithoutChangingIt() {
+        for (int rotation:List.of(0,90,180,270)) {
+            var target=BuildTarget.parse(JsonParser.parseString("""
+                    {"anchor":{"x":-236,"y":63,"z":-440},"rotation":%d,"regions":[
+                    {"from":{"x":0,"y":0,"z":0},"to":{"x":31,"y":0,"z":0},"block":"stone"},
+                    {"from":{"x":1,"y":1,"z":8},"to":{"x":1,"y":1,"z":8},"block":"red_bed",
+                    "properties":[{"name":"part","value":"head"},{"name":"facing","value":"south"}]},
+                    {"from":{"x":1,"y":1,"z":9},"to":{"x":1,"y":1,"z":9},"block":"red_bed",
+                    "properties":[{"name":"part","value":"foot"},{"name":"facing","value":"south"}]}]}
+                    """.formatted(rotation)).getAsJsonObject());
+            var original=target.input().deepCopy();
+            var world=new World();
+            var data=BuildSurvey.query(target,world,0,0,()->0).data();
+            var validation=data.getAsJsonObject("object_validation");
+            assertNotNull(validation,"the first detail page must expose invalid paired cells elsewhere in the drawing");
+            assertFalse(validation.get("valid").getAsBoolean());
+            assertEquals(2,validation.get("invalid_cells").getAsInt());
+            assertEquals(2,validation.getAsJsonArray("issues").size());
+            var issue=validation.getAsJsonArray("issues").get(0).getAsJsonObject();
+            assertEquals("bed_pair_missing_or_inconsistent",issue.get("reason").getAsString());
+            assertTrue(issue.has("expected_partner"));
+            assertEquals(validation,BuildSurvey.verify(target,world,0,()->0).data().get("object_validation"));
+            assertEquals(original,target.input(),"diagnosis cannot silently turn a bed or replace the drawing");
+            assertTrue(world.blocks.isEmpty());
+            assertEquals(0,world.prepares);
+        }
+    }
+
     @Test void foundationObservationsDistinguishReplacingTopsoilFromAddingAnExtraFloorAboveIt() {
         var world=new World();
         world.inventory.setItem(0,new ItemStack(Items.STONE,64));

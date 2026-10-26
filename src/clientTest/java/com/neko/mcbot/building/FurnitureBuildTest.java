@@ -83,6 +83,7 @@ class FurnitureBuildTest {
             assertEquals("",BuildObjects.problem(target,foot(target)));
             assertEquals(target.revision(),BuildTarget.parse(target.input()).revision());
             var initial=world.query(target);
+            assertTrue(initial.getAsJsonObject("object_validation").get("valid").getAsBoolean());
             assertEquals(1,initial.getAsJsonObject("counts").get("paired_pending").getAsInt());
             var bill=initial.getAsJsonArray("materials").get(0).getAsJsonObject();
             assertEquals(1,bill.get("design_required").getAsInt());

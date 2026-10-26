@@ -4,6 +4,7 @@ import com.neko.mcbot.body.CompanionPlayer;
 import com.neko.mcbot.building.BuildTarget;
 import com.neko.mcbot.path.NavigationGeometry;
 import com.neko.mcbot.path.NavigationGoal;
+import com.neko.mcbot.path.DigAStar;
 import com.neko.mcbot.path.TerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -82,25 +83,85 @@ public record PlacementWork(BlockItem item, Direction face, String temporaryPurp
         return goal(target, geometry, body.getEyeHeight(), body.getBbWidth(), body.getBbHeight(),
                 Math.min(6.5, body.blockInteractionRange()),
                 (eye, bounds, edits) -> assessFaces(face, candidate -> BlockPlacement.assessPlannedAt(body, target,
-                        BlockPlacement.findSlot(body.getInventory(), item), candidate, eye, bounds, edits, temporaryPurpose)));
+                        BlockPlacement.findSlot(body.getInventory(), item), candidate, eye, bounds, edits, temporaryPurpose)),
+                BlockAim.forPlayer(body), face);
     }
 
     static ServerTool.Result assessFaces(Direction selected,
                                          java.util.function.Function<Direction, ServerTool.Result> assess) {
+        return assessFaces(selected,assess,false);
+    }
+
+    static ServerTool.Result assessFaces(Direction selected,
+                                         java.util.function.Function<Direction, ServerTool.Result> assess,
+                                         boolean details) {
         if (selected != null) return assess.apply(selected);
         ServerTool.Result first = null;
+        var reasons=details ? new com.google.gson.JsonObject() : null;
         for (Direction face : Direction.values()) {
             var failure = assess.apply(face);
             if (failure == null) return null;
             if (first == null) first = failure;
+            if (reasons!=null) {
+                var reason=new com.google.gson.JsonObject();
+                if (failure.data()!=null && failure.data().has("placement_failure"))
+                    reason.add("placement_failure",failure.data().get("placement_failure"));
+                String feedback=failure.feedback();
+                reason.addProperty("feedback",feedback.substring(0,Math.min(256,feedback.length())));
+                reasons.add(face.getName(),reason);
+            }
+        }
+        if (reasons!=null && first!=null) {
+            var data=first.data()==null ? new com.google.gson.JsonObject() : first.data().deepCopy();
+            data.add("placement_face_failures",reasons);
+            return new ServerTool.Result(false,first.feedback(),data);
         }
         return first;
     }
 
     public static NavigationGoal goal(BlockPos target, NavigationGeometry geometry, double eyeHeight,
                                       double width, double height, double reach, Assessor assess) {
+        return goal(target,geometry,eyeHeight,width,height,reach,assess,null,null);
+    }
+
+    public static NavigationGoal goal(BlockPos target, NavigationGeometry geometry, double eyeHeight,
+                                      double width, double height, double reach, Assessor assess,
+                                      BlockAim.Access sight, Direction selectedFace) {
         return new NavigationGoal() {
             @Override public boolean estimateWorkStances() { return true; }
+            @Override public java.util.List<Long> workOpening(com.neko.mcbot.path.DigSampler terrain,
+                                                             int x, int y, int z, TerrainEdits edits) {
+                if (sight==null || geometry==null || remaining(x,y,z)>0) return java.util.List.of();
+                var foot=geometry.foot(x,y,z,edits);
+                if (foot==null) return java.util.List.of();
+                var removed=new java.util.HashSet<BlockPos>();
+                var placed=new java.util.HashSet<BlockPos>();
+                for (long cell:edits.removed())
+                    removed.add(new BlockPos(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell)));
+                for (long cell:edits.placed())
+                    placed.add(new BlockPos(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell)));
+                var eye=new Vec3(x+.5,foot.height()+eyeHeight,z+.5);
+                var source=sight.blocks()==null ? sight : BlockAim.withToggles(sight,sight.blocks(),edits.toggled());
+                var view=NavigationWork.view(source,eye,removed,placed);
+                var budget=new BlockAim.TraceBudget(BlockAim.MAX_PLAN_TRACES);
+                for (var face:Direction.values()) {
+                    if (selectedFace!=null && selectedFace!=face) continue;
+                    var clicked=target.relative(face.getOpposite());
+                    if (!view.loaded(clicked) || view.replaceable(clicked)) continue;
+                    var plan=BlockAim.miningPlan(view,clicked,reach,p-> {
+                        long key=DigAStar.pack(p.getX(),p.getY(),p.getZ());
+                        return !p.equals(target) && key!=foot.support()
+                                && terrain.inBounds(p.getX(),p.getY(),p.getZ())
+                                && terrain.known(p.getX(),p.getY(),p.getZ())
+                                && com.neko.mcbot.path.DigSampler.feasibleDig(
+                                terrain.digSeconds(p.getX(),p.getY(),p.getZ()));
+                    },budget);
+                    if (!plan.ok() || plan.blockers().isEmpty()) continue;
+                    var opening=plan.blockers().stream().map(p->DigAStar.pack(p.getX(),p.getY(),p.getZ())).toList();
+                    if (reached(x,y,z,edits.after(opening,java.util.List.of()))) return opening;
+                }
+                return java.util.List.of();
+            }
             @Override public Bounds estimateBounds() {
                 int r = (int) Math.ceil(reach + 2);
                 return new Bounds(target.getX() - r, (int) Math.floor(target.getY() - eyeHeight - r - 1),
@@ -138,7 +199,7 @@ public record PlacementWork(BlockItem item, Direction face, String temporaryPurp
             return new ServerTool.Result(false, "TARGET_BLOCKED:身体占用了放置目标格，未认定工作到达。", null);
         var access = temporaryPurpose == null ? BlockPlacement.forPlayer(body) : BlockPlacement.forTemporary(body, temporaryPurpose);
         var failure = assessFaces(face, candidate -> BlockPlacement.assess(access, target,
-                BlockPlacement.findSlot(body.getInventory(), item), candidate));
+                BlockPlacement.findSlot(body.getInventory(), item), candidate),true);
         if (failure != null) return failure;
         var data = new com.google.gson.JsonObject();
         data.addProperty("preflight_passed", true);

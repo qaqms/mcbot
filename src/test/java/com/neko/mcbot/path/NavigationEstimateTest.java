@@ -8,6 +8,54 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NavigationEstimateTest {
+    @Test void clearedWorkSeedsRequireKnownPermittedClearanceAndTheStrictEditedGoal() {
+        long floor=DigAStar.pack(0,0,0), leg=DigAStar.pack(0,1,0), head=DigAStar.pack(0,2,0);
+        var blockers=java.util.List.of(head,leg);
+        for (String mode:java.util.List.of("allowed","protected","unknown","support","no_contact")) {
+            var geometry=new NavigationGeometry() {
+                @Override public Foot foot(int x,int y,int z,TerrainEdits edits) { return new Foot(1,floor); }
+                @Override public Clearance clearance(int fx,double from,int fz,int x,double to,int z,TerrainEdits edits) {
+                    return new Clearance(mode.equals("support") ? java.util.List.of(floor) : blockers,null,null);
+                }
+                @Override public Motion motion(int fx,double from,int fz,int x,double to,int z,TerrainEdits edits) {
+                    return Motion.WALK;
+                }
+            };
+            var terrain=new DigSampler() {
+                @Override public NavigationGeometry geometry() { return geometry; }
+                @Override public boolean known(int x,int y,int z) { return !mode.equals("unknown") || y!=2; }
+                @Override public boolean passable(int x,int y,int z) { return false; }
+                @Override public double digSeconds(int x,int y,int z) {
+                    return mode.equals("protected") ? INFEASIBLE : 1;
+                }
+                @Override public boolean support(int x,int y,int z) { return true; }
+                @Override public boolean placeable(int x,int y,int z) { return false; }
+                @Override public double placeCost(int x,int y,int z) { return INFEASIBLE; }
+                @Override public boolean inBounds(int x,int y,int z) { return x==0 && z==0 && y>=0 && y<=2; }
+                @Override public int maxPlaces() { return 0; }
+            };
+            var goal=new NavigationGoal() {
+                @Override public boolean estimateWorkStances() { return true; }
+                @Override public Bounds estimateBounds() { return new Bounds(0,1,0,0,1,0); }
+                @Override public double remaining(int x,int y,int z) { return 0; }
+                @Override public boolean reached(int x,int y,int z) { return false; }
+                @Override public boolean reached(int x,int y,int z,TerrainEdits edits) {
+                    return !mode.equals("no_contact") && edits.removed().containsAll(blockers);
+                }
+            };
+            var field=new ApproachEstimate(terrain,goal,0,1,0,10);
+            for (int i=0;i<100 && !field.done();i++) field.advance();
+            assertTrue(field.done());
+            assertEquals(mode.equals("allowed") ? 1 : 0,field.workStances(),mode);
+            if (mode.equals("allowed")) {
+                double before=field.cost(0,1,0,TerrainEdits.EMPTY);
+                assertEquals(2*DigAStar.digCost(1),before,1e-9);
+                assertEquals(0,field.cost(0,1,0,TerrainEdits.EMPTY.after(blockers,java.util.List.of())),1e-9);
+                assertFalse(goal.reached(0,1,0),"guidance must not certify the live work arrival");
+            }
+        }
+    }
+
     @Test void constructionDoesNotReadTerrainBeforeTheTimedSliceStarts() {
         var reads = new int[1];
         DigSampler terrain = new DigSampler() {

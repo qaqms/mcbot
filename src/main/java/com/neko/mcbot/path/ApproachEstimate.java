@@ -25,9 +25,11 @@ final class ApproachEstimate {
     private final Set<Long> sealed = new HashSet<>();
     private final PriorityQueue<Entry> queue = new PriorityQueue<>(Comparator
             .comparingDouble(Entry::cost).thenComparingInt(Entry::tie).thenComparingLong(Entry::cell));
+    private final PriorityQueue<Entry> rayCandidates = new PriorityQueue<>(Comparator
+            .comparingDouble(Entry::cost).thenComparingLong(Entry::cell));
     private int x, y, z, scans, admitted, expanded;
     private int workStances;
-    private boolean seeding = true, done;
+    private boolean seeding = true, clearingSeeds, raySeeding, done;
     private double frontier;
 
     ApproachEstimate(DigSampler terrain, NavigationGoal goal, int sx, int sy, int sz, int cap) {
@@ -48,23 +50,45 @@ final class ApproachEstimate {
     void advance() {
         if (done) return;
         if (seeding) {
-            if (scans >= 8192) { disable(); return; }
+            if (scans >= 8192) {
+                if (clearingSeeds && workStances > 0) seeding = false;
+                else disable();
+                return;
+            }
             scans++;
-            if (terrain.inBounds(x, y, z) && goal.remaining(x, y, z) == 0
-                    && (!goal.estimateWorkStances() || goal.reached(x, y, z, TerrainEdits.EMPTY))) {
-                if (goal.estimateWorkStances()) {
-                    workStances++;
-                    var span = workLevels.computeIfAbsent(y, ignored -> new int[]{x, x, z, z});
-                    span[0] = Math.min(span[0], x); span[1] = Math.max(span[1], x);
-                    span[2] = Math.min(span[2], z); span[3] = Math.max(span[3], z);
+            if (terrain.inBounds(x, y, z) && goal.remaining(x, y, z) == 0) {
+                if (clearingSeeds) seedClearedStance(false);
+                else if (!goal.estimateWorkStances() || goal.reached(x, y, z, TerrainEdits.EMPTY)) {
+                    seed(0, null);
                 }
-                offer(x, y, z, 0, null);
             }
             if (++z > bounds.maxZ()) {
                 z = bounds.minZ();
                 if (++y > bounds.maxY()) { y = bounds.minY(); if (++x > bounds.maxX()) seeding = false; }
             }
+            // A sealed drawing gap may have no live stance at all. Guide toward a strictly checked
+            // local opening only after the unedited scan fails; transitions still own every action.
+            if (!seeding && !clearingSeeds && goal.estimateWorkStances() && workStances == 0) {
+                clearingSeeds = true;
+                seeding = true;
+                x = bounds.minX(); y = bounds.minY(); z = bounds.minZ();
+            }
+            if (!seeding && clearingSeeds) {
+                raySeeding=workStances==0;
+                if (!raySeeding) rayCandidates.clear();
+            }
             return;
+        }
+        if (raySeeding) {
+            var candidate=scans<8192 ? rayCandidates.poll() : null;
+            if (candidate!=null) {
+                scans++;
+                x=DigAStar.unpackX(candidate.cell()); y=DigAStar.unpackY(candidate.cell()); z=DigAStar.unpackZ(candidate.cell());
+                seedClearedStance(true);
+                return;
+            }
+            raySeeding=false;
+            rayCandidates.clear();
         }
         Entry entry = queue.poll();
         if (entry == null) { finish(); frontier = 0; return; }
@@ -102,6 +126,58 @@ final class ApproachEstimate {
         }
     }
 
+    private void seedClearedStance(boolean ray) {
+        var geometry = terrain.geometry();
+        if (geometry == null) return;
+        var foot = geometry.foot(x, y, z, TerrainEdits.EMPTY);
+        if (foot == null) return;
+        var clear = geometry.clearance(x, foot.height(), z, x, foot.height(), z, TerrainEdits.EMPTY);
+        if (!clear.known()) return;
+        var blockers = new java.util.LinkedHashSet<>(clear.blockers());
+        for (long cell : blockers) if (!openingAllowed(cell, foot.support())) return;
+        var edits = TerrainEdits.EMPTY.after(java.util.List.copyOf(blockers), java.util.List.of());
+        if (!ray && (blockers.isEmpty() || !goal.reached(x,y,z,edits))) {
+            if (workStances==0 && admitted+rayCandidates.size()<DigAStar.MAX_STORED_NODES/4)
+                rayCandidates.add(new Entry(DigAStar.pack(x,y,z),
+                        Math.abs(x-sx)+Math.abs(y-sy)+Math.abs(z-sz),0,null));
+            return;
+        }
+        if (ray) {
+            var opening=goal.workOpening(terrain,x,y,z,edits);
+            if (opening.isEmpty()) return;
+            blockers.addAll(opening);
+            edits=TerrainEdits.EMPTY.after(java.util.List.copyOf(blockers),java.util.List.of());
+        }
+        double cost = 0;
+        Work work = null;
+        for (long cell : blockers) {
+            if (!openingAllowed(cell,foot.support())) return;
+            int cx = DigAStar.unpackX(cell), cy = DigAStar.unpackY(cell), cz = DigAStar.unpackZ(cell);
+            double seconds = terrain.digSeconds(cx, cy, cz);
+            double price = DigAStar.digCost(seconds);
+            cost += price;
+            work = new Work(cell, price, work);
+        }
+        if (goal.reached(x, y, z, edits)) seed(cost, work);
+    }
+
+    private boolean openingAllowed(long cell, long support) {
+        int cx=DigAStar.unpackX(cell), cy=DigAStar.unpackY(cell), cz=DigAStar.unpackZ(cell);
+        return cell!=support && terrain.inBounds(cx,cy,cz) && terrain.known(cx,cy,cz)
+                && DigSampler.feasibleDig(terrain.digSeconds(cx,cy,cz));
+    }
+
+    private void seed(double cost, Work work) {
+        if (seeding) rayCandidates.clear();
+        if (goal.estimateWorkStances()) {
+            workStances++;
+            var span = workLevels.computeIfAbsent(y, ignored -> new int[]{x, x, z, z});
+            span[0] = Math.min(span[0], x); span[1] = Math.max(span[1], x);
+            span[2] = Math.min(span[2], z); span[3] = Math.max(span[3], z);
+        }
+        offer(x, y, z, cost, work);
+    }
+
     private void offer(int px, int py, int pz, double cost, Work work) {
         if (!terrain.inBounds(px, py, pz)) return;
         long cell = DigAStar.pack(px, py, pz);
@@ -135,6 +211,7 @@ final class ApproachEstimate {
         offered.clear();
         sealed.clear();
         queue.clear();
+        rayCandidates.clear();
     }
 
     double cost(int px, int py, int pz, TerrainEdits edits) {

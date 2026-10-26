@@ -33,9 +33,11 @@ public final class BoundedProgram {
             + "mc.build_diff(target,revision,offset)按next_offset续页，不在Lua攒万格大表。"
             + "已登记建筑可直接mc.build()或mc.build_diff()，mc.goal()返回当前登记条件副本；"
             + "无需重新生成原图或把内容修订号当instance_id。"
-            + "身体挡格或出口受阻时mc.build先按工地事实换位、临时开路或安全下落，原图待补格延后恢复；"
+            + "身体挡格或出口受阻时mc.build先按工地事实换位、临时开路或安全下落，"
+            + "到位完成本次工作后优先原地修补待补格，再离开；身体占位或封出口的格保留，不等整栋完成才修；"
             + "高处工作可由导航按真实材料与点击面连续起跳垫柱，不必逐格手写支撑。"
-            + "完成后自动尝试mc.cleanup_temporary(revision)，从高到低重查依赖，临时柱逐格拆降并等待落稳。";
+            + "临时记录满16项时及施工结束/局部受阻时尝试mc.cleanup_temporary(revision)，"
+            + "从高到低重查依赖，临时柱逐格拆降并等待落稳；局部够不到继续尝试其他支撑，保留原因。";
     public record Plan(String code, int seconds, int maxCalls) {
         public static Plan parse(String json) {
             if (json == null || bytes(json) > 20000) throw new IllegalArgumentException();
@@ -282,7 +284,7 @@ public final class BoundedProgram {
         if (name.equals("status")) return new JsonObject();
         if (name.equals("move_to")) {
             var view = new JsonObject();
-            for (String key : List.of("placed_blocks", "selected_work_target", "selected_place_item", "work_set_id"))
+            for (String key : List.of("removed_blocks", "placed_blocks", "selected_work_target", "selected_place_item", "work_set_id"))
                 if (data.has(key)) view.add(key, data.get(key));
             return view;
         }
@@ -296,7 +298,8 @@ public final class BoundedProgram {
         // Only mc.build's private calls use this view; raw mc.call and mc.build_diff retain the complete response.
         var view = new JsonObject();
         for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
-                "observation_key", "work_observation_key", "progress_observation_key", "design_components", "design_review", "clearing_work", "goal_satisfied", "offset", "next_offset", "total", "remaining",
+                "observation_key", "work_observation_key", "progress_observation_key", "goal_observation_key",
+                "design_components", "design_review", "object_validation", "clearing_work", "goal_satisfied", "offset", "next_offset", "total", "remaining",
                 "material_bill_complete", "work_scan", "work_next_cursor", "counts", "body_obstructs_target"))
             if (data.has(key)) view.add(key, data.get(key));
         var cells = new JsonArray();

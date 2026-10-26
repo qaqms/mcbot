@@ -286,6 +286,20 @@ public final class BuildRecords {
         event.add("before",BuildTarget.exactState(before)); event.add("after",BuildTarget.exactState(after));
         event.addProperty("consumed",consumed); instance.actions.add(event);
     }
+    /** Only a source proven before native use may receive a refreshed witness afterward. */
+    public void interacted(Instance instance,Map<BlockPos,BlockState> before,Map<BlockPos,BlockState> after,
+                           Set<BlockPos> owned,BuildSite.Access access) {
+        boolean changed=false;
+        for (var pos:before.keySet()) {
+            var previous=before.get(pos); var actual=after.get(pos);
+            if (previous==null || actual==null || previous==actual) continue;
+            action(instance,pos,"interact",previous,actual,0);
+            changed=true;
+            if (owned.contains(pos) && actual.is(previous.getBlock()))
+                instance.placed.put(pos.immutable(),new Placed(pos,actual,access.chunk(pos),access.watch(pos)));
+        }
+        if (changed) persistEffect();
+    }
     private void persistEffect() {
         try { save(); } catch (IllegalStateException failure) { healthy=false; }
     }
@@ -404,7 +418,7 @@ public final class BuildRecords {
                 BuildTarget.keys(event,Set.of("x","y","z","sequence","operation","instance_revision","before","after","consumed"));
                 position(event);
                 if (BuildTarget.integer(event.get("sequence"),1,BuildTarget.LIMIT*4)!=++sequence
-                        || !Set.of("place","break").contains(BuildTarget.string(event.get("operation"),8)))
+                        || !Set.of("place","break","interact").contains(BuildTarget.string(event.get("operation"),8)))
                     throw new IllegalArgumentException("action_history");
                 BuildTarget.integer(event.get("instance_revision"),1,instance.revision);
                 BuildTarget.integer(event.get("consumed"),0,64);

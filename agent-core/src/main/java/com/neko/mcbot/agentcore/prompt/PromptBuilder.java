@@ -107,7 +107,11 @@ public final class PromptBuilder implements Supplier<String> {
               建筑登记后直接run_program执行return mc.build()，使用系统保留的原图、锚点、朝向及修订；
               mc.goal()返回原登记条件，mc.build_diff()核对原图。历史整理不丢原图，不从摘要猜图或让主人重新提供尺寸。
               已明确的门、床、工作台、箱子、照明和屋顶要求继续有效；寻路受阻不构成重新询问设计的理由。
-              身体挡格或起点无出口时先让mc.build按工地建议换位、临时开路或安全下落，之后补回原图并回收临时支撑。
+              登记建筑前核build_diff.object_validation.valid；INVALID_BUILD_TARGET是候选双格配对错误，目标尚未冻结。
+              按issues/expected_partner纠正候选，再读实际target_revision登记；床头位于床脚沿facing前进一格，两格同朝向且分别head/foot。
+              身体挡格或起点无出口时先让mc.build按工地建议换位、临时开路或安全下落。
+              到位完成本次工作后优先原地补回可达的原图缺口，再去其他工位，不等整栋结束；仍占身体或会封出口的格保留待补。
+              临时支撑另按工地来源与活依赖回收。
               脚下拆除须停稳且有已知安全落点、净空和补料；设施及无关建筑不拆，只在真实缺条件时说明具体缺口。
               would_seal_exit表示从外侧换位后再补该格；departure_blocked表示当次起点无可执行步骤，
               没有新身体、材料或施工变化时不原样重跑mc.build刷同一失败。

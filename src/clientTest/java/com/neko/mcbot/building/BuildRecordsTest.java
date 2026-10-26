@@ -18,6 +18,28 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildRecordsTest {
+    @Test void nativeDoorUseRefreshesOnlyItsAlreadyProvenSourceAndItsLedgerReloads() {
+        var records=store();
+        var instance=instance(records);
+        var pos=instance.target().cells().getFirst().pos();
+        var door=Blocks.OAK_DOOR.defaultBlockState();
+        world.edit(pos,door);
+        records.placed(instance,pos,Blocks.AIR.defaultBlockState(),door,1,world);
+        assertTrue(records.mayChange(instance,pos,world));
+        var before=Map.of(pos,door);
+        var after=Map.of(pos,door.cycle(net.minecraft.world.level.block.DoorBlock.OPEN));
+        world.edit(pos,after.get(pos));
+        world.witnesses.remove(pos);
+        records.interacted(instance,before,after,Set.of(pos),world);
+        assertTrue(records.mayChange(instance,pos,world));
+        world.edit(pos,door);
+        world.witnesses.remove(pos);
+        records.interacted(instance,after,before,Set.of(),world);
+        assertFalse(records.mayChange(instance,pos,world),"an unproven interaction cannot reclaim a replacement");
+        var reloaded=new BuildRecords(root); reloaded.load();
+        assertTrue(reloaded.healthy(),"the durable schema accepts interaction events");
+    }
+
     @Test void worldIdentityIsDurableEvenBeforeAnyDesignOrBuildingExists() {
         var first = new BuildRecords(root); first.load(); first.initializeIdentity();
         var next = new BuildRecords(root); next.load();

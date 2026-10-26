@@ -45,6 +45,10 @@ public interface DigSampler {
     /** Live adapters supply shape facts; abstract unit-cell samplers retain their grid contract. */
     default NavigationGeometry geometry() { return null; }
 
+    /** Complete footprint for a hand-operated door; empty denies the interaction. */
+    default java.util.List<Long> toggleCells(int x,int y,int z) { return java.util.List.of(); }
+    default boolean canToggleFrom(int x,int y,int z,long target,TerrainEdits edits) { return false; }
+
     default boolean canPlaceFrom(int x, int y, int z, long target, TerrainEdits edits) { return true; }
 
     /** Lowering needs stance-aware worksite guards rather than the body's original occupied column. */

@@ -9,6 +9,17 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldGoalTest {
+    @Test void invalidPairedDrawingEvidenceCannotBeAcceptedEvenWithAClaimedCompleteCount() {
+        var state=buildState(20);
+        state.getAsJsonObject("goal_evidence").add("object_validation",json("{\"valid\":false,\"invalid_cells\":2}"));
+        assertThrows(RuntimeException.class,()->new WorldGoal(building(),state));
+        var initial=buildState(0);
+        initial.getAsJsonObject("goal_evidence").add("object_validation",json("{\"valid\":true,\"invalid_cells\":0}"));
+        var goal=new WorldGoal(building(),initial);
+        assertFalse(goal.satisfied());
+        assertThrows(RuntimeException.class,()->goal.observe(state));
+    }
+
     @Test void registrationExposesMissingEfficientToolsWithoutChangingOrBlockingTheGoal() {
         var state = buildState(0);
         state.getAsJsonObject("goal_evidence").add("clearing_work", json("""

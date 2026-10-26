@@ -1107,7 +1107,8 @@ public final class AgentLoop {
                         if (!WorldGoal.flag(data, "alive"))
                             throw new IllegalArgumentException();
                         if (!state.ok()) {
-                            if ("building".equals(type) && state.feedback().startsWith("TARGET_REVISION_CHANGED:")) {
+                            if ("building".equals(type) && (state.feedback().startsWith("TARGET_REVISION_CHANGED:")
+                                    || state.feedback().startsWith("INVALID_BUILD_TARGET:"))) {
                                 // A rejected draft is still editable, but cannot fall back to plain-text completion.
                                 unregisteredGoalReason = state.feedback();
                                 return new ToolOutcome(false, state.feedback()

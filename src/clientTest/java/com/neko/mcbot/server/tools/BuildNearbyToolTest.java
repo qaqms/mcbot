@@ -39,5 +39,13 @@ class BuildNearbyToolTest {
         input.addProperty("offset",0);
         assertEquals(0, BuildNearbyTool.arguments(input).offset());
         assertEquals(200, tool.capTicks(input));
+        input.addProperty("include_repairs",true);
+        input.addProperty("repairs_only",true);
+        assertTrue(BuildNearbyTool.arguments(input).repairsOnly());
+        input.addProperty("include_repairs",false);
+        assertThrows(IllegalArgumentException.class,()->BuildNearbyTool.arguments(input));
+        input.addProperty("include_repairs",true);
+        input.addProperty("repairs_only","true");
+        assertThrows(IllegalArgumentException.class,()->BuildNearbyTool.arguments(input));
     }
 }

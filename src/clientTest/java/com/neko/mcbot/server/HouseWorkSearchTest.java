@@ -29,6 +29,46 @@ import static org.junit.jupiter.api.Assertions.*;
 class HouseWorkSearchTest {
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
 
+    @Test void theLoggedHalfHeightRoofEdgeHasASafeDepartureIntoTheExistingRoofGeometry() throws Exception {
+        var scene=new Scene("/navigation/door-roof-20261026.json");
+        double x=.01217092919944, y=.5, z=.4995466320367;
+        var departure=scene.geometry.departure(x,y,z,p->scene.terrain.inBounds(p.getX(),p.getY(),p.getZ()));
+        assertNotNull(departure,"the stopped native roof pose must not be trapped by center-height rounding");
+        assertTrue(scene.geometry.canDepart(x,y,z,departure));
+        assertFalse(scene.geometry.canAlign(x,y,z,departure),"the previous equal-height check rejected this landing");
+        var foot=scene.geometry.standing(departure.getX(),departure.getY(),departure.getZ(),TerrainEdits.EMPTY);
+        assertNotNull(foot);
+        assertTrue(foot.height()<=y);
+        System.out.println("[roof-departure] "+departure+" feet="+foot.height());
+    }
+
+    @Test void aFloorGapUnderAFinishedWallFindsAReversibleWorkOpening() throws Exception {
+        var scene = new Scene("/navigation/foundation-wall-20261026.json");
+        scene.constructionGuards = true;
+        var target = new BlockPos(8,-1,4);
+        assertTrue(scene.world.getBlockState(target).isAir());
+        assertEquals(Blocks.COBBLESTONE,scene.world.getBlockState(target.above()).getBlock());
+        scene.check(scene.goal(target),target,new BlockPos(2,0,-2));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0,1,2})
+    void anEnclosedMissingRoofCellFindsItsRequiredReopeningInsteadOfFloodingTheGround(int start) throws Exception {
+        var scene = new Scene("/navigation/enclosed-roof-20261026.json");
+        var target = new BlockPos(9,4,1);
+        assertTrue(scene.world.getBlockState(target).isAir());
+        var goal = scene.goal(target);
+        for (int x=-1;x<=16;x++) for (int y=-3;y<=9;y++) for (int z=-6;z<=8;z++)
+            assertFalse(goal.reached(x,y,z),"the saved gap has no unedited work stance");
+        var from=switch (start) {
+            case 0 -> new BlockPos(-1,0,4);
+            case 1 -> new BlockPos(5,0,-1);
+            default -> new BlockPos(5,5,2);
+        };
+        var route = scene.check(goal,target,from);
+        assertTrue(route.dugCount()>0,"the sealed gap needs a permitted temporary opening");
+    }
+
     @Test void upperWallWorkFromABedFindsAnExecutableApproachBeforeFloodingEditHistories() throws Exception {
         var scene = new Scene();
         var target = new BlockPos(0,3,0);
@@ -103,6 +143,20 @@ class HouseWorkSearchTest {
         final StandingGeometry geometry;
         final DigSampler terrain;
         boolean preserveWalls;
+        boolean constructionGuards;
+        final com.neko.mcbot.building.BuildSite site = new com.neko.mcbot.building.BuildSite();
+        final com.neko.mcbot.building.BuildSite.Access siteAccess = new com.neko.mcbot.building.BuildSite.Access() {
+            @Override public BlockState state(BlockPos p) { return world.getBlockState(p); }
+            @Override public boolean corridor(BlockPos p) { return true; }
+            @Override public boolean facility(BlockPos p) {
+                var state=state(p);
+                return WorksiteProtection.facility(state,state.hasBlockEntity());
+            }
+            @Override public boolean occupied(BlockPos p) { return false; }
+            @Override public boolean material(BuildTarget.Cell cell) { return true; }
+            @Override public Object chunk(BlockPos p) { return world; }
+            @Override public com.neko.mcbot.building.CellWitness watch(BlockPos p) { return null; }
+        };
         Scene() throws Exception { this("/navigation/house-work-scene.json"); }
         Scene(String resource) throws Exception {
             world.blocks.clear();
@@ -133,6 +187,20 @@ class HouseWorkSearchTest {
                                 palette.get(row.get(4).getAsInt()));
                 }
             }
+            var cells = new ArrayList<BuildTarget.Cell>();
+            world.blocks.forEach((p,state) -> {
+                if (p.getX()>=0 && p.getX()<=10 && p.getZ()>=0 && p.getZ()<=10 && p.getY()>=-1
+                        && (state.is(Blocks.OAK_PLANKS) || state.is(Blocks.COBBLESTONE)
+                        || state.is(Blocks.GLASS) || state.is(Blocks.OAK_LOG)))
+                    cells.add(new BuildTarget.Cell(p,state,java.util.Set.of(),net.minecraft.world.level.block.Rotation.NONE));
+            });
+            var gap=new BlockPos(8,-1,4);
+            cells.removeIf(c->c.pos().equals(gap));
+            cells.add(new BuildTarget.Cell(gap,Blocks.OAK_PLANKS.defaultBlockState(),
+                    java.util.Set.of(),net.minecraft.world.level.block.Rotation.NONE));
+            var drawing=new BuildTarget(BlockPos.ZERO,0,cells,"a".repeat(64));
+            site.bind(this,world);
+            assertNull(site.begin(drawing,List.of(),new BlockPos(2,0,-2),siteAccess));
             geometry=new StandingGeometry(new StandingGeometry.Access() {
                 @Override public boolean known(BlockPos p) { return true; }
                 @Override public List<AABB> boxes(BlockPos p) {
@@ -152,7 +220,8 @@ class HouseWorkSearchTest {
                 @Override public double digSeconds(int x,int y,int z) {
                     var p=new BlockPos(x,y,z);
                     if (preserveWalls && y>=-1 || WorksiteProtection.protectedCell(p,b->true,
-                            world::getBlockState,b->world.getBlockState(b).hasBlockEntity(),b->false))
+                            world::getBlockState,b->world.getBlockState(b).hasBlockEntity(),
+                            b->constructionGuards && site.protectsNavigation(b,siteAccess)))
                         return INFEASIBLE;
                     var state=world.getBlockState(p);
                     return com.neko.mcbot.building.BuildSite.restorable(state) ? .5 : INFEASIBLE;
@@ -185,7 +254,7 @@ class HouseWorkSearchTest {
                     SupportPlacement.canPlanBlock(world,world,target,eye,body,new ItemStack(item),
                             4.5,edits,p->true,f->true,b->true)
                             && BlockPlacement.constructionExit(geometry,target,state,body,edits)==null
-                            ? null : new ServerTool.Result(false,"TARGET_BLOCKED:no contact or exit",null));
+                            ? null : new ServerTool.Result(false,"TARGET_BLOCKED:no contact or exit",null),world,null);
         }
         NavigationGoal stairGoal(BlockPos target) {
             var state=Blocks.OAK_STAIRS.defaultBlockState().setValue(StairBlock.FACING,Direction.EAST);

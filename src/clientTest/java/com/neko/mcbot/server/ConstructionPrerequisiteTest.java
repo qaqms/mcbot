@@ -15,6 +15,45 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConstructionPrerequisiteTest {
     @BeforeAll static void bootstrap() { BlockActionFixtures.bootstrap(); }
 
+    @Test void anEmptyFloorUnderABedCanBeRepairedWhileAnOccupiedFloorRemainsProtected() {
+        var world=new BlockAimTest.Grid(); world.blocks.clear();
+        var target=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":0,"y":2,"z":0},"cells":[{"x":0,"y":0,"z":0,"block":"oak_planks"}]}
+                """).getAsJsonObject());
+        var cell=target.cells().getFirst();
+        world.blocks.put(cell.pos().above(),Blocks.WHITE_BED.defaultBlockState());
+        var access=new BuildSurvey.Access() {
+            @Override public net.minecraft.world.level.block.state.BlockState state(BlockPos p) {
+                return world.loaded(p)?world.getBlockState(p):null;
+            }
+            @Override public boolean inBounds(BlockPos p) { return true; }
+            @Override public boolean protectedCell(BlockPos p) {
+                return WorksiteProtection.protectedCell(p,world::loaded,world::getBlockState,
+                        b->world.getBlockState(b).hasBlockEntity(),b->false);
+            }
+            @Override public boolean protectedPlacement(BlockPos p) {
+                return WorksiteProtection.protectedPlacement(p,world::loaded,world::getBlockState,
+                        b->world.getBlockState(b).hasBlockEntity(),b->false);
+            }
+            @Override public boolean near(BlockPos p) { return false; }
+            @Override public BlockAim.Anchor placementAnchor(BuildTarget.Cell c) {
+                return PlacementWork.anchor(world,c.pos(),null,c);
+            }
+            @Override public BlockPlacement.Access placement() { throw new AssertionError("far cell"); }
+            @Override public com.google.gson.JsonObject terrain() { return new com.google.gson.JsonObject(); }
+        };
+        world.blocks.put(cell.pos().below(),Blocks.DIRT.defaultBlockState());
+        assertTrue(access.protectedCell(cell.pos()),"removing a bed's floor still stays forbidden");
+        assertEquals("out_of_reach",BuildSurvey.cellState(target,cell,access,world.getBlockState(cell.pos())));
+        world.blocks.put(cell.pos(),Blocks.DIRT.defaultBlockState());
+        assertEquals("protected",BuildSurvey.cellState(target,cell,access,world.getBlockState(cell.pos())));
+        world.blocks.put(cell.pos(),Blocks.CHEST.defaultBlockState());
+        assertEquals("protected",BuildSurvey.cellState(target,cell,access,world.getBlockState(cell.pos())));
+        world.blocks.remove(cell.pos());
+        world.unknown.add(cell.pos());
+        assertEquals("unknown",BuildSurvey.cellState(target,cell,access,null));
+    }
+
     @Test void theLoggedUprightCornerDefersUntilItsMissingLowerLogIsRestored() {
         var world = new BlockAimTest.Grid(); world.blocks.clear();
         BuildTarget target;

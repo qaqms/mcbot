@@ -8,6 +8,38 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BuildDiffToolTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
+    @Test void pairedDrawingErrorsRemainQueryableButCannotBecomeVerifiedGoalEvidence() {
+        var placement=new com.neko.mcbot.server.BlockActionFixtures.Placement();
+        var access=new com.neko.mcbot.building.BuildSurvey.Access() {
+            @Override public net.minecraft.world.level.block.state.BlockState state(net.minecraft.core.BlockPos p) {
+                return net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+            }
+            @Override public boolean inBounds(net.minecraft.core.BlockPos p) { return true; }
+            @Override public boolean protectedCell(net.minecraft.core.BlockPos p) { return false; }
+            @Override public boolean near(net.minecraft.core.BlockPos p) { return false; }
+            @Override public com.neko.mcbot.server.BlockPlacement.Access placement() { return placement; }
+            @Override public com.google.gson.JsonObject terrain() {
+                return JsonParser.parseString("{\"dimension\":\"fixture:world\",\"chunks\":{\"0,0\":\"fixed\"}}").getAsJsonObject();
+            }
+        };
+        var args=JsonParser.parseString("""
+                {"target":{"anchor":{"x":0,"y":90,"z":0},"cells":[
+                {"x":0,"y":0,"z":0,"block":"red_bed","properties":[
+                {"name":"part","value":"foot"},{"name":"facing","value":"south"}]}]}}
+                """).getAsJsonObject();
+        var query=BuildDiffTool.report(args,ignored->access,()->0);
+        assertTrue(query.ok(),"a read-only diagnosis must stay available for correction");
+        assertFalse(query.data().getAsJsonObject("object_validation").get("valid").getAsBoolean());
+        args.addProperty("expected_revision",BuildTarget.parse(args.getAsJsonObject("target")).revision());
+        args.addProperty("verify_only",true);
+        var refused=BuildDiffTool.report(args,ignored->access,()->0);
+        assertFalse(refused.ok());
+        assertTrue(refused.feedback().startsWith("INVALID_BUILD_TARGET:"),refused.feedback());
+        assertTrue(refused.feedback().contains("bed_pair_missing_or_inconsistent"));
+        assertEquals(query.data().get("object_validation"),refused.data().get("object_validation"));
+        assertEquals(0,placement.calls);
+    }
+
     private static final String TARGET = """
             {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},
             "to":{"x":7,"y":0,"z":7},"block":"stone"}}

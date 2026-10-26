@@ -28,6 +28,7 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
     private final double minX, maxX, minZ, maxZ;
     private final PathSpec scope, outer;
     private final StandingGeometry geometry;
+    private final double eyeHeight,reach;
 
     record Bounds(int minY, int height, double minX, double maxX, double minZ, double maxZ) { }
 
@@ -42,6 +43,14 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
                        java.util.function.BiFunction<Integer, Integer, PalettedContainer<BlockState>[]> source,
                        BlockPos start, double width, double bodyHeight, double step, PathSpec scope, PathSpec outer,
                        double safeFall) {
+        this(bounds,source,start,width,bodyHeight,step,scope,outer,safeFall,1.62,4.5);
+    }
+
+    NavigationSnapshot(Bounds bounds,
+                       java.util.function.BiFunction<Integer,Integer,PalettedContainer<BlockState>[]> source,
+                       BlockPos start,double width,double bodyHeight,double step,PathSpec scope,PathSpec outer,
+                       double safeFall,double eyeHeight,double reach) {
+        this.eyeHeight=eyeHeight; this.reach=reach;
         sx = start.getX(); sy = start.getY(); sz = start.getZ();
         minY = bounds.minY(); height = bounds.height();
         minX = bounds.minX(); maxX = bounds.maxX(); minZ = bounds.minZ(); maxZ = bounds.maxZ();
@@ -68,12 +77,23 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
             @Override public List<AABB> boxes(BlockPos pos) {
                 return StandingGeometry.collision(getBlockState(pos), NavigationSnapshot.this, pos);
             }
+            @Override public List<AABB> toggledBoxes(BlockPos pos) {
+                return com.neko.mcbot.server.DoorTraversal.openable(getBlockState(pos))
+                        ? StandingGeometry.collision(com.neko.mcbot.server.DoorTraversal.flip(getBlockState(pos)),
+                        NavigationSnapshot.this,pos) : null;
+            }
         }, width, bodyHeight, step, () -> safeFall);
     }
 
     /** Called on the world thread before a worker receives this value. */
     public static NavigationSnapshot capture(ServerLevel level, BlockPos start, double width, double height,
                                              double step, PathSpec scope, PathSpec outer, double safeFall) {
+        return capture(level,start,width,height,step,scope,outer,safeFall,1.62,4.5);
+    }
+
+    public static NavigationSnapshot capture(ServerLevel level,BlockPos start,double width,double height,
+                                             double step,PathSpec scope,PathSpec outer,double safeFall,
+                                             double eyeHeight,double reach) {
         var border = level.getWorldBorder();
         var bounds = new Bounds(level.getMinY(), level.getHeight(),
                 border.getMinX(), border.getMaxX(), border.getMinZ(), border.getMaxZ());
@@ -86,7 +106,7 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
             for (int i = 0; i < source.length; i++)
                 if (!source[i].hasOnlyAir()) states[i] = source[i].getStates();
             return states;
-        }, start, width, height, step, scope, outer, safeFall);
+        }, start, width, height, step, scope, outer, safeFall,eyeHeight,reach);
     }
 
     private static long chunkKey(int x, int z) { return ((long) x << 32) ^ (z & 0xffffffffL); }
@@ -113,6 +133,7 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
     public StandingGeometry standing() { return geometry; }
     public BlockAim.Access sight(Vec3 eye) {
         return new BlockAim.Access() {
+            @Override public BlockGetter blocks() { return NavigationSnapshot.this; }
             @Override public Vec3 eye() { return eye; }
             @Override public boolean loaded(BlockPos pos) { return known(pos); }
             @Override public List<AABB> outline(BlockPos pos) {
@@ -157,6 +178,14 @@ public final class NavigationSnapshot implements DigSampler, BlockGetter {
                 && state.isFaceSturdy(this, pos, net.minecraft.core.Direction.UP);
     }
     @Override public NavigationGeometry geometry() { return geometry; }
+    @Override public List<Long> toggleCells(int x,int y,int z) {
+        return com.neko.mcbot.server.DoorTraversal.cells(this,new BlockPos(x,y,z),
+                p->known(p) && inBounds(p.getX(),p.getY(),p.getZ()));
+    }
+    @Override public boolean canToggleFrom(int x,int y,int z,long target,TerrainEdits edits) {
+        return com.neko.mcbot.server.DoorTraversal.reachable(this,sight(Vec3.ZERO),geometry,
+                x,y,z,target,edits,eyeHeight,reach);
+    }
     @Override public boolean allowsStep(int fx, int fy, int fz, int x, int y, int z) {
         return scope.allowsStep(fx, fy, fz, x, y, z) && outer.allowsStep(fx, fy, fz, x, y, z);
     }

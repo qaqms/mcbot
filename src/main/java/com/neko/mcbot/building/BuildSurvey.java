@@ -23,6 +23,7 @@ public final class BuildSurvey {
         BlockState state(BlockPos pos);
         boolean inBounds(BlockPos pos);
         boolean protectedCell(BlockPos pos);
+        default boolean protectedPlacement(BlockPos pos) { return protectedCell(pos); }
         boolean near(BlockPos pos);
         BlockPlacement.Access placement();
         JsonObject terrain();
@@ -90,6 +91,11 @@ public final class BuildSurvey {
         return query(target, access, cursor, 0, clock, true, false, true, true, includeRepairs);
     }
 
+    public static ServerTool.Result repairWork(BuildTarget target, Access access, int cursor,
+                                               LongSupplier clock, boolean wholeTarget) {
+        return query(target, access, cursor, 0, clock, true, false, wholeTarget, wholeTarget, true, true);
+    }
+
     public static ServerTool.Result verify(BuildTarget target, Access access, int offset, LongSupplier clock) {
         return query(target, access, offset, 0, clock, false, false, false, false);
     }
@@ -102,6 +108,13 @@ public final class BuildSurvey {
     private static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
                                             LongSupplier clock, boolean assessWork, boolean observeSurface,
                                             boolean workScan, boolean nearbyOnly, boolean includeRepairs) {
+        return query(target, access, offset, materialOffset, clock, assessWork, observeSurface,
+                workScan, nearbyOnly, includeRepairs, false);
+    }
+    private static ServerTool.Result query(BuildTarget target, Access access, int offset, int materialOffset,
+                                            LongSupplier clock, boolean assessWork, boolean observeSurface,
+                                            boolean workScan, boolean nearbyOnly, boolean includeRepairs,
+                                            boolean repairsOnly) {
         if (offset < 0 || offset >= target.cells().size() || !workScan && offset % PAGE != 0
                 || materialOffset < 0 || materialOffset > BuildTarget.LIMIT || materialOffset % PAGE != 0)
             throw new IllegalArgumentException("page");
@@ -164,8 +177,10 @@ public final class BuildSurvey {
         String progressKey = hash(observation.toString());
         var selected=new ArrayList<Row>();
         int nextCursor=-1;
-        for (int index=offset;index<rows.size();index++) {
+        int selectionEnd=workScan ? rows.size() : Math.min(rows.size(),offset+PAGE);
+        for (int index=offset;index<selectionEnd;index++) {
             var row=rows.get(index);
+            if (repairsOnly && !access.repairPending(row.cell.pos())) continue;
             if (!includeRepairs && access.repairPending(row.cell.pos())) continue;
             if (workScan && (row.state.equals("satisfied") || nearbyOnly && !row.state.equals("not_assessed"))) continue;
             if (workScan && !nearbyOnly && !List.of("not_assessed","needs_clear","out_of_reach").contains(row.state)) continue;
@@ -338,6 +353,8 @@ public final class BuildSurvey {
         data.addProperty("progress_observation_key", progressKey);
         data.addProperty("work_observation_key",hash(observation + "|" + access.workContext()));
         data.add("design_components",designComponents(target));
+        var objectValidation=BuildObjects.validation(target);
+        data.add("object_validation",objectValidation);
         data.add("design_review", designReview);
         data.add("clearing_work", clearingWork);
         if (after != null) data.add("spatial_facts", after);
@@ -357,6 +374,8 @@ public final class BuildSurvey {
                 + "needs_support表示尚缺放置前提，先完成相邻有支撑的格，现场改变后再核对，不靠反复走近解决。"
                 + "page_counts仅本页，counts含全目标及页外未评估格；本页完成不等于整栋完成。"
                 + "明细和料单分别按next_offset/material_next_offset及同一expected_revision续页，Lua可用mc.build_diff(target)。"
+                + (!objectValidation.get("valid").getAsBoolean()
+                ? " " + BuildObjects.invalidFeedback(objectValidation) : "")
                 + (clearingWork.get("preparation_recommended").getAsBoolean()
                 ? " 清障工具准备见clearing_work：批量清理前按真实配方考虑补做合适工具，材料和工具不由施工程序自动制作。" : ""), data);
     }
@@ -494,7 +513,8 @@ public final class BuildSurvey {
         if (actual == null) return "unknown";
         if (!supported) return "unsupported";
         if (cell.matches(actual)) return "satisfied";
-        if (access.protectedCell(cell.pos())) return "protected";
+        if (actual.isAir() ? access.protectedPlacement(cell.pos()) : access.protectedCell(cell.pos()))
+            return "protected";
         if (actual.getBlock() == cell.authored().getBlock()) return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (cell.authored().isAir() || !actual.canBeReplaced()) return "needs_clear";
         String prerequisite = assessWork ? placementPrerequisite(access, cell) : null;
@@ -523,7 +543,9 @@ public final class BuildSurvey {
         var other = states.apply(partner.pos());
         if (actual == null || other == null) return "unknown";
         if (BuildObjects.matches(target, cell, states)) return "satisfied";
-        if (access.protectedCell(cell.pos()) || access.protectedCell(partner.pos())) return "protected";
+        if ((actual.isAir() ? access.protectedPlacement(cell.pos()) : access.protectedCell(cell.pos()))
+                || (other.isAir() ? access.protectedPlacement(partner.pos()) : access.protectedCell(partner.pos())))
+            return "protected";
         if (!actual.isAir() || !other.isAir())
             return access.clearable(cell) ? "needs_clear" : "state_conflict";
         if (BuildObjects.secondary(cell.authored())) return "paired_pending";

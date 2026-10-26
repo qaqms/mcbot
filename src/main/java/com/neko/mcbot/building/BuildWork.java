@@ -27,7 +27,7 @@ public final class BuildWork extends TickTask {
     private final Access access;
     private final int offset, limit;
     private final LongSupplier clock;
-    private final boolean includeRepairs;
+    private final boolean includeRepairs, repairsOnly;
     private final JsonArray results = new JsonArray();
     private final java.util.Set<net.minecraft.core.BlockPos> attempted = new java.util.HashSet<>();
     private int attempts, placed, consumed, checks, surveys, settle;
@@ -43,8 +43,13 @@ public final class BuildWork extends TickTask {
         this(target,access,offset,limit,clock,true);
     }
     public BuildWork(BuildTarget target, Access access, int offset, int limit, LongSupplier clock, boolean includeRepairs) {
+        this(target, access, offset, limit, clock, includeRepairs, false);
+    }
+    public BuildWork(BuildTarget target, Access access, int offset, int limit, LongSupplier clock,
+                     boolean includeRepairs, boolean repairsOnly) {
         if (offset < -1 || offset >= target.cells().size() || offset >= 0 && offset % BuildSurvey.PAGE != 0
-                || limit < 1 || limit > MAX_ACTIONS) throw new IllegalArgumentException("bounded work");
+                || limit < 1 || limit > MAX_ACTIONS || repairsOnly && !includeRepairs)
+            throw new IllegalArgumentException("bounded work");
         this.target = target;
         this.access = access;
         this.offset = offset;
@@ -52,6 +57,7 @@ public final class BuildWork extends TickTask {
         this.limit = limit;
         this.clock = clock;
         this.includeRepairs = includeRepairs;
+        this.repairsOnly = repairsOnly;
     }
 
     @Override public Progress tick(CompanionPlayer body) {
@@ -76,7 +82,9 @@ public final class BuildWork extends TickTask {
         long start = clock.getAsLong();
         try {
             surveys++;
-            var survey = offset<0 ? BuildSurvey.nearby(target,access.survey(),workCursor,clock,includeRepairs)
+            var survey = repairsOnly ? BuildSurvey.repairWork(target,access.survey(),
+                    offset<0 ? workCursor : pageOffset,clock,offset<0)
+                    : offset<0 ? BuildSurvey.nearby(target,access.survey(),workCursor,clock,includeRepairs)
                     : BuildSurvey.queryForWork(target, access.survey(), pageOffset, clock,includeRepairs);
             observed = survey.data();
             checks += observed.get("work_preflights").getAsInt();
@@ -93,6 +101,7 @@ public final class BuildWork extends TickTask {
                         cell.get("y").getAsInt(), cell.get("z").getAsInt());
                 if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)
                         && (workLayer == null || pos.getY() == workLayer)
+                        && (!repairsOnly || cell.get("repair_pending").getAsBoolean())
                         && (includeRepairs || !cell.get("repair_pending").getAsBoolean())) { ready = cell; break; }
             }
             if (ready == null && offset < 0 && observed.get("work_next_cursor").getAsInt()>=0 && attempts < limit) {
@@ -117,6 +126,10 @@ public final class BuildWork extends TickTask {
             invalid = access.valid();
             if (invalid != null) return done(invalid, false);
             var fresh = access.survey();
+            if (repairsOnly && !fresh.repairPending(pos)) {
+                attempted.add(pos);
+                return running();
+            }
             var actual = fresh.inBounds(pos) ? fresh.state(pos) : null;
             String state = BuildSurvey.cellState(target, cell, fresh, actual);
             if ("satisfied".equals(state)) return running();
@@ -169,9 +182,9 @@ public final class BuildWork extends TickTask {
             summary.addProperty("report_details_omitted", true);
             summary.addProperty("query_details_with_build_diff", true);
         }
-        boolean ok = reason == null && (placed > 0 || satisfied);
+        boolean ok = reason == null && (placed > 0 || satisfied || repairsOnly);
         terminal = new ServerTool.Result(ok, reason != null ? reason.feedback()
-                : ok ? "近身施工本批结束：实际放置" + placed + "格，消耗" + consumed
+                : ok ? (repairsOnly ? "原地待补格检查结束：实际修补" : "近身施工本批结束：实际放置") + placed + "格，消耗" + consumed
                 + "个；整目标满足=" + satisfied + "。未施工页及剩余缺口须读同修订新鲜差异。"
                 : "TARGET_BLOCKED:" + (offset < 0 ? "全目标在当前站位没有可施工格" : "指定页在当前站位没有可施工格")
                 + "；整目标仍缺" + data.get("whole_remaining").getAsInt()
@@ -187,6 +200,7 @@ public final class BuildWork extends TickTask {
         data.addProperty("next_offset", pageOffset + BuildSurvey.PAGE < target.cells().size()
                 ? pageOffset + BuildSurvey.PAGE : -1);
         data.addProperty("max_actions", limit);
+        data.addProperty("repairs_only", repairsOnly);
         data.addProperty("action_attempts", attempts);
         data.addProperty("placed_blocks", placed);
         data.addProperty("consumed_count", consumed);

@@ -24,7 +24,10 @@ public final class DigAStar {
 
     /** 一格=打包 long（见 pack()）。一步落点：坐标 + 本步要挖/要放的格子。 */
     public record Step(int x, int y, int z, List<Long> dig, List<Long> place, byte action,
-                       double feetY, boolean jump) {
+                       double feetY, boolean jump,List<Long> toggle) {
+        public Step(int x,int y,int z,List<Long> dig,List<Long> place,byte action,double feetY,boolean jump) {
+            this(x,y,z,dig,place,action,feetY,jump,List.of());
+        }
         public Step(int x, int y, int z, List<Long> dig, List<Long> place, byte action) {
             this(x, y, z, dig, place, action, y, action == ACT_JUMP || action == ACT_PILLAR);
         }
@@ -696,6 +699,7 @@ public final class DigAStar {
             cost += s.placeCost(bx, by - 1, bz)
                     * (reuse != null && reuse.contains(pc) ? BIAS_REUSE : 1.0);
         }
+        cost += plan.toggle().size() * .15;
         // 3) 下落风险
         if (dy < 0) {
             cost += FALL_PENALTY * dy * dy;
@@ -709,7 +713,7 @@ public final class DigAStar {
             return;
         }
         var step = new Step(bx, by, bz, plan.dig(), plan.place(),
-                classify(cur, bx, by, bz, plan.dig(), plan.place()), plan.feetY(), plan.jump());
+                classify(cur, bx, by, bz, plan.dig(), plan.place()), plan.feetY(), plan.jump(),plan.toggle());
         Node n = new Node(key, bx, by, bz, digs, places, g,
                 (greedy && !existingPass ? 0 : g) + h(bx, by, bz, plan.terrain()), cur, step);
         nominatePartial(n);

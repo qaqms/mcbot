@@ -23,6 +23,7 @@ public final class StandingGeometry implements NavigationGeometry {
         boolean known(BlockPos pos);
         /** Null means unsafe or unsupported, not empty space. Boxes are local to the cell. */
         List<AABB> boxes(BlockPos pos);
+        default List<AABB> toggledBoxes(BlockPos pos) { return null; }
     }
     private record Piece(long cell, AABB box) { }
     private static final double EPS = 1e-7;
@@ -59,6 +60,10 @@ public final class StandingGeometry implements NavigationGeometry {
             }
             @Override public List<AABB> boxes(BlockPos pos) {
                 return collision(level.getBlockState(pos), level, pos);
+            }
+            @Override public List<AABB> toggledBoxes(BlockPos pos) {
+                return DoorTraversal.openable(level.getBlockState(pos))
+                        ? collision(DoorTraversal.flip(level.getBlockState(pos)),level,pos) : null;
             }
         }, body.getBbWidth(), body.getBbHeight(), body.maxUpStep(),
                 () -> body.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.SAFE_FALL_DISTANCE));
@@ -125,7 +130,9 @@ public final class StandingGeometry implements NavigationGeometry {
             removed.remove(key);
             placed.remove(key);
         }
-        var overlay = new TerrainEdits(java.util.Set.copyOf(removed),java.util.Set.copyOf(placed));
+        var toggled=new java.util.HashSet<>(edits.toggled());
+        for (var pos:proposed.keySet()) toggled.remove(DigAStar.pack(pos.getX(),pos.getY(),pos.getZ()));
+        var overlay = new TerrainEdits(java.util.Set.copyOf(removed),java.util.Set.copyOf(placed),toggled);
         return after.exit(x,feet,z,overlay) || !exit(x,feet,z,edits);
     }
 
@@ -154,14 +161,42 @@ public final class StandingGeometry implements NavigationGeometry {
         double distance = Double.POSITIVE_INFINITY;
         for (int cx = (int) Math.floor(x - half + EPS); cx <= (int) Math.floor(x + half - EPS); cx++)
             for (int cz = (int) Math.floor(z - half + EPS); cz <= (int) Math.floor(z + half - EPS); cz++) {
-                var pos = new BlockPos(cx, y, cz);
                 double d = Math.hypot(cx + .5 - x, cz + .5 - z);
-                if (d < distance && allowed.test(pos) && canAlign(x, feet, z, pos)) {
-                    nearest = pos;
-                    distance = d;
+                for (int cy=y;cy>=y-1;cy--) {
+                    var candidate=new BlockPos(cx,cy,cz);
+                    if (d < distance && allowed.test(candidate) && canDepart(x,feet,z,candidate)) {
+                        nearest=candidate;
+                        distance=d;
+                    }
                 }
             }
         return nearest;
+    }
+
+    /** A partial stair tread may lead down to its center; verify the whole native walking sweep. */
+    public boolean canDepart(double x,double feet,double z,BlockPos destination) {
+        if (canAlign(x,feet,z,destination)) return true;
+        if (!Double.isFinite(x) || !Double.isFinite(feet) || !Double.isFinite(z)
+                || Math.abs(destination.getX()+.5-x)>1 || Math.abs(destination.getZ()+.5-z)>1) return false;
+        var foot=standing(destination.getX(),destination.getY(),destination.getZ(),TerrainEdits.EMPTY);
+        if (foot==null || feet-foot.height()<=EPS || feet-foot.height()>step+EPS) return false;
+        var box=bodyAt(x,feet,z);
+        var end=body(destination.getX(),foot.height(),destination.getZ());
+        var pieces=gather(box.minmax(end),TerrainEdits.EMPTY);
+        var initial=box;
+        if (pieces==null || pieces.stream().anyMatch(p->p.box().intersects(initial.deflate(EPS)))
+                || pieces.stream().noneMatch(p->same(p.box().maxY,feet) && overlaps(initial,p.box()))) return false;
+        var shapes=pieces.stream().map(p->Shapes.create(p.box())).toList();
+        double dx=(destination.getX()+.5-x)/WALK_SLICES, dz=(destination.getZ()+.5-z)/WALK_SLICES;
+        for (int i=0;i<WALK_SLICES;i++) {
+            var moved=horizontal(box,shapes,dx,dz);
+            if (!same(moved.minX-box.minX,dx) || !same(moved.minZ-box.minZ,dz)) return false;
+            double down=Shapes.collide(Direction.Axis.Y,moved.deflate(EPS),shapes,foot.height()-moved.minY-1e-4);
+            box=moved.move(0,down,0);
+            var sole=box;
+            if (pieces.stream().noneMatch(p->same(p.box().maxY,sole.minY) && overlaps(sole,p.box()))) return false;
+        }
+        return same(box.minY,foot.height());
     }
 
     /** Actual pose to a centered stance; no edits, jump, height change or unobserved support. */
@@ -325,7 +360,8 @@ public final class StandingGeometry implements NavigationGeometry {
         if (!world.known(pos)) return null;
         long cell = DigAStar.pack(pos.getX(), pos.getY(), pos.getZ());
         if (edits.removed().contains(cell)) return List.of();
-        List<AABB> boxes = edits.placed().contains(cell) ? List.of(new AABB(0, 0, 0, 1, 1, 1)) : world.boxes(pos);
+        List<AABB> boxes = edits.placed().contains(cell) ? List.of(new AABB(0, 0, 0, 1, 1, 1))
+                : edits.toggled().contains(cell) ? world.toggledBoxes(pos) : world.boxes(pos);
         if (boxes == null || boxes.size() > 16) return null;
         var result = new ArrayList<Piece>(boxes.size());
         for (var box : boxes) {

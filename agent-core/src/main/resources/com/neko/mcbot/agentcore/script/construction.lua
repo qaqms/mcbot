@@ -135,18 +135,25 @@ function mc.build(target, options)
     revision=revision or site.target_revision
     assert(site.target_revision==revision)
     local temporary_possible=site.temporary and #site.temporary>0 or false
+    local pending_repairs=(site.repairs_pending or 0)>0
     local function remember(result)
         if result and (result.data.placed_blocks or 0)>0 then temporary_possible=true end
+        if result and (result.data.removed or (result.data.removed_blocks or 0)>0) then pending_repairs=true end
     end
-    local placed,cleared,consumed=0,0,0
+    local placed,cleared,consumed,repaired=0,0,0,0
     local effects,omitted={},0
     local last_pages,initial_remaining=nil,nil
     local relocations,recovery_seen,cleanup=0,{},nil
-    local function cleanup_after_stall()
+    local cleanup_stamp=nil
+    local cleanup_final=false
+    local function cleanup_after_stall(final)
+        if final then cleanup_final=true end
         if not temporary_possible then return end
         local current=call("build_site",{operation="query"}).data
         if current.temporary and #current.temporary>0 then
+            local previous=cleanup and cleanup.removed or 0
             cleanup=mc.cleanup_temporary(revision)
+            cleanup.removed=cleanup.removed+previous
         end
     end
     local function effect(cell,kind)
@@ -154,8 +161,22 @@ function mc.build(target, options)
             effects[#effects+1]={x=cell.x,y=cell.y,z=cell.z,block=cell.block,kind=kind}
         else omitted=omitted+1 end
     end
+    local function record_batch(result)
+        placed=placed+(result.data.placed_blocks or 0)
+        consumed=consumed+(result.data.consumed_count or 0)
+        if result.data.placement_results then
+            for _,cell in ipairs(result.data.placement_results) do
+                if cell.ok then effect(cell,"placed") end
+            end
+        end
+    end
     local function report(reason,round,pages,failure)
+        if reason and not cleanup_final then cleanup_after_stall(true) end
         local current=pages~=nil
+        if cleanup and cleanup.removed>0 then
+            pages=checked(target,revision)
+            current=pages~=nil
+        end
         pages=pages or last_pages
         local first=pages and pages[1]
         local satisfied=current and first and first.goal_satisfied==true or false
@@ -167,9 +188,19 @@ function mc.build(target, options)
             remaining_known=current,outer_goal_verified=false,
             effects=effects,effects_omitted=omitted,last_failure=failure}
         result.relocations=relocations
+        result.nearby_repaired_blocks=repaired
+        if reason=="construction_state_repeated" then
+            result.model_reassessment_required=true
+            result.blocked_detail="施工换位后再次遇到相同图纸实态；位移、库存变化和拆补次数不能证明进展。保留原图与实际效果，核对缺格并调整施工通路或顺序。"
+        end
         if cleanup then
             result.temporary_removed=cleanup.removed
             result.temporary_retained=cleanup.retained
+            result.temporary_cleanup_blocked=cleanup.blocked
+            result.temporary_cleanup_failures=cleanup.failures
+            result.temporary_cleanup_failures_omitted=cleanup.failures_omitted
+            result.temporary_retained_reasons=cleanup.retained_reasons
+            result.temporary_retained_reasons_omitted=cleanup.retained_reasons_omitted
         end
         if satisfied then result.evidence="fresh_whole_target_diff" end
         if pages then
@@ -196,10 +227,13 @@ function mc.build(target, options)
         return result
     end
     local function completed(round,pages)
+        cleanup_final=true
         if not temporary_possible then return report(nil,round,pages) end
         local current=call("build_site",{operation="query"}).data
         if current.temporary and #current.temporary>0 then
+            local previous=cleanup and cleanup.removed or 0
             cleanup=mc.cleanup_temporary(revision)
+            cleanup.removed=cleanup.removed+previous
             local fresh=call("build_site",{operation="query"}).data
             local retained=0
             for _,record in ipairs(fresh.temporary) do
@@ -239,13 +273,16 @@ function mc.build(target, options)
     end
     local round, failed, last_reason, last_failure=0,{},nil,nil
     local cursor,stamp=0,nil
+    local walked_states={}
     local repairing=false
+    local work_arrival=false
+    local repair_stamp=nil
     local function recover(workstamp, required)
         site=call("build_site",{operation="query"}).data
         if required and not site.body_obstructs_target then return false end
         local ok,result=relocate(site,revision,workstamp,recovery_seen)
         remember(result)
-        if ok then relocations=relocations+1 end
+        if ok then relocations=relocations+1; work_arrival=false end
         return ok
     end
     while rounds==0 or round<rounds do
@@ -271,12 +308,14 @@ function mc.build(target, options)
             pages,last_pages=remaining,remaining
             stamp=pages[1].progress_observation_key or pages[1].work_observation_key or pages[1].observation_key
             failed,cursor,repairing={},0,true
+            walked_states={}
         end
         local moved=false
         local ready,clear,far,clears,fars=nil,nil,nil,{},{}
         local function scan(scanned)
             for _,page in ipairs(scanned) do
                 for _,cell in ipairs(page.cells) do
+                    if cell.repair_pending and cell.state~="satisfied" then pending_repairs=true end
                     local kind=nil
                     if cell.state=="ready" then kind="ready"
                     elseif cell.state=="needs_clear" and cell.clear_allowed then kind="clear"
@@ -325,8 +364,30 @@ function mc.build(target, options)
         local obstructing=pages[1].body_obstructs_target
         if obstructing==nil then obstructing=site.body_obstructs_target end
         if not ready and not clear and obstructing then moved=recover(stamp,true) end
-        if not moved and (ready or clear or far) then
-            call("build_site",{operation="checkpoint",expected_revision=revision})
+        if not ready and not clear then work_arrival=false end
+        if not moved and (ready or clear or far or pending_repairs) then
+            local checkpoint=call("build_site",{operation="checkpoint",expected_revision=revision}).data
+            pending_repairs=(checkpoint.repairs_pending or 0)>0
+            local local_stamp=pages[1].work_observation_key or stamp
+            -- Complete the arrival's work before closing its opening. Then repair in place,
+            -- across all drawing pages, before another route can leave the holes behind.
+            if not work_arrival and pending_repairs
+                and repair_stamp~=local_stamp then
+                repair_stamp=local_stamp
+                local result=call("build_nearby",{target=target,expected_revision=revision,
+                    max_actions=actions,repairs_only=true})
+                record_batch(result)
+                local count=result.data.placed_blocks or 0
+                repaired=repaired+count
+                moved=count>0
+            end
+            if not moved and checkpoint.temporary and #checkpoint.temporary>=16 and cleanup_stamp~=stamp then
+                cleanup_stamp=stamp
+                temporary_possible=true
+                local before=cleanup and cleanup.removed or 0
+                cleanup_after_stall()
+                if cleanup and cleanup.removed>before then moved=true end
+            end
         end
         if moved then
             cursor=0
@@ -375,13 +436,8 @@ function mc.build(target, options)
                     end
                 end
             end
-            placed=placed+(result.data.placed_blocks or 0)
-            consumed=consumed+(result.data.consumed_count or 0)
-            if result.data.placement_results then
-                for _,cell in ipairs(result.data.placement_results) do
-                    if cell.ok then effect(cell,"placed") end
-                end
-            end
+            record_batch(result)
+            work_arrival=false
             if not result.ok then
                 call("status",{details=true})
                 failed[ready.key]=true
@@ -391,6 +447,12 @@ function mc.build(target, options)
                 last_reason="nearby_no_actual_progress"
             end
         elseif far then
+            -- A route can reopen finished cells and change stock without advancing the drawing.
+            -- Keep construction-state history across those changes, independently of failed stances.
+            local drawing=pages[1].goal_observation_key
+            if drawing and walked_states[drawing] then
+                return report("construction_state_repeated",round,pages,last_failure)
+            end
             local ok,result,trapped=move(far.cell,far.cell.item,site.bounds,nil,fars,revision)
             remember(result)
             if trapped then
@@ -401,6 +463,7 @@ function mc.build(target, options)
                 for _,candidate in ipairs(fars) do failed[candidate.key]=true end
                 last_reason,last_failure="placement_stance_unavailable",result.feedback
             elseif not trapped then
+                if drawing then walked_states[drawing]=true end
                 local selected=result.data.selected_work_target
                 if not selected and #fars>1 then return report("work_member_unconfirmed",round,nil,result.feedback) end
                 selected=selected or far.cell
@@ -413,6 +476,7 @@ function mc.build(target, options)
                     end
                 end
                 if not matched then return report("work_member_unconfirmed",round,nil,result.feedback) end
+                work_arrival=true
             end
         elseif pages[1].work_next_cursor and pages[1].work_next_cursor>=0 then
             cursor=pages[1].work_next_cursor
@@ -424,7 +488,7 @@ function mc.build(target, options)
             -- A blocked build can still have throwaway supports that no longer
             -- carry any local dependency.  Give the bounded cleanup pass one
             -- chance before returning the obstruction to the model.
-            cleanup_after_stall()
+            cleanup_after_stall(true)
             local result=report(last_reason or "no_feasible_work_material_support_state_or_protection",round,pages)
             result.last_failure=last_failure
             return result
@@ -435,7 +499,7 @@ function mc.build(target, options)
         local done,remaining=completed(rounds,pages)
         return done or report("cleanup_changed_target",rounds,remaining)
     end
-    cleanup_after_stall()
+    cleanup_after_stall(true)
     return report(reason or "round_limit",rounds,pages)
 end
 
@@ -447,12 +511,22 @@ function mc.cleanup_temporary(revision)
             target_revision=site.target_revision,requested_revision=revision,goal_satisfied=false}
     end
     local removed,attempted,recovery=0,{},{}
+    local failures,failures_omitted={},0
     local function finish(blocked)
-        local retained=0
+        local retained,reasons,reasons_omitted=0,{},0
         for _,record in ipairs(site.temporary) do
-            if not record.present_known or record.present~=false then retained=retained+1 end
+            if not record.present_known or record.present~=false then
+                retained=retained+1
+                if #reasons<8 and record.cleanup_reason then
+                    reasons[#reasons+1]={x=record.x,y=record.y,z=record.z,
+                        reason=record.cleanup_reason}
+                elseif record.cleanup_reason then reasons_omitted=reasons_omitted+1
+                end
+            end
         end
-        return {removed=removed,retained=retained,blocked=blocked or nil,goal_satisfied=false}
+        return {removed=removed,retained=retained,blocked=blocked or (#failures>0 and "some_stances_unavailable" or nil),
+            failures=failures,failures_omitted=failures_omitted,retained_reasons=reasons,
+            retained_reasons_omitted=reasons_omitted,goal_satisfied=false}
     end
     while true do
         local moved=false
@@ -480,19 +554,24 @@ function mc.cleanup_temporary(revision)
             if not record then return finish() end
             attempted[record.x..":"..record.y..":"..record.z]=true
             -- Dismantling must not create another scaffold just to reach the previous one.
-            if not move(record,nil,site.bounds,true) then
+            local reachable,result=move(record,nil,site.bounds,true)
+            if not reachable then
+                if #failures<8 then
+                    failures[#failures+1]={x=record.x,y=record.y,z=record.z,
+                        reason=result and result.feedback}
+                else failures_omitted=failures_omitted+1 end
                 site=call("build_site",{operation="query"}).data
-                return finish(true)
-            end
-            local fresh=call("build_site",{operation="query"}).data
-            local allowed=false
-            for _,r in ipairs(fresh.temporary) do
-                if r.x==record.x and r.y==record.y and r.z==record.z then allowed=r.cleanup_allowed end
-            end
-            if allowed then
-                local result=call("break_block",{x=record.x,y=record.y,z=record.z,expected_block=record.block,
-                    site_revision=revision,temporary_cleanup=true})
-                if result.data.removed then removed=removed+1 end
+            else
+                local fresh=call("build_site",{operation="query"}).data
+                local allowed=false
+                for _,r in ipairs(fresh.temporary) do
+                    if r.x==record.x and r.y==record.y and r.z==record.z then allowed=r.cleanup_allowed end
+                end
+                if allowed then
+                    local result=call("break_block",{x=record.x,y=record.y,z=record.z,expected_block=record.block,
+                        site_revision=revision,temporary_cleanup=true})
+                    if result.data.removed then removed=removed+1; attempted={} end
+                end
             end
         end
         site=call("build_site",{operation="query"}).data

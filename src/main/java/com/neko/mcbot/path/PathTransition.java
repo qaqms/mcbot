@@ -5,7 +5,12 @@ import java.util.List;
 
 /** One step's terrain premises, shared by search and live route validation. */
 final class PathTransition {
-    record Plan(List<Long> dig, List<Long> place, TerrainEdits terrain, double feetY, boolean jump) { }
+    record Plan(List<Long> dig, List<Long> place, TerrainEdits terrain, double feetY, boolean jump,
+                List<Long> toggle) {
+        Plan(List<Long> dig,List<Long> place,TerrainEdits terrain,double feetY,boolean jump) {
+            this(dig,place,terrain,feetY,jump,List.of());
+        }
+    }
     record Check(Plan plan, String reason, Long cell) {
         static Check refused(String reason, Long cell) { return new Check(null, reason, cell); }
     }
@@ -87,6 +92,11 @@ final class PathTransition {
 
     private static Check shaped(DigSampler base, TerrainEdits edits, int fx, int fy, int fz,
                                 int x, int y, int z, int remainingDigs, int remainingPlaces) {
+        return shaped(base,edits,fx,fy,fz,x,y,z,remainingDigs,remainingPlaces,true);
+    }
+
+    private static Check shaped(DigSampler base, TerrainEdits edits, int fx, int fy, int fz,
+                                int x, int y, int z, int remainingDigs, int remainingPlaces,boolean doors) {
         var geometry = base.geometry();
         var from = geometry.foot(fx, fy, fz, edits);
         if (from == null) return Check.refused("DEPARTURE_FOOTING", DigAStar.pack(fx, fy, fz));
@@ -103,6 +113,24 @@ final class PathTransition {
         double feet = dest == null ? y : dest.height();
         var clear = geometry.clearance(fx, from.height(), fz, x, feet, z, edits);
         if (!clear.known()) return Check.refused(clear.failure(), clear.cell());
+        var toggles=new ArrayList<Long>();
+        var changed=edits;
+        for (long cell:doors ? clear.blockers() : List.<Long>of()) {
+            var parts=base.toggleCells(DigAStar.unpackX(cell),DigAStar.unpackY(cell),DigAStar.unpackZ(cell));
+            if (parts.isEmpty() || parts.stream().anyMatch(toggles::contains)) continue;
+            if (!base.canToggleFrom(fx,fy,fz,cell,changed)) return Check.refused("DOOR_UNREACHABLE",cell);
+            var after=changed.toggle(parts);
+            var occupied=geometry.clearance(fx,from.height(),fz,fx,from.height(),fz,after);
+            if (!occupied.known() || !occupied.blockers().isEmpty()) return Check.refused("DOOR_OCCUPIED",cell);
+            toggles.addAll(parts);
+            changed=after;
+        }
+        if (!toggles.isEmpty()) {
+            var result=shaped(base,changed,fx,fy,fz,x,y,z,remainingDigs,remainingPlaces,false);
+            if (result.plan()==null) return result;
+            var p=result.plan();
+            return new Check(new Plan(p.dig(),p.place(),p.terrain(),p.feetY(),p.jump(),List.copyOf(toggles)),null,null);
+        }
         var blockers = new ArrayList<>(clear.blockers());
         // A standing jump rises above its landing. Its ceiling is explicit work, never an implicit edit.
         var landing = dest == null ? List.of(DigAStar.pack(x, y - 1, z)) : List.<Long>of();

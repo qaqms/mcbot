@@ -20,6 +20,85 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlacementWorkTest {
+    @Test void liveWorkDiagnosticsKeepTheNativeFailureForEachFaceRatherThanOnlyTheFirstInvisibleFace() {
+        var result=PlacementWork.assessFaces(null,face-> {
+            var data=new JsonObject();
+            data.addProperty("placement_failure",face==Direction.UP?"desired_state_mismatch":"no_clickable_face");
+            return new ServerTool.Result(false,"TARGET_BLOCKED:"+face.getName(),data);
+        },true);
+        var reasons=result.data().getAsJsonObject("placement_face_failures");
+        assertEquals(6,reasons.size());
+        assertEquals("desired_state_mismatch",reasons.getAsJsonObject("up").get("placement_failure").getAsString());
+        assertEquals("no_clickable_face",reasons.getAsJsonObject("down").get("placement_failure").getAsString());
+        assertNull(PlacementWork.assessFaces(null,face->face==Direction.UP ? null : result,true));
+    }
+
+    @Test void aClearStanceCanGuideTowardOpeningItsBlockedWorkRayWithoutRemovingItsFloor() {
+        var grid=new StandingGeometryTest.Grid(); grid.blocks.clear();
+        var sight=new BlockAimTest.Grid(); sight.blocks.clear();
+        for (int x=0;x<=6;x++) for (int z=-2;z<=2;z++)
+            grid.blocks.put(new BlockPos(x,-1,z),Blocks.STONE.defaultBlockState());
+        var target=new BlockPos(3,-1,0);
+        grid.blocks.remove(target);
+        grid.blocks.put(target.below(),Blocks.STONE.defaultBlockState());
+        grid.blocks.put(target.above(),Blocks.COBBLESTONE.defaultBlockState());
+        grid.blocks.put(target.above(2),Blocks.COBBLESTONE.defaultBlockState());
+        sight.blocks.putAll(grid.blocks);
+        var geometry=grid.geometry();
+        var original=java.util.Map.copyOf(sight.blocks);
+        boolean[] allowed={true};
+        DigSampler terrain=new DigSampler() {
+            @Override public NavigationGeometry geometry() { return geometry; }
+            @Override public boolean inBounds(int x,int y,int z) {
+                return x>=0 && x<=6 && y>=-2 && y<=4 && z>=-2 && z<=2;
+            }
+            @Override public boolean passable(int x,int y,int z) {
+                return sight.getBlockState(new BlockPos(x,y,z)).isAir();
+            }
+            @Override public boolean support(int x,int y,int z) { return !passable(x,y,z); }
+            @Override public double digSeconds(int x,int y,int z) {
+                return allowed[0] && x==3 && z==0 && y>=0 && y<=1 ? .5 : INFEASIBLE;
+            }
+            @Override public boolean placeable(int x,int y,int z) { return false; }
+            @Override public double placeCost(int x,int y,int z) { return INFEASIBLE; }
+            @Override public int maxPlaces() { return 0; }
+            @Override public boolean canClear(int x,int y,int z,List<Long> cells,TerrainEdits edits) {
+                return NavigationWork.canClear(sight,new BlockPos(x,y,z),1.62,4.5,cells,edits,geometry);
+            }
+        };
+        PlacementWork.Assessor assess=(eye,bounds,edits)->SupportPlacement.canPlanBlock(sight,sight,target,
+                eye,bounds,new ItemStack(Items.OAK_PLANKS),4.5,edits,p->true,f->true,b->true)
+                && BlockPlacement.constructionExit(geometry,target,Blocks.OAK_PLANKS.defaultBlockState(),bounds,edits)==null
+                ? null : new ServerTool.Result(false,"TARGET_BLOCKED:no native contact",null);
+        var goal=PlacementWork.goal(target,geometry,1.62,.6,1.8,4.5,assess,sight,null);
+        assertFalse(goal.reached(2,0,0));
+        var opening=goal.workOpening(terrain,2,0,0,TerrainEdits.EMPTY);
+        assertEquals(List.of(DigAStar.pack(3,0,0)),opening);
+        assertTrue(goal.reached(2,0,0,TerrainEdits.EMPTY.after(opening,List.of())));
+        allowed[0]=false;
+        assertTrue(goal.workOpening(terrain,2,0,0,TerrainEdits.EMPTY).isEmpty(),"no protected ray is suggested");
+        allowed[0]=true;
+        sight.unknown.add(target.above());
+        assertTrue(goal.workOpening(terrain,2,0,0,TerrainEdits.EMPTY).isEmpty(),"unknown sight is not cleared");
+        sight.unknown.clear();
+        var rejected=PlacementWork.goal(target,geometry,1.62,.6,1.8,4.5,
+                (eye,bounds,edits)->new ServerTool.Result(false,"TARGET_BLOCKED:wrong native state",null),sight,null);
+        assertTrue(rejected.workOpening(terrain,2,0,0,TerrainEdits.EMPTY).isEmpty(),
+                "clearing a ray cannot bypass the desired state, collision or exit predicate");
+        var combined=com.neko.mcbot.path.NavigationGoal.anyOf(List.of(goal));
+        assertEquals(opening,combined.workOpening(terrain,2,0,0,TerrainEdits.EMPTY));
+        var route=new DigAStar(terrain,0,0,0,3,-1,0,4000,64,combined).segments();
+        while (!route.advance(100)) { }
+        assertNull(route.failure(),()->route.failure()+" "+route.rejections());
+        assertTrue(route.estimatedWorkStances()>0,"ray openings enter the original preparation account");
+        var edits=TerrainEdits.EMPTY;
+        for (var step:route.path()) edits=edits.after(step.dig(),step.place());
+        var last=route.path().getLast();
+        assertTrue(goal.reached(last.x(),last.y(),last.z(),edits));
+        assertFalse(edits.removed().contains(DigAStar.pack(3,-2,0)));
+        assertEquals(original,sight.blocks);
+    }
+
     @Test void roofRepairSearchUsesActualVisibleWorkStancesAcrossAnEnclosedHouse() {
         var grid = new StandingGeometryTest.Grid(); grid.blocks.clear();
         var sight = new BlockAimTest.Grid(); sight.blocks.clear();

@@ -12,6 +12,44 @@ import java.util.concurrent.CompletableFuture;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentLoopWorldGoalTest {
+    @Test void invalidDrawingRecoveryStillChecksBodyIdentityAndDoesNotSurviveCancellation() {
+        var f=new Fixture();
+        var foreign=WorldGoalTest.body(); foreign.addProperty("body_id","another-body");
+        f.pending=CompletableFuture.completedFuture(new ToolOutcome(false,"INVALID_BUILD_TARGET:bed",foreign));
+        f.goal(false);
+        assertEquals(List.of(AgentLoop.TaskStatus.FAILED),f.finishes);
+        assertTrue(f.endings.getLast().contains("BODY_IDENTITY_CHANGED"));
+        var next=new Fixture();
+        var delayed=new CompletableFuture<ToolOutcome>(); next.pending=delayed;
+        next.goal(false);
+        int requests=next.responses.size();
+        next.loop.cancelTask(81);
+        delayed.complete(new ToolOutcome(false,"INVALID_BUILD_TARGET:late",WorldGoalTest.body()));
+        assertEquals(requests,next.responses.size());
+        next.loop.submit(82,"ordinary answer");
+        next.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.CANCELLED,AgentLoop.TaskStatus.COMPLETED),next.finishes);
+    }
+
+    @Test void anInvalidBuildingDraftIsCorrectableBeforeRegistrationButCannotFallBackToAnItemGoal() {
+        var f=new Fixture();
+        f.pending=CompletableFuture.completedFuture(new ToolOutcome(false,
+                "INVALID_BUILD_TARGET:bed_pair_missing_or_inconsistent",WorldGoalTest.body()));
+        f.goal(true);
+        assertTrue(f.finishes.isEmpty(),"a drawing rejected before registration must remain editable");
+        assertNull(f.loop.registeredGoal());
+        assertFalse(f.receipt().ok());
+        assertTrue(f.receipt().content().startsWith("INVALID_BUILD_TARGET:"));
+        f.tool("set_goal",WorldGoalTest.json("{\"item\":\"dirt\",\"count\":1}"));
+        assertFalse(f.receipt().ok());
+        assertNull(f.loop.registeredGoal());
+        f.goal(true);
+        assertTrue(f.receipt().ok(),f.receipt().content());
+        assertEquals(WorldGoalTest.building(),f.loop.registeredGoal());
+        f.state=WorldGoalTest.buildState(20); f.reply();
+        assertEquals(List.of(AgentLoop.TaskStatus.COMPLETED),f.finishes);
+    }
+
     static final class Fixture implements ChatEngine, ToolExecutor, AgentLoop.Listener {
         final List<CompletableFuture<AssistantTurn>> responses = new ArrayList<>();
         final List<AgentLoop.TaskStatus> finishes = new ArrayList<>();

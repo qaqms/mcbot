@@ -23,7 +23,7 @@ public final class BuildSiteAccess implements BuildSite.Access {
         long key=com.neko.mcbot.path.DigAStar.pack(pos.getX(),pos.getY(),pos.getZ());
         return edits.removed().contains(key) ? net.minecraft.world.level.block.Blocks.AIR.defaultBlockState()
                 : edits.placed().contains(key) ? net.minecraft.world.level.block.Blocks.COBBLESTONE.defaultBlockState()
-                : level.getBlockState(pos);
+                : edits.toggled().contains(key) ? DoorTraversal.flip(level.getBlockState(pos)) : level.getBlockState(pos);
     }
     @Override public boolean corridor(BlockPos feet) {
         if (geometry == null) geometry = StandingGeometry.forPlayer(body);

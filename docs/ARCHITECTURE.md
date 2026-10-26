@@ -3,6 +3,66 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 双格图纸与目标冻结前校验（2026-10-26）
+
+详见PAIRED-DRAWING-GOAL-VALIDATION-2026-10-26。BuildObjects.validation复用原problem判据，
+按完整规范目标返回object_validation，包含valid、全部invalid_cells、最多4条issues及issues_omitted。
+样本带世界坐标、作者属性、可推导时world_facing/expected_partner；与明细页和实际材料/手距无关。
+BuildSurvey所有模式都给诊断，普通build_diff仍可读并保留草稿；verify_only拒绝非法配对为
+INVALID_BUILD_TARGET，BuildSite.begin共用同一校验，防止目标接受而施工拒绝。
+AgentRunner保留同次身体与配对证据，且对成功回执中的非法标记再次拒绝；直接工具历史和内置Lua
+都保留有限诊断。核心先核原身体/维度/存活，再将登记前此失败交回模型纠正，保留未登记门槛，
+禁止改用物品目标或文字冒报完成。WorldGoal也拒绝已明确非法的配对证据。
+成功登记后的冻结、取消迟到、材料及动作守卫保持；不替模型翻床、不补画目标或删除次格。
+缺材料、未知/不稳定现场和暂缺施工前提仍沿各自原语义处理，离线不等于原生完整施工验收。
+
+## 临时开路及时修补（2026-10-26）
+
+详见EARLY-CONSTRUCTION-REPAIRS-2026-10-26。mc.build不再把所有repair_pending统一拖到
+常规施工收尾：工作导航到位后先做本次近身工作，随后在下一趟路线或其他工作前原地尝试修补。
+没有本次可做工作时不永久等待；实际导航移除也会触发检查，不要求缺口恰在当前明细页。
+build_nearby的repairs_only须当前同修订工地，BuildSurvey在选页和分配原料前仅筛待补来源；
+自动模式跨全图选近身格，显式页仍16格；BuildWork在预留区域后再次核待补来源。
+仍沿原放置与回调、任务许可、材料、占位、出口和记录守卫；不额外寻路、采掘或搭支撑。
+无可修格成功返回本次本地检查结束、零放置，完整目标仍独立验收；实际失败及fatal不吞。
+相同工作实态的空检查去重，实际修补计入placed/consumed及nearby_repaired_blocks；
+够不到或占位/封出口的格仍留在来源账，经原最后恢复阶段处理。临时支撑回收另沿既有链。
+参考只学习到位重扫/手边可做工作优先，没有等价即时恢复机制的证明；原生整栋收尾仍待复测。
+
+## 门交互、半格起步与临时回收（2026-10-26）
+
+详见DOORS-ROOF-DEPARTURE-AND-TEMPORARY-CLEANUP-2026-10-26。
+TerrainEdits独立保存成对门翻转，真实形状/工作射线/快照、搜索、现场重建及续段共用；
+普通形状步优先交互，再核移动，不将门交互计挖放。PathTask沿原任务权限/锁/视线/
+手距执行原版useWithoutItem，检查实际OPEN改变；通过后条件允许才恢复，取消后不补动作。
+实例交互只刷新事前已证实来源，外部替换不认领。walk_only可沿原许可开关门但仍不挖放。
+StandingGeometry.canDepart允许实际脚底覆盖列中有全程支撑/扫掠证据的半格下降，
+不抬高、传送或跳过未知。临时support不被历史通路永久钉住，实际移除释放16条待回收槽；
+显式通道、当前占位、来源和活依赖继续保护。Lua清理跳过局部不可达候选并尝试其他项，
+满槽、完工及局部阻塞可清理，fatal失败仍立即退出；返回有限失败/保留原因。
+没有等价参考自动拆脚手架的证明，原生完整施工/门通过和全部残留清理仍待实测。
+
+## 基础修补与工作射线开口（2026-10-26）
+
+详见FOUNDATION-WORK-AND-PROTECTION-2026-10-26。BuildSurvey对实际空气补放单独核保护，
+床下缺失基础不再等同拆除床的支撑；非空格仍用原拆除守卫。BuildSite普通可恢复整块
+包含干燥原版TransparentBlock，材料/来源/设施/依赖仍核验。
+PlacementWork可用既有BlockAim射线计划建议合法工作开口，累计编辑后必须通过原严格
+reached。ApproachEstimate先无编辑、再身体净空、最后射线开口，共原8192探测及存储账户；
+候选只作引导，不绕过路径逐边/现场准入。实际失败保留六面有界诊断，搜索节点不生成JSON。
+受控存档场景没有精确复现原生0/8100，不据离线通过声称本次546格已完成。
+
+## 封闭缺格与施工循环（2026-10-26）
+
+详见ENCLOSED-ROOF-AND-CONSTRUCTION-CYCLES-2026-10-26。ApproachEstimate完整扫描无现成
+严格工作位后，在原预处理账户内检查保留支撑、允许清理身体净空的局部开口，再按累计
+地形核同一个严格工作目标。候选带挖价，仍只是排序；原路线每边和执行前核验负责准入。
+construction.lua另按goal_observation_key记录成功工作移动前的图纸实态，
+即使库存变化或实际挖放也不能无限重复相同图纸状态；当前近身施工和待补仍先处理。
+循环返回construction_state_repeated及新鲜剩余事实，不视为无路或完成；历史仅属本次
+mc.build，完工清理后的恢复可重新核对。BoundedProgram内置投影同步保留图纸状态字段。
+原30秒空搜、已有通路偏好、累计编辑、来源/设施保护和整图验收保持，实机边界见STATUS。
+
 ## 上层引导与重复搜索证据（2026-10-26）
 
 详见UPPER-WORK-AND-STALE-DRAWINGS-2026-10-26。ApproachEstimate对严格工作目标记录已核
@@ -219,7 +279,8 @@ mc.build在身体挡图时先让位，departure_blocked后先尝试局部恢复�
 只有已有或本次新增临时工程时才进入完工清理，避免改变普通路径的原显式调用账。
 同工作事实中的恢复建议去重，权限/未知/材料/取消失败保持原停止语义。
 BuildSurvey把repair_pending传到Lua的内部字段视图；build_nearby的include_repairs默认true，
-Lua常规施工传false，在虚拟原料分配和候选筛选之前延后待补格，常规候选遍历后再恢复。
+Lua常规施工传false，在虚拟原料分配和候选筛选之前延后待补格；最新repairs_only在到位本次工作后、
+下一趟路线前原地尝试修补，暂不可修格保留常规候选遍历后的恢复阶段。
 
 已走过的临时支撑仍须当前活来源、无占位/贴附/目标依赖和完整路线记录，才可回收；
 PathTask用同一cleanup判断与原BlockMining执行。完成后Lua尝试清理，报告temporary_removed/

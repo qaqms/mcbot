@@ -20,4 +20,11 @@ public final class WorksiteProtection {
     public static boolean facility(BlockState state, boolean blockEntity) {
         return blockEntity || com.neko.mcbot.path.LevelDigSampler.protectedFacility(state);
     }
+
+    /** Adding a missing floor does not remove the facility it supports. */
+    public static boolean protectedPlacement(BlockPos cell, Predicate<BlockPos> known,
+            Function<BlockPos, BlockState> state, Predicate<BlockPos> blockEntity,
+            Predicate<BlockPos> selected) {
+        return selected.test(cell) || !known.test(cell) || facility(state.apply(cell), blockEntity.test(cell));
+    }
 }

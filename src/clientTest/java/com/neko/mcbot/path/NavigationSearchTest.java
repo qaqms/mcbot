@@ -21,6 +21,45 @@ import static org.junit.jupiter.api.Assertions.*;
 class NavigationSearchTest {
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
 
+    @Test void restoringADoorWaitsUntilTheRouteHasActuallyPassedItsFootprint() {
+        var path=java.util.List.of(
+                new DigAStar.Step(-1,0,0,java.util.List.of(),java.util.List.of(),DigAStar.ACT_START),
+                new DigAStar.Step(0,0,0,java.util.List.of(),java.util.List.of(),DigAStar.ACT_WALK),
+                new DigAStar.Step(1,0,0,java.util.List.of(),java.util.List.of(),DigAStar.ACT_WALK));
+        assertTrue(PathTask.doorAhead(path,0,BlockPos.ZERO));
+        assertTrue(PathTask.doorAhead(path,1,BlockPos.ZERO),"opening cannot be immediately undone from the approach side");
+        assertFalse(PathTask.doorAhead(path,2,BlockPos.ZERO));
+    }
+
+    @Test void workerDoorPlansSurviveLiveRebuildingAndRejectAnIronReplacement() throws Exception {
+        var source=sections();
+        for (int z=0;z<16;z++) for(int y=0;y<3;y++)
+            source[1].set(7,y,z,Blocks.STONE.defaultBlockState());
+        var door=Blocks.OAK_DOOR.defaultBlockState().setValue(
+                net.minecraft.world.level.block.DoorBlock.FACING,net.minecraft.core.Direction.EAST);
+        source[1].set(7,0,4,door);
+        source[1].set(7,1,4,door.setValue(net.minecraft.world.level.block.DoorBlock.HALF,
+                net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER));
+        var snapshot=capture(source);
+        var pending=NavigationSearch.submit(search(snapshot,NavigationGoal.position(10,0,4,0)));
+        await(pending);
+        var route=pending.take();
+        assertNull(route.failure(),route.failure());
+        assertTrue(route.path().stream().anyMatch(s->!s.toggle().isEmpty()));
+        var live=PathTask.liveSteps(route.path(),0,capture(source));
+        assertTrue(live.stream().anyMatch(s->!s.toggle().isEmpty()));
+        assertNull(PathTask.planFailure(live,capture(source),0));
+        var edits=NavigationContinuation.remainingEdits(live,1);
+        assertEquals(2,edits.toggled().size(),"continuation retains both halves without calling them removals");
+        assertTrue(edits.removed().isEmpty());
+        source[1].set(7,0,4,Blocks.IRON_DOOR.defaultBlockState().setValue(
+                net.minecraft.world.level.block.DoorBlock.FACING,net.minecraft.core.Direction.EAST));
+        source[1].set(7,1,4,source[1].get(7,0,4).setValue(
+                net.minecraft.world.level.block.DoorBlock.HALF,
+                net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER));
+        assertNotNull(PathTask.planFailure(live,capture(source),0));
+    }
+
     @SuppressWarnings("unchecked")
     private PalettedContainer<BlockState>[] sections() {
         var strategy = Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY);

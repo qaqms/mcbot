@@ -153,6 +153,10 @@ public final class MemoDigSampler implements DigSampler {
     }
 
     @Override public NavigationGeometry geometry() { return base.geometry(); }
+    @Override public java.util.List<Long> toggleCells(int x,int y,int z) { return base.toggleCells(x,y,z); }
+    @Override public boolean canToggleFrom(int x,int y,int z,long target,TerrainEdits edits) {
+        return base.canToggleFrom(x,y,z,target,edits);
+    }
     @Override public double loweringSeconds(int x,int y,int z,TerrainEdits edits) {
         return base.loweringSeconds(x,y,z,edits);
     }

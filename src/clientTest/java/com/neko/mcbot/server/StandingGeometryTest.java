@@ -26,6 +26,19 @@ import static com.neko.mcbot.path.NavigationGeometry.Motion.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class StandingGeometryTest {
+    @Test void aRealRoofTreadCanWalkDownFromItsEdgeWithoutDemandingAnEqualHeightCellCenter() {
+        var grid=new Grid();
+        grid.blocks.clear();
+        grid.blocks.put(BlockPos.ZERO,Blocks.OAK_STAIRS.defaultBlockState().setValue(StairBlock.FACING,Direction.EAST));
+        grid.blocks.put(new BlockPos(-1,-1,0),Blocks.STONE.defaultBlockState());
+        var geometry=grid.geometry();
+        var destination=geometry.departure(.19,.5,.5,p->true);
+        assertNotNull(destination);
+        assertTrue(geometry.canDepart(.19,.5,.5,destination));
+        assertFalse(geometry.canAlign(.19,.5,.5,destination));
+        assertTrue(geometry.standing(destination.getX(),destination.getY(),destination.getZ(),TerrainEdits.EMPTY).height()<=.5);
+        assertNull(geometry.departure(.19,.5,.5,p->false));
+    }
     @BeforeAll static void registries() { BlockActionFixtures.bootstrap(); }
     static class Grid implements StandingGeometry.Access {
         final Map<BlockPos, BlockState> blocks = new HashMap<>();

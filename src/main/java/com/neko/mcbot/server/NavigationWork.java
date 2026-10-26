@@ -24,6 +24,7 @@ public final class NavigationWork {
 
     public static BlockAim.Access view(BlockAim.Access world, Vec3 eye, Set<BlockPos> removed, Set<BlockPos> placed) {
         return new BlockAim.Access() {
+            @Override public net.minecraft.world.level.BlockGetter blocks() { return world.blocks(); }
             @Override public Vec3 eye() { return eye; }
             @Override public boolean loaded(BlockPos pos) { return world.loaded(pos); }
             @Override public boolean replaceable(BlockPos pos) {
@@ -144,7 +145,8 @@ public final class NavigationWork {
                             DigAStar.unpackZ(foot.support()));
                 }
                 BlockPos protectedSupport = support;
-                var view = view(world, new Vec3(x + .5, height + eyeHeight, z + .5),
+                var source=world.blocks()==null ? world : BlockAim.withToggles(world,world.blocks(),edits.toggled());
+                var view = view(source, new Vec3(x + .5, height + eyeHeight, z + .5),
                         removed, positions(edits.placed()));
                 return clear ? BlockAim.miningPlan(view, target, reach,
                         pos -> !pos.equals(protectedSupport) && !pos.equals(target.below()) && safe.test(pos))

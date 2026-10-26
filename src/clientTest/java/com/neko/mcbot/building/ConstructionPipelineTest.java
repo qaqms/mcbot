@@ -10,6 +10,7 @@ import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -24,6 +25,124 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(30)
 class ConstructionPipelineTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
+
+    @Test void arrivalWorkThenEarlyRepairClearsTheRealSiteLedgerBeforeTheNextRoofRoute() throws Exception {
+        var target=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":4,"y":90,"z":0},"regions":[
+                {"from":{"x":0,"y":0,"z":0},"to":{"x":31,"y":0,"z":0},"block":"stone"},
+                {"from":{"x":0,"y":4,"z":0},"to":{"x":0,"y":4,"z":0},"block":"stone"}]}
+                """).getAsJsonObject());
+        var first=new BlockPos(4,90,0);
+        var repaired=new BlockPos(35,90,0);
+        var roof=new BlockPos(4,94,0);
+        var siteWorld=new BuildSiteTest.World();
+        var site=new BuildSite(); site.bind("pipeline",siteWorld);
+        target.cells().forEach(c->siteWorld.states.put(c.pos(),c.desired()));
+        siteWorld.states.remove(first); siteWorld.states.remove(roof);
+        assertNull(site.begin(target,java.util.List.of(),BuildSiteTest.FEET,siteWorld));
+        var placements=new ArrayList<BlockPos>();
+        var world=new BuildSurveyTest.World() {
+            @Override public net.minecraft.world.level.block.state.BlockState state(BlockPos p) { return siteWorld.state(p); }
+            @Override public boolean repairPending(BlockPos p) { return site.repairPending(p); }
+            @Override public ServerTool.Result beforePlace() { return site.charge(); }
+            @Override public net.minecraft.world.InteractionResult place(BlockPos p,
+                    net.minecraft.world.item.ItemStack stack,net.minecraft.core.Direction face) {
+                placements.add(p); stack.shrink(1); siteWorld.states.put(p,proposed);
+                return net.minecraft.world.InteractionResult.SUCCESS;
+            }
+            @Override public void recorded(BlockPos p,net.minecraft.world.level.block.state.BlockState before,
+                    net.minecraft.world.level.block.state.BlockState after,int consumed) {
+                site.recordPlacement(p,before,after,consumed,siteWorld);
+            }
+        };
+        world.prepare=(p,face)->site.placementGuard(p,world.proposed,siteWorld);
+        world.inventory.setItem(0,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE,3));
+        world.far.add(first); world.far.add(roof);
+        int[] routes={0};
+        var queue=new LinkedBlockingQueue<Runnable>();
+        var goal=new JsonObject();
+        goal.addProperty("type","building"); goal.add("target",target.input());
+        goal.addProperty("expected_revision",target.revision());
+        var program=new BoundedProgram(new BoundedProgram.Plan("return mc.build()",0,0),()->0L,(name,json)->{
+            var args=JsonParser.parseString(json).getAsJsonObject();
+            ServerTool.Result result;
+            switch(name) {
+                case "status" -> result=new ServerTool.Result(true,"controlled body",JsonParser.parseString("""
+                        {"x":0,"y":90,"z":0,"dimension":"fixture:world","inventory":{"slots":[]}}
+                        """).getAsJsonObject());
+                case "build_site" -> {
+                    if (args.get("operation").getAsString().equals("checkpoint"))
+                        assertNull(site.checkpoint(target.revision(),BuildSiteTest.FEET,siteWorld));
+                    result=new ServerTool.Result(true,"actual worksite report",site.report(siteWorld));
+                }
+                case "build_diff" -> result=args.has("work_scan") && args.get("work_scan").getAsBoolean()
+                        ? BuildSurvey.workScan(target,world,args.get("work_cursor").getAsInt(),()->0)
+                        : BuildSurvey.query(target,world,args.get("offset").getAsInt(),0,()->0);
+                case "move_to" -> {
+                    routes[0]++;
+                    if (routes[0]==1) {
+                        assertEquals(first.getY(),args.get("y").getAsInt());
+                        assertNull(site.miningGuard(repaired,target.revision(),false,siteWorld));
+                        site.recordRemoval(repaired,siteWorld.state(repaired),Blocks.AIR.defaultBlockState());
+                        siteWorld.states.remove(repaired); world.far.remove(first);
+                        assertEquals(1,site.report(siteWorld).get("repairs_pending").getAsInt());
+                    } else {
+                        assertEquals(2,routes[0]);
+                        assertEquals(java.util.List.of(first,repaired),placements);
+                        assertFalse(site.repairPending(repaired),"the native placement callback clears the source ledger");
+                        assertEquals(0,site.report(siteWorld).get("repairs_pending").getAsInt());
+                        assertEquals(roof.getY(),args.get("y").getAsInt());
+                        world.far.remove(roof);
+                    }
+                    var data=new JsonObject(); data.addProperty("can_work_here",true);
+                    data.addProperty("removed_blocks",routes[0]==1?1:0);
+                    result=new ServerTool.Result(true,"controlled arrival, actual removal ledger",data);
+                }
+                case "build_nearby" -> {
+                    boolean repairsOnly=args.has("repairs_only") && args.get("repairs_only").getAsBoolean();
+                    if (repairsOnly) {
+                        assertEquals(java.util.List.of(first),placements,"finish the arrival's work before closing its opening");
+                        assertEquals(1,routes[0],"repair without another route");
+                    }
+                    var work=new BuildWork(target,new BuildWork.Access() {
+                        @Override public BuildSurvey.Access survey() { return world; }
+                        @Override public ServerTool.Result valid() { return site.live(siteWorld); }
+                        @Override public boolean reserve(BuildTarget.Cell c) { return true; }
+                    },-1,args.get("max_actions").getAsInt(),()->0,
+                            !args.has("include_repairs") || args.get("include_repairs").getAsBoolean(),repairsOnly);
+                    result=null;
+                    for (int tick=0;tick<40 && result==null;tick++)
+                        if (work.tickSafe(null) instanceof TickTask.Progress.Done done) result=done.result();
+                    assertNotNull(result);
+                }
+                default -> throw new AssertionError(name);
+            }
+            return CompletableFuture.completedFuture(new ToolOutcome(result.ok(),result.feedback(),result.data()));
+        },queue::add,()->{},goal);
+        var future=program.start();
+        try {
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
+            while(!future.isDone() && System.nanoTime()<deadline) {
+                var next=queue.poll(50,TimeUnit.MILLISECONDS);
+                if (next!=null) next.run();
+            }
+            assertTrue(future.isDone());
+            var result=future.join();
+            assertTrue(result.ok(),result.feedback());
+            var report=result.data().getAsJsonObject("returned");
+            assertTrue(report.get("goal_satisfied").getAsBoolean(),result.feedback());
+            assertEquals(1,report.get("nearby_repaired_blocks").getAsInt());
+            assertEquals(3,report.get("placed_blocks").getAsInt());
+            assertEquals(3,report.get("consumed_count").getAsInt());
+            assertEquals(java.util.List.of(first,repaired,roof),placements);
+            assertEquals(0,world.inventory.getItem(0).getCount());
+            assertEquals(0,site.report(siteWorld).get("repairs_pending").getAsInt());
+            assertEquals(target.revision(),site.target().revision());
+        } finally {
+            program.stop("CANCELLED:test cleanup");
+            program.terminated().get(2,TimeUnit.SECONDS);
+        }
+    }
 
     @ParameterizedTest @ValueSource(ints = {49,105,128,400})
     void aFullFloorClearsAndBuildsAcrossPagesInOneProgramWithoutExhaustingReceiptSpace(int count) throws Exception {

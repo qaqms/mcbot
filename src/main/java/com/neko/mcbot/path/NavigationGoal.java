@@ -11,6 +11,11 @@ public interface NavigationGoal {
     /** Optional guidance starts at verified work stances, never a proof that other edited stances are impossible. */
     default boolean estimateWorkStances() { return false; }
 
+    /** Optional, strictly rechecked guidance for a local work ray; never an executable edit plan. */
+    default java.util.List<Long> workOpening(DigSampler terrain, int x, int y, int z, TerrainEdits edits) {
+        return java.util.List.of();
+    }
+
     /** Null keeps goals with live premises on the world thread. */
     default NavigationGoal snapshot(DigSampler terrain) { return null; }
     default boolean reached(int x, int y, int z, TerrainEdits edits) {
@@ -49,6 +54,13 @@ public interface NavigationGoal {
             }
             @Override public boolean estimateWorkStances() {
                 return members.stream().allMatch(NavigationGoal::estimateWorkStances);
+            }
+            @Override public java.util.List<Long> workOpening(DigSampler terrain, int x, int y, int z, TerrainEdits edits) {
+                for (var member : members) {
+                    var opening=member.workOpening(terrain,x,y,z,edits);
+                    if (!opening.isEmpty()) return opening;
+                }
+                return java.util.List.of();
             }
             @Override public double arrivalCost(DigSampler terrain, int x, int y, int z, TerrainEdits edits) {
                 double cost = Double.POSITIVE_INFINITY;

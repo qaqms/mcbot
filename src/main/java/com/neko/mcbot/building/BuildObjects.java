@@ -80,6 +80,45 @@ public final class BuildObjects {
         }
         return "";
     }
+
+    /** Drawing-only contradictions must be visible before a goal or worksite can be frozen. */
+    public static com.google.gson.JsonObject validation(BuildTarget target) {
+        var data=new com.google.gson.JsonObject();
+        var issues=new com.google.gson.JsonArray();
+        int invalid=0;
+        for (var cell:target.cells()) {
+            String reason=problem(target,cell);
+            if (reason.isEmpty()) continue;
+            invalid++;
+            if (issues.size()>=4) continue;
+            var issue=cell.describe();
+            issue.addProperty("reason",reason);
+            if (cell.properties().containsAll(requiredProperties(cell.authored()))) {
+                issue.addProperty("world_facing",cell.desired().getValue(
+                        net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING).getName());
+                var expected=other(cell.pos(),cell.desired());
+                issue.add("expected_partner",BuildTarget.coordinates(expected));
+                var partner=at(target,expected);
+                if (partner!=null)
+                    issue.addProperty("partner_block",BuiltInRegistries.BLOCK.getKey(partner.authored().getBlock()).toString());
+            }
+            issues.add(issue);
+        }
+        data.addProperty("valid",invalid==0);
+        data.addProperty("invalid_cells",invalid);
+        data.add("issues",issues);
+        data.addProperty("issues_omitted",invalid-issues.size());
+        return data;
+    }
+
+    public static String invalidFeedback(com.google.gson.JsonObject validation) {
+        return "INVALID_BUILD_TARGET:图纸双格对象的声明、坐标或属性不一致；未登记目标或修改图纸。"
+                + "床头坐标=床脚坐标+facing方向一格，两格同色且part分别为foot/head、facing相同；"
+                + "门上下两半须同列相邻，half分别lower/upper且facing一致，hinge可省略。"
+                + "先纠正候选图，再build_diff读取新target/target_revision后登记，不重开任务或降低目标。"
+                + "全图配对诊断：" + validation;
+    }
+
     public static boolean matches(BuildTarget target, BuildTarget.Cell cell, Function<BlockPos, BlockState> state) {
         if (!cell.matches(state.apply(cell.pos()))) return false;
         if (!paired(cell.authored())) return true;

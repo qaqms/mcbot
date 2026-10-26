@@ -11,6 +11,306 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void aRouteRemovalTriggersRepairEvenWhenTheNextWorkPageHasNoActionableCells() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"repairs_pending":%d}
+                    """.formatted(REV,w.moved>0?1:0));
+            if (name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":2,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"state-%d","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"%s","item":"stone","material_available":true}]}
+                    """.formatted(REV,w.moved,w.moved==0?"out_of_reach":"needs_support"));
+            if (name.equals("move_to")) {
+                w.moved++;
+                return actual("{\"removed_blocks\":1,\"can_work_here\":true}");
+            }
+            if (name.equals("build_nearby")) {
+                assertEquals(1,w.moved);
+                assertTrue(args.get("repairs_only").getAsBoolean());
+                return new ToolOutcome(false,"DENIED:stop after verifying repair dispatch");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertFalse(result.ok());
+        assertEquals("build_nearby",w.calls.getLast().name());
+        assertTrue(result.feedback().contains("DENIED:stop after verifying repair dispatch"));
+    }
+
+    @Test void anUnchangedUnreachableRepairIsCheckedOnceAndCannotBecomeCompletion() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"repairs_pending":1}
+                    """.formatted(REV));
+            if (name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":1,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"same","work_observation_key":"same-work",
+                    "offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"needs_support","repair_pending":true}]}
+                    """.formatted(REV));
+            if (name.equals("build_nearby")) {
+                assertTrue(args.get("repairs_only").getAsBoolean());
+                return actual("{\"placed_blocks\":0,\"no_work_here\":true,\"goal_satisfied\":false}");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        var report=result.data().getAsJsonObject("returned");
+        assertFalse(report.get("goal_satisfied").getAsBoolean());
+        assertEquals(0,report.get("nearby_repaired_blocks").getAsInt());
+        assertEquals(1,w.calls.stream().filter(c->c.name().equals("build_nearby")).count());
+        assertEquals(0,w.moved);
+    }
+
+    @Test void earlyRepairPermissionCancellationAndBudgetFailureStopAllLaterWork() throws Exception {
+        for (String reason:List.of("DENIED:permission changed","CANCELLED:owner stopped","ACTION_LIMIT:work")) {
+            var w=new World();
+            w.override=(name,args)-> {
+                if (name.equals("build_site")) return actual("""
+                        {"active":true,"target_revision":"%s","temporary":[],"repairs_pending":1}
+                        """.formatted(REV));
+                if (name.equals("build_nearby")) {
+                    assertTrue(args.get("repairs_only").getAsBoolean());
+                    return new ToolOutcome(false,reason);
+                }
+                return null;
+            };
+            var result=run(w,CODE,128);
+            assertFalse(result.ok(),reason);
+            assertTrue(result.feedback().contains(reason),result.feedback());
+            assertEquals("build_nearby",w.calls.getLast().name());
+            assertEquals(0,w.moved);
+            assertEquals(0,w.placed);
+        }
+    }
+
+    @Test void reachableRepairsAreRestoredBeforeAnUnrelatedRoofSearchCanStall() throws Exception {
+        var w=new World();
+        boolean[] repaired={false};
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"repairs_pending":%d}
+                    """.formatted(REV,repaired[0]?0:1));
+            if (name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":false,"remaining":%d,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"state-%s","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"%s","repair_pending":true},
+                    {"x":5,"y":94,"z":0,"state":"out_of_reach","item":"stone","material_available":true}]}
+                    """.formatted(REV,repaired[0]?1:2,repaired[0],repaired[0]?"satisfied":"ready"));
+            if (name.equals("build_nearby")) {
+                assertTrue(args.get("repairs_only").getAsBoolean());
+                assertEquals(REV,args.get("expected_revision").getAsString());
+                assertFalse(args.has("offset"),"nearby repairs must cover later drawing pages too");
+                assertEquals(0,w.moved,"repair without another route");
+                repaired[0]=true; w.placed++;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            if (name.equals("move_to")) return new ToolOutcome(false,"NAVIGATION_STALLED:roof");
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertFalse(result.ok());
+        assertTrue(result.feedback().contains("NAVIGATION_STALLED:roof"));
+        assertTrue(repaired[0],"the reachable hole must not wait for an impossible roof search");
+        assertEquals(1,w.placed);
+        assertEquals("move_to",w.calls.getLast().name(),"a stall still stops all later actions");
+    }
+
+    @Test void workArrivalFinishesItsWorkThenRepairsBeforeLeavingForAnotherLayer() throws Exception {
+        var w=new World();
+        boolean[] first={false},repair={false},roof={false};
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[],"repairs_pending":%d}
+                    """.formatted(REV,w.moved>0&&!repair[0]?1:0));
+            if (name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","goal_satisfied":%s,"remaining":%d,
+                    "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                    "observation_key":"state-%s-%s-%s","offset":0,"next_offset":-1,"cells":[
+                    {"x":4,"y":90,"z":0,"state":"%s","item":"stone","material_available":true},
+                    {"x":5,"y":90,"z":0,"state":"%s","repair_pending":true},
+                    {"x":6,"y":94,"z":0,"state":"%s","item":"stone","material_available":true}]}
+                    """.formatted(REV,roof[0],(first[0]?0:1)+(repair[0]?0:1)+(roof[0]?0:1),
+                    first[0],repair[0],roof[0],first[0]?"satisfied":w.moved>0?"ready":"out_of_reach",
+                    repair[0]?"satisfied":"ready",roof[0]?"satisfied":w.moved>1?"ready":"out_of_reach"));
+            if (name.equals("move_to")) {
+                if (w.moved>0) assertTrue(repair[0],"do not leave a reachable repair behind");
+                w.moved++;
+                return actual("{\"can_work_here\":true}");
+            }
+            if (name.equals("build_nearby")) {
+                if (args.has("repairs_only") && args.get("repairs_only").getAsBoolean()) {
+                    assertTrue(first[0],"keep the work opening until the arrival's work is done");
+                    assertEquals(1,w.moved);
+                    repair[0]=true;
+                } else if (!first[0]) {
+                    assertFalse(repair[0]); first[0]=true;
+                } else {
+                    assertTrue(repair[0]); roof[0]=true;
+                }
+                w.placed++;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(3,w.placed);
+        assertEquals(2,w.moved);
+    }
+
+    @Test void fullTemporaryLedgerTriggersCleanupBeforeMoreConstructionAndReportsBoundedRetainedReasons() throws Exception {
+        var w=new World(); w.moved=1;
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) {
+                var site=JsonParser.parseString("""
+                        {"active":true,"target_revision":"%s","temporary":[]}
+                        """.formatted(REV)).getAsJsonObject();
+                for (int i=w.breaks>0 ? 1 : 0;i<16;i++) {
+                    site.getAsJsonArray("temporary").add(JsonParser.parseString("""
+                            {"x":%d,"y":90,"z":0,"block":"minecraft:stone","present_known":true,
+                            "present":true,"cleanup_allowed":%s,"cleanup_reason":"dependent_block"}
+                            """.formatted(8+i,i==0)));
+                }
+                return new ToolOutcome(true,"fresh supports",site);
+            }
+            if (name.equals("build_nearby")) assertEquals(1,w.breaks,
+                    "free an actual source slot before continuing the construction batch");
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        var report=result.data().getAsJsonObject("returned");
+        assertTrue(report.get("goal_satisfied").getAsBoolean());
+        assertEquals(1,report.get("temporary_removed").getAsInt());
+        assertEquals(15,report.get("temporary_retained").getAsInt());
+        assertEquals(8,report.getAsJsonArray("temporary_retained_reasons").size());
+        assertEquals(7,report.get("temporary_retained_reasons_omitted").getAsInt());
+    }
+
+    @Test void cleanupDoesNotContinueAfterCancellationPermissionOrSearchStall() throws Exception {
+        for (String reason:List.of("CANCELLED:owner stopped","DENIED:permission changed",
+                "NAVIGATION_STALLED:yield for reassessment")) {
+            var w=new World();
+            w.override=(name,args)-> {
+                if (name.equals("build_site")) return actual("""
+                        {"active":true,"target_revision":"%s","temporary":[
+                        {"x":8,"y":92,"z":0,"block":"minecraft:stone","cleanup_allowed":true,"present_known":true,"present":true},
+                        {"x":9,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":true,"present_known":true,"present":true}]}
+                        """.formatted(REV));
+                return name.equals("move_to") ? new ToolOutcome(false,reason) : null;
+            };
+            var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+            assertFalse(result.ok(),reason);
+            assertTrue(result.feedback().contains(reason),result.feedback());
+            assertEquals("move_to",w.calls.getLast().name());
+            assertEquals(1,w.calls.stream().filter(c->c.name().equals("move_to")).count());
+            assertEquals(0,w.breaks);
+        }
+    }
+
+    @Test void oneUnreachableTemporarySupportDoesNotPreventCleaningOtherSupports() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_site")) return actual("""
+                    {"active":true,"target_revision":"%s","temporary":[
+                    {"x":8,"y":92,"z":0,"block":"minecraft:stone","cleanup_allowed":true,"present_known":true,"present":true},
+                    {"x":9,"y":90,"z":0,"block":"minecraft:stone","cleanup_allowed":true,"present_known":true,"present":%s}]}
+                    """.formatted(REV,w.breaks==0));
+            if (name.equals("move_to") && args.get("x").getAsInt()==8)
+                return new ToolOutcome(false,"NO_PATH:upper support currently unreachable");
+            return null;
+        };
+        var result=run(w,"return mc.cleanup_temporary('"+REV+"')",128);
+        assertTrue(result.ok(),result.feedback());
+        var returned=result.data().getAsJsonObject("returned");
+        assertEquals(1,returned.get("removed").getAsInt());
+        assertEquals(1,returned.get("retained").getAsInt());
+        assertEquals(1,w.breaks);
+        assertTrue(returned.getAsJsonArray("failures").size()>=1);
+    }
+    @Test void reopeningAndRepairingTheSameDrawingStateDoesNotKeepConstructionWalkingForever() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_diff")) {
+                boolean ready=w.moved>w.placed;
+                return actual("""
+                        {"target_revision":"%s","total":3,"remaining":1,"goal_satisfied":false,
+                        "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                        "observation_key":"observation-%d-%d","progress_observation_key":"inventory-%d-%d",
+                        "goal_observation_key":"drawing-%d","offset":0,"next_offset":-1,
+                        "cells":[{"x":4,"y":90,"z":0,"state":"%s","item":"stone","material_available":true}]}
+                        """.formatted(REV,w.moved,w.placed,w.moved,w.placed,w.placed%2,
+                        ready?"ready":"out_of_reach"));
+            }
+            if (name.equals("build_nearby")) {
+                w.placed++;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        var returned=result.data().getAsJsonObject("returned");
+        assertEquals("construction_state_repeated",returned.get("blocked").getAsString());
+        assertFalse(returned.get("goal_satisfied").getAsBoolean());
+        assertTrue(returned.get("model_reassessment_required").getAsBoolean());
+        assertTrue(returned.get("remaining_known").getAsBoolean());
+        assertEquals(2,w.moved,"target states A -> B -> A must yield before another route");
+        assertEquals(2,w.placed,"real placements in a cycle are retained, not called completion");
+    }
+
+    @Test void aSuccessfulWorkMoveWithoutConstructionCannotBeRepeatedByInventoryChanges() throws Exception {
+        var w=new World();
+        w.override=(name,args)->name.equals("build_diff") ? actual("""
+                {"target_revision":"%s","remaining":2,"goal_satisfied":false,"observation_complete":true,
+                "spatial_stable":true,"budget_exhausted":false,"observation_key":"body-%d",
+                "progress_observation_key":"inventory-%d","goal_observation_key":"same-drawing",
+                "offset":0,"next_offset":-1,"cells":[{"x":%d,"y":90,"z":0,
+                "state":"out_of_reach","item":"stone","material_available":true}]}
+                """.formatted(REV,w.moved,w.moved,4+w.moved)) : null;
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertEquals("construction_state_repeated",
+                result.data().getAsJsonObject("returned").get("blocked").getAsString());
+        assertEquals(1,w.moved);
+    }
+
+    @Test void differentDrawingStatesWithTheSameRemainingCountCanContinueWork() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if (name.equals("build_diff") && w.placed<4) {
+                boolean ready=w.moved>w.placed;
+                return actual("""
+                        {"target_revision":"%s","remaining":2,"goal_satisfied":false,
+                        "observation_complete":true,"spatial_stable":true,"budget_exhausted":false,
+                        "observation_key":"observation-%d","goal_observation_key":"drawing-%d",
+                        "offset":0,"next_offset":-1,"cells":[{"x":%d,"y":90,"z":0,
+                        "state":"%s","item":"stone","material_available":true}]}
+                        """.formatted(REV,w.placed,w.placed,4+w.placed,ready?"ready":"out_of_reach"));
+            }
+            if (name.equals("build_nearby")) {
+                w.placed++;
+                if (w.placed==4) w.remaining=0;
+                return actual("{\"placed_blocks\":1,\"consumed_count\":1}");
+            }
+            return null;
+        };
+        var result=run(w,CODE.replace("max_rounds=3,",""),128);
+        assertTrue(result.ok(),result.feedback());
+        assertTrue(result.data().getAsJsonObject("returned").get("goal_satisfied").getAsBoolean());
+        assertEquals(4,w.moved);
+        assertEquals(4,w.placed);
+    }
+
     @Test void aStalledRouteReturnsToTheModelInsteadOfTryingMoreConstructionCandidates() throws Exception {
         var w=new World();
         var stalled=new JsonObject();

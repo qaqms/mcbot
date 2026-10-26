@@ -21,7 +21,7 @@ public final class WorkRelocation {
                 var plan = check.plan();
                 var step = new DigAStar.Step(x + dx, y + dy, z + dz, plan.dig(), plan.place(),
                         plan.jump() ? DigAStar.ACT_JUMP : dy < 0 ? DigAStar.ACT_FALL : DigAStar.ACT_WALK,
-                        plan.feetY(), plan.jump());
+                        plan.feetY(), plan.jump(),plan.toggle());
                 if (!usable.test(step)) continue;
                 double cost = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * .25;
                 for (long p : plan.dig()) cost += 10 + DigAStar.digCost(terrain.digSeconds(

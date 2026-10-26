@@ -350,6 +350,7 @@ public final class ClientToolDefs {
                     + "单独传operation=query只读取回当前原登记条件，不重设；建筑登记后run_program直接return mc.build()，无需再生成target。"
                     + "item是物品ID，count是目标件数；mode=additional指相对任务开始背包净新增，total指背包总量。"
                     + "type=building须target和build_diff读到的expected_revision，完整目标同修订独立验收。"
+                    + "登记前复核整图object_validation；INVALID_BUILD_TARGET未冻结目标，可纠正候选后在同任务重登记，不需取消或更换主人要求。"
                     + "type=delivery须container={x,y,z}及item/count/mode，先靠近登记完整容器基线；"
                     + "additional仅登记后本任务已核实净存入且容器净新增，双向transfer须明确item过滤；total为容器当前总量。"
                     + "首次登记后不能换目标或降低数量。完成回复会重新查询实际背包核对，挖掘格数/地上掉落不算入包。"
@@ -483,6 +484,9 @@ public final class ClientToolDefs {
                     + "当前页最多96次原版放置预检，共用50ms协作时间帽；未查明/不支持/未知保留缺口，不能误报完成。"
                     + "支持普通单格、玻璃、楼梯/半砖、工作台、空单箱/木桶、灯笼/火把、活板门、栅栏/墙及地毯；属性须原版可放出。"
                     + "双格门明确half/facing，hinge可省略由原版选择；床明确part/facing且含完整foot/head，明确属性不得冲突；"
+                    + "床头=床脚沿facing前进一格，两格同色同facing。object_validation覆盖全图配对：valid/invalid_cells/issues/issues_omitted，"
+                    + "最多4条错误样本含世界坐标、作者属性、world_facing及可推导时expected_partner；与当前明细页无关。"
+                    + "false时先纠正候选再登记；普通查询仍给诊断，verify_only拒绝为INVALID_BUILD_TARGET，不自动翻转或补画。"
                     + "只从门下半或床foot动作/一件料，次格paired_pending仍验收。不能覆盖另一半或合并邻箱，不搬家具内容。"
                     + "其他多格、流体、双层半砖多次动作及复杂组件仍不支持，绝不直接写状态。"
                     + "需求/可用/本页分配/实际消费分开，已满足格不再要料，只有36槽无额外组件材料可分配。"
@@ -512,7 +516,7 @@ public final class ClientToolDefs {
                     + "mc.build直接返回{status,goal_satisfied,placed_blocks,cleared_blocks,consumed_count,remaining,blocked,counts,unresolved}，"
                     + "不包在data里，并自动输出施工结果；脚本执行成功不代表建筑完成。默认批次12动作，不主动加短max_rounds拆断连续施工。"
                     + "身体挡格时先按只读relocation换位，出口受阻时可按原动作临时开路、搭支撑或确认安全落点后逐格下落。"
-                    + "同修订普通施工格可在有补料、无占位/设施/依赖时暂拆，repair_pending保留原图缺口，其他工作之后再补回。"
+                    + "同修订普通施工格可在有补料、无占位/设施/依赖时暂拆，repair_pending保留原图缺口；到位完成本次工作后优先原地修补，再离开去做其他工作。"
                     + "不自动找料合成；需要升高才能够到目标时，导航可按真实库存、头顶净空和点击面连续起跳垫柱，不必逐格手写脚手架。额外工位用temporary指定。"
                     + "完成后从高到低重查并回收本任务临时工程，站在临时柱上可安全逐格拆降并等待落稳；temporary_retained仍有缺口，不跨任务认领；外层完整目标另验。",
                     """
@@ -529,7 +533,9 @@ public final class ClientToolDefs {
                     + "400ms累计协作工作帽/每次查询50ms/200游戏刻；自动模式直接筛选全目标近身候选，不逐刻等待所有空页，不中断单个原版回调。"
                     + "失败不重放，取消后不再动作；实际扣料与半成品保留，两个游戏刻后重新核全目标。"
                     + "已有满足格不消费；沿用36槽默认组件及build_diff支持范围。双格对象仅主格一次动作/消费一件，"
-                    + "include_repairs默认true；false在原料分配和候选筛选前延后临时拆开的待补格，mc.build完成其他工作后再恢复。"
+                    + "include_repairs默认true；false在原料分配和候选筛选前延后待补格。repairs_only默认false；"
+                    + "true仅检查当前工地待补格，原地修补可达且不占身体/不封出口的缺口，不移动或再开路；"
+                    + "不能与include_repairs=false组合。没有可修格时成功返回placed_blocks=0/no_work_here=true，整图仍另验。"
                     + "两半逐格记录；任一半未知/保护/占位不得动作。ACCEPTED等真终态；本批结束不是整栋完成。"
                     + "Lua按max_actions预扣原子预算，换页/换阶段不补原预算。",
                     """
@@ -537,7 +543,7 @@ public final class ClientToolDefs {
                     "offset":{"type":"integer","minimum":0,"maximum":16368},
                     "expected_revision":{"type":"string","minLength":64,"maxLength":64},
                     "max_actions":{"type":"integer","minimum":1,"maximum":12},
-                    "include_repairs":{"type":"boolean"}},
+                    "include_repairs":{"type":"boolean"},"repairs_only":{"type":"boolean"}},
                     "required":["target","expected_revision"],"additionalProperties":false}
                     """.formatted(BUILD_TARGET)),
             new ToolSpec("search_resource", "优先用此只读入口查找资源：一次调用在本地完成同中心全部分页，最多5页、30秒；"
@@ -693,7 +699,7 @@ public final class ClientToolDefs {
                             + "\"temporary_purpose\":{\"type\":\"string\",\"enum\":[\"support\",\"workstation\"]},\"face\":{\"type\":\"string\","
                             + "\"enum\":[\"up\",\"down\",\"north\",\"south\",\"east\",\"west\"]}},\"required\":[\"x\",\"y\",\"z\",\"item\"]}"),
             new ToolSpec("move_to", "走向已加载的目标坐标：规划绕路/挖穿/搭路，长路线分段并按实际落点自动接续。"
-                    + "walk_only=true只走路/跳跃/下落，规划/重规划与执行均不挖放，探索使用此模式。"
+                    + "walk_only=true走路/跳跃/下落且不挖放，可沿原任务许可开关可手动操作的门，探索使用此模式。"
                     + "return_waypoint可填status/move_to实际路标id，坐标须匹配、exact=true、walk_only=true且保留路标bounds/underground；"
                     + "先核当前支撑再正常导航，不继承许可，不自动连续返回或重开预算。"
                     + "普通坐标默认到目标相邻一格范围；指定脚格用exact=true，要求实际站稳。"

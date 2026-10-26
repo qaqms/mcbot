@@ -7,11 +7,71 @@ import com.neko.mcbot.common.Envelope;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class AgentRunnerMultiGoalTest {
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void actualBedSurveyCannotFreezeAnInvalidDrawingAndTheCorrectedPairCanRegisterInTheSameTask(boolean serverRefused) {
+        com.neko.mcbot.server.BlockActionFixtures.bootstrap();
+        var placement=new com.neko.mcbot.server.BlockActionFixtures.Placement();
+        var blocks=new java.util.HashMap<net.minecraft.core.BlockPos,net.minecraft.world.level.block.state.BlockState>();
+        var access=new com.neko.mcbot.building.BuildSurvey.Access() {
+            @Override public net.minecraft.world.level.block.state.BlockState state(net.minecraft.core.BlockPos p) {
+                return blocks.getOrDefault(p,net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+            }
+            @Override public boolean inBounds(net.minecraft.core.BlockPos p) { return true; }
+            @Override public boolean protectedCell(net.minecraft.core.BlockPos p) { return false; }
+            @Override public boolean near(net.minecraft.core.BlockPos p) { return false; }
+            @Override public com.neko.mcbot.server.BlockPlacement.Access placement() { return placement; }
+            @Override public JsonObject terrain() { return json("{\"dimension\":\"minecraft:overworld\",\"chunks\":{\"0,0\":\"fixed\"}}"); }
+        };
+        var bad=json("""
+                {"anchor":{"x":-236,"y":63,"z":-440},"cells":[
+                {"x":1,"y":1,"z":8,"block":"red_bed","properties":[
+                {"name":"part","value":"head"},{"name":"facing","value":"south"}]},
+                {"x":1,"y":1,"z":9,"block":"red_bed","properties":[
+                {"name":"part","value":"foot"},{"name":"facing","value":"south"}]}]}
+                """);
+        var target=com.neko.mcbot.building.BuildTarget.parse(bad);
+        var goal=json("{\"type\":\"building\",\"lifecycle\":\"long_term\"}");
+        goal.add("target",bad); goal.addProperty("expected_revision",target.revision());
+        begin();
+        long task=runner.currentTaskId();
+        client.engine().tools(0,new ToolCall("invalid-bed","set_goal",goal.toString())); client.drain(); status();
+        assertEquals("build_diff",client.lastTool().str("tool"));
+        var actual=com.neko.mcbot.building.BuildSurvey.verify(target,access,0,()->0);
+        assertEquals(2,actual.data().getAsJsonObject("counts").get("unsupported").getAsInt());
+        if (serverRefused) reply(false,com.neko.mcbot.building.BuildObjects.invalidFeedback(
+                actual.data().getAsJsonObject("object_validation")),actual.data());
+        else reply(actual.data());
+        status();
+        var receipt=client.engine().histories.getLast().stream()
+                .filter(com.neko.mcbot.agentcore.llm.Msg.Tool.class::isInstance)
+                .map(com.neko.mcbot.agentcore.llm.Msg.Tool.class::cast)
+                .filter(t->t.callId().equals("invalid-bed")).findFirst().orElseThrow();
+        assertFalse(receipt.ok(),"the old chain accepted the invalid pair and froze it");
+        assertTrue(receipt.content().contains("INVALID_BUILD_TARGET:"),receipt.content());
+        assertTrue(receipt.content().contains("bed_pair_missing_or_inconsistent"),receipt.content());
+        assertEquals(task,runner.currentTaskId());
+        for (var cell:bad.getAsJsonArray("cells"))
+            cell.getAsJsonObject().getAsJsonArray("properties").get(1).getAsJsonObject().addProperty("value","north");
+        var corrected=com.neko.mcbot.building.BuildTarget.parse(bad);
+        goal.add("target",bad); goal.addProperty("expected_revision",corrected.revision());
+        client.engine().tools(1,new ToolCall("corrected-bed","set_goal",goal.toString())); client.drain(); status();
+        reply(com.neko.mcbot.building.BuildSurvey.verify(corrected,access,0,()->0).data()); status();
+        assertEquals(task,runner.currentTaskId());
+        corrected.cells().forEach(c->blocks.put(c.pos(),c.desired()));
+        finishCheck(com.neko.mcbot.building.BuildSurvey.verify(corrected,access,0,()->0).data(),"build_diff");
+        assertEquals(0,runner.currentTaskId());
+        assertEquals("completed",runner.panelHistory().tasks().getFirst().status());
+        assertEquals(0,placement.calls);
+        assertEquals(1,client.sent.stream().filter(e->e.kind().equals("task_begin")).count());
+    }
+
     private static final String REVISION="a".repeat(64);
     private static final String TARGET="{\"anchor\":{\"x\":2,\"y\":90,\"z\":0},\"fill\":{"
             + "\"from\":{\"x\":0,\"y\":0,\"z\":0},\"to\":{\"x\":19,\"y\":0,\"z\":0},\"block\":\"stone\"}}";
@@ -127,6 +187,7 @@ class AgentRunnerMultiGoalTest {
         evidence.addProperty("material_next_offset",-1);
         evidence.add("design_components",json("{\"doors\":0,\"beds\":0}"));
         evidence.add("design_review",json("{\"stairs_missing_orientation\":2,\"stairs_rising_behind_back\":4}"));
+        evidence.add("object_validation",json("{\"valid\":false,\"invalid_cells\":2,\"issues\":[{\"reason\":\"bed_pair_missing_or_inconsistent\"}]}"));
         evidence.add("target",json("{\"draft_revision\":\""+REVISION+"\"}"));
         evidence.addProperty("draft_retained",true);
         evidence.add("cells",json("{\"private_fixture_field\":\"not-for-direct-feedback\"}"));
@@ -142,6 +203,7 @@ class AgentRunnerMultiGoalTest {
         assertTrue(receipt.content().contains("\"stairs_rising_behind_back\":4"),receipt.content());
         assertTrue(receipt.content().contains("\"doors\":0"),receipt.content());
         assertTrue(receipt.content().contains("\"draft_revision\":\""+REVISION+"\""),receipt.content());
+        assertTrue(receipt.content().contains("bed_pair_missing_or_inconsistent"),receipt.content());
         assertFalse(receipt.content().contains("private_fixture_field"));
         assertNotEquals(0,runner.currentTaskId());
     }

@@ -6,13 +6,17 @@ import java.util.List;
 import java.util.Set;
 
 /** Immutable planned terrain for one route prefix; never a record of actual world effects. */
-public record TerrainEdits(Set<Long> removed, Set<Long> placed) {
-    public static final TerrainEdits EMPTY = new TerrainEdits(Set.of(), Set.of());
+public record TerrainEdits(Set<Long> removed, Set<Long> placed, Set<Long> toggled) {
+    public static final TerrainEdits EMPTY = new TerrainEdits(Set.of(), Set.of(), Set.of());
+    public TerrainEdits(Set<Long> removed,Set<Long> placed) { this(removed,placed,Set.of()); }
 
     public TerrainEdits {
         removed = Set.copyOf(removed);
         placed = Set.copyOf(placed);
+        toggled = Set.copyOf(toggled);
         if (!Collections.disjoint(removed, placed)) throw new IllegalArgumentException("Conflicting edits");
+        if (!Collections.disjoint(removed,toggled) || !Collections.disjoint(placed,toggled))
+            throw new IllegalArgumentException("Conflicting toggle");
     }
 
     public TerrainEdits after(List<Long> dig, List<Long> place) {
@@ -27,11 +31,19 @@ public record TerrainEdits(Set<Long> removed, Set<Long> placed) {
             nextRemoved.remove(cell);
             nextPlaced.add(cell);
         }
-        return new TerrainEdits(nextRemoved, nextPlaced);
+        var nextToggled=new HashSet<>(toggled);
+        nextToggled.removeAll(dig); nextToggled.removeAll(place);
+        return new TerrainEdits(nextRemoved, nextPlaced,nextToggled);
+    }
+
+    public TerrainEdits toggle(List<Long> cells) {
+        var next=new HashSet<>(toggled);
+        for (long cell:cells) if (!next.remove(cell)) next.add(cell);
+        return new TerrainEdits(removed,placed,next);
     }
 
     public DigSampler view(DigSampler base) {
-        if (removed.isEmpty() && placed.isEmpty()) return base;
+        if (removed.isEmpty() && placed.isEmpty() && toggled.isEmpty()) return base;
         return new DigSampler() {
             @Override public boolean passable(int x, int y, int z) {
                 long key = DigAStar.pack(x, y, z);
@@ -54,6 +66,10 @@ public record TerrainEdits(Set<Long> removed, Set<Long> placed) {
             @Override public boolean known(int x, int y, int z) { return base.known(x, y, z); }
             @Override public int maxPlaces() { return base.maxPlaces(); }
             @Override public NavigationGeometry geometry() { return base.geometry(); }
+            @Override public List<Long> toggleCells(int x,int y,int z) { return base.toggleCells(x,y,z); }
+            @Override public boolean canToggleFrom(int x,int y,int z,long target,TerrainEdits edits) {
+                return base.canToggleFrom(x,y,z,target,edits);
+            }
             @Override public double loweringSeconds(int x,int y,int z,TerrainEdits edits) {
                 return base.loweringSeconds(x,y,z,edits);
             }

@@ -19,6 +19,88 @@ import static org.junit.jupiter.api.Assertions.*;
 class BuildWorkTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
+    @Test void localRepairFindsLaterPageBeforeAllocatingTheOnlyMaterialToNewWork() {
+        var repaired=new BlockPos(31,90,0);
+        var order=new java.util.ArrayList<BlockPos>();
+        var world=new BuildSurveyTest.World() {
+            @Override public boolean repairPending(BlockPos pos) { return pos.equals(repaired); }
+            @Override public InteractionResult place(BlockPos pos, ItemStack stack, Direction face) {
+                order.add(pos); stack.shrink(1); blocks.put(pos,proposed);
+                return InteractionResult.SUCCESS;
+            }
+        };
+        var drawing=target(32);
+        drawing.cells().forEach(c->world.blocks.put(c.pos(),c.desired()));
+        world.blocks.remove(repaired);
+        world.blocks.remove(drawing.cells().getFirst().pos());
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var result=finish(new BuildWork(drawing,access(world),-1,12,()->0,true,true));
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(java.util.List.of(repaired),order);
+        assertEquals(1,result.data().get("placed_blocks").getAsInt());
+        assertEquals(1,result.data().get("whole_remaining").getAsInt());
+        assertFalse(result.data().get("goal_satisfied").getAsBoolean());
+        assertEquals(0,world.inventory.getItem(0).getCount());
+    }
+
+    @Test void localRepairSkipsBodyExitBlockedUnknownAndDistantHolesWithoutMovingOrConsuming() {
+        for (String reason:java.util.List.of("self_collision","would_seal_exit","unknown","distant")) {
+            var world=new BuildSurveyTest.World() {
+                @Override public boolean repairPending(BlockPos pos) { return true; }
+            };
+            var pos=new BlockPos(0,90,0);
+            world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+            if (reason.equals("unknown")) world.unknown.add(pos);
+            else if (reason.equals("distant")) world.far.add(pos);
+            else world.prepare=(p,d)->new ServerTool.Result(false,"TARGET_BLOCKED:"+reason,
+                    JsonParser.parseString("{\"placement_failure\":\""+reason+"\"}").getAsJsonObject());
+            var result=finish(new BuildWork(target(1),access(world),-1,12,()->0,true,true));
+            assertTrue(result.ok(),result.feedback());
+            assertTrue(result.data().get("no_work_here").getAsBoolean());
+            assertFalse(result.data().get("goal_satisfied").getAsBoolean());
+            assertEquals(0,result.data().get("placed_blocks").getAsInt());
+            assertEquals(1,world.inventory.getItem(0).getCount());
+            assertTrue(world.blocks.isEmpty());
+        }
+    }
+
+    @Test void explicitRepairPageCannotReachIntoALaterPageWhenEarlierRowsAreFilteredOut() {
+        var world=new BuildSurveyTest.World() {
+            @Override public boolean repairPending(BlockPos pos) { return pos.getX()==31; }
+        };
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var result=finish(new BuildWork(target(32),access(world),0,12,()->0,true,true));
+        assertTrue(result.ok(),result.feedback());
+        assertEquals(0,result.data().get("placed_blocks").getAsInt());
+        assertEquals(0,world.prepares,"the requested page contains no repair source");
+        assertEquals(1,world.inventory.getItem(0).getCount());
+    }
+
+    @Test void repairSourceMustStillBePendingAfterTheRegionIsReserved() {
+        boolean[] pending={true};
+        var world=new BuildSurveyTest.World() {
+            @Override public boolean repairPending(BlockPos pos) { return pending[0]; }
+        };
+        world.inventory.setItem(0,new ItemStack(Items.STONE,1));
+        var access=new BuildWork.Access() {
+            @Override public BuildSurvey.Access survey() { return world; }
+            @Override public ServerTool.Result valid() { return null; }
+            @Override public boolean reserve(BuildTarget.Cell cell) { pending[0]=false; return true; }
+        };
+        var result=finish(new BuildWork(target(1),access,-1,12,()->0,true,true));
+        assertEquals(0,result.data().get("placed_blocks").getAsInt());
+        assertEquals(1,world.inventory.getItem(0).getCount());
+        assertTrue(world.blocks.isEmpty());
+    }
+
+    private BuildWork.Access access(BuildSurveyTest.World world) {
+        return new BuildWork.Access() {
+            @Override public BuildSurvey.Access survey() { return world; }
+            @Override public ServerTool.Result valid() { return null; }
+            @Override public boolean reserve(BuildTarget.Cell cell) { return true; }
+        };
+    }
+
     @Test void aBatchFinishesItsCurrentLayerBeforeMovingOnToTheRoof() {
         var drawing = BuildTarget.parse(JsonParser.parseString("""
                 {"anchor":{"x":0,"y":90,"z":0},"fill":{"from":{"x":0,"y":0,"z":0},

@@ -101,6 +101,17 @@ public final class LevelDigSampler implements DigSampler {
         return st.getCollisionShape(level, p).isEmpty() && st.getFluidState().isEmpty();
     }
 
+    @Override public java.util.List<Long> toggleCells(int x,int y,int z) {
+        return com.neko.mcbot.server.DoorTraversal.cells(level,new BlockPos(x,y,z),p->
+                inBounds(p.getX(),p.getY(),p.getZ()) && level.isLoaded(p) && level.mayInteract(companion,p));
+    }
+    @Override public boolean canToggleFrom(int x,int y,int z,long target,TerrainEdits edits) {
+        return geometry instanceof com.neko.mcbot.server.StandingGeometry standing
+                && com.neko.mcbot.server.DoorTraversal.reachable(level,
+                com.neko.mcbot.server.BlockAim.forPlayer((com.neko.mcbot.body.CompanionPlayer)companion),
+                standing,x,y,z,target,edits,companion.getEyeHeight(),companion.blockInteractionRange());
+    }
+
     @Override
     public double digSeconds(int x, int y, int z) {
         return digSeconds(x,y,z,null);
@@ -258,7 +269,8 @@ public final class LevelDigSampler implements DigSampler {
     @Override public boolean canClear(int x, int y, int z, java.util.List<Long> cells, TerrainEdits edits) {
         if (!(companion instanceof com.neko.mcbot.body.CompanionPlayer body)) return false;
         return com.neko.mcbot.server.NavigationWork.canClear(
-                com.neko.mcbot.server.BlockAim.forPlayer(body), new BlockPos(x, y, z),
+                com.neko.mcbot.server.BlockAim.withToggles(
+                        com.neko.mcbot.server.BlockAim.forPlayer(body),level,edits.toggled()), new BlockPos(x, y, z),
                 companion.getEyePosition().y - companion.getY(),
                 Math.min(5.5, companion.blockInteractionRange()), cells, edits, geometry);
     }

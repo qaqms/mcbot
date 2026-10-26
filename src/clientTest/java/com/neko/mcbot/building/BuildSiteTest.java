@@ -12,6 +12,28 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BuildSiteTest {
+    @Test void aWindowDoesNotMakeItsOrdinaryWallSupportPermanentlyUndiggable() {
+        var w=new World();
+        var design=BuildTarget.parse(JsonParser.parseString("""
+                {"anchor":{"x":4,"y":90,"z":0},"cells":[
+                {"x":0,"y":0,"z":0,"block":"cobblestone"},
+                {"x":0,"y":1,"z":0,"block":"glass"}]}
+                """).getAsJsonObject());
+        design.cells().forEach(c->w.states.put(c.pos(),c.desired()));
+        var site=new BuildSite(); site.bind(this,w);
+        assertNull(site.begin(design,List.of(),FEET,w));
+        assertNull(site.miningGuard(TARGET,design.revision(),false,w));
+        var glass=TARGET.above();
+        assertNull(site.miningGuard(glass,design.revision(),false,w));
+        w.material=false;
+        assertNotNull(site.miningGuard(glass,design.revision(),false,w));
+        w.material=true;
+        w.states.put(glass,Blocks.SAND.defaultBlockState());
+        assertNotNull(site.miningGuard(TARGET,design.revision(),false,w));
+        w.states.put(glass,Blocks.CRAFTING_TABLE.defaultBlockState());
+        assertNotNull(site.miningGuard(TARGET,design.revision(),false,w));
+    }
+
     @Test void chargedAttemptsAndCheckpointsCannotPretendTheConstructionChangedAfterAStall() {
         var world = new World();
         var site = site(world);
@@ -491,7 +513,7 @@ class BuildSiteTest {
         w.states.remove(TEMP.east()); w.unknown.add(TEMP.east());
         assertNotNull(site.miningGuard(TEMP,target().revision(),true,w));
     }
-    @Test void temporaryCapDoesNotEvictOrRecycleRemovedRecords() {
+    @Test void temporaryCapBoundsOutstandingRecordsAndActualRemovalReleasesItsSlot() {
         var w=new World(); var site=site(w);
         for(int i=0;i<16;i++) {
             var pos=TEMP.south(i);
@@ -500,8 +522,15 @@ class BuildSiteTest {
             site.placedTemporary(pos,Blocks.AIR.defaultBlockState(),w.state(pos),"support",w);
             site.removedTemporary(pos);
         }
-        assertNotNull(site.temporaryGuard(TEMP.north(),"support",w));
-        assertEquals(16,site.report(w).getAsJsonArray("temporary").size());
+        assertNull(site.temporaryGuard(TEMP.north(),"support",w));
+        assertEquals(0,site.report(w).getAsJsonArray("temporary").size());
+        for (int i=0;i<16;i++) {
+            var pos=TEMP.east(10).south(i);
+            assertNull(site.temporaryGuard(pos,"support",w));
+            w.states.put(pos,Blocks.STONE.defaultBlockState());
+            site.placedTemporary(pos,Blocks.AIR.defaultBlockState(),w.state(pos),"support",w);
+        }
+        assertNotNull(site.temporaryGuard(TEMP.north(),"support",w),"unremoved sources still count toward the cap");
     }
     @Test void nativeEditsAndRepeatedRoundsContinuePastOldCapsAcrossRegistrationAndRestore() {
         var w=new World(); var site=site(w);
@@ -687,7 +716,7 @@ class BuildSiteTest {
         assertNotNull(site.miningGuard(TARGET,target().revision(),false,w));
         assertNull(site.navigationRevision(TARGET,w));
     }
-    @Test void missingHistoricalPassagesOnlyKeepUnprovenSupportOrWorkstations() {
+    @Test void missingHistoricalPassagesDoNotPermanentlyProtectLocallyProvenThrowawaySupports() {
         var w=new World(); var site=site(w); temporary(site,w);
         w.passageComplete=false;
         assertNull(site.live(w));
@@ -695,8 +724,8 @@ class BuildSiteTest {
         assertNull(site.miningGuard(TEMP,target().revision(),true,w),
                 "an intact support outside the recorded passage has a local cleanup proof");
         w.passage.add(TEMP);
-        assertNotNull(site.miningGuard(TEMP,target().revision(),true,w),
-                "a support that was part of the recorded passage remains conservative");
+        assertNull(site.miningGuard(TEMP,target().revision(),true,w),
+                "a historical passage does not permanently own a throwaway support");
         var restored=new BuildSite(); restored.bind("restored",w);
         restored.restore(site.snapshot(),FEET,w);
         assertNull(restored.live(w));

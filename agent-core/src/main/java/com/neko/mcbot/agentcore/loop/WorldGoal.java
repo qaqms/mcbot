@@ -102,6 +102,8 @@ public final class WorldGoal {
         available = true;
         var data = state.getAsJsonObject("goal_evidence");
         if (type.equals("building")) {
+            if (data.has("object_validation") && !flag(data.getAsJsonObject("object_validation"),"valid"))
+                throw new IllegalArgumentException("Invalid paired drawing");
             if (!text(request, "expected_revision").equals(text(data, "target_revision"))
                     || !flag(data, "observation_complete") || !flag(data, "spatial_stable")
                     || flag(data, "budget_exhausted")) throw new IllegalArgumentException("Incomplete building facts");

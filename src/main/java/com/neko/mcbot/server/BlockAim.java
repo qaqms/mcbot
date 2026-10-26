@@ -19,6 +19,7 @@ import java.util.function.Predicate;
 /** Loaded, bounded sight checks before a coordinate-based action can touch the world. */
 public final class BlockAim {
     public interface Access {
+        default BlockGetter blocks() { return this instanceof BlockGetter getter ? getter : null; }
         Vec3 eye();
         boolean loaded(BlockPos pos);
         default boolean replaceable(BlockPos pos) { return false; }
@@ -94,6 +95,7 @@ public final class BlockAim {
     public static Access forPlayer(CompanionPlayer player) {
         var level = player.level();
         return new Access() {
+            @Override public BlockGetter blocks() { return level; }
             @Override public Vec3 eye() { return player.getEyePosition(); }
             @Override public boolean loaded(BlockPos pos) {
                 return level.isInWorldBounds(pos) && level.getWorldBorder().isWithinBounds(pos)
@@ -121,6 +123,7 @@ public final class BlockAim {
     /** Evaluate a proposed stance without moving the body or changing its look direction. */
     public static Access fromEye(Access world, Vec3 eye) {
         return new Access() {
+            @Override public BlockGetter blocks() { return world.blocks(); }
             @Override public Vec3 eye() { return eye; }
             @Override public boolean loaded(BlockPos pos) { return world.loaded(pos); }
             @Override public boolean replaceable(BlockPos pos) { return world.replaceable(pos); }
@@ -132,6 +135,40 @@ public final class BlockAim {
             @Override public BlockHitResult traceEdited(Vec3 from, Vec3 to, Set<BlockPos> removed, Set<BlockPos> placed) {
                 return world.traceEdited(from, to, removed, placed);
             }
+        };
+    }
+
+    public static Access withToggles(Access sight,BlockGetter world,Set<Long> toggled) {
+        if (toggled.isEmpty()) return sight;
+        var view=toggledWorld(world,toggled);
+        return new Access() {
+            @Override public BlockGetter blocks() { return view; }
+            @Override public Vec3 eye() { return sight.eye(); }
+            @Override public boolean loaded(BlockPos pos) { return sight.loaded(pos); }
+            @Override public boolean replaceable(BlockPos pos) { return view.getBlockState(pos).canBeReplaced(); }
+            @Override public List<AABB> outline(BlockPos pos) { return view.getBlockState(pos).getShape(view,pos).toAabbs(); }
+            @Override public BlockHitResult trace(Vec3 from,Vec3 to) {
+                return clipEdited(view,from,to,CollisionContext.empty(),Set.of(),Set.of());
+            }
+            @Override public BlockHitResult traceEdited(Vec3 from,Vec3 to,Set<BlockPos> removed,Set<BlockPos> placed) {
+                return clipEdited(view,from,to,CollisionContext.empty(),removed,placed);
+            }
+        };
+    }
+
+    public static BlockGetter toggledWorld(BlockGetter world,Set<Long> toggled) {
+        if (toggled.isEmpty()) return world;
+        return new BlockGetter() {
+            @Override public net.minecraft.world.level.block.state.BlockState getBlockState(BlockPos pos) {
+                var state=world.getBlockState(pos);
+                return toggled.contains(DoorTraversal.key(pos)) ? DoorTraversal.flip(state) : state;
+            }
+            @Override public net.minecraft.world.level.material.FluidState getFluidState(BlockPos pos) {
+                return getBlockState(pos).getFluidState();
+            }
+            @Override public net.minecraft.world.level.block.entity.BlockEntity getBlockEntity(BlockPos pos) { return null; }
+            @Override public int getHeight() { return world.getHeight(); }
+            @Override public int getMinY() { return world.getMinY(); }
         };
     }
 

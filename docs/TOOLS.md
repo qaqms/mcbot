@@ -3,6 +3,74 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 双格图纸登记前校验（2026-10-26）
+
+build_diff增加object_validation，覆盖全图床/门配对，不限当前明细页：
+valid、invalid_cells、issues（最多4条）及issues_omitted。
+issues含世界坐标、block、作者属性和reason；声明足够时给world_facing及expected_partner，
+其中作者属性仍为旋转前，世界坐标/方向已含目标rotation。
+普通查询仍成功返回诊断和可保留草稿；verify_only=true遇非法配对返回INVALID_BUILD_TARGET。
+set_goal登记前此错误不会冻结目标或结束任务，可纠正候选后重新build_diff并用新修订登记；
+不能降级物品目标或文字完成，成功登记后仍不能借此换图，取消及原预算不重开。
+床头坐标是床脚沿facing前进一格，两格须同色同朝向、part分别head/foot；
+门须同列上下相邻、half分别lower/upper、facing一致，hinge仍可省略，明确属性仍须一致。
+不自动补画/翻转两半，也不把缺材料、超手距或暂缺支撑归作配对错误。
+build_site沿同一判据拒绝无效候选，原实际放置/权限/来源及完整目标验收保持。
+详见PAIRED-DRAWING-GOAL-VALIDATION-2026-10-26。
+
+## 临时开路及时修补（2026-10-26）
+
+mc.build到位先完成本次近身工作，再优先原地补回可达repair_pending格，然后离开去其他工位。
+不等整栋完成；占身体、会封出口或暂时够不到的缺口仍保留原图待补与最后恢复阶段。
+build_nearby新增repairs_only（严格布尔，默认false），true须当前同修订活动工地，
+不能与include_repairs=false组合；在候选分页与原料分配前仅保留当前待补来源。
+省略offset查整图中的近身可修格，显式offset限原16格页；max_actions仍1-12，
+原生放置、实际材料、占位/出口、来源、任务许可与区域锁继续核验，不移动/挖掘/搭新支撑。
+该模式无可修格时ok=true、placed_blocks=0、no_work_here=true，仅表示本地检查结束；
+不代表goal_satisfied，也不吞取消、权限、实际动作及预算失败。最终目标仍按完整原图核实。
+mc.build新增nearby_repaired_blocks，表示提前原地实际修补数，并计入已有placed_blocks/
+consumed_count，不把清理支撑或查询算作修补。相同工作事实的无动作修补检查不会反复派发。
+详见EARLY-CONSTRUCTION-REPAIRS-2026-10-26，原生完整施工效果仍待复测。
+
+## 门通行与临时回收（2026-10-26）
+
+move_to普通相邻形状步可在原许可内开关可手动操作的门，优先利用已有门洞；
+walk_only仍禁止挖放，可使用该交互，不能绕过只读/确认模式。确认清单包含
+toggle及door_restore的具体格和预期状态。navigation诊断含door_interactions、
+doors_pending_restore；实际改变OPEN不等于已经穿过，恢复须路线通过且身体/视线/许可允许。
+半格边缘允许经完整支撑和碰撞复核的下降起步，未知/无支撑仍拒绝。
+
+mc.cleanup_temporary逐次重查来源/依赖，一个局部站位不可达不阻止其他候选；
+取消、权限、安全、未知、账户和NAVIGATION_STALLED不转成内部续试。
+mc.build在16条待回收记录压力下及完工/局部受阻时尝试清理；实际移除释放记录槽，
+历史通行不永久保护普通支撑，显式通道/当前占位/设施/来源和活依赖保持。
+结果新增temporary_cleanup_blocked、temporary_cleanup_failures及其_omitted、
+temporary_retained_reasons及其_omitted，分别最多8条样本；已有removed/retained为实态计数。
+建筑goal_satisfied只按新鲜完整目标验收，清理失败或残留不会被偷偷删除或计为建筑完成。
+完整机制与离线/原生边界见DOORS-ROOF-DEPARTURE-AND-TEMPORARY-CLEANUP-2026-10-26。
+
+## 基础修补与放置诊断（2026-10-26）
+
+build_diff对实际空气补放使用独立保护判据，床下缺失基础可按正常条件修补；
+已有支撑的拆除保护保持。合法的可恢复玻璃开口仍须核材料、来源与依赖。
+工作move_to没有无编辑或身体净空工作位时，可在原预处理账户内尝试工作射线开口引导，
+不表示已经挖开或允许清单外操作。实际严格放置预检失败的诊断中，
+placement_face_failures保留全部六面的有界原因，原首条反馈保持；显式face仅核该面。
+原NAVIGATION_STALLED、真实材料和整图完成口径保持，不能根据单个no_clickable_face
+把其他面的状态失败概括为纯距离问题。完整机制与原生差异见
+FOUNDATION-WORK-AND-PROTECTION-2026-10-26。
+
+## 施工状态循环（2026-10-26）
+
+mc.build在处理当前可执行工作和待补后，若准备再次移动时遇到已成功工作移动前的相同
+图纸实态，返回blocked=construction_state_repeated、model_reassessment_required=true，
+并保留原修订、实际消耗、剩余和有限缺格原因。身体位移、库存变化或累计挖放不能
+单独把拆补循环称作进展；完成格数相同但不同图纸实态可以继续。
+此历史仅在本次程序，不是无路证明或永久禁令。模型应核对缺格、临时开口与恢复顺序，
+按真实许可和工作条件调整方案；NO_PATH和保护格本身不等于服务端要求主人批准。
+寻路对没有现成严格工作位的目标可用原许可内局部开口引导，实际挖放继续逐格现场核验。
+详见ENCLOSED-ROOF-AND-CONSTRUCTION-CYCLES-2026-10-26。
+
 ## 同工地超时后复核（2026-10-26）
 
 工作move_to发生真实NAVIGATION_STALLED后，同意图、修订及规格的重发先核有限局部现场。
@@ -209,7 +277,8 @@ temporary_cleanup。这些是只读建议，mc.build经原move_to/break_block执
 build_diff cells[].repair_pending表示本工地拆开尚待补回的原图格。
 整图body_obstructs_target随原差异查询给出，正常施工不额外反复查询恢复建议。
 build_nearby新增可选include_repairs（严格布尔，默认true）；false在分配原料前延后待补格。
-mc.build先做常规格，候选遍历后再补回，最终仍按完整原图验收。
+mc.build常规批次先做本次工作，再用repairs_only原地补可达缺口；不可达部分留最后恢复阶段，
+不再统一等常规整图结束才修补，最终仍按完整原图验收。
 
 完成后自动尝试清理本任务临时工程，mc.build结果增加relocations、temporary_removed和temporary_retained。
 后两者只在实际调用清理时出现；暂留可能来自来源缺口、真实占位或依赖，不假报已清空。
