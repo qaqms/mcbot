@@ -393,13 +393,13 @@ function mc.build(target, options)
                 repaired=repaired+count
                 moved=count>0
             end
-            if not moved and checkpoint.temporary and #checkpoint.temporary>=16 and cleanup_stamp~=stamp then
-                cleanup_stamp=stamp
-                temporary_possible=true
-                local before=cleanup and cleanup.removed or 0
-                cleanup_after_stall()
-                if cleanup and cleanup.removed>before then moved=true end
-            end
+            -- Keep route edits alive while there is still drawing work to do.
+            -- The reference builder finishes the current reachable layer/pass before
+            -- changing route state; reclaiming a support merely because the ledger is
+            -- full makes the next work route rebuild the same support and creates an
+            -- edit -> cleanup -> edit loop.  Cleanup remains available in the
+            -- no-candidate/final branches below, where it cannot invalidate an
+            -- actionable work set.
         end
         if moved then
             cursor=0

@@ -19,6 +19,20 @@ import static org.junit.jupiter.api.Assertions.*;
 class BuildWorkTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
+    @Test void nativeSelectionKeepsLowestLayerAndChoosesNearestMemberWithinIt() {
+        var near = new com.google.gson.JsonObject();
+        near.addProperty("x", 2); near.addProperty("y", 90); near.addProperty("z", 0);
+        var far = new com.google.gson.JsonObject();
+        far.addProperty("x", 12); far.addProperty("y", 90); far.addProperty("z", 0);
+        var roof = new com.google.gson.JsonObject();
+        roof.addProperty("x", 1); roof.addProperty("y", 91); roof.addProperty("z", 0);
+        var body = new net.minecraft.world.phys.Vec3(1.5, 90, .5);
+        assertTrue(BuildWork.nearer(near, far, body));
+        assertFalse(BuildWork.nearer(far, near, body));
+        assertTrue(BuildWork.nearer(near, roof, body),
+                "a higher layer cannot win while a lower ready member remains");
+    }
+
     @Test void localRepairFindsLaterPageBeforeAllocatingTheOnlyMaterialToNewWork() {
         var repaired=new BlockPos(31,90,0);
         var order=new java.util.ArrayList<BlockPos>();

@@ -24,6 +24,20 @@
   新JAR `build/libs/mcbot-0.1.0.jar` 为1938138 bytes，SHA256
   `8d9986ef6aee730e1303632d8afc25f61bcc1d4fc09c8a1e9292350389aad658`。
 
+## 施工层窗口与路线连续性（2026-10-26，Asia/Shanghai）
+
+- 参考项目复核确认：施工按最低层建立窗口，层内完成当前阶段后再按身体当前位置选择最近待建格；
+  失败单格只影响本次候选，不把整层或整栋永久保护。参考项目没有与本插件等价的自动脚手架回收机制，
+  因此本轮迁移施工调度思想，不扩大硬保护。
+- `BuildWork` 自动近身批次现在在有限候选中保持最低层，同层按身体位置选最近 `ready` 格；
+  身体对象不可用时回退确定性图纸顺序。新增回归覆盖低层优先和同层就近。
+- Lua `mc.build` 在仍有可执行施工或待补工作时保留临时路线编辑；只有无候选停滞、最终收尾或显式清理
+  才回收，避免 `edit -> cleanup -> edit` 反复搭拆支撑。完整说明见
+  `docs/CONSTRUCTION-LAYER-LOCALITY-2026-10-26.md`。
+- `:agent-core:test`、`:test` 与完整 `build --offline --console=plain --no-daemon --rerun-tasks`
+  均通过。新JAR `build/libs/mcbot-0.1.0.jar` 为1938839 bytes，SHA256
+  `01CDEB5E20F13E28FCA383D79F544E98693AF02817A61015979853C6A93F2010`。
+
 ## 屋面收尾受阻诊断（2026-10-26，Asia/Shanghai）
 
 - 最新日志冻结为 `build/roof-finish-current-20261026.log`，末时刻

@@ -330,7 +330,7 @@ class ConstructionProgramTest {
         assertEquals(2,w.moved);
     }
 
-    @Test void fullTemporaryLedgerTriggersCleanupBeforeMoreConstructionAndReportsBoundedRetainedReasons() throws Exception {
+    @Test void fullTemporaryLedgerStaysDuringConstructionThenCleansAtFinalization() throws Exception {
         var w=new World(); w.moved=1;
         w.override=(name,args)-> {
             if (name.equals("build_site")) {
@@ -345,8 +345,8 @@ class ConstructionProgramTest {
                 }
                 return new ToolOutcome(true,"fresh supports",site);
             }
-            if (name.equals("build_nearby")) assertEquals(1,w.breaks,
-                    "free an actual source slot before continuing the construction batch");
+            if (name.equals("build_nearby")) assertEquals(0,w.breaks,
+                    "do not reclaim route edits while actionable construction work remains");
             return null;
         };
         var result=run(w,CODE,128);

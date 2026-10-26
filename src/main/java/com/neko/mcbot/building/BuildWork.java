@@ -7,6 +7,7 @@ import com.neko.mcbot.server.BlockPlacement;
 import com.neko.mcbot.server.ServerTool;
 import com.neko.mcbot.task.TickTask;
 import net.minecraft.core.Direction;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.function.LongSupplier;
 
@@ -103,7 +104,8 @@ public final class BuildWork extends TickTask {
                         && (repairsOnly || BuildFoundation.allows(observed.getAsJsonObject("foundation_work"), pos))
                         && (workLayer == null || pos.getY() == workLayer)
                         && (!repairsOnly || cell.get("repair_pending").getAsBoolean())
-                        && (includeRepairs || !cell.get("repair_pending").getAsBoolean())) { ready = cell; break; }
+                        && (includeRepairs || !cell.get("repair_pending").getAsBoolean())
+                        && nearer(cell, ready, body)) ready = cell;
             }
             if (ready == null && offset < 0 && observed.get("work_next_cursor").getAsInt()>=0 && attempts < limit) {
                 workCursor=observed.get("work_next_cursor").getAsInt();
@@ -173,6 +175,31 @@ public final class BuildWork extends TickTask {
         } finally {
             nanos += Math.max(0, clock.getAsLong() - start);
         }
+    }
+
+    /**
+     * Keep the lowest active layer, then choose the nearest ready member from
+     * the bounded native work set. This mirrors the reference builder's layer
+     * window; canonical drawing order remains the deterministic tie break.
+     */
+    private boolean nearer(JsonObject candidate, JsonObject current, CompanionPlayer body) {
+        return nearer(candidate, current, body == null ? null : body.position());
+    }
+
+    static boolean nearer(JsonObject candidate, JsonObject current, Vec3 body) {
+        if (current == null) return true;
+        int candidateY = candidate.get("y").getAsInt();
+        int currentY = current.get("y").getAsInt();
+        if (candidateY != currentY) return candidateY < currentY;
+        if (body == null) return false;
+        return distanceSq(candidate, body) < distanceSq(current, body);
+    }
+
+    private static double distanceSq(JsonObject cell, Vec3 body) {
+        double dx = cell.get("x").getAsDouble() + .5 - body.x;
+        double dy = cell.get("y").getAsDouble() + .5 - body.y;
+        double dz = cell.get("z").getAsDouble() + .5 - body.z;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     private Progress done(ServerTool.Result reason, boolean verified) {
