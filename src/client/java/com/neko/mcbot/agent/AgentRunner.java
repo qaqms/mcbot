@@ -1463,7 +1463,7 @@ public final class AgentRunner implements ToolExecutor {
             var fields = new JsonObject();
             for (String key : List.of("target", "draft_retained", "worksite_revision", "target_revision", "total", "remaining", "observation_complete",
                     "spatial_stable", "budget_exhausted", "goal_satisfied", "next_offset", "material_next_offset",
-                    "work_next_cursor", "design_components", "design_review", "object_validation", "clearing_work",
+                    "work_next_cursor", "design_components", "design_review", "object_validation", "clearing_work", "foundation_work",
                     "entries", "task_scoped", "persistent", "active", "target_edits", "draft_revision_allowed",
                     "instance_id", "instance_revision", "design_id", "design_revision", "content_revision", "cell_count",
                     "anchor", "rotation", "layers", "offset", "cells", "records", "record_count", "conflicts", "unknown",

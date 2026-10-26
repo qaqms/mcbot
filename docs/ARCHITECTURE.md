@@ -3,6 +3,16 @@
 > 本文描述**已建成**的结构；施工前的完整蓝图见根目录 `mcbot-DESIGN.md`，
 > 进度与 API 防漂移笔记见 `STATUS.md`。与代码不一致时，以代码为准并请修订本文。
 
+## 基础顺序与补制交接（2026-10-26）
+
+详见FOUNDATION-ORDER-AND-SUPPLY-2026-10-26。BuildFoundation跨全图核最低可恢复主体层，
+foundation_work不受候选页、手距和现货过滤影响；未匹配基础与原来源repair_pending分别统计。
+BuildSurvey工作候选、Lua选格、BuildWork自动/显式页共用基础约束，预留后动作前重核现场。
+现货不足以支付任何剩余基础格时，mc.build返回foundation_materials_required及基础缺口，
+原模型先核原料、真实配方和工位，制作后按原修订续建；不在施工器内自动合成或强求整栋齐料。
+附着和家具不作基础门，通道待补保留原出口/修补规则，完整原图验收不减分母。
+只限制最低主体基础，不声称所有楼层严格整层完工；真实模型补制和原生完整施工仍待验。
+
 ## 双格图纸与目标冻结前校验（2026-10-26）
 
 详见PAIRED-DRAWING-GOAL-VALIDATION-2026-10-26。BuildObjects.validation复用原problem判据，

@@ -200,6 +200,11 @@ mc.build() 在本地连续查询、换位、清障与放置。默认连续工作
 placed_blocks、cleared_blocks、remaining、blocked 和 design_components。程序返回成功
 仅表示程序正常结束，status=blocked 或 goal_satisfied=false 就仍需处理真实缺口。
 
+最低主体基础未完成时，工作候选和实际批次不抢建新的上层格；必要通路的待补仍沿原修补规则。
+blocked=foundation_materials_required 表示基础放置现货耗尽，先读 foundation_work.materials，
+核对背包原料，用 craft query=true 查询真实配方。能制作就先按工位、产量及背包空间分批补制，
+再用同一个 mc.build() 续建。缺木板现货不代表缺原木，不直接要求主人提供成品，也不重画目标。
+
 放置会封住当前站位最后出口时，would_seal_exit 表示先换外侧站位，再补这格；
 不是删掉屋顶，也不是增加一份给主人签字的授权。导航允许已有安全落点的两/三格下降，
 更高落差仍需真实台阶或可放置的临时支撑，所有工作保留实际材料、接触面与世界权限。

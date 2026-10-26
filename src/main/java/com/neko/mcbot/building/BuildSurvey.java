@@ -175,11 +175,13 @@ public final class BuildSurvey {
             observation.append('|').append(BuiltInRegistries.ITEM.getKey(bill.item)).append(':').append(bill.available);
         }
         String progressKey = hash(observation.toString());
+        var foundation = BuildFoundation.observe(target, access, actuals::get);
         var selected=new ArrayList<Row>();
         int nextCursor=-1;
         int selectionEnd=workScan ? rows.size() : Math.min(rows.size(),offset+PAGE);
         for (int index=offset;index<selectionEnd;index++) {
             var row=rows.get(index);
+            if (workScan && !repairsOnly && !BuildFoundation.allows(foundation, row.cell.pos())) continue;
             if (repairsOnly && !access.repairPending(row.cell.pos())) continue;
             if (!includeRepairs && access.repairPending(row.cell.pos())) continue;
             if (workScan && (row.state.equals("satisfied") || nearbyOnly && !row.state.equals("not_assessed"))) continue;
@@ -191,7 +193,8 @@ public final class BuildSurvey {
             if (!workScan && selected.size()==PAGE) break;
         }
         if (workScan && !nearbyOnly && selected.isEmpty()) {
-            for (var row:rows) if (!row.state.equals("satisfied")) {
+            for (var row:rows) if (!row.state.equals("satisfied")
+                    && BuildFoundation.allows(foundation, row.cell.pos())) {
                 selected.add(row);
                 if (selected.size()==PAGE) break;
             }
@@ -324,6 +327,7 @@ public final class BuildSurvey {
         data.addProperty("rotation", target.rotation());
         data.addProperty("total", rows.size());
         data.addProperty("remaining", rows.size() - satisfied);
+        data.add("foundation_work", foundation);
         data.add("counts", counts);
         data.add("cells", details);
         data.add("page_counts", pageCounts);

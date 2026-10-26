@@ -26,6 +26,101 @@ import static org.junit.jupiter.api.Assertions.*;
 class ConstructionPipelineTest {
     @BeforeAll static void bootstrap() { com.neko.mcbot.server.BlockActionFixtures.bootstrap(); }
 
+    @Test void exhaustedFoundationStockReturnsForRecipeProcessingAndResumesTheSameDrawingBeforeUpperWork() throws Exception {
+        var target=FoundationWorkTest.drawing(25);
+        var world=new BuildWorkTest.World();
+        world.inventory.setItem(0,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OAK_PLANKS,23));
+        world.inventory.setItem(1,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE,64));
+        world.inventory.setItem(2,new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OAK_LOG,64));
+        world.afterAction=()->{
+            if(world.blocks.containsKey(new BlockPos(0,91,0)))
+                assertEquals(25,world.blocks.keySet().stream().filter(p->p.getY()==90).count());
+        };
+        var goal=new JsonObject();
+        goal.addProperty("type","building"); goal.add("target",target.input());
+        goal.addProperty("expected_revision",target.revision());
+        var frozen=goal.deepCopy();
+        var queue=new LinkedBlockingQueue<Runnable>();
+        var names=new ArrayList<String>();
+        boolean[] queried={false};
+        var reports=new ArrayList<ToolOutcome>();
+        for(String code:java.util.List.of("return mc.build()",
+                "return mc.call('craft',{item='minecraft:oak_planks',count=2,query=true})",
+                "return mc.call('craft',{item='minecraft:oak_planks',count=2,query=false})",
+                "return mc.build()")) {
+            var program=new BoundedProgram(new BoundedProgram.Plan(code,0,0),()->0L,(name,json)->{
+                names.add(name);
+                var args=JsonParser.parseString(json).getAsJsonObject();
+                ServerTool.Result result=switch(name) {
+                    case "status" -> new ServerTool.Result(true,"controlled body",new JsonObject());
+                    case "build_site" -> {
+                        var data=new JsonObject(); data.addProperty("target_revision",target.revision());
+                        data.add("temporary",new com.google.gson.JsonArray());
+                        yield new ServerTool.Result(true,"same site",data);
+                    }
+                    case "build_diff" -> args.has("work_scan") && args.get("work_scan").getAsBoolean()
+                            ? BuildSurvey.workScan(target,world,args.get("work_cursor").getAsInt(),()->0)
+                            : BuildSurvey.query(target,world,args.get("offset").getAsInt(),0,()->0);
+                    case "build_nearby" -> {
+                        var work=new BuildWork(target,world,-1,args.get("max_actions").getAsInt(),()->0,
+                                !args.has("include_repairs")||args.get("include_repairs").getAsBoolean(),
+                                args.has("repairs_only")&&args.get("repairs_only").getAsBoolean());
+                        yield FoundationWorkTest.finish(work);
+                    }
+                    case "craft" -> {
+                        assertEquals(23,world.actions,"supply must return before placing the upper block");
+                        assertEquals("minecraft:oak_planks",args.get("item").getAsString());
+                        assertEquals(2,args.get("count").getAsInt(),"the model requests the reported foundation gap");
+                        var data=new JsonObject(); data.addProperty("can_craft",true);
+                        if(args.get("query").getAsBoolean()) {
+                            queried[0]=true;
+                            assertEquals(64,world.inventory.getItem(2).getCount());
+                            data.addProperty("crafted_count",0);
+                        } else {
+                            assertTrue(queried[0]);
+                            // Crafting is a controlled boundary here; this test exercises its handoff, not recipes.
+                            world.inventory.getItem(2).shrink(1);
+                            world.inventory.setItem(0,new net.minecraft.world.item.ItemStack(
+                                    net.minecraft.world.item.Items.OAK_PLANKS,4));
+                            data.addProperty("crafted_count",4);
+                        }
+                        yield new ServerTool.Result(true,"controlled recipe result",data);
+                    }
+                    default -> throw new AssertionError("unexpected action during foundation supply: "+name);
+                };
+                return CompletableFuture.completedFuture(new ToolOutcome(result.ok(),result.feedback(),result.data()));
+            },queue::add,()->{},goal);
+            var future=program.start();
+            try {
+                long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+                while(!future.isDone() && System.nanoTime()<deadline) {
+                    var next=queue.poll(20,TimeUnit.MILLISECONDS);
+                    if(next!=null) next.run();
+                }
+                assertTrue(future.isDone());
+                reports.add(future.join());
+                assertTrue(future.join().ok(),future.join().feedback());
+                assertEquals(frozen,goal);
+            } finally {
+                program.stop("CANCELLED:test cleanup");
+                program.terminated().get(2,TimeUnit.SECONDS);
+            }
+        }
+        var gap=reports.getFirst().data().getAsJsonObject("returned");
+        assertEquals("foundation_materials_required",gap.get("blocked").getAsString());
+        assertEquals(2,gap.getAsJsonObject("foundation_work").get("unfinished").getAsInt());
+        assertEquals(23,gap.get("placed_blocks").getAsInt());
+        assertEquals(target.revision(),gap.get("target_revision").getAsString());
+        var finalReport=reports.getLast().data().getAsJsonObject("returned");
+        assertTrue(finalReport.get("goal_satisfied").getAsBoolean());
+        assertEquals(target.revision(),finalReport.get("target_revision").getAsString());
+        assertEquals(3,finalReport.get("placed_blocks").getAsInt());
+        assertEquals(26,world.actions);
+        assertEquals(63,world.inventory.getItem(2).getCount());
+        assertEquals(2,world.inventory.getItem(0).getCount());
+        assertEquals(2,names.stream().filter(n->n.equals("craft")).count());
+    }
+
     @Test void arrivalWorkThenEarlyRepairClearsTheRealSiteLedgerBeforeTheNextRoofRoute() throws Exception {
         var target=BuildTarget.parse(JsonParser.parseString("""
                 {"anchor":{"x":4,"y":90,"z":0},"regions":[

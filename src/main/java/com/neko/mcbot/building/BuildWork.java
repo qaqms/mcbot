@@ -100,6 +100,7 @@ public final class BuildWork extends TickTask {
                 var pos = new net.minecraft.core.BlockPos(cell.get("x").getAsInt(),
                         cell.get("y").getAsInt(), cell.get("z").getAsInt());
                 if ("ready".equals(cell.get("state").getAsString()) && !attempted.contains(pos)
+                        && (repairsOnly || BuildFoundation.allows(observed.getAsJsonObject("foundation_work"), pos))
                         && (workLayer == null || pos.getY() == workLayer)
                         && (!repairsOnly || cell.get("repair_pending").getAsBoolean())
                         && (includeRepairs || !cell.get("repair_pending").getAsBoolean())) { ready = cell; break; }
@@ -129,6 +130,17 @@ public final class BuildWork extends TickTask {
             if (repairsOnly && !fresh.repairPending(pos)) {
                 attempted.add(pos);
                 return running();
+            }
+            if (!repairsOnly) {
+                var foundation = BuildFoundation.observe(target, fresh,
+                        p -> clock.getAsLong() - start + nanos < MAX_NANOS && fresh.inBounds(p) ? fresh.state(p) : null);
+                if (!foundation.get("known").getAsBoolean() || !BuildFoundation.allows(foundation, pos)) {
+                    observed.add("foundation_work", foundation);
+                    failure = new ServerTool.Result(false,
+                            "TARGET_BLOCKED:执行前基础未完成或不可核实；未放置上层，先核对基础及现货补制。", null);
+                    finishing = true;
+                    return running();
+                }
             }
             var actual = fresh.inBounds(pos) ? fresh.state(pos) : null;
             String state = BuildSurvey.cellState(target, cell, fresh, actual);
@@ -194,6 +206,8 @@ public final class BuildWork extends TickTask {
 
     @Override public JsonObject observation() {
         var data = new JsonObject();
+        if (observed != null && observed.has("foundation_work"))
+            data.add("foundation_work", observed.get("foundation_work").deepCopy());
         data.addProperty("target_revision", target.revision());
         data.addProperty("offset", pageOffset);
         data.addProperty("work_scope", offset < 0 ? "whole_target_nearby" : "current_page");

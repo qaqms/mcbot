@@ -205,7 +205,8 @@ class BuildWorkTest {
     @Test void maximumEmptyPlanCountsEveryMaterialButDirectlySelectsTheSingleNearbyCell() {
         var target=BuildTarget.parse(BuildTargetTest.largeInput()); var world=world();
         target.cells().forEach(c->world.far.add(c.pos()));
-        var last=target.cells().getLast(); world.far.remove(last.pos());
+        var last=target.cells().stream().filter(c->c.pos().getY()==90).reduce((a,b)->b).orElseThrow();
+        world.far.remove(last.pos());
         var before=BuildSurvey.workScan(target,world,0,()->0).data();
         assertEquals(16384,before.get("remaining").getAsInt());
         var bill=before.getAsJsonArray("materials").get(0).getAsJsonObject();

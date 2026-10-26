@@ -13,6 +13,13 @@
 
 ## 当前阶段（2026-10-14，维护者确认）
 
+- 2026-10-26基础顺序与补制见docs/FOUNDATION-ORDER-AND-SUPPLY-2026-10-26.md及STATUS顶部。
+  foundation_work跨全图核最低可恢复主体基础，候选分页/缺现货/远端/失败不能成为升层许可；
+  Survey、Lua及BuildWork显式页/自动选格共用，区域预留后实际动作前重核。
+  foundation_materials_required交原模型先查背包原料与真实craft配方，能制作先制作再同图续建；
+  不把缺成品现货当缺原料、不要求整栋齐料、不内置配方链。通道待补沿原来源/出口恢复，
+  附着和家具不误锁基础，完整验收及许可保持。只限最低主体层，原生/真实模型仍待验。
+  参考只读学习完整状态/排序/补料/恢复链，无全基础保证，不复制；最终全量/JAR见STATUS。
 - 2026-10-26床头脚错误与目标登记续修见docs/PAIRED-DRAWING-GOAL-VALIDATION-2026-10-26.md及STATUS顶部。
   BuildObjects原配对判据生成全图object_validation，查询、verify_only及工地登记共用；
   普通查询保留纠正诊断，verify_only拒绝非法配对为INVALID_BUILD_TARGET。

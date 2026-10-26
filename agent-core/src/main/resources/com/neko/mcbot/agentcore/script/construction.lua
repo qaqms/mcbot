@@ -171,7 +171,7 @@ function mc.build(target, options)
         end
     end
     local function report(reason,round,pages,failure)
-        if reason and not cleanup_final then cleanup_after_stall(true) end
+        if reason and reason~="foundation_materials_required" and not cleanup_final then cleanup_after_stall(true) end
         local current=pages~=nil
         if cleanup and cleanup.removed>0 then
             pages=checked(target,revision)
@@ -189,6 +189,12 @@ function mc.build(target, options)
             effects=effects,effects_omitted=omitted,last_failure=failure}
         result.relocations=relocations
         result.nearby_repaired_blocks=repaired
+        result.foundation_work=first and first.foundation_work
+        if reason=="foundation_materials_required" then
+            result.supply_required=true
+            result.model_reassessment_required=true
+            result.blocked_detail="基础放置现货不足，原图和成果保留。先核对背包原料及真实配方，能制作先制作，再按同修订mc.build()续建；缺现货不证明缺原料，不跳建上层或直接要求主人供料。"
+        end
         if reason=="construction_state_repeated" then
             result.model_reassessment_required=true
             result.blocked_detail="施工换位后再次遇到相同图纸实态；位移、库存变化和拆补次数不能证明进展。保留原图与实际效果，核对缺格并调整施工通路或顺序。"
@@ -310,6 +316,10 @@ function mc.build(target, options)
             failed,cursor,repairing={},0,true
             walked_states={}
         end
+        local foundation=pages[1].foundation_work
+        if foundation and foundation.active and foundation.supply_required then
+            return report("foundation_materials_required",round-1,pages)
+        end
         local moved=false
         local ready,clear,far,clears,fars=nil,nil,nil,{},{}
         local function scan(scanned)
@@ -323,7 +333,8 @@ function mc.build(target, options)
                         or cell.state=="state_conflict" and cell.actual_block and cell.block
                         and cell.actual_block~=cell.block) and cell.item
                         and cell.material_available then kind="place" end
-                    if kind and (repairing or not cell.repair_pending) then
+                    if kind and (repairing or not cell.repair_pending)
+                        and (not foundation or not foundation.active or cell.y<=foundation.y) then
                         local key=workkey(cell,kind,stamp)
                         local candidate={cell=cell,offset=cell.source_offset or page.offset,key=key}
                         if not failed[key] then

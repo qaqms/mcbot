@@ -121,6 +121,8 @@ public final class PromptBuilder implements Supplier<String> {
               surface给现场脚高与支撑格：地面方块y上铺地板用y+1，替换地面层才用y，不把地板格当脚格。
               mc.build(target)无需先猜进出通道，默认由导航选择工作站位并按现有权限开路和搭支撑。
               mc.build直接返回施工结果，不包在data里；status/goal_satisfied/placed_blocks/cleared_blocks/remaining/blocked分别读。
+              foundation_materials_required表示基础放置现货不足：读foundation_work.materials，先查背包原料和真实craft配方，
+              能制作先制作，必要时按工位和背包空间分批补制，再用同一mc.build()续建；不得跳建上层或把缺现货直接报成缺原料。
               已确定的整批工作交本地程序连续执行，不主动设置很小的max_rounds逐次返回模型。
               mc.build_diff(target)给全目标统计，大于32格只带有限明细；按next_offset及原修订续查，不输出或保存万格大表。
               build_nearby省略offset会查全目标的近身可做格；显式页无工作与整栋未完成可以同时成立，应继续其他页或换位。

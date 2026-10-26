@@ -11,6 +11,32 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Timeout(10)
 class ConstructionProgramTest {
+    @Test void foundationSupplyGapReturnsToTheModelBeforeAnyUpperWorkEvenWithRawMaterialsInInventory() throws Exception {
+        var w=new World();
+        w.override=(name,args)-> {
+            if(name.equals("build_diff")) return actual("""
+                    {"target_revision":"%s","remaining":18,"goal_satisfied":false,"observation_complete":true,
+                    "spatial_stable":true,"budget_exhausted":false,"observation_key":"stock",
+                    "offset":0,"next_offset":-1,"work_scan":true,"work_next_cursor":-1,
+                    "foundation_work":{"active":true,"y":90,"unfinished":17,"supply_required":true,
+                    "materials":[{"item":"minecraft:oak_planks","required":17,"available":0,"shortfall":17}]},
+                    "cells":[{"x":4,"y":91,"z":0,"state":"ready","item":"stone","material_available":true}]}
+                    """.formatted(REV));
+            return null;
+        };
+        var result=run(w,CODE,128);
+        assertTrue(result.ok(),result.feedback());
+        var report=result.data().getAsJsonObject("returned");
+        assertEquals("foundation_materials_required",report.get("blocked").getAsString());
+        assertTrue(report.get("supply_required").getAsBoolean());
+        assertTrue(report.get("model_reassessment_required").getAsBoolean());
+        assertEquals(17,report.getAsJsonObject("foundation_work").get("unfinished").getAsInt());
+        assertTrue(report.get("blocked_detail").getAsString().contains("配方"));
+        assertEquals(0,w.placed); assertEquals(0,w.moved); assertEquals(0,w.breaks);
+        assertFalse(w.calls.stream().anyMatch(c->c.name().equals("craft")),
+                "prerequisite processing belongs to the model and real recipe tools");
+    }
+
     @Test void aRouteRemovalTriggersRepairEvenWhenTheNextWorkPageHasNoActionableCells() throws Exception {
         var w=new World();
         w.override=(name,args)-> {

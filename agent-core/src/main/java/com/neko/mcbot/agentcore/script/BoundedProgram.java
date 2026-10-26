@@ -300,7 +300,7 @@ public final class BoundedProgram {
         for (String key : List.of("target_revision", "observation_complete", "spatial_stable", "budget_exhausted",
                 "observation_key", "work_observation_key", "progress_observation_key", "goal_observation_key",
                 "design_components", "design_review", "object_validation", "clearing_work", "goal_satisfied", "offset", "next_offset", "total", "remaining",
-                "material_bill_complete", "work_scan", "work_next_cursor", "counts", "body_obstructs_target"))
+                "material_bill_complete", "work_scan", "work_next_cursor", "counts", "body_obstructs_target", "foundation_work"))
             if (data.has(key)) view.add(key, data.get(key));
         var cells = new JsonArray();
         for (var value : data.getAsJsonArray("cells")) {

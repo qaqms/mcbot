@@ -188,6 +188,10 @@ class AgentRunnerMultiGoalTest {
         evidence.add("design_components",json("{\"doors\":0,\"beds\":0}"));
         evidence.add("design_review",json("{\"stairs_missing_orientation\":2,\"stairs_rising_behind_back\":4}"));
         evidence.add("object_validation",json("{\"valid\":false,\"invalid_cells\":2,\"issues\":[{\"reason\":\"bed_pair_missing_or_inconsistent\"}]}"));
+        evidence.add("foundation_work",json("""
+                {"active":true,"y":90,"unfinished":17,"supply_required":true,
+                "materials":[{"item":"minecraft:oak_planks","required":17,"available":0,"shortfall":17}]}
+                """));
         evidence.add("target",json("{\"draft_revision\":\""+REVISION+"\"}"));
         evidence.addProperty("draft_retained",true);
         evidence.add("cells",json("{\"private_fixture_field\":\"not-for-direct-feedback\"}"));
@@ -204,6 +208,10 @@ class AgentRunnerMultiGoalTest {
         assertTrue(receipt.content().contains("\"doors\":0"),receipt.content());
         assertTrue(receipt.content().contains("\"draft_revision\":\""+REVISION+"\""),receipt.content());
         assertTrue(receipt.content().contains("bed_pair_missing_or_inconsistent"),receipt.content());
+        assertTrue(receipt.content().contains("\"foundation_work\":"),receipt.content());
+        assertTrue(receipt.content().contains("\"supply_required\":true"),receipt.content());
+        assertTrue(receipt.content().contains("\"shortfall\":17"),receipt.content());
+        assertTrue(receipt.content().contains("minecraft:oak_planks"),receipt.content());
         assertFalse(receipt.content().contains("private_fixture_field"));
         assertNotEquals(0,runner.currentTaskId());
     }

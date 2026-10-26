@@ -3,6 +3,19 @@
 > 服务端白名单（`ToolRegistry`）是真源；`ClientToolDefs` 只是给模型看的描述。
 > 两者不同步时以服务端为准——未注册的工具会被闸③以 `DENIED:未知工具` 拒掉。
 
+## 基础顺序与补制（2026-10-26）
+
+build_diff所有模式增加foundation_work：active/y/total/unfinished/repairs_pending/known，
+及supply_required、materials（最多8种item/required/available/shortfall）、materials_omitted。
+最低主体基础未匹配时不因缺料、手距、分页或失败越到上层；实际build_nearby显式页也受约束。
+附着和家具不作为基础，原来源通道待补仍沿repairs_only、出口及最后恢复处理。
+部分现货可先施工；当已知剩余基础连一格都无法支付时，mc.build返回
+blocked=foundation_materials_required、supply_required和model_reassessment_required，
+先核已有原料，用craft query=true查实际配方，按工位/产量/空间制作后同图续建。
+不能把缺现货直接当缺原料，或要求主人先给成品。超8类按原完整料单继续查询。
+原图和成果不重置，完整验收不变；这是最低主体基础约束，不是所有楼层的严格分层规划。
+详见FOUNDATION-ORDER-AND-SUPPLY-2026-10-26。
+
 ## 双格图纸登记前校验（2026-10-26）
 
 build_diff增加object_validation，覆盖全图床/门配对，不限当前明细页：

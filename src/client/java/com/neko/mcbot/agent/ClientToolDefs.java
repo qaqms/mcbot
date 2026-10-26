@@ -178,6 +178,9 @@ public final class ClientToolDefs {
                     + "按next_offset及同修订调用mc.build_diff(target,revision,offset)续页，不把万格明细全存入Lua或输出。"
                     + "work_scan=true返回最多16个未满足候选，work_cursor/work_next_cursor沿规范格索引续取，"
                     + "候选source_offset供普通16格页重新核查；counts/remaining始终覆盖全目标。"
+                    + "foundation_work独立核最低主体基础，active/y/unfinished不受候选分页或缺料过滤影响，"
+                    + "materials含基础required/available/shortfall，最多8种及materials_omitted。"
+                    + "supply_required仅表示基础放置现货不足，先查背包原料和真实craft配方，制作后同图续建，不代表原料不足。"
                     + "page_counts/page_remaining/page_satisfied仅本页，counts/remaining是全目标，二者不是矛盾。"
                     + "料单required为全目标已知未满足格需求下界，available仅36储物槽的无额外组件材料，"
                     + "shortfall是差额；allocated仅当前明细页通过原版预检的份数，未预留，consumed始终0。"
@@ -200,6 +203,7 @@ public final class ClientToolDefs {
                     + "consumed_count为实际结果，placement_results含逐格效果；失败可能已改变世界或扣料。"
                     + "work_scope区分whole_target_nearby自动全目标近身选格/current_page显式页，whole_remaining为整目标剩余；"
                     + "page_satisfied/no_work_here不等于整目标满足，当前站位无工作应换位或处理清障/材料。"
+                    + "未完成主体基础时不放新的上层格，显式页也不能绕过；repairs_only沿原待补来源及出口规则。"
                     + "survey是收尾重查全目标，仍有cells/materials分页；final_verified=false不可验收。"
                     + "batch_finished只表示局部批次结束，goal_satisfied才是同修订全目标现场满足，仍不完成外层set_goal。";
             case "break_block" -> "data.removed表示真实移除；collected_count=0表示挖掘不直接塞包。"
