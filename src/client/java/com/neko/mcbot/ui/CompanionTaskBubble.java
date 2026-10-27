@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.neko.mcbot.McbotClient;
 import com.neko.mcbot.agent.TaskBubbleState;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.RenderStateDataKey;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldExtractionContext;
 import net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderContext;
@@ -13,37 +14,59 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Quaternionfc;
 
+import java.util.UUID;
+
 /** Owner-local, depth-tested billboard. Extraction alone reads task and entity state. */
 public final class CompanionTaskBubble {
     private static final RenderStateDataKey<Frame> FRAME = RenderStateDataKey.create(() -> "mcbot:task_bubble");
+    private static final TaskBubbleMotion MOTION = new TaskBubbleMotion();
+    private static Object boundRunner, boundWorld;
+    private static UUID boundBody;
     record Palette(int background, int border, int text, int muted, int accent) {}
     record Frame(Vec3 anchor, float scale, float opacity, TaskBubbleLayout.Layout layout,
-                 Palette palette, float rotation) {
+                 Palette palette, TaskBubbleMotion.Sample motion) {
         Frame(Vec3 anchor, float scale, float opacity, TaskBubbleLayout.Layout layout, Palette palette) {
-            this(anchor, scale, opacity, layout, palette, 0);
+            this(anchor, scale, opacity, layout, palette,
+                    new TaskBubbleMotion.Sample(layout.message().text(), false, false, 1, 0, 0));
         }
     }
     private CompanionTaskBubble() {}
     public static void register() {
         WorldRenderEvents.END_EXTRACTION.register(CompanionTaskBubble::extract);
         WorldRenderEvents.BEFORE_ENTITIES.register(CompanionTaskBubble::render);
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> clear());
+    }
+    private static void clear() {
+        MOTION.clear();
+        boundRunner = boundWorld = null;
+        boundBody = null;
     }
     private static void extract(WorldExtractionContext context) {
         context.worldState().setData(FRAME, null);
         var mc = Minecraft.getInstance();
         var runner = McbotClient.runner();
-        if (runner == null || mc.player == null || mc.level != context.world() || mc.screen != null || mc.options.hideGui
-                || !runner.config().preferences.showHud() || runner.companionUuid() == null) return;
+        if (runner == null || mc.player == null || mc.level != context.world() || runner.companionUuid() == null) {
+            clear();
+            return;
+        }
+        if (runner != boundRunner || mc.level != boundWorld || !runner.companionUuid().equals(boundBody)) {
+            MOTION.clear();
+            boundRunner = runner;
+            boundWorld = mc.level;
+            boundBody = runner.companionUuid();
+        }
         var state = runner.taskBubbleSnapshot();
-        if (state == null) return;
+        if (state == null) { MOTION.clear(); return; }
+        var layout = TaskBubbleLayout.create(state, mc.font::width);
+        var motion = MOTION.sample(state, layout.message().text(), System.nanoTime() / 1_000_000);
+        layout = layout.reveal(motion.text(), mc.font::width);
+        if (mc.screen != null || mc.options.hideGui || !runner.config().preferences.showHud()) return;
         var entity = context.world().getPlayerByUUID(runner.companionUuid());
         if (entity == null || entity.isRemoved() || !entity.isAlive() || entity.isInvisibleTo(mc.player)) return;
         float partial = context.tickCounter().getGameTimeDeltaPartialTick(false);
@@ -62,15 +85,8 @@ public final class CompanionTaskBubble {
                 ClipContext.Fluid.NONE, mc.player)).getType() == HitResult.Type.MISS;
         float opacity = TaskBubbleVisibility.opacity(distance, front, inFrustum, clear);
         if (opacity <= 0) return;
-        String item = "";
-        if (state.progress() != null) {
-            var key = Identifier.tryParse(state.progress().item());
-            item = key != null && BuiltInRegistries.ITEM.containsKey(key)
-                    ? BuiltInRegistries.ITEM.getValue(key).getName().getString() : state.progress().item();
-        }
-        var layout = TaskBubbleLayout.create(state, runner.companionName(), item, mc.font::width);
-        context.worldState().setData(FRAME, new Frame(anchor, TaskBubbleVisibility.scale(distance), opacity,
-                layout, palette(runner.config().preferences.dark(), state.tone()), rotation(System.nanoTime())));
+        context.worldState().setData(FRAME, new Frame(anchor, TaskBubbleVisibility.scale(distance),
+                opacity * motion.opacity(), layout, palette(runner.config().preferences.dark(), state.tone()), motion));
     }
     private static void render(WorldRenderContext context) {
         Frame frame = context.worldState().getData(FRAME);
@@ -84,7 +100,7 @@ public final class CompanionTaskBubble {
         pose.translate(frame.anchor.x - camera.x, frame.anchor.y - camera.y, frame.anchor.z - camera.z);
         pose.mulPose(orientation);
         pose.scale(frame.scale, -frame.scale, frame.scale);
-        pose.translate(-TaskBubbleLayout.WIDTH / 2f, -TaskBubbleLayout.HEIGHT - 6, 0);
+        pose.translate(-frame.layout.width() / 2f, -frame.layout.height() - TaskBubbleLayout.TAIL, 0);
         // The background uses POSITION_COLOR_LIGHTMAP, NORMAL text retains the world's depth test.
         queue.submitCustomGeometry(pose, RenderTypes.textBackground(), (matrix, vertices) -> background(matrix, vertices, frame));
         pose.translate(0, 0, .6);
@@ -101,31 +117,34 @@ public final class CompanionTaskBubble {
         pose.popPose();
     }
     private static void background(PoseStack.Pose matrix, VertexConsumer vertices, Frame frame) {
-        int w = TaskBubbleLayout.WIDTH, h = TaskBubbleLayout.HEIGHT;
-        int edge = alpha(frame.palette.border, frame.opacity), fill = alpha(frame.palette.background, frame.opacity);
-        rounded(matrix, vertices, 0, 0, w, h, 3, 0, edge);
-        rounded(matrix, vertices, 1, 1, w - 1, h - 1, 2, .2f, fill);
-        quad(matrix, vertices, w / 2f - 5, h, w / 2f + 5, h + 2, 0, edge);
-        quad(matrix, vertices, w / 2f - 3, h + 2, w / 2f + 3, h + 4, 0, edge);
-        quad(matrix, vertices, w / 2f - 1, h + 4, w / 2f + 1, h + 6, 0, edge);
-        quad(matrix, vertices, w / 2f - 4, h - 1, w / 2f + 4, h + 1, .2f, fill);
-        quad(matrix, vertices, w / 2f - 2, h + 1, w / 2f + 2, h + 3, .2f, fill);
-        if (frame.layout.progress() >= 0) {
-            quad(matrix, vertices, 8, 70, w - 8, 72, .3f, edge);
-            if (frame.layout.progress() > 0)
-                quad(matrix, vertices, 8, 70, 8 + (w - 16) * frame.layout.progress(), 72, .4f,
-                        alpha(frame.palette.accent, frame.opacity));
+        int w = frame.layout.width(), h = frame.layout.height();
+        int edge = alpha(frame.palette.border, frame.opacity);
+        int fill = alpha(frame.palette.background, frame.opacity * .95f);
+        quad(matrix, vertices, 0, 0, w, h, 0, edge);
+        quad(matrix, vertices, 1, 1, w - 1, h - 1, .2f, fill);
+        quad(matrix, vertices, w / 2f - 4, h, w / 2f + 4, h + 2, 0, edge);
+        quad(matrix, vertices, w / 2f - 2, h + 2, w / 2f + 2, h + TaskBubbleLayout.TAIL, 0, edge);
+        quad(matrix, vertices, w / 2f - 3, h - 1, w / 2f + 3, h + 1, .2f, fill);
+        quad(matrix, vertices, w / 2f - 1, h + 1, w / 2f + 1, h + 3, .2f, fill);
+        quad(matrix, vertices, 1, 8, 3, 20, .3f, alpha(frame.palette.accent, frame.opacity * .7f));
+        if (frame.motion.caret()) {
+            int x = frame.layout.caretX(), y = frame.layout.message().y();
+            quad(matrix, vertices, x, y, x + 1, y + 9, .3f, alpha(frame.palette.accent, frame.opacity));
         }
-        if (frame.layout.spinning()) spinner(matrix, vertices, frame);
-    }
-    static float rotation(long nanos) {
-        return Math.floorMod(nanos, 1_200_000_000L) / 1_200_000_000f * (float) (2 * Math.PI);
+        if (frame.layout.spinning()) {
+            spinner(matrix, vertices, frame);
+            int x = w - TaskBubbleCat.WIDTH - 5, y = 2 - TaskBubbleCat.HEIGHT;
+            for (var pixel : TaskBubbleCat.pixels(frame.motion.catFrame()))
+                quad(matrix, vertices, x + pixel.x(), y + pixel.y(),
+                        x + pixel.x() + pixel.width(), y + pixel.y() + pixel.height(), .5f,
+                        alpha(pixel.color(), frame.opacity));
+        }
     }
     private static void spinner(PoseStack.Pose pose, VertexConsumer vertices, Frame frame) {
         for (int i = 0; i < 10; i++) {
-            double angle = frame.rotation - i * Math.PI / 5;
+            double angle = frame.motion.rotation() - i * Math.PI / 5;
             float x = (float) Math.cos(angle), y = (float) Math.sin(angle);
-            float cx = TaskBubbleLayout.PADDING + 5, cy = 26;
+            float cx = frame.layout.spinnerX(), cy = 14;
             int color = alpha(frame.palette.accent, frame.opacity * (1 - i * .075f));
             vertices.addVertex(pose, cx + 3 * x - .6f * y, cy + 3 * y + .6f * x, .4f)
                     .setColor(color).setLight(LightTexture.FULL_BRIGHT);
@@ -137,16 +156,6 @@ public final class CompanionTaskBubble {
                     .setColor(color).setLight(LightTexture.FULL_BRIGHT);
         }
     }
-    private static void rounded(PoseStack.Pose pose, VertexConsumer vertices, float x, float y,
-                                float right, float bottom, int radius, float z, int color) {
-        quad(pose, vertices, x + radius, y, right - radius, bottom, z, color);
-        quad(pose, vertices, x, y + radius, x + radius, bottom - radius, z, color);
-        quad(pose, vertices, right - radius, y + radius, right, bottom - radius, z, color);
-        quad(pose, vertices, x + 1, y + 1, x + radius, y + radius, z, color);
-        quad(pose, vertices, right - radius, y + 1, right - 1, y + radius, z, color);
-        quad(pose, vertices, x + 1, bottom - radius, x + radius, bottom - 1, z, color);
-        quad(pose, vertices, right - radius, bottom - radius, right - 1, bottom - 1, z, color);
-    }
     private static void quad(PoseStack.Pose pose, VertexConsumer vertices, float x, float y,
                              float right, float bottom, float z, int color) {
         vertices.addVertex(pose, x, y, z).setColor(color).setLight(LightTexture.FULL_BRIGHT);
@@ -157,20 +166,22 @@ public final class CompanionTaskBubble {
     private static int alpha(int rgb, float opacity) {
         return Math.round(255 * opacity) << 24 | rgb & 0xFFFFFF;
     }
-    private static Palette palette(boolean dark, TaskBubbleState.Tone tone) {
+    static Palette palette(boolean dark, TaskBubbleState.Tone tone) {
         int accent = switch (tone) {
-            case QUESTION -> dark ? 0xF4C66D : 0x8A5B13;
-            case FAILED -> dark ? 0xF3A49F : 0xA33E3B;
-            case CANCELLED -> dark ? 0xB5BDC0 : 0x626B70;
-            default -> dark ? 0xA8D9B8 : 0x356F52;
+            case QUESTION -> dark ? 0xE4B1C2 : 0x985C75;
+            case FAILED -> dark ? 0xEFA8A3 : 0xA34450;
+            case COMPLETED -> dark ? 0xA5D6BF : 0x427C66;
+            case CANCELLED -> dark ? 0xBAC4CA : 0x677681;
+            default -> dark ? 0xA1CBCE : 0x507A8B;
         };
-        int background = dark ? 0x222C28 : switch (tone) {
-            case QUESTION -> 0xFFF3D7;
-            case FAILED -> 0xFBE9E7;
-            case CANCELLED -> 0xECEEEF;
-            default -> 0xEDF8EE;
+        int background = dark ? 0x293640 : switch (tone) {
+            case QUESTION -> 0xEFE3EB;
+            case FAILED -> 0xF1DFE2;
+            case COMPLETED -> 0xDDEAE5;
+            case CANCELLED -> 0xE2E6E9;
+            default -> 0xDFE9ED;
         };
-        return new Palette(background, dark ? 0x66786B : 0xA3B9A9,
-                dark ? 0xF1F6F2 : 0x243B2D, dark ? 0xC2CEC5 : 0x536B5A, accent);
+        return new Palette(background, dark ? 0x5D7581 : 0xA4B9C5,
+                dark ? 0xE6EFF1 : 0x293F4A, dark ? 0xB9C9CF : 0x627581, accent);
     }
 }

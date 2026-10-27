@@ -877,6 +877,12 @@ BoundedGather只保留目标回执drops的最多8次物品样本，与清障产�
 
 ## Bot头顶任务显示（2026-10-15）
 
+当前视觉使用TaskBubbleLayout的132至232像素横条、高28或42，完整测量后逐字显示。
+TaskBubbleMotion仅管理140ms/字、300ms入场、2.4秒转圈与5.6秒小猫循环；
+TaskBubbleCat提供原创像素几何。提取帧携带已揭示文字、布局、动画及配色，
+渲染不再读取runner。动画身份随世界/身体/任务隔离，断线清理，不更改任何执行期限。
+紧凑样式与离线预览入口见TASK-BUBBLE-DESIGN当前节。
+
 TaskBubbleState只维护当前任务显示、在途原子工具seq和短终态，不参与任务规划。
 AgentRunner在真实发送、终态/超时和任务监听器更新显示，结构化读取问答、整理、
 地下勘探/返程及ItemGoal.Progress。数量/材料子目标和最终目标保持分离，

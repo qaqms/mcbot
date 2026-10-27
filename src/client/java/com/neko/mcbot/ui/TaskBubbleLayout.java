@@ -7,47 +7,53 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.ToIntFunction;
 
-/** Fixed world-pixel geometry, measured with the game's current font during extraction. */
+/** Measure the complete message before revealing letters, so typing never resizes the bubble. */
 final class TaskBubbleLayout {
-    static final int WIDTH = 184, HEIGHT = 88, PADDING = 8;
+    static final int MIN_WIDTH = 132, MAX_WIDTH = 232, PADDING = 12, ROW_HEIGHT = 28, TAIL = 4;
     enum Ink { PRIMARY, SECONDARY, ACCENT }
     record Line(String text, int x, int y, Ink ink) {}
-    record Layout(List<Line> lines, float progress, boolean spinning) {}
+    record Layout(int width, int height, List<Line> lines, boolean spinning, int spinnerX, int caretX) {
+        Line message() { return lines.getFirst(); }
+        Layout reveal(String text, ToIntFunction<String> measure) {
+            var visible = new ArrayList<>(lines);
+            visible.set(0, new Line(text, message().x(), message().y(), message().ink()));
+            return new Layout(width, height, List.copyOf(visible), spinning, spinnerX,
+                    message().x() + measure.applyAsInt(text) + 2);
+        }
+    }
     private TaskBubbleLayout() {}
 
-    static Layout create(TaskBubbleState.Snapshot state, String name, String item,
-                         ToIntFunction<String> measure) {
-        var lines = new ArrayList<Line>();
-        String badge = switch (state.tone()) {
-            case WORKING -> "进行中";
-            case QUESTION -> time(state.remainingMs());
-            case COMPLETED -> "已结束";
-            case FAILED -> "未完成";
-            case CANCELLED -> "已停止";
-        };
-        int badgeX = WIDTH - PADDING - measure.applyAsInt(badge);
-        lines.add(new Line(fit(name, badgeX - PADDING - 10, measure), PADDING, 7, Ink.SECONDARY));
-        lines.add(new Line(badge, badgeX, 7, Ink.ACCENT));
+    static Layout create(TaskBubbleState.Snapshot state, ToIntFunction<String> measure) {
         boolean spinning = state.tone() == TaskBubbleState.Tone.WORKING && state.modelWaiting();
-        int actionX = PADDING + (spinning ? 14 : 0);
-        lines.add(new Line(fit(state.action(), WIDTH - PADDING - actionX, measure), actionX, 22, Ink.PRIMARY));
-        var details = wrap(state.detail(), WIDTH - 2 * PADDING, measure);
-        for (int i = 0; i < details.size(); i++)
-            lines.add(new Line(details.get(i), PADDING, 36 + i * 10, Ink.SECONDARY));
-        ItemGoal.Progress progress = state.progress();
-        if (progress != null) {
-            String count = progress.current() + "/" + progress.target();
-            String prefix = progress.scope() == ItemGoal.Scope.SUBTASK ? "本段" : "目标";
-            String kind = progress.additional() ? "净增" : "总量";
-            String label = prefix + " " + (progress.alternatives() ? "配方来源合计" : item);
-            int countWidth = measure.applyAsInt(kind + " " + count);
-            lines.add(new Line(fit(label, WIDTH - 3 * PADDING - countWidth, measure),
-                    PADDING, 59, Ink.SECONDARY));
-            lines.add(new Line(kind + " " + count, WIDTH - PADDING - countWidth, 59, Ink.ACCENT));
-        }
-        lines.add(new Line(fit(state.title(), WIDTH - 2 * PADDING, measure), PADDING, 75, Ink.SECONDARY));
-        return new Layout(List.copyOf(lines), progress == null ? -1
-                : Math.clamp((float) progress.current() / progress.target(), 0, 1), spinning);
+        String meta = state.tone() == TaskBubbleState.Tone.QUESTION ? time(state.remainingMs())
+                : spinning ? "" : quantity(state.progress());
+        String detail = switch (state.tone()) {
+            case QUESTION, FAILED -> state.detail();
+            default -> "";
+        };
+        int accessory = spinning ? 46 : meta.isEmpty() ? 0 : measure.applyAsInt(meta) + 12;
+        int messageLimit = Math.max(0, MAX_WIDTH - PADDING * 2 - accessory);
+        String message = fit(state.action(), messageLimit, measure);
+        String preview = fit(detail, MAX_WIDTH - PADDING * 2, measure);
+        int content = measure.applyAsInt(message) + accessory;
+        int width = Math.clamp(Math.max(content, measure.applyAsInt(preview)) + PADDING * 2,
+                MIN_WIDTH, MAX_WIDTH);
+        int height = ROW_HEIGHT + (preview.isEmpty() ? 0 : 14);
+        var lines = new ArrayList<Line>();
+        lines.add(new Line(message, PADDING, 10, Ink.PRIMARY));
+        if (!meta.isEmpty())
+            lines.add(new Line(meta, width - PADDING - measure.applyAsInt(meta), 10, Ink.ACCENT));
+        if (!preview.isEmpty())
+            lines.add(new Line(preview, PADDING, 25, Ink.SECONDARY));
+        return new Layout(width, height, List.copyOf(lines), spinning,
+                PADDING + measure.applyAsInt(message) + 9, PADDING + measure.applyAsInt(message) + 2);
+    }
+
+    private static String quantity(ItemGoal.Progress progress) {
+        if (progress == null) return "";
+        String scope = progress.scope() == ItemGoal.Scope.SUBTASK ? "本段" : "目标";
+        String kind = progress.alternatives() ? "来源合计" : progress.additional() ? "净增" : "总量";
+        return scope + kind + " " + progress.current() + "/" + progress.target();
     }
     static String fit(String text, int width, ToIntFunction<String> measure) {
         if (measure.applyAsInt(text) <= width) return text;
@@ -58,19 +64,8 @@ final class TaskBubbleLayout {
             end = text.offsetByCodePoints(end, -1);
         return text.substring(0, end) + suffix;
     }
-    private static List<String> wrap(String text, int width, ToIntFunction<String> measure) {
-        if (text.isEmpty()) return List.of();
-        int end = 0;
-        while (end < text.length()) {
-            int next = text.offsetByCodePoints(end, 1);
-            if (measure.applyAsInt(text.substring(0, next)) > width) break;
-            end = next;
-        }
-        if (end == text.length()) return List.of(text);
-        return List.of(text.substring(0, end), fit(text.substring(end), width, measure));
-    }
     private static String time(long ms) {
-        long seconds = Math.max(0, (ms + 999) / 1000);
+        long seconds = Math.max(0, ms / 1000 + (ms % 1000 > 0 ? 1 : 0));
         return (seconds / 60) + ":" + (seconds % 60 < 10 ? "0" : "") + seconds % 60;
     }
 }

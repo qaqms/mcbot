@@ -9,7 +9,7 @@ import java.util.TreeMap;
 public final class TaskBubbleState {
     public enum Tone { WORKING, QUESTION, COMPLETED, FAILED, CANCELLED }
     public enum Activity {
-        PROCESSING("正在处理任务"), MODEL("等待下一步"), COMPACTING("正在整理上下文"),
+        PROCESSING("正在处理任务"), MODEL("模型正在思考"), COMPACTING("正在整理上下文"),
         OBSERVING("正在核对状态"), SEARCHING("正在查找资源"), MOVING("正在移动"),
         MINING("正在挖掘"), PLACING("正在放置"), CRAFTING("正在制作"),
         SMELTING("正在烧制"), EQUIPPING("正在整理装备"), WAITING("正在等待"),

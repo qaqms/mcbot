@@ -41,7 +41,7 @@ class AgentRunnerTaskBubbleTest {
     }
     @Test void sentPrimitiveRemainsVisibleAcrossAcceptanceAndIgnoresOtherInspectionsAndLateEvents() {
         long task = start();
-        assertEquals("等待下一步", runner.taskBubbleSnapshot().action());
+        assertEquals("模型正在思考", runner.taskBubbleSnapshot().action());
         assertTrue(runner.taskBubbleSnapshot().modelWaiting());
         client.engine().tools(0, new ToolCall("mine", "break_block", "{\"x\":2,\"y\":90,\"z\":0}"));
         client.drain();
@@ -62,7 +62,7 @@ class AgentRunnerTaskBubbleTest {
         assertEquals("正在挖掘", runner.taskBubbleSnapshot().action());
         terminal.addProperty("seq", seq);
         runner.handleS2c(new Envelope("job_event", terminal)); client.drain();
-        assertEquals("等待下一步", runner.taskBubbleSnapshot().action());
+        assertEquals("模型正在思考", runner.taskBubbleSnapshot().action());
         assertTrue(runner.taskBubbleSnapshot().modelWaiting());
         client.engine().reply(1, "done"); client.drain();
         assertEquals(TaskBubbleState.Tone.COMPLETED, runner.taskBubbleSnapshot().tone());
@@ -199,7 +199,7 @@ class AgentRunnerTaskBubbleTest {
         client.drain();
         assertEquals("正在挖掘", runner.taskBubbleSnapshot().action());
         client.now += 90001; runner.tick(); client.drain();
-        assertEquals("等待下一步", runner.taskBubbleSnapshot().action());
+        assertEquals("模型正在思考", runner.taskBubbleSnapshot().action());
     }
     @Test void modelFailureShowsRealFailureForTenSeconds() {
         start();
