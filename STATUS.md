@@ -3,6 +3,37 @@
 > 面向项目维护者、贡献者与自动化开发工具：先读仓内 `AGENTS.md`（开发约定），再读本文件（唯一进度事实源，
 > 每完成一个里程碑更新），as-built 细节看 `docs/`，完整蓝图 `mcbot-DESIGN.md` 也在仓内。
 
+## 公开仓库敏感信息与文件检查（2026-10-27，Asia/Shanghai）
+
+- 检查基线为 `e731486`：615份跟踪文件、13个远端分支、1个标签，
+  补取11个PR head引用后共170个可达提交（含已关闭未合并的PR #5）。
+  未登录读取GitHub页面及原始README均返回HTTP 200，页面标记Public；本轮不修改可见性。
+- 使用官方Gitleaks 8.30.1及该版本默认规则，下载校验和匹配。
+  `git --log-opts="--all --full-history -m"`覆盖170个提交，当前跟踪文件工作副本与
+  v0.1.0发布附件分别扫描，均零命中；补查3021个历史blob中的路径、邮箱和鉴权URL。
+  规则扫描不保证没有未知格式的秘密；测试中的虚构鉴权URL不当作实际凭据。
+- 历史10个提交的作者邮箱为个人邮箱；旧版文档、旧构建配置及提交消息仍有机器用户名/
+  绝对路径，关闭PR #5的测试报告也含机器路径。普通清理提交不能删除这些历史信息；
+  本轮不重写历史、不强推、不删除远端分支/
+  标签或发行附件，进一步匿名化需维护者另行决定。
+- 当前跟踪清单无玩家配置、真实桥接令牌、原始日志、存档或发行JAR/ZIP；
+  唯一跟踪JAR是必需的Gradle wrapper。dist测试页、气泡原型、测试夹具与开发记录
+  仍有用途或引用，继续保留；本地忽略的缓存/日志不属于远端源码，无需为公开删掉。
+- 补齐环境文件、client.json、令牌、私钥、发行包、运行目录、日志、备份与反馈导出的
+  忽略规则；保留wrapper及环境示例。移除仓内固定代理，相关开发/换机说明同步。
+  当前文档的机器名与旧token URL推送说明已清理；历史验收记录不批量删改。
+- v0.1.0的JAR、测试ZIP、HTML均匹配发布SHA256清单；ZIP仅7份预期文件，
+  内含JAR与单独附件一致。发布JAR条目无玩家配置/令牌/日志/世界数据。
+  详细本地报告及脱敏扫描结果位于忽略的 `build/publication-audit/`。
+- 忽略规则实核49类私密/生成路径被排除、11类必需/示例路径保留，
+  既有跟踪文件无误伤，`git diff --check`通过。首次构建因进程未设置JAVA_HOME未启动，
+  仅本次进程指向用户级已配置的JDK21后，`gradlew.bat build --offline --console=plain
+  --no-daemon`成功，12秒/21项任务均UP-TO-DATE；这是缓存构建检查，不是新跑2181项测试。
+  既有三根XML为核心496/48 suites、根198/27、客户端1487/149，
+  合计2181项/224 suites，failures/errors/skipped全0。
+- 既有AgentLoop.java未提交修改保留，文件SHA256与开工一致；本轮不改生产Java、
+  宿主、连接器、参考、玩家配置或用户级配置，不启动游戏或真实模型。
+
 ## 许可与参考说明复核（2026-10-27，Asia/Shanghai）
 
 - 复核维护者提供的许可补充，保留自有内容的保留所有权利声明（LicenseRef-ARR），
@@ -8466,11 +8497,11 @@ fabric `KeyBindingHelper.registerKeyBinding(KeyMapping)`。
 | 映射 | `loom.officialMojangMappings()` | 官方示例默认 |
 | Gradle | 9.5.1，wrapper 走**官方源** `services.gradle.org/distributions/` | 09-10 起不再指向本机盘上的 zip（那会让别的设备构建不起来） |
 | 构建 JDK | Temurin **21.0.10**，路径写在**用户级** `<GRADLE_USER_HOME>/gradle.properties` 的 `org.gradle.java.home`（仓内不写） | 换机器只需改仓外那一个文件；本机 PATH 上的 java 是 17，不能拿来编 MC 1.21.11 |
-| 代理 | 127.0.0.1:7897（仓内 `gradle.properties` 的 systemProp 已配，并标注"本机网络相关"） | 换环境删 Proxy 两行即回退直连 |
+| 代理 | 仓内不设置代理，默认直连（2026-10-27公开检查时移除历史机器默认值） | 需要时在用户级 `gradle.properties` 配置，不提交机器地址或端口 |
 | AI 执行者 shell | pi 的 `bash` 需在 `~/.pi/agent/settings.json` 配 `shellPath` 指向你的 git-bash | Git 若装在非标准路径，pi 默认扫不到；改完**必须重启 pi** 才生效 |
-| 仓库路径 | 仓根可放任意位置（origin `https://github.com/qaqms/mcbot.git`，私有） | 文档一律用相对路径引用本仓；推送用一次性 token URL，token 不落 `.git/config` |
+| 仓库路径 | 仓根可放任意位置（origin `https://github.com/qaqms/mcbot.git`） | 文档一律用相对路径引用本仓；推送使用既有凭据管理器或GitHub CLI凭据助手，token不拼入URL、命令行或文档 |
 
-### 机器迁移记录（2026-09-08 10:20，hostname mio）
+### 机器迁移记录（2026-09-08 10:20）
 
 从远端拉到 `0c7f244`（本地原在 `7dc6f9f`，快进 5 个提交：`a9a4877`/`a9f4373`/`1459fa8`/`c3cca77`/`0c7f244`）。
 当时 `a9a4877` 把构建配置改到了另一台机器（另一个用户名下的 `.gradle/jdks`、wrapper 指另一个盘），

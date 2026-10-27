@@ -685,7 +685,7 @@ JAR/测试ZIP/校验清单通过GitHub Release交付，不提交源码仓。
 | 映射 | `loom.officialMojangMappings()` | 注意：`Identifier` 不叫 ResourceLocation 等命名坑见 STATUS 防漂移表 |
 | JDK | Temurin 21 | **仓内不写路径**；本机路径放用户级 `gradle.properties`（见 §1.1） |
 | Gradle | 9.5.1 | wrapper 走**官方源**；到不了 services.gradle.org 的机器按 wrapper 注释临时改 `file:`（别提交） |
-| 代理 | 仓内仍有历史回环代理默认值 | **本机网络相关**；新设备按 §1.1 在用户级配置覆盖，不假定该端口可用 |
+| 代理 | 仓内不设置，默认直连 | **本机网络相关**；需要时按 §1.1 在用户级配置 |
 
 `run/` 是开发运行目录（gitignore）：`eula.txt` 预置 true；`run/mcbot/` 放名册/配置/flag。
 
@@ -704,10 +704,11 @@ JAR/测试ZIP/校验清单通过GitHub Release交付，不提交源码仓。
    只有网络到不了 `services.gradle.org` 时，才手动下 zip 并**临时**把
    `gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指过去——**改完别提交**。
    （Gradle 用 URL 的 MD5 当缓存目录名：换了 URL 就等于换了缓存，所以要重新下。）
-3. **代理**：仓内仍保留历史 `systemProp.*Proxy*` 默认值，不能假定新设备也有同一代理。
-   优先在用户级 `gradle.properties` 覆盖 `systemProp.http.proxyHost/proxyPort`、
-   `systemProp.https.proxyHost/proxyPort`，端口按本机填写；直连时将两项proxyHost设为空值。
-   用户级配置优先于项目配置。本机网络调整不提交；本轮交接不改变既有构建配置。
+3. **代理**：仓内不设置代理，默认直连。需要代理时，在用户级 `gradle.properties` 配置
+   `systemProp.http.proxyHost/proxyPort`、`systemProp.https.proxyHost/proxyPort`，
+   地址与端口按本机填写；本地服务可用 `systemProp.http.nonProxyHosts`、
+   `systemProp.https.nonProxyHosts` 排除。恢复直连时删除用户级对应代理设置，
+   或将两项proxyHost设为空值。本机网络调整不提交。
 
 换设备接手的代码检查点、材料边界和下一张卡见 `HANDOFF.md`。
 `STATUS.md` 同时承担开发日志，不另建与其竞争的进度事实源；

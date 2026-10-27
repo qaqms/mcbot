@@ -279,7 +279,7 @@ Fabric API0.141.6+1.21.11、官方映射与LuaJ `org.luaj:luaj-jse:3.0.1`。
 
 JDK位置、JAVA_HOME、代理与缓存都是本机设置，放用户环境或用户级
 `<GRADLE_USER_HOME>/gradle.properties`；见DEVELOPMENT§1.1。
-仓内有历史代理默认值，新设备按自身网络覆盖；直连清空用户级HTTP/HTTPS proxyHost，
+仓内不设置代理，默认直连；需要时在用户级配置，恢复直连清空用户级HTTP/HTTPS proxyHost，
 不把机器路径、代理端口或凭据写入仓库。不要为修环境盲目换wrapper/MC/API版本。
 
 ### 首次构建与证据
