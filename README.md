@@ -184,8 +184,30 @@ T11入口已就绪但未实机运行，RG3取消视觉证据仍待补；维护�
 | 新手按顺序实机测试并填写反馈 | [`手册`](docs/REAL-GAME-TESTING.md)、[`浏览器填写版`](dist/game-testing.html)、[`文字反馈模板`](docs/templates/GAME-TEST-FEEDBACK.md) |
 | AI/新人接手第一页 | [`AGENTS.md`](AGENTS.md) |
 
-## Clean-room 声明
+## 许可
 
-本项目为独立实现，仅借鉴公开的框架思路（假玩家机制参考 Carpet、寻路思想参考 Baritone 公开文章、
-空间表征参考 arXiv:2410.08500、function calling 参考 OpenAI 协议文档）；
-不含任何第三方同类项目的代码、注释文本、美术或专有名称。
+本项目自有内容采用[保留所有权利声明](LICENSE)（`LicenseRef-ARR`），允许阅读研究及按发行说明
+使用官方未修改构建；其他复制、修改、再分发与商业使用须遵守该声明。
+这是源码可读项目，不是采用开放源代码许可证的项目。
+第三方组件按各自许可使用，其中内嵌 LuaJ 采用
+[MIT 许可](src/main/resources/META-INF/LICENSE-luaj.txt)。
+
+## 独立实现与参考致谢
+
+mcbot 自有代码独立实现。开发约定允许阅读公开源码理解机制与设计思路，
+禁止复制或翻译参考项目的代码、注释、文档与美术资源。
+参考项目的名称仅用于注明来源，不用于本项目命名、标识或品牌宣传。
+
+开发期间阅读过以下公开资料，用于理解机制与设计思路（实现均为自行设计）：
+
+- **Numen（言出法随）** — 公开源码 <https://github.com/Dwinovo/minecraft-numen>
+  （所参考副本声明为 LGPL-3.0-only）：学习其假玩家身体、寻路、任务调度、
+  Lua 组合执行与工具调用分层等机制的取舍。感谢该项目公开源码与设计资料。
+- **Fabric Carpet** — 假玩家机制的公开实现思路（MIT）。
+- **Baritone** — 公开文章中的寻路思想（LGPL-3.0）。
+- **arXiv:2410.08500** — Yunpeng Gao, Zhigang Wang, Pengfei Han, Linglin Jing, Dong Wang, Bin Zhao,
+  *Exploring Spatial Representation to Enhance LLM Reasoning in Aerial Vision-Language Navigation*：
+  空间表征（语义字符网格，STMR）设计参考。
+- **OpenAI function calling 文档、MCP（Model Context Protocol）规范** — 工具调用与流式传输规范。
+
+以上名称仅用于说明参考来源，不代表隶属、兼容或官方认可关系。

@@ -460,8 +460,8 @@ git log -3 --oneline
 
 工具链保持JDK21、Gradle9.5.1及仓内钉死的Minecraft/Fabric/Loom版本。
 JDK和代理设置放用户级 `<GRADLE_USER_HOME>/gradle.properties`，详见DEVELOPMENT §1.1。
-仓内仍有历史代理默认值，新设备应在用户级按自己的网络覆盖；
-直连将HTTP/HTTPS的proxyHost设为空值，不提交本机调整。
+仓内不设置代理，默认直连；需要时在用户级按自己的网络配置HTTP/HTTPS代理。
+恢复直连时删除用户级代理设置或将proxyHost设为空值，不提交本机调整。
 
 先确认工具链与缓存，再运行离线验证。Windows：
 

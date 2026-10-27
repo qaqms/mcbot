@@ -357,9 +357,9 @@ git ls-remote origin refs/heads/main
 
 JDK路径仅设置到新环境用户级`<GRADLE_USER_HOME>/gradle.properties`的
 `org.gradle.java.home`，或本次进程`JAVA_HOME`/PATH，不把旧机器路径抄入仓库。
-项目`gradle.properties`仍有历史回环代理默认值；
-新设备在用户级覆盖HTTP/HTTPS代理主机与端口，直连将两项proxyHost设为空值，
-不要假定旧端口有效，也不要提交本机代理/JDK/wrapper临时配置。
+项目`gradle.properties`不设置代理，默认直连；
+需要时在用户级配置HTTP/HTTPS代理主机与端口，恢复直连删除相应设置或将proxyHost设为空值，
+不提交本机代理/JDK/wrapper临时配置。
 Wrapper默认下载官方发行包，若网络需要临时改本地zip，恢复后不要提交该路径。
 
 确认JDK/Wrapper/缓存后：

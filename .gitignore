@@ -10,8 +10,58 @@ __pycache__/
 .vscode/
 local.properties
 
-# 构建产物：源码仓不收 dist 里的 jar（README 保留）
-dist/*.jar
+# 构建与发行产物：只保留 Gradle wrapper JAR
+*.class
+*.jar
+!/gradle/wrapper/gradle-wrapper.jar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# 本地凭据与玩家配置；示例环境文件可以入仓
+.env
+.env.*
+!.env.example
+!.env.sample
+client.json
+*.token
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_ed25519
+
+# 误在仓根启动游戏时产生的配置、世界与玩家数据
+/mcbot/
+/config/
+/.minecraft/
+/saves/
+/world/
+/world_nether/
+/world_the_end/
+/playerdata/
+/screenshots/
+/crash-reports/
+/server.properties
+/eula.txt
+/usercache.json
+/usernamecache.json
+/ops.json
+/whitelist.json
+/banned-players.json
+/banned-ips.json
+
+# 本地备份、临时文件与反馈导出；仓内反馈模板继续保留
+*.bak
+*.tmp
+*~
+mcbot-feedback*
+mcbot-rg5-feedback*
 
 # 测试/桥接跑出来的空日志目录（每次 :test 都会重建）
 logs/
+*.log
+*.log.gz
