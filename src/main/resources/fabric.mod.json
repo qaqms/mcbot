@@ -5,6 +5,7 @@
   "name": "mcbot",
   "description": "LLM-driven in-game companion (fake player) on Fabric, with a task-level local bridge for external AI controllers",
   "authors": ["neko"],
+  "license": "LicenseRef-ARR",
   "environment": "*",
   "mixins": ["mcbot.mixins.json"],
   "entrypoints": {
