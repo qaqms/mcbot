@@ -33,7 +33,7 @@ public final class CompanionTaskBubble {
                  Palette palette, TaskBubbleMotion.Sample motion) {
         Frame(Vec3 anchor, float scale, float opacity, TaskBubbleLayout.Layout layout, Palette palette) {
             this(anchor, scale, opacity, layout, palette,
-                    new TaskBubbleMotion.Sample(layout.message().text(), false, false, 1, 0, 0));
+                    new TaskBubbleMotion.Sample(layout.message().text(), false, false, 1, 0));
         }
     }
     private CompanionTaskBubble() {}
@@ -131,14 +131,7 @@ public final class CompanionTaskBubble {
             int x = frame.layout.caretX(), y = frame.layout.message().y();
             quad(matrix, vertices, x, y, x + 1, y + 9, .3f, alpha(frame.palette.accent, frame.opacity));
         }
-        if (frame.layout.spinning()) {
-            spinner(matrix, vertices, frame);
-            int x = w - TaskBubbleCat.WIDTH - 5, y = 2 - TaskBubbleCat.HEIGHT;
-            for (var pixel : TaskBubbleCat.pixels(frame.motion.catFrame()))
-                quad(matrix, vertices, x + pixel.x(), y + pixel.y(),
-                        x + pixel.x() + pixel.width(), y + pixel.y() + pixel.height(), .5f,
-                        alpha(pixel.color(), frame.opacity));
-        }
+        if (frame.layout.spinning()) spinner(matrix, vertices, frame);
     }
     private static void spinner(PoseStack.Pose pose, VertexConsumer vertices, Frame frame) {
         for (int i = 0; i < 10; i++) {

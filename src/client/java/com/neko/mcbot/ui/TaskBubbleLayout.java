@@ -9,7 +9,7 @@ import java.util.function.ToIntFunction;
 
 /** Measure the complete message before revealing letters, so typing never resizes the bubble. */
 final class TaskBubbleLayout {
-    static final int MIN_WIDTH = 132, MAX_WIDTH = 232, PADDING = 12, ROW_HEIGHT = 28, TAIL = 4;
+    static final int MIN_WIDTH = 112, MAX_WIDTH = 232, PADDING = 12, ROW_HEIGHT = 28, TAIL = 4;
     enum Ink { PRIMARY, SECONDARY, ACCENT }
     record Line(String text, int x, int y, Ink ink) {}
     record Layout(int width, int height, List<Line> lines, boolean spinning, int spinnerX, int caretX) {
@@ -31,7 +31,7 @@ final class TaskBubbleLayout {
             case QUESTION, FAILED -> state.detail();
             default -> "";
         };
-        int accessory = spinning ? 46 : meta.isEmpty() ? 0 : measure.applyAsInt(meta) + 12;
+        int accessory = spinning ? 16 : meta.isEmpty() ? 0 : measure.applyAsInt(meta) + 12;
         int messageLimit = Math.max(0, MAX_WIDTH - PADDING * 2 - accessory);
         String message = fit(state.action(), messageLimit, measure);
         String preview = fit(detail, MAX_WIDTH - PADDING * 2, measure);

@@ -4,8 +4,8 @@ import com.neko.mcbot.agent.TaskBubbleState;
 
 /** Presentation time only: no task, question, or permission deadline is changed here. */
 final class TaskBubbleMotion {
-    static final long LETTER_MS = 140, FADE_MS = 300, SPIN_MS = 2400, CAT_MS = 5600;
-    record Sample(String text, boolean typing, boolean caret, float opacity, float rotation, int catFrame) {}
+    static final long LETTER_MS = 140, FADE_MS = 300, SPIN_MS = 2400;
+    record Sample(String text, boolean typing, boolean caret, float opacity, float rotation) {}
     private long taskId, started;
     private TaskBubbleState.Tone tone;
     private String text = "", question = "";
@@ -28,24 +28,11 @@ final class TaskBubbleMotion {
         float fade = Math.min(1, (elapsed + 60) / (float) FADE_MS);
         float opacity = 1 - (1 - fade) * (1 - fade);
         return new Sample(shown, typing, typing && elapsed / 600 % 2 == 0, opacity,
-                rotation(elapsed), catFrame(elapsed));
+                rotation(elapsed));
     }
 
     static float rotation(long ms) {
         return Math.floorMod(ms, SPIN_MS) / (float) SPIN_MS * (float) (Math.PI * 2);
-    }
-
-    static int catFrame(long ms) {
-        long phase = Math.floorMod(ms, CAT_MS);
-        if (phase < 1000) return 0;
-        if (phase < 1600) return 1;
-        if (phase < 2100) return 2;
-        if (phase < 2500) return 3;
-        if (phase < 2900) return 2;
-        if (phase < 3300) return 3;
-        if (phase < 4100) return 1;
-        if (phase < 4700) return 4;
-        return 0;
     }
 
     void clear() {

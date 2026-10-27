@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TaskBubbleLayoutTest {
-    @Test void thinkingIsOneStripWithReservedSpinnerAndCatSpace() {
+    @Test void thinkingIsOneStripWithReservedSpinnerSpace() {
         for (var tone : TaskBubbleState.Tone.values()) {
             var state = new TaskBubbleState.Snapshot(7, "long task", tone,
                     "模型正在思考".repeat(80), "", null, 0, true);
@@ -19,7 +19,7 @@ class TaskBubbleLayoutTest {
             assertEquals(TaskBubbleLayout.PADDING, action.x());
             if (visible) {
                 assertTrue(action.x() + width(action.text()) < layout.spinnerX() - 5);
-                assertTrue(layout.spinnerX() + 5 < layout.width() - TaskBubbleCat.WIDTH - 5);
+                assertTrue(layout.spinnerX() + 5 < layout.width() - TaskBubbleLayout.PADDING);
             }
             assertInside(layout);
         }

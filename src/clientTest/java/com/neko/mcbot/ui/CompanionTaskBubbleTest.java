@@ -47,7 +47,7 @@ class CompanionTaskBubbleTest {
             CompanionTaskBubble.submit(new PoseStack(), capture.queue, Vec3.ZERO, new Quaternionf(),
                     new CompanionTaskBubble.Frame(Vec3.ZERO, 1, .5f, layout, base.palette(),
                             new TaskBubbleMotion.Sample(state.action(), false, false, 1,
-                                    TaskBubbleMotion.rotation(ms), TaskBubbleMotion.catFrame(ms))));
+                                    TaskBubbleMotion.rotation(ms))));
             var vertices = new ArrayList<float[]>();
             var colors = new ArrayList<Integer>();
             VertexConsumer sink = (VertexConsumer) Proxy.newProxyInstance(getClass().getClassLoader(),
@@ -211,18 +211,18 @@ class CompanionTaskBubbleTest {
         var writer = ImageIO.getImageWritersByFormatName("gif").next();
         Path directory = Path.of("build", "bubble-preview");
         Files.createDirectories(directory);
-        BufferedImage first = null, licking = null;
+        BufferedImage first = null, settled = null;
         try (var output = new FileImageOutputStream(directory.resolve("thinking.gif").toFile())) {
             writer.setOutput(output);
             writer.prepareWriteSequence(null);
-            for (int ms = 0; ms < TaskBubbleMotion.CAT_MS; ms += 100) {
+            for (int ms = 0; ms < TaskBubbleMotion.SPIN_MS * 2; ms += 100) {
                 var sample = motion.sample(state, full.message().text(), ms);
                 var frame = new CompanionTaskBubble.Frame(Vec3.ZERO, 1, sample.opacity(),
                         full.reveal(sample.text(), CompanionTaskBubbleTest::previewWidth),
                         CompanionTaskBubble.palette(false, state.tone()), sample);
                 BufferedImage image = rasterize(frame, 720, 240, 3);
                 if (ms == 0) first = image;
-                if (ms == 2300) licking = image;
+                if (ms == 2300) settled = image;
                 var metadata = writer.getDefaultImageMetadata(
                         javax.imageio.ImageTypeSpecifier.createFromRenderedImage(image), null);
                 String format = metadata.getNativeMetadataFormatName();
@@ -247,15 +247,15 @@ class CompanionTaskBubbleTest {
             writer.dispose();
         }
         assertNotNull(first);
-        assertNotNull(licking);
+        assertNotNull(settled);
         int changed = 0, ink = 0;
-        for (int y = 0; y < licking.getHeight(); y++) for (int x = 0; x < licking.getWidth(); x++) {
-            if (first.getRGB(x, y) != licking.getRGB(x, y)) changed++;
-            if (licking.getRGB(x, y) != new Color(0xCBD7DB).getRGB()) ink++;
+        for (int y = 0; y < settled.getHeight(); y++) for (int x = 0; x < settled.getWidth(); x++) {
+            if (first.getRGB(x, y) != settled.getRGB(x, y)) changed++;
+            if (settled.getRGB(x, y) != new Color(0xCBD7DB).getRGB()) ink++;
         }
         assertTrue(changed > 1000);
         assertTrue(ink > 10000 && ink < 720 * 120);
-        ImageIO.write(licking, "png", directory.resolve("thinking.png").toFile());
+        ImageIO.write(settled, "png", directory.resolve("thinking.png").toFile());
 
         var sheet = new BufferedImage(960, 480, BufferedImage.TYPE_INT_RGB);
         var graphics = sheet.createGraphics();
@@ -271,7 +271,7 @@ class CompanionTaskBubbleTest {
             var example = examples.get(i);
             var layout = TaskBubbleLayout.create(example, CompanionTaskBubbleTest::previewWidth);
             var sample = new TaskBubbleMotion.Sample(example.action(), false, false, 1,
-                    TaskBubbleMotion.rotation(2300), 3);
+                    TaskBubbleMotion.rotation(2300));
             var frame = new CompanionTaskBubble.Frame(Vec3.ZERO, 1, 1, layout,
                     CompanionTaskBubble.palette(i >= 2, example.tone()), sample);
             graphics.drawImage(rasterize(frame, 480, 240, 2), i % 2 * 480, i / 2 * 240, null);

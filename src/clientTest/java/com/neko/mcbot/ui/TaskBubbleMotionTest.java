@@ -11,7 +11,7 @@ class TaskBubbleMotionTest {
                 "模型正在思考", detail, null, 0, true);
     }
 
-    @Test void lettersAppearOnceAndHoldWhileTheSpinnerAndCatContinue() {
+    @Test void lettersAppearOnceAndHoldWhileTheSpinnerContinues() {
         var motion = new TaskBubbleMotion();
         assertEquals("模", motion.sample(state(7, ""), "模型正在思考", 1000).text());
         assertEquals("模型", motion.sample(state(7, "1 秒"), "模型正在思考", 1140).text());
@@ -46,23 +46,9 @@ class TaskBubbleMotionTest {
         assertEquals("想", motion.sample(next, next.action(), 2100).text());
     }
 
-    @Test void catHasABoundedSlowGroomingLoopAndSpinnerTakesOverTwoSeconds() {
+    @Test void spinnerTakesOverTwoSecondsAndWrapsAtItsOriginalPeriod() {
         assertEquals(TaskBubbleMotion.rotation(0), TaskBubbleMotion.rotation(2400));
-        assertEquals(0, TaskBubbleMotion.catFrame(0));
-        assertEquals(1, TaskBubbleMotion.catFrame(1100));
-        assertEquals(2, TaskBubbleMotion.catFrame(1800));
-        assertEquals(3, TaskBubbleMotion.catFrame(2300));
-        assertEquals(4, TaskBubbleMotion.catFrame(4400));
-        assertEquals(TaskBubbleMotion.catFrame(0), TaskBubbleMotion.catFrame(5600));
-        for (int frame = 0; frame < 5; frame++) {
-            assertFalse(TaskBubbleCat.pixels(frame).isEmpty());
-            for (var pixel : TaskBubbleCat.pixels(frame)) {
-                assertTrue(pixel.x() >= 0 && pixel.y() >= 0);
-                assertTrue(pixel.width() > 0 && pixel.height() > 0);
-                assertTrue(pixel.x() + pixel.width() <= TaskBubbleCat.WIDTH);
-                assertTrue(pixel.y() + pixel.height() <= TaskBubbleCat.HEIGHT);
-            }
-        }
-        assertNotEquals(TaskBubbleCat.pixels(2), TaskBubbleCat.pixels(3));
+        assertEquals((float) Math.PI, TaskBubbleMotion.rotation(1200), .0001f);
+        assertTrue(TaskBubbleMotion.rotation(-1) >= 0);
     }
 }
