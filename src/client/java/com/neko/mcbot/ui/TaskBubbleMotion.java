@@ -2,16 +2,21 @@ package com.neko.mcbot.ui;
 
 import com.neko.mcbot.agent.TaskBubbleState;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /** Presentation time only: no task, question, or permission deadline is changed here. */
 final class TaskBubbleMotion {
     static final long LETTER_MS = 140, FADE_MS = 300, SPIN_MS = 2400;
     record Sample(String text, boolean typing, boolean caret, float opacity, float rotation) {}
+    private final Map<String, Long> waitingStarted = new HashMap<>();
     private long taskId, started;
     private TaskBubbleState.Tone tone;
     private String text = "", question = "";
 
     Sample sample(TaskBubbleState.Snapshot state, String message, long now) {
         String currentQuestion = state.tone() == TaskBubbleState.Tone.QUESTION ? state.detail() : "";
+        if (taskId != state.taskId()) waitingStarted.clear();
         if (taskId != state.taskId() || tone != state.tone() || !text.equals(message)
                 || !question.equals(currentQuestion)) {
             taskId = state.taskId();
@@ -20,7 +25,10 @@ final class TaskBubbleMotion {
             question = currentQuestion;
             started = now;
         }
-        long elapsed = Math.max(0, now - started);
+        // Tool turns interrupt waiting; returning to the same label must not replay its reveal.
+        long animationStarted = state.tone() == TaskBubbleState.Tone.WORKING && state.modelWaiting()
+                ? waitingStarted.computeIfAbsent(message, ignored -> now) : started;
+        long elapsed = Math.max(0, now - animationStarted);
         int count = text.codePointCount(0, text.length());
         int visible = (int) Math.min(count, 1 + elapsed / LETTER_MS);
         String shown = text.substring(0, text.offsetByCodePoints(0, visible));
@@ -36,6 +44,7 @@ final class TaskBubbleMotion {
     }
 
     void clear() {
+        waitingStarted.clear();
         taskId = 0;
         tone = null;
         text = "";
